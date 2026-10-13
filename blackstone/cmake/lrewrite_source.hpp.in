@@ -1,0 +1,3 @@
+#pragma once
+inline constexpr char lrewrite_source[] = R"BLACKSTONELUA(@LREWRITE_SOURCE@)BLACKSTONELUA";
+inline constexpr char local_rewrite_source[] = R"BLACKSTONELUA(@LOCAL_REWRITE_SOURCE@)BLACKSTONELUA";

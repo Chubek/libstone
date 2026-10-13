@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(Firestone CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/BlackstoneTargets.cmake")
+set_property(TARGET Blackstone::blackstone APPEND PROPERTY
+  INTERFACE_LINK_LIBRARIES Firestone::ir Firestone::rewrite)
+set(Blackstone_KERNEL_DIR "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/blackstone/kernels")
+check_required_components(Blackstone)
