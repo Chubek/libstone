@@ -1,0 +1,103 @@
+local xbind = require("lxbind")
+
+-- Blackstone: Lua-hosted rewrite-kernel runtime.
+-- Header is relative to blackstone/ (blackstone.h). Runtime handles are
+-- opaque and caller-owned; kernel info views are borrowed until the next
+-- load or destruction. blackstone_run (callback + available-analysis list)
+-- is intentionally deferred until XBind IR gains callbacks and string
+-- arrays; everything below uses only opaque handles, strings, ints, and
+-- size_t so all nine backends lower it today.
+return xbind.library {
+  name = "blackstone",
+  version = "0.1.0",
+  headers = { "blackstone.h" },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "blackstone" }),
+    xbind.target("Go", { package = "blackstone" }),
+    xbind.target("Java", { package = "stone.blackstone", class = "Blackstone" }),
+    xbind.target("Lua", { module = "blackstone" }),
+    xbind.target("NodeJS", { addon = "blackstone" }),
+    xbind.target("OCaml", { library = "blackstone" }),
+    xbind.target("Python", { module = "blackstone" }),
+    xbind.target("Ruby", { extension = "blackstone" }),
+    xbind.target("Rust", { crate = "blackstone_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("blackstone_runtime *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const blackstone_runtime *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("blackstone_version", {
+      returns = "const char *",
+      params = {},
+    }),
+    xbind.func("blackstone_create", {
+      returns = "blackstone_runtime *",
+      params = {},
+    }),
+    xbind.func("blackstone_destroy", {
+      returns = "void",
+      params = {
+        xbind.param("runtime", "blackstone_runtime *", { nullable = true }),
+      },
+    }),
+    xbind.func("blackstone_load_file", {
+      returns = "int",
+      params = {
+        xbind.param("runtime", "blackstone_runtime *"),
+        xbind.param("path", "const char *"),
+      },
+    }),
+    xbind.func("blackstone_load_directory", {
+      returns = "int",
+      params = {
+        xbind.param("runtime", "blackstone_runtime *"),
+        xbind.param("path", "const char *"),
+      },
+    }),
+    xbind.func("blackstone_kernel_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *", { nullable = true }),
+      },
+    }),
+    xbind.func("blackstone_requirement_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *"),
+        xbind.param("index", "size_t"),
+      },
+    }),
+    xbind.func("blackstone_requirement_get", {
+      returns = "const char *",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *"),
+        xbind.param("index", "size_t"),
+        xbind.param("requirement", "size_t"),
+      },
+    }),
+    xbind.func("blackstone_preservation_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *"),
+        xbind.param("index", "size_t"),
+      },
+    }),
+    xbind.func("blackstone_preservation_get", {
+      returns = "const char *",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *"),
+        xbind.param("index", "size_t"),
+        xbind.param("preservation", "size_t"),
+      },
+    }),
+    xbind.func("blackstone_last_error", {
+      returns = "const char *",
+      params = {
+        xbind.param("runtime", "const blackstone_runtime *", { nullable = true }),
+      },
+    }),
+  },
+}

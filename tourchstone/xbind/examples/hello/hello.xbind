@@ -1,12 +1,24 @@
 local xbind = require("lxbind")
 
+-- hello fixture: minimal C library used by the XBind scaffold regimen.
+-- Targets every supported backend so the all-target smoke matrix has a
+-- trivial first row. C types are intentionally limited to the default
+-- typedef maps (int/double/string) so no per-target override is needed
+-- beyond the borrowed-string annotation below.
 return xbind.library {
   name = "hello",
+  version = "0.1.0",
   headers = { "hello.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
-    xbind.target("Python", { module = "hello" }),
+    xbind.target("D", { module = "hello" }),
+    xbind.target("Go", { package = "hello" }),
+    xbind.target("Java", { package = "stone.hello", class = "Hello" }),
     xbind.target("Lua", { module = "hello" }),
+    xbind.target("NodeJS", { addon = "hello" }),
+    xbind.target("OCaml", { library = "hello" }),
+    xbind.target("Python", { module = "hello" }),
+    xbind.target("Ruby", { extension = "hello" }),
     xbind.target("Rust", { crate = "hello_sys" }),
   },
   typedefs = {

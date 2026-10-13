@@ -1,0 +1,154 @@
+local xbind = require("lxbind")
+
+-- Sandstone: SymAS databank library (DomSymAs C ABI).
+-- Header is relative to sandstone/ (include/sandstone.h). This spec binds
+-- the version/probe lifecycle slice plus the per-section count accessors
+-- that every backend needs first. Record pointers (Target/Feature/Register
+-- and friends) are deliberately left out until XBind IR gains records and
+-- borrowed-view support; the count + string + validate + builder surface
+-- below is already sufficient for bank open/validate/inspect/save flows.
+-- DomSymAs_Error is an int-like status; uint32_t maps to each target's
+-- 32-bit integer; opaque bank/builder handles map to each DomBind opaque.
+return xbind.library {
+  name = "sandstone",
+  version = "0.1.0",
+  headers = { "include/sandstone.h" },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "sandstone" }),
+    xbind.target("Go", { package = "sandstone" }),
+    xbind.target("Java", { package = "stone.sandstone", class = "Sandstone" }),
+    xbind.target("Lua", { module = "sandstone" }),
+    xbind.target("NodeJS", { addon = "sandstone" }),
+    xbind.target("OCaml", { library = "sandstone" }),
+    xbind.target("Python", { module = "sandstone" }),
+    xbind.target("Ruby", { extension = "sandstone" }),
+    xbind.target("Rust", { crate = "sandstone_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("DomSymAs_Error", "int", { range = "status" }),
+    xbind.typedef("uint32_t", "int", { range = "uint32" }),
+    xbind.typedef("const uint8_t *", "opaque", { ownership = "borrowed", encoding = "bytes" }),
+    xbind.typedef("DomSymAs_Bank *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const DomSymAs_Bank *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("DomSymAs_Builder *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("domsymas_version", {
+      returns = "const char *",
+      params = {},
+    }),
+    xbind.func("domsymas_error_string", {
+      returns = "const char *",
+      params = {
+        xbind.param("err", "DomSymAs_Error"),
+      },
+    }),
+    xbind.func("domsymas_magic", {
+      returns = "uint32_t",
+      params = {},
+    }),
+    xbind.func("domsymas_probe_magic", {
+      returns = "int",
+      params = {
+        xbind.param("data", "const uint8_t *"),
+        xbind.param("len", "size_t"),
+      },
+    }),
+    xbind.func("domsymas_crc32", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("data", "const uint8_t *"),
+        xbind.param("len", "size_t"),
+      },
+    }),
+    xbind.func("domsymas_close", {
+      returns = "void",
+      params = {
+        xbind.param("bank", "DomSymAs_Bank *", { nullable = true }),
+      },
+    }),
+    xbind.func("domsymas_last_error", {
+      returns = "const char *",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *", { nullable = true }),
+      },
+    }),
+    xbind.func("domsymas_validate", {
+      returns = "DomSymAs_Error",
+      params = {
+        xbind.param("bank", "DomSymAs_Bank *"),
+        xbind.param("semantic", "int"),
+      },
+    }),
+    xbind.func("domsymas_string_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_string_at", {
+      returns = "const char *",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+        xbind.param("index", "uint32_t"),
+      },
+    }),
+    xbind.func("domsymas_target_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_feature_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_register_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_mnemonic_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_form_count", {
+      returns = "uint32_t",
+      params = {
+        xbind.param("bank", "const DomSymAs_Bank *"),
+      },
+    }),
+    xbind.func("domsymas_free", {
+      returns = "void",
+      params = {
+        xbind.param("ptr", "void *", { nullable = true }),
+      },
+    }),
+    xbind.func("domsymas_builder_new", {
+      returns = "DomSymAs_Builder *",
+      params = {
+        xbind.param("little_endian", "int"),
+      },
+    }),
+    xbind.func("domsymas_builder_free", {
+      returns = "void",
+      params = {
+        xbind.param("builder", "DomSymAs_Builder *", { nullable = true }),
+      },
+    }),
+    xbind.func("domsymas_builder_save", {
+      returns = "DomSymAs_Error",
+      params = {
+        xbind.param("builder", "DomSymAs_Builder *"),
+        xbind.param("path", "const char *"),
+      },
+    }),
+  },
+}

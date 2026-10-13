@@ -124,8 +124,23 @@ class XBindRegimen(unittest.TestCase):
             stdout=subprocess.PIPE,
         )
         self.assertIn("library: hello", dump_result.stdout)
-        self.assertIn("targets: Python Lua Rust", dump_result.stdout)
+        self.assertIn(
+            "targets: D Go Java Lua NodeJS OCaml Python Ruby Rust",
+            dump_result.stdout,
+        )
         self.assertIn("hello_add -> int", dump_result.stdout)
+        dogfood_result = subprocess.run(
+            [self.cli, "--dump-spec", "Dogfooding", str(self.root)],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        self.assertIn("library: dogfooding", dogfood_result.stdout)
+        self.assertIn(
+            "targets: D Go Java Lua NodeJS OCaml Python Ruby Rust",
+            dogfood_result.stdout,
+        )
+        self.assertIn("xbind_version -> const char *", dogfood_result.stdout)
 
 
 def main(argv: list[str]) -> int:

@@ -1,0 +1,141 @@
+local xbind = require("lxbind")
+
+-- Limestone: TraceML/UMD compiler pipeline plus binary adapters.
+-- Headers are relative to limestone/ (limestone/*.h). Handles
+-- (module/target/program/configuration/buffer and friends) are opaque and
+-- caller-owned; borrowed strings stay valid until handle destruction.
+-- limestone_status is int-like; limestone_error * diagnostics are nullable.
+-- This slice covers compile/module/target/program/config stages with only
+-- string, integer, size_t, and opaque-handle types so every backend can
+-- lower it today. Callback/installer and PBQP-cost-struct entry points are
+-- deferred until XBind IR gains callbacks and records.
+return xbind.library {
+  name = "limestone",
+  version = "0.1.0",
+  headers = {
+    "limestone/limestone.h",
+    "limestone/il.h",
+    "limestone/object.h",
+    "limestone/optimization.h",
+    "limestone/runtime.h",
+    "limestone/traceml.h",
+  },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "limestone" }),
+    xbind.target("Go", { package = "limestone" }),
+    xbind.target("Java", { package = "stone.limestone", class = "Limestone" }),
+    xbind.target("Lua", { module = "limestone" }),
+    xbind.target("NodeJS", { addon = "limestone" }),
+    xbind.target("OCaml", { library = "limestone" }),
+    xbind.target("Python", { module = "limestone" }),
+    xbind.target("Ruby", { extension = "limestone" }),
+    xbind.target("Rust", { crate = "limestone_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("limestone_status", "int", { range = "status" }),
+    xbind.typedef("limestone_module *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const limestone_module *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("limestone_target *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("limestone_program *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const limestone_program *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("limestone_configuration *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("limestone_buffer *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const limestone_buffer *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("limestone_error *", "opaque", { ownership = "opaque", nullable = true }),
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("limestone_compile", {
+      returns = "limestone_module *",
+      params = {
+        xbind.param("input", "const char *"),
+      },
+    }),
+    xbind.func("limestone_module_text", {
+      returns = "const char *",
+      params = {
+        xbind.param("module", "const limestone_module *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_module_destroy", {
+      returns = "void",
+      params = {
+        xbind.param("module", "limestone_module *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_target_load", {
+      returns = "limestone_target *",
+      params = {
+        xbind.param("umd", "const char *"),
+        xbind.param("error", "limestone_error *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_target_destroy", {
+      returns = "void",
+      params = {
+        xbind.param("target", "limestone_target *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_program_create", {
+      returns = "limestone_program *",
+      params = {},
+    }),
+    xbind.func("limestone_program_destroy", {
+      returns = "void",
+      params = {
+        xbind.param("program", "limestone_program *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_module_stage_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("module", "const limestone_module *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_module_stage", {
+      returns = "const char *",
+      params = {
+        xbind.param("module", "const limestone_module *"),
+        xbind.param("index", "size_t"),
+      },
+    }),
+    xbind.func("limestone_module_byte_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("module", "const limestone_module *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_module_instruction_count", {
+      returns = "size_t",
+      params = {
+        xbind.param("module", "const limestone_module *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_module_instruction_opcode", {
+      returns = "const char *",
+      params = {
+        xbind.param("module", "const limestone_module *"),
+        xbind.param("index", "size_t"),
+      },
+    }),
+    xbind.func("limestone_buffer_text", {
+      returns = "const char *",
+      params = {
+        xbind.param("buffer", "const limestone_buffer *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_buffer_size", {
+      returns = "size_t",
+      params = {
+        xbind.param("buffer", "const limestone_buffer *", { nullable = true }),
+      },
+    }),
+    xbind.func("limestone_buffer_destroy", {
+      returns = "void",
+      params = {
+        xbind.param("buffer", "limestone_buffer *", { nullable = true }),
+      },
+    }),
+  },
+}

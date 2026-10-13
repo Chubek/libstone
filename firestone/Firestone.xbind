@@ -1,0 +1,30 @@
+local xbind = require("lxbind")
+
+-- Firestone: header-only C++20 IR/compute/concurrency/graph library.
+-- There is deliberately no stable C ABI to bind yet (Firestone.hpp and
+-- FireIR.hpp are C++ headers with classes, templates, and overloads, not
+-- extern "C" functions). This spec therefore locks the all-backend target
+-- matrix, stdlib, and header inventory now so the future C shim has a
+-- stable manifest to grow into. Stage 2 (C surface ingestion) treats an
+-- empty function list as "no C surface yet" rather than an error; the
+-- first real slice must add a C shim (e.g. firestone_version /
+-- firestone_status_string) and list its functions here.
+return xbind.library {
+  name = "firestone",
+  version = "0.1.0",
+  headers = { "Firestone.hpp", "FireIR.hpp" },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "firestone" }),
+    xbind.target("Go", { package = "firestone" }),
+    xbind.target("Java", { package = "stone.firestone", class = "Firestone" }),
+    xbind.target("Lua", { module = "firestone" }),
+    xbind.target("NodeJS", { addon = "firestone" }),
+    xbind.target("OCaml", { library = "firestone" }),
+    xbind.target("Python", { module = "firestone" }),
+    xbind.target("Ruby", { extension = "firestone" }),
+    xbind.target("Rust", { crate = "firestone_sys" }),
+  },
+  typedefs = {},
+  functions = {},
+}
