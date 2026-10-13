@@ -1,0 +1,37 @@
+local xbind = require("lxbind")
+
+return xbind.library {
+  name = "hello",
+  headers = { "hello.h" },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("Python", { module = "hello" }),
+    xbind.target("Lua", { module = "hello" }),
+    xbind.target("Rust", { crate = "hello_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("hello_add", {
+      returns = "int",
+      params = {
+        xbind.param("left", "int"),
+        xbind.param("right", "int"),
+      },
+    }),
+    xbind.func("hello_scale", {
+      returns = "double",
+      params = {
+        xbind.param("value", "double"),
+        xbind.param("factor", "double"),
+      },
+    }),
+    xbind.func("hello_greet", {
+      returns = "const char *",
+      params = {
+        xbind.param("name", "const char *", { nullable = true }),
+      },
+    }),
+  },
+}
