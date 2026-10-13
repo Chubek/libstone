@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -25,6 +27,21 @@ TARGETS = {
     "Python": ("compilers/Python.c", "dombind/dompybind", "typedefs/Python-Default.sexpr"),
     "Ruby": ("compilers/Ruby.c", "dombind/domrubybind", "typedefs/Ruby-Default.sexpr"),
     "Rust": ("compilers/Rust.c", "dombind/domrustbind", "typedefs/Rust-Default.sexpr"),
+}
+
+TARGET_DUMP_LINE = "targets: " + " ".join(TARGETS)
+
+REPOSITORY_SPECS = {
+    "yellowstone/Yellowstone.xbind": "yellowstone",
+    "sandstone/Sandstone.xbind": "sandstone",
+    "limestone/Limestone.xbind": "limestone",
+    "blackstone/Blackstone.xbind": "blackstone",
+    "firestone/Firestone.xbind": "firestone",
+    "tourchstone/Tourchstone.xbind": "tourchstone",
+    "tourchstone/dyninvoke/DynINVOKE.xbind": "dyninvoke",
+    "tourchstone/dynload/DynLOAD.xbind": "dynload",
+    "tourchstone/xbind/Dogfooding.xbind": "dogfooding",
+    "tourchstone/xbind/examples/hello/hello.xbind": "hello",
 }
 
 
@@ -50,6 +67,19 @@ def balanced_sexpr(text: str) -> bool:
             if depth < 0:
                 return False
     return depth == 0 and not in_string
+
+
+def repo_root(root: Path) -> Path:
+    # root is normally <repo>/tourchstone/xbind.
+    return root.parents[1]
+
+
+def lua_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def spec_string_set(pattern: str, text: str) -> set[str]:
+    return set(re.findall(pattern, text))
 
 
 class XBindRegimen(unittest.TestCase):
@@ -97,6 +127,85 @@ class XBindRegimen(unittest.TestCase):
         self.assertIn('xbind.func("hello_add"', spec)
         self.assertIn("int hello_add", header)
 
+    def test_repository_specs_have_all_targets_and_headers(self) -> None:
+        repo = repo_root(self.root)
+        for relative, library in REPOSITORY_SPECS.items():
+            with self.subTest(spec=relative):
+                path = repo / relative
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(f'name = "{library}"', text)
+                for target in TARGETS:
+                    self.assertIn(f'xbind.target("{target}"', text)
+
+                header_match = re.search(r"headers\s*=\s*\{([^}]*)\}", text, re.S)
+                self.assertIsNotNone(header_match, relative)
+                headers = re.findall(r'"([^"]+)"', header_match.group(1))
+                self.assertTrue(headers, relative)
+                for header in headers:
+                    self.assertTrue((path.parent / header).is_file(), header)
+
+    def test_repository_spec_functions_match_headers(self) -> None:
+        repo = repo_root(self.root)
+        for relative in REPOSITORY_SPECS:
+            with self.subTest(spec=relative):
+                path = repo / relative
+                text = path.read_text(encoding="utf-8")
+                functions = re.findall(r'xbind\.func\("([^"]+)"', text)
+                self.assertEqual(len(functions), len(set(functions)))
+                header_match = re.search(r"headers\s*=\s*\{([^}]*)\}", text, re.S)
+                headers = re.findall(r'"([^"]+)"', header_match.group(1)) if header_match else []
+                header_text = "\n".join(
+                    (path.parent / header).read_text(encoding="utf-8", errors="ignore")
+                    for header in headers
+                )
+                for function in functions:
+                    self.assertIn(function, header_text, function)
+
+    def test_repository_spec_types_are_mapped_or_overridden(self) -> None:
+        default_types: set[str] = set()
+        for typedefs in (self.root / "typedefs").glob("*-Default.sexpr"):
+            default_types.update(
+                re.findall(r'\(c "([^"]+)"\)', typedefs.read_text(encoding="utf-8"))
+            )
+        self.assertTrue(default_types)
+
+        repo = repo_root(self.root)
+        for relative in REPOSITORY_SPECS:
+            with self.subTest(spec=relative):
+                text = (repo / relative).read_text(encoding="utf-8")
+                local_types = spec_string_set(r'xbind\.typedef\("([^"]+)"', text)
+                used_types = spec_string_set(r'returns\s*=\s*"([^"]+)"', text)
+                used_types.update(
+                    re.findall(r'xbind\.param\("[^"]+",\s*"([^"]+)"', text)
+                )
+                unmapped = used_types - default_types - local_types
+                self.assertFalse(unmapped, sorted(unmapped))
+
+    def test_repository_specs_load_with_stock_lua(self) -> None:
+        lua = shutil.which("lua5.4") or shutil.which("lua")
+        if not lua:
+            self.skipTest("no stock Lua interpreter found")
+        repo = repo_root(self.root)
+        for relative, library in REPOSITORY_SPECS.items():
+            with self.subTest(spec=relative):
+                path = repo / relative
+                script = (
+                    "package.path="
+                    + lua_string(str(self.root / "lxbind" / "?.lua") + ";")
+                    + "..package.path; "
+                    + "local x=require('lxbind'); "
+                    + "local m=assert(loadfile("
+                    + lua_string(str(path))
+                    + "))(); "
+                    + "x.validate_library(m); "
+                    + "assert(m.name=="
+                    + lua_string(library)
+                    + "); "
+                    + "assert(#m.targets==9); "
+                    + "print(m.name)"
+                )
+                subprocess.run([lua, "-e", script], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
     def test_cli_smoke(self) -> None:
         if not self.cli:
             self.skipTest("no --cli provided")
@@ -124,10 +233,7 @@ class XBindRegimen(unittest.TestCase):
             stdout=subprocess.PIPE,
         )
         self.assertIn("library: hello", dump_result.stdout)
-        self.assertIn(
-            "targets: D Go Java Lua NodeJS OCaml Python Ruby Rust",
-            dump_result.stdout,
-        )
+        self.assertIn(TARGET_DUMP_LINE, dump_result.stdout)
         self.assertIn("hello_add -> int", dump_result.stdout)
         dogfood_result = subprocess.run(
             [self.cli, "--dump-spec", "Dogfooding", str(self.root)],
@@ -136,10 +242,7 @@ class XBindRegimen(unittest.TestCase):
             stdout=subprocess.PIPE,
         )
         self.assertIn("library: dogfooding", dogfood_result.stdout)
-        self.assertIn(
-            "targets: D Go Java Lua NodeJS OCaml Python Ruby Rust",
-            dogfood_result.stdout,
-        )
+        self.assertIn(TARGET_DUMP_LINE, dogfood_result.stdout)
         self.assertIn("xbind_version -> const char *", dogfood_result.stdout)
 
 

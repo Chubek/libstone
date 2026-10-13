@@ -22,3 +22,14 @@ The first backend should implement a small traceable pipeline:
 2. resolve target type mappings,
 3. request DomBind primitives,
 4. emit source files plus a target-native smoke test.
+
+Current status: these directories are placeholders only. The repository specs
+are kept to callback-free/query-oriented surfaces so the future IR and emitter
+work can start from the same all-target contract instead of per-language one-off
+fixtures. The recommended bring-up order is:
+
+1. emit a target-neutral IR dump for `examples/hello/hello.xbind`,
+2. lower that IR through `Lua.c` and `domluabind`,
+3. add `Dogfooding.xbind` as the second fixture,
+4. expand the same IR to the remaining target directories,
+5. only then add records, callbacks, buffers, and ownership-transfer lowering.

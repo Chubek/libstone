@@ -53,3 +53,11 @@ tdynload --self --resolve malloc
 
 Use `-L DIR` to add search paths and `--default-paths` to import the platform
 path environment (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, or `PATH`).
+
+## XBind spec
+
+`DynLOAD.xbind` describes the string/int/handle query subset for all XBind
+backends: D, Go, Java, Lua, NodeJS, OCaml, Python, Ruby, and Rust. APIs that
+return record structs (`tdyn_symbol_info_t`, `tdyn_section_info_t`,
+`tdyn_relocation_info_t`) or require out-pointers remain deferred until XBind IR
+supports records and out-parameter lowering.

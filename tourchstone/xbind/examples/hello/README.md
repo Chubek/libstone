@@ -7,8 +7,12 @@ Expected scaffold probes:
 
 ```sh
 xbind --find-spec hello examples/hello
-xbind --target Python
+xbind --dump-spec hello examples/hello
+xbind --target Lua
 ```
+
+The spec targets every supported backend: D, Go, Java, Lua, NodeJS, OCaml,
+Python, Ruby, and Rust.
 
 Future end-to-end checks should generate and run bindings for `hello_add`,
 `hello_scale`, and `hello_greet`.

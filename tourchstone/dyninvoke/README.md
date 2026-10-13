@@ -48,3 +48,11 @@ dinvoke --abi sysv_amd64 --ret f64 --arg f64:1.5 --arg f64:2.25 ./libfn.so dinvk
 `yellowstone/qbfd/qABI.hpp` (included by `qBFD.hpp`) adds the
 `qbfd::abi::CallConv` view (`SysV_AMD64`, `Win64`, `Aapcs64`, `Riscv64`,
 `Riscv32`), format-aware selection, ISA file names, and host detection.
+
+## XBind spec
+
+`DynINVOKE.xbind` describes the callback-free ABI/type/layout query subset for
+all XBind backends: D, Go, Java, Lua, NodeJS, OCaml, Python, Ruby, and Rust.
+Direct calls, closure creation, `void **` argument arrays, and executable
+function pointers are intentionally deferred until XBind IR supports callbacks
+and buffer/out-parameter lowering.

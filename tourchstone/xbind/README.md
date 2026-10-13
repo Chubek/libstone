@@ -7,8 +7,10 @@ the result through the DomBind runtime libraries.
 
 This directory is currently an initial vertical scaffold, not a complete C parser
 or binding generator. The committed pieces establish the project shape, target
-inventory, Lua spec vocabulary, default type-map format, examples, and checks that
-future compiler stages can grow into.
+inventory, Lua spec vocabulary, default type-map format, examples, repository
+spec inventory, and checks that future compiler stages can grow into. See
+[`MANUAL.md`](MANUAL.md) for the spec authoring guide and current binding
+coverage.
 
 ## Directory map
 
@@ -16,13 +18,15 @@ future compiler stages can grow into.
 | --- | --- |
 | `xbind.c`, `xbind.h`, `xbind.hpp` | Small C/C++ API plus a scaffold CLI for discovery and layout checks. |
 | `xbind_qamrpp.*` | QaMRpp-backed executor for `.xbind` Lua specs. |
-| `cmake/XBindQaMRpp.cmake` | CMake locator for `/mnt/lambda/mlvm/third_party/qamrpp`. |
+| `MANUAL.md` | Spec authoring guide, target matrix, current repository specs, and limitations. |
+| `cmake/XBindQaMRpp.cmake` | CMake locator for the configured `third_party/qamrpp` checkout (`XBIND_QAMRPP_ROOT`). |
 | `lxbind/` | Lua helpers used by `.xbind`/`.lua` specs. |
 | `typedefs/` | Default per-target C type maps, loaded before user overrides. |
 | `stdlib/` | Planned reusable spec/runtime helpers. |
 | `compilers/<Target>.c/` | Per-target compiler/lowering stages from XBind IR to DomBind. |
 | `dombind/` | Native target runtime/boundary libraries used by generated bindings. |
 | `examples/` | Executable examples and spec fixtures. |
+| `Dogfooding.xbind` | XBind's self-binding spec for the stable `xbind.h` query surface. |
 | `XFeats.schema.json` | Feature-manifest schema for binding transformation features. |
 
 ## Supported target scaffold
@@ -52,8 +56,15 @@ return xbind.library {
   name = "hello",
   headers = { "hello.h" },
   targets = {
-    xbind.target("Python", { module = "hello" }),
+    xbind.target("D", { module = "hello" }),
+    xbind.target("Go", { package = "hello" }),
+    xbind.target("Java", { package = "stone.hello", class = "Hello" }),
     xbind.target("Lua", { module = "hello" }),
+    xbind.target("NodeJS", { addon = "hello" }),
+    xbind.target("OCaml", { library = "hello" }),
+    xbind.target("Python", { module = "hello" }),
+    xbind.target("Ruby", { extension = "hello" }),
+    xbind.target("Rust", { crate = "hello_sys" }),
   },
   functions = {
     xbind.func("hello_add", {
@@ -67,6 +78,11 @@ return xbind.library {
 User specs may also add type overrides. XBind loads the relevant
 `typedefs/<Target>-Default.sexpr` first, then applies spec-local entries and any
 requested standard-library helpers.
+
+Repository specs currently target all supported backends. The first implemented
+surface is deliberately callback-free and record-free so every backend can share
+the same lowering contract while header parsing and IR generation are brought up.
+See `MANUAL.md` for the per-spec coverage table.
 
 ## Build and smoke checks
 
@@ -87,10 +103,11 @@ Useful CLI probes:
 /tmp/opencode/xbind-build/xbind --dump-spec hello tourchstone/xbind/examples/hello
 ```
 
-The `--check-spec` and `--dump-spec` commands execute the spec with the vendored
-QaMRpp Lua-compatible interpreter from `/mnt/lambda/mlvm/third_party/qamrpp/`.
-The build also emits `libqamrpp_xbind.so`, a QaMRpp native module that exposes
-the same XBind/LxBind constructor surface to QaMRpp hosts.
+The `--check-spec` and `--dump-spec` commands execute the spec with the
+configured QaMRpp Lua-compatible interpreter (`XBIND_QAMRPP_ROOT`, normally
+`third_party/qamrpp` or `${LIBSTONE_THIRD_PARTY_DIR}/qamrpp`). The build also
+emits `libqamrpp_xbind.so`, a QaMRpp native module that exposes the same
+XBind/LxBind constructor surface to QaMRpp hosts.
 
 DomBind remains opt-in because each runtime may require a different SDK:
 

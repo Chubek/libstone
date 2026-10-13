@@ -37,6 +37,9 @@ cmake -S libstone/yellowstone/qbfd -B build-qbfd
 - `TOURCHSTONE_BUILD_DYNINVOKE` enables the libffi/dyncall-style foreign-call
   library and `dinvoke` tool under `tourchstone/dyninvoke` (ELF/Mach-O/PE with
   AMD64/AArch64/RISC-V layouts from Sandstone ISA data).
+- `TOURCHSTONE_BUILD_XBIND` enables the XBind spec runner/scaffold CLI under
+  `tourchstone/xbind`. The committed `.xbind` specs target D, Go, Java, Lua,
+  NodeJS, OCaml, Python, Ruby, and Rust; see `tourchstone/xbind/MANUAL.md`.
 - `LIBSTONE_BUILD_TESTS`, `LIBSTONE_BUILD_TOOLS`, and
   `LIBSTONE_ENABLE_WARNINGS` are the top-level defaults. Standalone tests
   default to `BUILD_TESTING`.

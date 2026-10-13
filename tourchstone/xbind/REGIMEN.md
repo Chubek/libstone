@@ -11,23 +11,30 @@ Checks:
 
 - `xbind --check-layout <root>` succeeds.
 - `xbind --check-spec hello <root>/examples/hello` succeeds through QaMRpp.
+- `xbind --dump-spec Dogfooding <root>` succeeds and lists every backend.
 - `python tests/regimen.py --root <root> --cli <built-xbind>` succeeds.
 - Every supported target has a compiler directory, DomBind directory, and default
   typedef map.
 - `XFeats.schema.json` parses as JSON.
+- `examples/hello/hello.xbind` targets D, Go, Java, Lua, NodeJS, OCaml,
+  Python, Ruby, and Rust.
 
 ## Stage 1: Lua spec contract
 
 Goal: make `.xbind` files deterministic before executing user code in the full
 driver.
 
-Checks to add next:
+Current checks:
 
 - Load `lxbind/lxbind.lua` with a stock Lua interpreter.
 - Load `examples/hello/hello.xbind` through QaMRpp and verify it returns a
   manifest table.
 - Reject missing library names, empty target names, malformed params, duplicate
   function names, and type overrides without C/native sides.
+
+Repository specs should remain deterministic under both the stock Lua helper and
+the QaMRpp helper. The committed all-backend specs are documented in
+`MANUAL.md`.
 
 ## Stage 2: C surface ingestion
 
@@ -37,6 +44,7 @@ Checks to add next:
 
 - Parse `examples/hello/hello.h` and preserve source spans.
 - Match spec functions to C declarations by name.
+- Match every committed repository spec function to its declared headers.
 - Diagnose missing declarations, ambiguous declarations, unsupported C types, and
   conflicting ownership annotations.
 
@@ -50,6 +58,8 @@ Checks to add next:
 - Apply spec-local overrides after defaults.
 - Report the final C-to-native map per target.
 - Fail on unmapped ABI-visible types unless the spec marks them opaque.
+- Keep the repository specs on default-mapped scalar/string types or explicit
+  opaque/status/integer typedefs until records, callbacks, and buffers land.
 
 ## Stage 4: DomBind lowering
 
@@ -62,6 +72,8 @@ Checks to add next:
 - Lower the hello example into a target-neutral XBind IR dump.
 - Generate Lua glue through `compilers/Lua.c` and `dombind/domluabind`.
 - Compile the generated module and run a Lua smoke script.
+- Preserve the `Dogfooding.xbind` self-binding as a second, callback-free IR
+  input once the IR dump exists.
 
 ## Stage 5: all-target smoke matrix
 
@@ -78,6 +90,8 @@ Checks to add next:
 ## Definition of done for the first real slice
 
 - `examples/hello/hello.xbind` generates and runs in at least one target.
+- `tourchstone/xbind/Dogfooding.xbind` generates a usable wrapper for the
+  stable `xbind.h` query surface.
 - The target compiler emits through DomBind rather than hand-written glue.
 - Default typedefs and user overrides are both exercised.
 - Generated traces show the selected spec, headers, targets, type maps, and
