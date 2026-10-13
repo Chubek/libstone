@@ -6,6 +6,10 @@ preservation contract and transformation. C/C++ hosts can discover kernels and
 provide execution contexts. The supplied Firestone adapter implements the
 object protocol used by `kernels/local/strength-redudction.lua`.
 
+The catalog now contains **71 executable kernels**: the original strength
+reduction kernel and 70 integer/SSA local optimizations. The complete inventory,
+rewrite patterns and semantic restrictions are in [docs/kernels.md](docs/kernels.md).
+
 ## Build
 
 ```sh
@@ -151,6 +155,48 @@ assert(bindings["?x"] == "a")
 A mismatch returns `nil`, successful bindings are serialized Firestone terms,
 and malformed patterns produce an error.
 
+## Integer local kernels
+
+The additional kernels are grouped under `kernels/local/`:
+
+| Family | Kernels | Phase |
+| --- | ---: | --- |
+| Constant folding | 18 | `constant_evaluation` |
+| Algebraic identities and cancellation | 29 | `algebraic_simplification` |
+| Reflexive comparisons | 6 | `comparison_simplification` |
+| Select simplification | 5 | `select_simplification` |
+| Phi simplification and value propagation | 3 | `ssa_simplification`, `value_propagation` |
+| Dominance-aware common-subexpression elimination | 4 | `redundancy_elimination` |
+| Constant reassociation | 5 | `integer_reassociation` |
+
+Each file declares one independently discoverable kernel and binds its run
+function with `lrewrite.local_rewrite("rule_name")`. The shared factory in
+`lrewrite/local.lua` implements width normalization, definition lookup,
+applicability checks and the named rule. An unknown rule name is a load error.
+This helper is embedded alongside the main Lua library and installed with it.
+
+All new kernels require explicit `IntegerSemantics::Modular`, valid typed SSA,
+and built-in integer types of width 1–64 with no custom type name. The snapshot's
+`value_types` table supplies declared types for both parameters and definitions,
+so a Boolean comparison result does not make its floating-point operands eligible.
+Constants may be recovered through constant/copy definitions; missing facts
+remain unknown. Narrow constants are normalized to their width, then emitted
+as sign-extended bit patterns, except Boolean constants, which remain zero or one.
+
+Division/remainder folding requires nonnegative, signed-representable operands
+and a positive divisor. Ordered-comparison folding uses the same common
+signed/unsigned domain. Right-shift folding requires a clear sign bit; all folded
+shift counts must be within the type width. These restrictions avoid inventing
+signedness or invalid-operation semantics absent from Firestone's types.
+
+Every new kernel preserves CFG and dominators while conservatively invalidating
+def-use and induction facts. Operand-producing instructions are retained, even
+when their result becomes unused: simplifying multiplication by zero must not
+delete a load, call or potentially trapping input computation. Common-subexpression
+elimination only reuses pure operations with a dominating, earlier definition;
+it excludes memory, calls, division and shifts. These local kernels add no CFG
+rewrites or new values, and error handling uses the existing transactional adapter.
+
 ## Validation
 
 The runtime tests exercise C embedding, catalog validation, deterministic and
@@ -160,3 +206,13 @@ Differential tests compare original and reduced return values over 8-, 32- and
 64-bit arithmetic, zero-trip loops, modular overflow and multiple backedges.
 Negative cases include unsupported initial values, strides, scales and arithmetic
 semantics. These checks are executable evidence for the supported contract.
+
+`blackstone.kernels` checks all 70 additions individually with positive and
+nonmatching cases, unknown-semantics rejection, valid output SSA and analysis
+contracts. Differential evaluation compares original and rewritten return values
+at 8-, 32- and 64-bit widths under both signed and unsigned interpretations,
+using boundary bit patterns and deterministic generated inputs. Additional cases
+cover wraparound, minimum values, zero divisors, invalid shifts, commuted operands,
+cross-block CSE dominance, phi ordering, floating-point/NaN-sensitive exclusions,
+custom types and retained effectful inputs. The installation check loads all 71
+kernels through an installed C++20 consumer.
