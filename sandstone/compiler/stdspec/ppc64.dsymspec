@@ -4,7 +4,7 @@
 -- arch_oracle ppc64 quick facts (GPR0-31/FPR0-31/CR/LR/CTR, 32-bit fixed),
 -- ccbe_oracle ABI topics (ELFv2 calling convention, TOC/GOT/PLT).
 -- Strata: base | fpu | altivec | vsx | power8/9/10 | dfp | htm | mma | priv.
-local symas = require("dsl").new()
+local symas = require("backend").new("ppc64")
 
 symas.target{
     arch = "ppc64", subarch = "power9",
@@ -101,7 +101,6 @@ symas.encoder{ name = "mfspr", source = "emit32le(0x7C0002A6 + rd*2097152 + ((sp
 symas.encoder{ name = "mtspr", source = "emit32le(0x7C0003A6 + rs*2097152 + ((spr + 1024) % 1024)*65536);", max_bytes = 4 }
 symas.encoder{ name = "fadd", source = "emit32le(0xFC00002A + rd*2097152 + ra*65536 + rb*2048);", max_bytes = 4 }
 symas.encoder{ name = "fmul", source = "emit32le(0xFC000032 + rd*2097152 + ra*65536 + rb*65536);", max_bytes = 4 }
-symas.encoder{ name = "mr",   source = "emit32le(0x7C000378 + rd*2097152 + rb*2048 + rb*32768);", max_bytes = 4 }
 symas.encoder{ name = "fmr",  source = "emit32le(0xFC000090 + rd*2097152 + rb*2048);", max_bytes = 4 }
 symas.encoder{ name = "vand", source = "emit32le(0x10000442 + rd*2097152 + ra*65536 + rb*2048);", max_bytes = 4 }
 symas.encoder{ name = "vor",  source = "emit32le(0x1000044A + rd*2097152 + ra*65536 + rb*2048);", max_bytes = 4 }
@@ -124,7 +123,7 @@ for _, m in ipairs({ "nop", "add", "subf", "and", "or", "xor", "mulli",
     "mullw", "divw", "cmpw", "li", "addi", "addis", "lwz", "stw", "lbz",
     "stb", "ld", "std", "lmw", "stmw", "lwarx", "stwcx", "bc", "bl", "b",
     "bclr", "bcctr", "blr", "tw", "sc", "sync", "isync", "rfid", "mfspr",
-    "mtspr", "fadd", "fmul", "fmr", "mr", "vand", "vor", "vadd", "lxvd2x",
+    "mtspr", "fadd", "fmul", "fmr", "vand", "vor", "vadd", "lxvd2x",
     "stxvd2x", "vcipher", "dadd", "tbegin", "tend" }) do
     symas.mnemonic{ name = m }
 end
@@ -184,7 +183,6 @@ symas.form{ mnemonic = "mtspr", encoder = "mtspr", required = { "priv" }, flags 
     operands = { { kind = "imm", width = 16, signed = false, imm_min = 0, imm_max = 1023 }, r() } }
 symas.form{ mnemonic = "fadd", encoder = "fadd", required = { "fpu" }, operands = { wfr(), fr(), fr() } }
 symas.form{ mnemonic = "fmul", encoder = "fmul", required = { "fpu" }, operands = { wfr(), fr(), fr() } }
-symas.form{ mnemonic = "mr", encoder = "mr", operands = { wr(), r() } }
 symas.form{ mnemonic = "fmr", encoder = "fmr", required = { "fpu" }, operands = { wfr(), fr() } }
 symas.form{ mnemonic = "vand", encoder = "vand", required = { "altivec" }, operands = { wvr(), vr(), vr() } }
 symas.form{ mnemonic = "vor", encoder = "vor", required = { "altivec" }, operands = { wvr(), vr(), vr() } }
@@ -242,230 +240,4 @@ symas.debug{ msg = "power64 base+fpu+altivec/vsx+powerisa+htm/mma stratification
 symas.debug{ msg = "vector forms require altivec/vsx", kind = "form", ref = "vadd" }
 symas.debug{ msg = "privileged forms require priv", kind = "form", ref = "rfid" }
 
--- ---------------------------------------------------------------------------
--- Instruction selection, scheduling, and per-model optimization
--- ---------------------------------------------------------------------------
--- Sources (cross-checked with the tablegen_inquiry MCP tool, which reads the
--- same files under $TABLEGEN_LIB):
---   PowerPC/PPCScheduleP9.td  P9Model (8-wide fetch, 6-wide dispatch, ROB 44,
---                              LoopMOB 60, LoadLat 5, Mispredict 16) + the
---                              DISPx02/DISPx13/DISPxab, IP_AGEN/IP_EXEC,
---                              ALU/ALUE/ALUO, DIV, DP/DPE/DPO, LS, BR, CY
---                              ProcResources and the P9_*_NC latency table
---   PowerPC/PPCScheduleP8.td  P8Model (8-wide, ROB 64, LoadLat 3)
---   PowerPC/PPCScheduleP7.td  P7Model (6-wide, ROB 44, LoadLat 3)
---   PowerPC/PPCScheduleG5.td  G5Model (4-wide, LoadLat 3, Mispredict 16)
---   ccbe_oracle               PowerISA multiply-add (madd/msub), record forms
---                              (lmw/stmw), branch prediction and dispatch groups.
-
--- Machine models.
-symas.model{
-    name = "power9", vendor = "ibm", issue_width = 8, rob = 44,
-    loop_buffer = 60, load_latency = 5, mispredict = 16,
-    flags = { "out_of_order", "has_stalls", "forwarding", "complete" },
-    desc = "P9Model: IssueWidth 8, of which at most 6 instructions dispatch per cycle; four execution slices with 11-entry issue queues",
-}
-symas.model{
-    name = "power8", vendor = "ibm", issue_width = 8, rob = 64,
-    loop_buffer = 60, load_latency = 3, mispredict = 16,
-    flags = { "out_of_order", "has_stalls", "forwarding" },
-    desc = "P8Model: 8-wide fetch, 6-wide dispatch, 64-entry iop buffer",
-}
-symas.model{
-    name = "g5", vendor = "ibm", issue_width = 4, rob = 0,
-    load_latency = 3, mispredict = 16,
-    flags = { "out_of_order", "has_stalls", "default" },
-    desc = "G5Model: 4-wide dispatch, optimistic 3-cycle load latency",
-}
-symas.model{
-    name = "p7", vendor = "ibm", issue_width = 6, rob = 44,
-    load_latency = 3, mispredict = 16,
-    flags = { "out_of_order", "has_stalls", "forwarding" },
-    desc = "P7Model: 6-wide dispatch bundle, 8 total issue slots",
-}
-
--- Functional units (PPCScheduleP9.td ProcResource declarations).
-symas.unit{ name = "p9-disp02", model = "power9", kind = "other", count = 2, latency = 1, throughput = 1 }
-symas.unit{ name = "p9-disp13", model = "power9", kind = "other", count = 2, latency = 1, throughput = 1 }
-symas.unit{ name = "p9-dispab", model = "power9", kind = "branch", count = 2, latency = 1, throughput = 1 }
-symas.unit{ name = "p9-alu",  model = "power9", kind = "int", count = 4, latency = 2, throughput = 1, flags = { "pipelined" } }
-symas.unit{ name = "p9-alue", model = "power9", kind = "int", count = 2, latency = 2, throughput = 1 }
-symas.unit{ name = "p9-aluo", model = "power9", kind = "int", count = 2, latency = 2, throughput = 1 }
-symas.unit{ name = "p9-div",  model = "power9", kind = "divider", count = 2, latency = 12, throughput = 8, flags = { "noncoincident" } }
-symas.unit{ name = "p9-dp",   model = "power9", kind = "fp", count = 4, latency = 3, throughput = 1, flags = { "pipelined" } }
-symas.unit{ name = "p9-dpe",  model = "power9", kind = "fp", count = 2, latency = 3, throughput = 1 }
-symas.unit{ name = "p9-dpo",  model = "power9", kind = "fp", count = 2, latency = 3, throughput = 1 }
-symas.unit{ name = "p9-ls",   model = "power9", kind = "load", count = 4, latency = 5, throughput = 1 }
-symas.unit{ name = "p9-dfu",  model = "power9", kind = "fp", count = 1, latency = 12, throughput = 8 }
-symas.unit{ name = "p9-br",   model = "power9", kind = "branch", count = 1, latency = 1, throughput = 1, flags = { "superscalar" } }
-symas.unit{ name = "p8-alu",  model = "power8", kind = "int", count = 4, latency = 2, throughput = 1, flags = { "pipelined" } }
-symas.unit{ name = "p8-dp",   model = "power8", kind = "fp", count = 4, latency = 5, throughput = 1 }
-symas.unit{ name = "p8-ls",   model = "power8", kind = "load", count = 2, latency = 3, throughput = 1 }
-symas.unit{ name = "g5-alu",  model = "g5", kind = "int", count = 2, latency = 1, throughput = 1, flags = { "pipelined" } }
-symas.unit{ name = "g5-fpu",  model = "g5", kind = "fp", count = 2, latency = 4, throughput = 1 }
-symas.unit{ name = "g5-ls",   model = "g5", kind = "load", count = 2, latency = 3, throughput = 1 }
-symas.unit{ name = "p7-alu",  model = "p7", kind = "int", count = 4, latency = 2, throughput = 1, flags = { "pipelined" } }
-symas.unit{ name = "p7-ls",   model = "p7", kind = "load", count = 2, latency = 3, throughput = 1 }
-
--- Base scheduling: Power9 dispatch class table (P9_*_NC).
-for _, m in ipairs({ "add", "subf", "and", "or", "xor" }) do
-    symas.sched{ form = m, name = "P9_ALU_2C", latency = 2, uops = 1, writes = { "p9-alu" }, reads = { "p9-alu" } }
-end
-symas.sched{ form = { "addi", "li" }, name = "P9_ALU_2C", latency = 2, uops = 1, writes = { "p9-alu" }, reads = { "p9-alu" } }
-symas.sched{ form = "addis", name = "P9_ALU_2C", latency = 2, uops = 1, writes = { "p9-alu" }, reads = { "p9-alu" } }
-symas.sched{ form = "cmpw", name = "P9_ALU_2C", latency = 2, uops = 1, flags = { "side_effects" },
-             writes = { "p9-alu" }, reads = { "p9-alu" } }
-symas.sched{ form = "mullw", name = "P9_MUL3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "mulli", name = "P9_MUL3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "divw", name = "P9_DIV_24C_8", latency = 24, uops = 1, flags = { "multicycle", "may_fault" },
-             writes = { "p9-div" }, reads = { "p9-div" } }
-symas.sched{ form = "lwz", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "lbz", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "ld", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "lwarx", name = "P9_LDARX", latency = 4, uops = 1, flags = { "may_fault", "side_effects" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "stw", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "stb", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "std", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "stwcx", name = "P9_STWCX", latency = 4, uops = 1, flags = { "may_fault", "side_effects" },
-             writes = { "p9-ls" } }
-symas.sched{ form = "lmw", name = "P9_LDST4C_4L", latency = 4, uops = 3, flags = { "may_fault" }, writes = { "p9-ls" } }
-symas.sched{ form = "stmw", name = "P9_LDST4C_4L", latency = 4, uops = 3, flags = { "may_fault" }, writes = { "p9-ls" } }
-symas.sched{ form = "bc", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "fused" }, writes = { "p9-dispab" } }
-symas.sched{ form = "b", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "fused" }, writes = { "p9-dispab" } }
-symas.sched{ form = "bl", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "fused" }, writes = { "p9-dispab" } }
-symas.sched{ form = "bclr", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "fused" }, writes = { "p9-dispab" } }
-symas.sched{ form = "bcctr", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "fused" }, writes = { "p9-dispab" } }
-symas.sched{ form = "blr", name = "DISP_BR_1C", latency = 1, uops = 1, flags = { "serializing" }, writes = { "p9-dispab" } }
-symas.sched{ form = "tw", name = "P9_TRAP4C", latency = 4, uops = 1, flags = { "serializing" }, writes = { "p9-dispab" } }
-symas.sched{ form = "sc", name = "P9_SC", latency = 4, uops = 1, flags = { "serializing" }, writes = { "p9-dispab" } }
-symas.sched{ form = "sync", name = "P9_SYNC", latency = 1, uops = 1, flags = { "serializing", "barrier" },
-             writes = { "p9-dispab" } }
-symas.sched{ form = "isync", name = "P9_SYNC", latency = 1, uops = 1, flags = { "serializing", "barrier" },
-             writes = { "p9-dispab" } }
-symas.sched{ form = "rfid", name = "P9_RFID", latency = 4, uops = 1, flags = { "serializing" }, writes = { "p9-dispab" } }
-symas.sched{ form = { "mfspr", "mtspr" }, name = "P9_SPR", latency = 4, uops = 1, flags = { "serializing" },
-             writes = { "p9-dispab" } }
-symas.sched{ form = "fadd", name = "P9_DFPADD3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "fmul", name = "P9_DFPMUL3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "fmr", name = "P9_DFPCOPY2C", latency = 2, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "dadd", name = "P9_DFPADD3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = { "vand", "vor", "vadd" }, name = "P9_VEC3C", latency = 3, uops = 1,
-             writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "vcipher", name = "P9_VEC3C", latency = 3, uops = 1, writes = { "p9-dp" }, reads = { "p9-dp" } }
-symas.sched{ form = "lxvd2x", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" }, writes = { "p9-ls" } }
-symas.sched{ form = "stxvd2x", name = "P9_LDST4C_4L", latency = 4, uops = 1, flags = { "may_fault" }, writes = { "p9-ls" } }
-symas.sched{ form = { "tbegin", "tend" }, name = "P9_HTM_4C", latency = 4, uops = 1, flags = { "serializing" },
-             writes = { "p9-dispab" } }
-symas.sched{ form = "nop", name = "WriteNop", latency = 0, uops = 1, flags = { "nop" }, writes = {} }
-
--- Per-model overrides.
-for _, m in ipairs({ "add", "subf", "and", "or", "xor", "addi", "cmpw" }) do
-    symas.tune{ model = "p7", kind = "latency", form = m, value = 1, flags = { "override" } }
-    symas.tune{ model = "power8", kind = "latency", form = m, value = 1, flags = { "override" } }
-    symas.tune{ model = "g5", kind = "latency", form = m, value = 1, flags = { "override" } }
-end
-symas.tune{ model = "p7", kind = "latency", form = "lwz", value = 3, flags = { "override" } }
-symas.tune{ model = "power8", kind = "latency", form = "lwz", value = 3, flags = { "override" },
-            desc = "P8Model.LoadLatency = 3" }
-symas.tune{ model = "g5", kind = "latency", form = "lwz", value = 3, flags = { "override" } }
-symas.tune{ model = "p7", kind = "latency", form = "divw", value = 18, flags = { "override" } }
-symas.tune{ model = "power8", kind = "latency", form = "divw", value = 20, flags = { "override" } }
-symas.tune{ model = "power8", kind = "latency", form = "fmul", value = 5, flags = { "override" },
-            desc = "P8 has a single vector multiply pipe with 5-cycle latency" }
-symas.tune{ model = "g5", kind = "latency", form = "fmul", value = 4, flags = { "override" } }
-symas.tune{ model = "g5", kind = "latency", form = "fadd", value = 4, flags = { "override" } }
-symas.tune{ model = "power9", kind = "avoid", form = "divw", value = 4,
-            desc = "P9 integer divide occupies the divider for up to 24 cycles" }
-symas.tune{ model = "power8", kind = "avoid", form = "divw", value = 4 }
-symas.tune{ model = "g5", kind = "avoid", form = "divw", value = 3 }
-symas.tune{ model = "power9", kind = "prefer", form = "mullw", value = 2,
-            desc = "P9 has four DP pipes; integer multiply leaves a free slot" }
-symas.tune{ model = "g5", kind = "prefer", form = "lmw", value = 2,
-            desc = "record forms amortize the load pipe on narrow machines" }
-symas.tune{ model = "power9", kind = "threshold", name = "dispatch-group", value = 6,
-            desc = "P9 fetches 8 but dispatches at most 6 instructions per group" }
-symas.tune{ model = "p7", kind = "threshold", name = "dispatch-group", value = 6 }
-symas.tune{ model = "g5", kind = "threshold", name = "dispatch-group", value = 4 }
-
--- Instruction selection.
-symas.isel{ node = "add", form = "add", kind = "node", cost = 2, complexity = 1,
-            flags = { "commutes" }, pattern = "(add GPR:$a, GPR:$b)" }
-symas.isel{ node = "add", form = "addi", kind = "node", cost = 2, complexity = 2,
-            pattern = "(add GPR:$a, (i64 0))" }
-symas.isel{ node = "add", form = "li", kind = "node", cost = 2, complexity = 2,
-            pattern = "(add (i64 0), (i64 imm16))" }
-symas.isel{ node = "add", form = "addis", kind = "node", cost = 2, complexity = 3,
-            pattern = "(add GPR:$a, (i64 imm32)) that does not fit in 16 bits" }
-symas.isel{ node = "sub", form = "subf", kind = "node", cost = 2, complexity = 2,
-            pattern = "subf $dst, $b, $a computes $a - $b" }
-symas.isel{ node = "and", form = "and", kind = "node", cost = 2, complexity = 1,
-            flags = { "commutes" }, pattern = "(and GPR:$a, GPR:$b)" }
-symas.isel{ node = "or", form = "or", kind = "node", cost = 2, complexity = 1,
-            flags = { "commutes" }, pattern = "(or GPR:$a, GPR:$b)" }
-symas.isel{ node = "xor", form = "xor", kind = "node", cost = 2, complexity = 1,
-            flags = { "commutes" }, pattern = "(xor GPR:$a, GPR:$b)" }
-symas.isel{ node = "mul", form = "mullw", kind = "node", cost = 3, complexity = 2, pattern = "(mul GPR:$a, GPR:$b)" }
-symas.isel{ node = "mul", form = "mulli", kind = "node", cost = 3, complexity = 2,
-            pattern = "(mul GPR:$a, (i64 imm16))" }
-symas.isel{ node = "sdiv", form = "divw", kind = "node", cost = 24, complexity = 3,
-            flags = { "unprofitable" }, pattern = "(sdiv GPR:$a, GPR:$b)" }
-symas.isel{ node = "load", form = "lwz", kind = "node", cost = 4, complexity = 2, pattern = "(load GPR:$addr)" }
-symas.isel{ node = "load", form = "ld", kind = "node", cost = 4, complexity = 2, pattern = "(load GPR:$addr) 64-bit" }
-symas.isel{ node = "store", form = "stw", kind = "node", cost = 4, complexity = 2, pattern = "(store GPR:$val, GPR:$addr)" }
-symas.isel{ node = "store", form = "std", kind = "node", cost = 4, complexity = 2, pattern = "(store GPR:$val, GPR:$addr) 64-bit" }
-symas.isel{ node = "load", form = "lmw", kind = "node", cost = 4, complexity = 3,
-            pattern = "lmw: a contiguous register run" }
-symas.isel{ node = "store", form = "stmw", kind = "node", cost = 4, complexity = 3,
-            pattern = "stmw: a contiguous register run" }
-symas.isel{ node = "br", form = "b", kind = "node", cost = 1, complexity = 1, pattern = "(br GPR:$addr)" }
-symas.isel{ node = "br", form = "bl", kind = "node", cost = 1, complexity = 1, pattern = "(call GPR:$addr)" }
-symas.isel{ node = "br", form = "bclr", kind = "node", cost = 1, complexity = 1, pattern = "(brind GPR:$addr)" }
-symas.isel{ node = "br", form = "bc", kind = "node", cost = 1, complexity = 2, pattern = "(brcond (setcc CR:$cc))" }
-symas.isel{ node = "br", form = "blr", kind = "node", cost = 1, complexity = 1, pattern = "RETURNADDR" }
-symas.isel{ node = "COPY", form = "mr", kind = "copy", cost = 0, complexity = 1, flags = { "prefer" },
-            pattern = "mr $dst, $src" }
-symas.isel{ node = "MEMBARRIER", form = "sync", kind = "node", cost = 1, complexity = 1,
-            flags = { "side_effects", "prefer" } }
-symas.isel{ node = "MEMBARRIER", form = "isync", kind = "node", cost = 1, complexity = 2,
-            flags = { "side_effects" }, pattern = "instruction-cache synchronization" }
-symas.isel{ node = "ATOMICRMW_CSWAP", form = "lwarx", kind = "node", cost = 4, complexity = 5,
-            pattern = "lwarx/stwcx. pair" }
-symas.isel{ node = "ATOMICRMW_XCHG", form = "lwarx", kind = "node", cost = 4, complexity = 4 }
-symas.isel{ node = "fadd", form = "fadd", kind = "node", cost = 3, complexity = 2, required = { "fpu" } }
-symas.isel{ node = "fmul", form = "fmul", kind = "node", cost = 3, complexity = 2, required = { "fpu" } }
-symas.isel{ node = "fadd", form = "vadd", kind = "node", cost = 3, complexity = 2, required = { "altivec" } }
-symas.isel{ node = "fadd", form = "dadd", kind = "node", cost = 3, complexity = 3, required = { "dfp" },
-            pattern = "decimal floating add" }
-symas.isel{ node = "ISD", form = "li", kind = "node", cost = 2, complexity = 1, flags = { "prefer" },
-            pattern = "li (addi $dst, 0, imm) is the canonical copy" }
-symas.isel{ node = "ISD", form = "mr", kind = "node", cost = 0, complexity = 1, flags = { "prefer" } }
-
--- Macro fusion: Power dispatch groups let compare+branch, branch+compare and
--- load+compare share a dispatch slot.
-symas.fuse{ name = "cmp-b", a = "cmpw", b = "b", kind = "cmp_branch", latency = 2,
-            flags = { "profitable", "requires_flags", "adjacent", "bidirectional" },
-            pattern = "cmp + b pairs share a dispatch group on P7/P8/P9" }
-symas.fuse{ name = "cmp-bc", a = "cmpw", b = "bc", kind = "cmp_branch", latency = 2,
-            flags = { "profitable", "requires_flags", "adjacent", "bidirectional" } }
-symas.fuse{ name = "cmp-bclr", a = "cmpw", b = "bclr", kind = "cmp_branch", latency = 2,
-            flags = { "profitable", "requires_flags", "adjacent" } }
-symas.fuse{ name = "cmp-bcctr", a = "cmpw", b = "bcctr", kind = "cmp_branch", latency = 2,
-            flags = { "profitable", "requires_flags", "adjacent" } }
-symas.fuse{ name = "lwz-add", a = "lwz", b = "add", kind = "mem_arith", latency = 4,
-            flags = { "profitable", "adjacent" },
-            pattern = "load followed by an ALU op issues on separate slices anyway" }
-symas.fuse{ name = "stw-lwz", a = "stw", b = "lwz", kind = "macro", latency = 4,
-            flags = { "profitable", "adjacent" }, pattern = "store + load to the same line" }
-symas.fuse{ name = "adds-b", a = "addi", b = "b", kind = "cmp_branch", latency = 2,
-            flags = { "profitable", "requires_flags", "adjacent" },
-            pattern = "addi. records CR0 and branches on it" }
-symas.fuse{ name = "isync-sync", a = "sync", b = "isync", kind = "macro",
-            flags = { "profitable", "adjacent" }, pattern = "LWSYNC + ISYNC pairs" }
 print(symas.emit())

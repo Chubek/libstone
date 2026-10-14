@@ -7,9 +7,11 @@
 // (which are the per-type record indices, assigned in list order).
 //
 // This is the DomMune-free half of the compiler: it only depends on the
-// `json.hpp` model and the `domsymas` library, so it can be built and tested
-// independently of the embedded interpreter.
+// Symspec / Boost.JSON and the `domsymas` library. The private json::Value
+// model adapts assembler fields to the existing Builder mapping; parsing and
+// lossless document serialization are handled by Symspec.
 #include "domsymascc/domsymascc.hpp"
+#include "json.hpp"
 
 #include <cstdlib>
 #include <functional>
@@ -23,6 +25,35 @@ namespace domsymas::cc {
 namespace {
 
 using json::Value;
+
+// Only assembler fields enter the legacy Builder mapping. Keep the original
+// Boost.JSON document for serialization so backend nulls, DAGs and integers
+// (including unsigned 64-bit values) survive unchanged.
+Value assembler_value(const symspec::Json &input) {
+    if (input.is_null()) return Value::null();
+    if (input.is_bool()) return Value::boolean_value(input.as_bool());
+    if (input.is_int64()) return Value::integer_value(input.as_int64());
+    if (input.is_uint64()) {
+        if (input.as_uint64() > uint64_t(INT64_MAX))
+            throw std::runtime_error("assembler integer exceeds signed 64-bit range");
+        return Value::integer_value(static_cast<int64_t>(input.as_uint64()));
+    }
+    if (input.is_double()) {
+        if (auto n = symspec::integer(&input)) return Value::integer_value(*n);
+        throw std::runtime_error("assembler fields require integral numbers");
+    }
+    if (input.is_string()) return Value::string_value(std::string(input.as_string()));
+    if (input.is_array()) {
+        auto result = Value::array_value();
+        for (const auto &item : input.as_array()) result.array->push_back(assembler_value(item));
+        return result;
+    }
+    auto result = Value::object_value();
+    for (const auto &item : input.as_object()) {
+        result.object->emplace_back(std::string(item.key()), assembler_value(item.value()));
+    }
+    return result;
+}
 
 // ---- small typed accessors over json::Value --------------------------------
 
@@ -369,10 +400,34 @@ static const Value &field(const Value &v, const char *key) {
 } // namespace
 
 Result compile_document(const std::string &document_json, domsymas::Builder &builder) {
+    auto spec = symspec::Spec::from_json(document_json);
+    if (!spec) return {false, "spec JSON: " + spec.error().message, {}};
+    return compile_spec(*spec, builder);
+}
+
+Result compile_file(const symspec::Path &path, domsymas::Builder &builder,
+                    const symspec::LoadOptions &options) {
+    auto spec = symspec::Spec::load(path, options);
+    if (!spec) return {false, spec.error().message, {}};
+    return compile_spec(*spec, builder);
+}
+
+Result compile_spec(const symspec::Spec &spec, domsymas::Builder &builder) {
     Result res;
+    if (spec.backend_only()) {
+        res.error = "backend-only specifications have no assembler records; use backend export";
+        return res;
+    }
     Value doc;
     try {
-        doc = json::parse(document_json);
+        doc = Value::object_value();
+        for (auto key : {"schema", "targets", "features", "registers", "syntaxes",
+                         "relocs", "sections", "linkages", "mnemonics", "encoders",
+                         "forms", "debug", "models", "units", "isels", "scheds",
+                         "tunes", "fusions"}) {
+            if (const auto *value = symspec::field(spec.json(), key))
+                doc.object->emplace_back(key, assembler_value(*value));
+        }
     } catch (const std::exception &e) {
         res.error = std::string("spec JSON parse failed: ") + e.what();
         return res;
@@ -1069,7 +1124,7 @@ Result compile_document(const std::string &document_json, domsymas::Builder &bui
     }
 
     res.ok = true;
-    res.spec_json = json::dump(doc);
+    res.spec_json = *spec.serialize();
     return res;
 }
 

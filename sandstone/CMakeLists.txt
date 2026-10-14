@@ -141,6 +141,10 @@ if(SANDSTONE_BUILD_TESTS)
               --build-dir ${CMAKE_CURRENT_BINARY_DIR}
               --source-dir ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    if(SANDSTONE_DSL_DIRECTORY)
+      set_tests_properties(sandstone_spec_pipeline PROPERTIES
+        ENVIRONMENT "SANDSTONE_DSL_DIRECTORY=${SANDSTONE_DSL_DIRECTORY}")
+    endif()
   endif()
   if(Python3_Interpreter_FOUND)
     add_test(NAME sandstone_simple_isa

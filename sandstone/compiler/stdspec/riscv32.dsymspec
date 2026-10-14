@@ -6,7 +6,7 @@
 -- (x0-x31 ABI roles, R/I/S/B/U/J formats).
 -- Operand names used by encoders: rd, rs1, rs2, imm, sym, id.
 -- Strata: base I | M | A | F/D | C | Zb*/Zk* | V | Zicsr/Zifencei/priv.
-local symas = require("dsl").new()
+local symas = require("backend").new("riscv32")
 
 symas.target{
     arch = "riscv32", subarch = "rv32gcv",
@@ -95,12 +95,6 @@ symas.encoder{ name = "slt",  source = "emit32le(0x00002033 + rd*128 + rs1*32768
 symas.encoder{ name = "sltu", source = "emit32le(0x00003033 + rd*128 + rs1*32768 + rs2*1048576);", max_bytes = 4 }
 -- Base I-type.
 symas.encoder{ name = "addi", source = "emit32le(0x00000013 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "andi", source = "emit32le(0x00007013 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "slli", source = "emit32le(0x00001013 + rd*128 + rs1*32768 + ((imm + 64) % 64)*1048576);", max_bytes = 2 + 2 }
-symas.encoder{ name = "srli", source = "emit32le(0x00005013 + rd*128 + rs1*32768 + ((imm + 64) % 64)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "srai", source = "emit32le(0x40005013 + rd*128 + rs1*32768 + ((imm + 64) % 64)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "slti", source = "emit32le(0x00002013 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "sltiu", source = "emit32le(0x00003013 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
 symas.encoder{ name = "li",   source = "emit32le(0x00000013 + rd*128 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
 symas.encoder{ name = "lui",  source = "emit32le(0x00000037 + rd*128 + ((imm + 524288) % 1048576));", max_bytes = 4 }
 symas.encoder{ name = "auipc", source = "emit32le(0x00000017 + rd*128 + ((imm + 524288) % 1048576));", max_bytes = 4 }
@@ -177,7 +171,7 @@ local function vreg(pos)
 end
 
 for _, m in ipairs({ "nop", "add", "sub", "and", "or", "xor", "sll", "srl", "sra",
-    "slt", "sltu", "addi", "andi", "slli", "srli", "srai", "slti", "sltiu", "li", "lui", "auipc", "lw", "ld", "lb", "lbu", "lh",
+    "slt", "sltu", "addi", "li", "lui", "auipc", "lw", "ld", "lb", "lbu", "lh",
     "sw", "sd", "sb", "sh", "jalr", "jal", "beq", "bne", "blt", "bge", "ret",
     "mul", "div", "rem", "lr.w", "sc.w", "amoswap.w", "csrrw", "fence", "fence.i",
     "ecall", "ebreak", "mret", "wfi", "flw", "fsw", "fadd.s", "fmul.s", "fadd.d",
@@ -199,18 +193,6 @@ symas.form{ mnemonic = "slt", encoder = "slt", operands = { rreg(0,32), reg(32),
 symas.form{ mnemonic = "sltu", encoder = "sltu", operands = { rreg(0,32), reg(32), reg(32) } }
 symas.form{ mnemonic = "addi", encoder = "addi", operands = { rreg(0,32), reg(32),
     { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
-symas.form{ mnemonic = "andi", encoder = "andi", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 4095 } } }
-symas.form{ mnemonic = "slli", encoder = "slli", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 5, signed = false, imm_min = 0, imm_max = 31 } } }
-symas.form{ mnemonic = "srli", encoder = "srli", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 5, signed = false, imm_min = 0, imm_max = 31 } } }
-symas.form{ mnemonic = "srai", encoder = "srai", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 5, signed = false, imm_min = 0, imm_max = 31 } } }
-symas.form{ mnemonic = "slti", encoder = "slti", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
-symas.form{ mnemonic = "sltiu", encoder = "sltiu", operands = { rreg(0,32), reg(32),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 4095 } } }
 symas.form{ mnemonic = "li", encoder = "li", operands = { rreg(0,32),
     { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
 symas.form{ mnemonic = "lui", encoder = "lui", operands = { rreg(0,32),
@@ -354,250 +336,5 @@ symas.reloc{ name = "R_RISCV_JUMP_SLOT", width = 32, expr = "S + A" }
 symas.debug{ msg = "rv32gc base integer + atomics + fp + compressed", kind = "target", ref = "" }
 symas.debug{ msg = "vector forms require v", kind = "form", ref = "vadd.vv" }
 symas.debug{ msg = "privileged forms require priv", kind = "form", ref = "mret" }
-
--- ---------------------------------------------------------------------------
--- Instruction selection, scheduling, and per-model optimization
--- ---------------------------------------------------------------------------
--- Sources (cross-checked with the tablegen_inquiry MCP tool, which reads the
--- same files under $TABLEGEN_LIB):
---   RISCV/RISCVSchedRocket.td     RocketModel (1-wide in-order) + RocketUnit*
---                                  and the WriteRes<WriteIALU/IMul/IDiv/...>
---                                  latency table
---   RISCV/RISCVSchedSiFiveP500.td SiFiveP500Model (3-wide, ROB 96, LoadLat 4,
---                                  Mispredict 9) + SiFiveP500Int/Float/LSU
---                                  ProcResources (3 IE + 2 FE + 2 LS pipes)
---   RISCV/RISCVSchedGenericOOO.td GenericOOOModel (6-wide, ROB 192)
---   RISCV/RISCVMacroFusion.td     SimpleFusion pairs: lui-addi, auipc-addi,
---                                  zexth, zextw, ld-add, add-load, mul-add,
---                                  logic-reg-reg, add-mem, shift-bit-extract
---   RISCV/RISCVFeatures.td        RISCVTuneFeature knobs
---   ccbe_oracle / isa_reference   RISC-V (unpriv) manual: latency classes
---                                  (ALU 1, M 3, D 20-40, LD 2-3, F 4-6)
-
--- Machine models.
-symas.model{
-    name = "rocket", vendor = "riscv", issue_width = 1, rob = 0,
-    load_latency = 3, mispredict = 3,
-    flags = { "in_order", "has_stalls", "forwarding", "complete", "default" },
-    features = { "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" },
-    desc = "RocketModel: 1-wide in-order core, no reorder buffer",
-}
-symas.model{
-    name = "sifive-p500", vendor = "sifive", issue_width = 3, rob = 96,
-    load_latency = 4, mispredict = 9,
-    flags = { "out_of_order", "has_stalls", "forwarding" },
-    features = { "i", "m", "a", "f", "d", "c", "v", "zicsr", "zifencei" },
-    desc = "SiFiveP500Model: 3 integer, 2 FP, 2 load/store pipes",
-}
-symas.model{
-    name = "generic-o3", vendor = "unknown", issue_width = 6, rob = 192,
-    load_latency = 4, mispredict = 8,
-    flags = { "out_of_order", "has_stalls", "forwarding" },
-    desc = "GenericOOOModel: 6-wide out-of-order baseline for RV64GC",
-}
-
--- Functional units (RISCVSchedRocket.td RocketUnit*, SiFive8 ProcResources).
-symas.unit{ name = "rk-alu",   model = "rocket",     kind = "int",     count = 1, latency = 1,  throughput = 1 }
-symas.unit{ name = "rk-imul",  model = "rocket",     kind = "mul",     count = 1, latency = 4,  throughput = 1 }
-symas.unit{ name = "rk-idiv",  model = "rocket",     kind = "divider", count = 1, latency = 33, throughput = 33, flags = { "noncoincident" } }
-symas.unit{ name = "rk-mem",   model = "rocket",     kind = "load",    count = 1, latency = 3,  throughput = 1 }
-symas.unit{ name = "rk-b",     model = "rocket",     kind = "branch",  count = 1, latency = 1,  throughput = 1 }
-symas.unit{ name = "rk-fpalu", model = "rocket",     kind = "fp",      count = 1, latency = 6,  throughput = 1 }
-symas.unit{ name = "rk-fpdiv", model = "rocket",     kind = "divider", count = 1, latency = 20, throughput = 20, flags = { "noncoincident" } }
-symas.unit{ name = "p500-ie0", model = "sifive-p500", kind = "int",    count = 1, latency = 1,  throughput = 1 }
-symas.unit{ name = "p500-ie1", model = "sifive-p500", kind = "int",    count = 1, latency = 1,  throughput = 1 }
-symas.unit{ name = "p500-ie2", model = "sifive-p500", kind = "mul",    count = 1, latency = 3,  throughput = 1 }
-symas.unit{ name = "p500-fe0", model = "sifive-p500", kind = "fp",     count = 1, latency = 4,  throughput = 1 }
-symas.unit{ name = "p500-fe1", model = "sifive-p500", kind = "fp",     count = 1, latency = 4,  throughput = 1 }
-symas.unit{ name = "p500-fdiv",model = "sifive-p500", kind = "divider",count = 1, latency = 19, throughput = 19, flags = { "noncoincident" } }
-symas.unit{ name = "p500-lsu0",model = "sifive-p500", kind = "load",   count = 1, latency = 4,  throughput = 1 }
-symas.unit{ name = "p500-lsu1",model = "sifive-p500", kind = "store",  count = 1, latency = 2,  throughput = 1 }
-symas.unit{ name = "o3-aglu",  model = "generic-o3", kind = "int",     count = 2, latency = 1,  throughput = 1 }
-symas.unit{ name = "o3-alu",   model = "generic-o3", kind = "int",     count = 4, latency = 1,  throughput = 1 }
-symas.unit{ name = "o3-mul",   model = "generic-o3", kind = "mul",     count = 1, latency = 3,  throughput = 1 }
-symas.unit{ name = "o3-div",   model = "generic-o3", kind = "divider", count = 1, latency = 24, throughput = 8 }
-symas.unit{ name = "o3-fp",    model = "generic-o3", kind = "fp",      count = 2, latency = 4,  throughput = 1 }
-symas.unit{ name = "o3-lsu",   model = "generic-o3", kind = "load",    count = 2, latency = 4,  throughput = 1 }
-
--- Base scheduling: the Rocket in-order table (RISCVSchedRocket.td), which is
--- the conservative choice; the wider models override the values below.
-for _, m in ipairs({ "add", "sub", "and", "or", "xor", "sll", "srl", "sra",
-                     "slt", "sltu", "addi", "li", "lui", "auipc" }) do
-    symas.sched{ form = m, name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-end
-symas.sched{ form = { "lb", "lbu", "lh" }, name = "WriteLDB", latency = 3, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "lw", name = "WriteLDW", latency = 2, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "ld", name = "WriteLDD", latency = 2, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = { "sb", "sh" }, name = "WriteSTH", latency = 1, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "sw", name = "WriteSTW", latency = 1, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "sd", name = "WriteSTD", latency = 1, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = { "jal", "ret" }, name = "WriteJal", latency = 1, uops = 1, flags = { "fused" }, writes = { "rk-b" } }
-symas.sched{ form = "jalr", name = "WriteJalr", latency = 1, uops = 1, flags = { "fused" }, writes = { "rk-b" } }
-symas.sched{ form = { "beq", "bne", "blt", "bge" }, name = "WriteJmp", latency = 1, uops = 1, flags = { "fused" }, writes = { "rk-b" } }
-symas.sched{ form = "mul", name = "WriteIMul", latency = 4, uops = 1, writes = { "rk-imul" }, reads = { "rk-imul" } }
-symas.sched{ form = { "div", "rem" }, name = "WriteIDiv", latency = 33, uops = 1, flags = { "multicycle", "may_fault" },
-             writes = { "rk-idiv" }, reads = { "rk-idiv" } }
-symas.sched{ form = "flw", name = "WriteFLD32", latency = 2, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "fsw", name = "WriteFST32", latency = 1, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "fadd.s", name = "WriteFAdd32", latency = 4, uops = 1, writes = { "rk-fpalu" }, reads = { "rk-fpalu" } }
-symas.sched{ form = "fmul.s", name = "WriteFMul32", latency = 5, uops = 1, writes = { "rk-fpalu" }, reads = { "rk-fpalu" } }
-symas.sched{ form = "fadd.d", name = "WriteFAdd64", latency = 6, uops = 1, writes = { "rk-fpalu" }, reads = { "rk-fpalu" } }
-symas.sched{ form = "lr.w", name = "WriteAtomicLDW", latency = 2, uops = 1, flags = { "may_fault", "side_effects" }, writes = { "rk-mem" } }
-symas.sched{ form = "sc.w", name = "WriteAtomicSTW", latency = 1, uops = 1, flags = { "may_fault", "side_effects" }, writes = { "rk-mem" } }
-symas.sched{ form = "amoswap.w", name = "WriteAtomicW", latency = 2, uops = 1, flags = { "may_fault", "side_effects" }, writes = { "rk-mem" } }
-symas.sched{ form = "csrrw", name = "WriteI", latency = 1, uops = 1, flags = { "side_effects" }, writes = { "rk-alu" } }
-symas.sched{ form = { "fence", "fence.i" }, name = "WriteMemBarrier", latency = 1, uops = 1, flags = { "serializing", "barrier" }, writes = { "rk-b" } }
-symas.sched{ form = { "ecall", "ebreak" }, name = "WriteTrap", latency = 1, uops = 1, flags = { "serializing" }, writes = { "rk-b" } }
-symas.sched{ form = "mret", name = "WriteTrap", latency = 1, uops = 1, flags = { "serializing", "side_effects" }, writes = { "rk-b" } }
-symas.sched{ form = "wfi", name = "WriteWait", latency = 1, uops = 1, flags = { "serializing" }, writes = { "rk-b" } }
-symas.sched{ form = "andn", name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "sh1add", name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "bseti", name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "czero.eqz", name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "pause", name = "WriteHint", latency = 1, uops = 1, flags = { "nop" }, writes = {} }
-symas.sched{ form = "vadd.vv", name = "WriteV", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "vle32.v", name = "WriteVLD", latency = 3, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "vse32.v", name = "WriteVST", latency = 1, uops = 1, flags = { "may_fault" }, writes = { "rk-mem" } }
-symas.sched{ form = "vsetvli", name = "WriteVSetVL", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "c.addi", name = "WriteIALU", latency = 1, uops = 1, writes = { "rk-alu" } }
-symas.sched{ form = "c.nop", name = "WriteNop", latency = 0, uops = 1, flags = { "nop" }, writes = {} }
-symas.sched{ form = "nop", name = "WriteNop", latency = 0, uops = 1, flags = { "nop" }, writes = {} }
-
--- Per-model overrides: a 3-wide or 6-wide core has shorter effective
--- dependency latencies than the 1-wide in-order pipeline.
-for _, m in ipairs({ "add", "sub", "and", "or", "xor", "sll", "srl", "sra",
-                     "slt", "sltu", "addi", "lui", "auipc" }) do
-    symas.tune{ model = "sifive-p500", kind = "latency", form = m, value = 1, flags = { "override" } }
-    symas.tune{ model = "generic-o3", kind = "latency", form = m, value = 1, flags = { "override" } }
-end
-symas.tune{ model = "sifive-p500", kind = "latency", form = "mul", value = 3, flags = { "override" } }
-symas.tune{ model = "generic-o3", kind = "latency", form = "mul", value = 3, flags = { "override" } }
-symas.tune{ model = "sifive-p500", kind = "latency", form = "lw", value = 4, flags = { "override" },
-            desc = "SiFiveP500Model.LoadLatency = 4" }
-symas.tune{ model = "sifive-p500", kind = "latency", form = "ld", value = 4, flags = { "override" } }
-symas.tune{ model = "sifive-p500", kind = "latency", form = "div", value = 19, flags = { "override" },
-            desc = "P500 integer divide is faster than Rocket's 33-cycle unit" }
-symas.tune{ model = "generic-o3", kind = "latency", form = "div", value = 24, flags = { "override" } }
-symas.tune{ model = "generic-o3", kind = "latency", form = "lw", value = 4, flags = { "override" } }
-symas.tune{ model = "generic-o3", kind = "latency", form = "fadd.d", value = 4, flags = { "override" } }
-symas.tune{ model = "generic-o3", kind = "latency", form = "fmul.s", value = 4, flags = { "override" } }
-symas.tune{ model = "rocket", kind = "avoid", form = "div", value = 4,
-            desc = "1-wide in-order core: a 33-cycle divide stalls the pipeline" }
-symas.tune{ model = "rocket", kind = "avoid", form = "rem", value = 4 }
-symas.tune{ model = "rocket", kind = "prefer", form = "mul", value = 2,
-            desc = "M-extension multiply is 4 cycles and pipelined on Rocket" }
-symas.tune{ model = "sifive-p500", kind = "prefer", form = "vsetvli", value = 2,
-            desc = "RVV: hoist vsetvli so the vtype register is set once per block" }
-symas.tune{ model = "generic-o3", kind = "threshold", name = "unroll", value = 4,
-            desc = "RISC-V generic tuning: unroll small loops up to 4x" }
-symas.tune{ model = "rocket", kind = "threshold", name = "unroll", value = 1,
-            desc = "in-order core: unrolling cannot hide a stall" }
-
--- Instruction selection.
-symas.isel{ node = "add", form = "add", kind = "node", cost = 1, complexity = 1,
-            flags = { "commutes" }, pattern = "(add GPR:$a, GPR:$b)" }
-symas.isel{ node = "add", form = "addi", kind = "node", cost = 1, complexity = 2,
-            pattern = "(add GPR:$a, (i64 0))" }
-symas.isel{ node = "sub", form = "sub", kind = "node", cost = 1, complexity = 1, pattern = "(sub GPR:$a, GPR:$b)" }
-symas.isel{ node = "and", form = "and", kind = "node", cost = 1, complexity = 1,
-            flags = { "commutes" }, pattern = "(and GPR:$a, GPR:$b)" }
-symas.isel{ node = "or", form = "or", kind = "node", cost = 1, complexity = 1,
-            flags = { "commutes" }, pattern = "(or GPR:$a, GPR:$b)" }
-symas.isel{ node = "xor", form = "xor", kind = "node", cost = 1, complexity = 1,
-            flags = { "commutes" }, pattern = "(xor GPR:$a, GPR:$b)" }
-symas.isel{ node = "shl", form = "sll", kind = "node", cost = 1, complexity = 1, pattern = "(shl GPR:$a, GPR:$b)" }
-symas.isel{ node = "mul", form = "mul", kind = "node", cost = 4, complexity = 2,
-            required = { "m" }, pattern = "(mul GPR:$a, GPR:$b)" }
-symas.isel{ node = "sdiv", form = "div", kind = "node", cost = 33, complexity = 3,
-            required = { "m" }, flags = { "unprofitable" }, pattern = "(sdiv GPR:$a, GPR:$b)" }
-symas.isel{ node = "srem", form = "rem", kind = "node", cost = 33, complexity = 3,
-            required = { "m" }, flags = { "unprofitable" }, pattern = "(srem GPR:$a, GPR:$b)" }
-symas.isel{ node = "load", form = "lw", kind = "node", cost = 2, complexity = 2, pattern = "(load GPR:$addr)" }
-symas.isel{ node = "load", form = "ld", kind = "node", cost = 2, complexity = 2, pattern = "(load GPR:$addr) 64-bit" }
-symas.isel{ node = "store", form = "sw", kind = "node", cost = 1, complexity = 2, pattern = "(store GPR:$val, GPR:$addr)" }
-symas.isel{ node = "store", form = "sd", kind = "node", cost = 1, complexity = 2, pattern = "(store GPR:$val, GPR:$addr) 64-bit" }
-symas.isel{ node = "br", form = "beq", kind = "node", cost = 1, complexity = 1,
-            pattern = "(brcond (setcc GPR:$a, GPR:$b), eq)" }
-symas.isel{ node = "br", form = "jal", kind = "node", cost = 1, complexity = 1, pattern = "(br GPR:$addr)" }
-symas.isel{ node = "br", form = "jalr", kind = "node", cost = 1, complexity = 2, pattern = "(call GPR:$addr)" }
-symas.isel{ node = "br", form = "ret", kind = "node", cost = 1, complexity = 1, pattern = "RETURNADDR" }
-symas.isel{ node = "zext", form = "andi", kind = "node", cost = 1, complexity = 2,
-            pattern = "(zext (i64 32), GPR:$src)" }
-symas.isel{ node = "zext", form = "slli", kind = "node", cost = 1, complexity = 3,
-            pattern = "slli+srli pair: zero extension through a shift pair" }
-symas.isel{ node = "COPY", form = "addi", kind = "copy", cost = 0, complexity = 1,
-            flags = { "prefer", "commutes" }, pattern = "COPY = addi $dst, x0, 0" }
-symas.isel{ node = "ATOMICRMW_CSWAP", form = "amoswap.w", kind = "node", cost = 2, complexity = 4,
-            required = { "a" }, pattern = "(atomicrmw cmpxchg GPR:$ptr, GPR:$cmp, GPR:$new)" }
-symas.isel{ node = "ATOMICRMW_XCHG", form = "lr.w", kind = "node", cost = 2, complexity = 3,
-            required = { "a" }, pattern = "(atomicrmw xchg GPR:$ptr, GPR:$new)" }
-symas.isel{ node = "fadd", form = "fadd.s", kind = "node", cost = 4, complexity = 2, required = { "f" } }
-symas.isel{ node = "fmul", form = "fmul.s", kind = "node", cost = 5, complexity = 2, required = { "f" } }
-symas.isel{ node = "fadd", form = "fadd.d", kind = "node", cost = 6, complexity = 2, required = { "d" } }
-symas.isel{ node = "READ_CSR", form = "csrrw", kind = "node", cost = 1, complexity = 2,
-            required = { "zicsr" }, pattern = "(read_register RISCVClassSystem)" }
-symas.isel{ node = "MEMBARRIER", form = "fence", kind = "node", cost = 1, complexity = 1,
-            flags = { "side_effects", "prefer" } }
-symas.isel{ node = "HINT", form = "pause", kind = "node", cost = 0, complexity = 1,
-            required = { "zihintpause" }, flags = { "prefer", "unprofitable" },
-            pattern = "Zihintpause: pause hints at spin-wait loops" }
-symas.isel{ node = "ISD", form = "c.addi", kind = "node", cost = 1, complexity = 3,
-            required = { "c" }, pattern = "C extension: same operation, 2-byte encoding" }
-symas.isel{ node = "ISD", form = "c.nop", kind = "node", cost = 0, complexity = 1,
-            required = { "c" }, flags = { "prefer" } }
-symas.isel{ node = "INSERT_SUBVECTOR", form = "vsetvli", kind = "node", cost = 1, complexity = 2,
-            required = { "v" }, pattern = "RVV: vsetvli sets vtype/vl for the following vector ops" }
-symas.isel{ node = "BINOP", form = "andn", kind = "node", cost = 1, complexity = 2,
-            required = { "zbb" }, pattern = "(and (not GPR:$a), GPR:$b)" }
-symas.isel{ node = "BINOP", form = "sh1add", kind = "node", cost = 1, complexity = 2,
-            required = { "zba" }, pattern = "(add (shl GPR:$a, 1), GPR:$b)" }
-symas.isel{ node = "ICMP", form = "czero.eqz", kind = "node", cost = 1, complexity = 2,
-            required = { "zicond" }, pattern = "(select (setcc GPR:$a, eq), GPR:$b, 0)" }
-
--- Macro fusion (RISCVMacroFusion.td: SimpleFusion / Fusion definitions).
-symas.fuse{ name = "lui-addi", a = "lui", b = "addi", kind = "macro",
-            flags = { "profitable", "same_reg", "adjacent" },
-            pattern = "TuneLUIADDIFusion: lui + addi forms a 32-bit constant" }
-symas.fuse{ name = "auipc-addi", a = "auipc", b = "addi", kind = "macro",
-            flags = { "profitable", "same_reg", "adjacent" },
-            pattern = "TuneAUIPCADDIFusion: pc-relative address with a low 12-bit offset" }
-symas.fuse{ name = "zexth", a = "sll", b = "srl", kind = "shift",
-            flags = { "profitable", "same_reg", "adjacent" },
-            pattern = "TuneZExtHFusion: slli rd,rs,48 + srli rd,rd,48" }
-symas.fuse{ name = "zextw", a = "sll", b = "srl", kind = "shift",
-            flags = { "profitable", "same_reg", "adjacent" },
-            pattern = "TuneZExtWFusion: slli rd,rs,32 + srli rd,rd,32" }
-symas.fuse{ name = "shifted-zextw", a = "sll", b = "srl", kind = "shift",
-            flags = { "profitable", "same_reg", "adjacent" },
-            pattern = "TuneShiftedZExtWFusion" }
-symas.fuse{ name = "ld-add", a = "ld", b = "add", kind = "mem_arith", latency = 4,
-            flags = { "profitable", "adjacent" }, pattern = "TuneLDADDFusion" }
-symas.fuse{ name = "add-load", a = "add", b = "ld", kind = "load_op", latency = 4,
-            flags = { "profitable", "adjacent" }, pattern = "TuneADDLoadFusion" }
-symas.fuse{ name = "auipc-load", a = "auipc", b = "ld", kind = "load_op",
-            flags = { "profitable", "adjacent" }, pattern = "TuneAUIPCLoadFusion" }
-symas.fuse{ name = "lui-load", a = "lui", b = "ld", kind = "load_op",
-            flags = { "profitable", "adjacent" }, pattern = "TuneLUILoadFusion" }
-symas.fuse{ name = "addi-load", a = "addi", b = "ld", kind = "load_op",
-            flags = { "profitable", "adjacent" }, pattern = "TuneADDILoadFusion" }
-symas.fuse{ name = "shxadd-load", a = "sh1add", b = "ld", kind = "load_op",
-            flags = { "profitable", "adjacent" }, pattern = "TuneSHXADDLoadFusion" }
-symas.fuse{ name = "mul-add", a = "mul", b = "add", kind = "mul_add",
-            flags = { "profitable", "adjacent" }, pattern = "TuneFusionMulAdd: M-ext has no FMA" }
-symas.fuse{ name = "logic-reg-reg", a = "and", b = "or", kind = "macro",
-            flags = { "profitable", "adjacent" }, pattern = "TuneFusionLogicRegReg" }
-symas.fuse{ name = "logic-reg-imm", a = "and", b = "addi", kind = "macro",
-            flags = { "profitable", "adjacent" }, pattern = "TuneFusionLogicRegImm" }
-symas.fuse{ name = "logic-imm-reg", a = "addi", b = "and", kind = "macro",
-            flags = { "profitable", "adjacent" }, pattern = "TuneFusionLogicImmReg" }
-symas.fuse{ name = "add-mem", a = "add", b = "sw", kind = "mem_arith",
-            flags = { "profitable", "adjacent" }, pattern = "TuneFusionAddMem" }
-symas.fuse{ name = "bfext", a = "sll", b = "srl", kind = "shift",
-            flags = { "profitable", "same_reg", "adjacent" }, pattern = "TuneBFExtFusion" }
-symas.fuse{ name = "vsetvli-vop", a = "vsetvli", b = "vadd.vv", kind = "vsetvli",
-            flags = { "profitable", "adjacent", "suppress_unfuse" },
-            pattern = "RVV: vsetvli + vector op is one fused dispatch group" }
-symas.fuse{ name = "branch-branch", a = "beq", b = "bne", kind = "branch_pair",
-            flags = { "profitable", "adjacent" }, pattern = "two taken branches merge into one" }
 
 print(symas.emit())

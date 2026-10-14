@@ -17,7 +17,7 @@ folded into one bank.
 Usage:
     python3 scripts/spec-compiler.py [--compiler PATH] [-o OUT.symas]
         [--compression none|zlib|zstd] [--validate] [--emit-spec [FILE]]
-        [--spec-dir DIR] [--lua LUA] inputs...
+        [--spec-dir DIR] [--dsl-dir DIR] [--lua LUA] inputs...
 
     python3 scripts/spec-compiler.py --list-arches [--spec-dir DIR]
 """
@@ -56,17 +56,19 @@ def find_lua(explicit):
     return os.environ.get("LUA", "lua")
 
 
-def run_spec(lua, spec, spec_dir):
+def run_spec(lua, spec, spec_dir, dsl_dir=None):
     """Run one .dsymspec under stock Lua; return its JSON document."""
     env = dict(os.environ)
-    # The DSL module lives next to the specs (dsl.lua) and beside the
-    # spec file itself; both are added to LUA_PATH.
+    # Backend modules resolve beside the source and in stdspec; dsl.lua
+    # comes from the external runtime directory or the existing LUA_PATH.
     path_entries = []
     parent = os.path.dirname(os.path.abspath(spec))
     if parent:
         path_entries.append(os.path.join(parent, "?.lua"))
     if spec_dir:
         path_entries.append(os.path.join(os.path.abspath(spec_dir), "?.lua"))
+    if dsl_dir:
+        path_entries.append(os.path.join(os.path.abspath(dsl_dir), "?.lua"))
     if env.get("LUA_PATH"):
         path_entries.append(env["LUA_PATH"])
     else:
@@ -82,10 +84,6 @@ def run_spec(lua, spec, spec_dir):
     if not doc:
         sys.stderr.write("error: %s: spec produced no output "
                          "(expected a JSON document on stdout)\n" % spec)
-        sys.exit(1)
-    if ')JSON"' in doc:
-        sys.stderr.write("error: %s: JSON contains raw-string delimiter\n"
-                         % spec)
         sys.exit(1)
     return doc
 
@@ -111,7 +109,9 @@ def main(argv=None):
     parser.add_argument("--lua", default=None,
                         help="Lua interpreter for the DSL step")
     parser.add_argument("--spec-dir", default=None,
-                        help="directory containing dsl.lua and standard specs")
+                        help="directory containing standard specs and backend modules")
+    parser.add_argument("--dsl-dir", default=os.environ.get("SANDSTONE_DSL_DIRECTORY"),
+                        help="directory containing the external dsl.lua runtime")
     parser.add_argument("--compression", default="zlib",
                         choices=("none", "zlib", "zstd"),
                         help="payload compression (default: zlib)")
@@ -134,7 +134,7 @@ def main(argv=None):
         parser.error("at least one .dsymspec input is required")
 
     lua = find_lua(args.lua)
-    documents = [run_spec(lua, spec, spec_dir) for spec in args.inputs]
+    documents = [run_spec(lua, spec, spec_dir, args.dsl_dir) for spec in args.inputs]
 
     if args.emit_spec is not None:
         joined = "\n".join(documents) + "\n"

@@ -1,27 +1,20 @@
 # DomSymAsCC stdspec
 
-For a smaller, directly loadable set of representative instruction encodings,
-see `../../simple-isa/README.md`, `../../simple_isa.py`, and the header-only
-C++ interface `../../simple_isa.hpp`.
-
-`.dsymspec` files are assembler-target specifications written in the
+`.dsymspec` files are architecture specifications written in the
 DomSymAsCC DSL (a small Lua library run under the embedded DomMune
 interpreter). Each file describes one architecture's registers, extensions,
 relocations, sections, and a representative instruction set, and prints a
-JSON document that `domlibs/domsymas/compiler` maps onto `domsymas::Builder`
-to emit a SymAS databank (`.symas`).
+JSON document with assembler records and a structured `backend` extension
+for register allocation, instruction selection, and instruction scheduling.
+`domlibs/domsymas/compiler` maps the assembler records onto
+`domsymas::Builder` to emit a SymAS databank (`.symas`). Compiler consumers
+read the `backend` extension from the emitted JSON; the existing SymAS
+builder does not persist that extension.
 
 ```text
   .dsymspec (Lua DSL)  ->  JSON document  ->  domsymas::Builder  ->  .symas
        (DomMune)             (this file)        (spec_document.cpp)
 ```
-
-A spec may also describe *how the target prefers to be used*: which form an
-operation lowers to, what that form costs, which pipeline resources it uses,
-which CPU models exist, what each model changes, and which instruction pairs
-may be fused. Those records go into the optional `ISEL`, `SCHED`, `UNITS`,
-`MODELS`, `TUNING` and `FUSION` sections (SymAS format 1.1) and are documented
-in the last section of this file.
 
 ## Using the DSL
 
@@ -70,19 +63,9 @@ one another by **name**; the C++ compiler resolves names to numeric ids.
   "sections":   [ Section ],
   "linkages":   [ Linkage ],
   "relocs":     [ Reloc ],
-  "models":     [ Model ],
-  "units":      [ Unit ],
-  "isels":      [ Isel ],
-  "scheds":     [ Sched ],
-  "tunes":      [ Tune ],
-  "fusions":    [ Fusion ],
   "debug":      [ Debug ]
 }
 ```
-
-The six optimization arrays (`models` .. `fusions`) are optional; a document
-that omits them produces a bank without the optimization sections, which is
-valid.
 
 ### Target
 
@@ -128,7 +111,7 @@ register **name** (or absent). `width` ∈ `{8,16,32,64,80,128,256,512}`.
 ```
 
 `source` is the Algol-like encoding language parsed by
-Sandstone (MetaTk's `DSLtk`). Statements: `emit8`, `emit16le/be`,
+`domlibs/domsymas` (`domdsl`). Statements: `emit8`, `emit16le/be`,
 `emit32le/be`, `emit64le/be`, `emit_imm(width,v)`, `emit_disp(width,v)`,
 `emit_modrm(dst,src)`, `emit_sib(a,b,c)`, `emit_relocation(sym,TYPE)`,
 `emit_reloc`, `require(cond);`, `if (...) {...} else {...}`, `fail("msg")`.
@@ -187,128 +170,207 @@ class.
 code data meta`; `content` ∈ `unknown code data meta`. `reloc.overflow` ∈
 `error truncate`; `reloc.addend` ∈ `explicit infield implied`. `debug.kind` ∈
 `target register feature mnemonic form operand encoder syntax section linkage
-reloc isel sched unit model tune fusion`.
-
-## Optimization records
-
-These records answer "how should a consumer use this target", not "how is it
-encoded". Every record references other records **by name**; the compiler
-resolves those names against the same document and fails if a name is unknown.
-
-### Form references
-
-Instruction selection, scheduling, tuning and fusion all name an instruction
-form with a *form reference* string:
-
-| Reference      | Resolves to                                        |
-| -------------- | -------------------------------------------------- |
-| `"add"`        | every form of the mnemonic `add`                   |
-| `"add#2"`      | the second form of that mnemonic (1-based)          |
-| `"add/add_rr"` | the form of that mnemonic that uses encoder `add_rr` |
-
-A reference may also be a list of such strings. `sched` and `tune` expand to
-one record per matching form; `fuse` emits one record per `(a, b)` combination.
-A form name that resolves to no form is an error.
-
-### Model (machine description)
-
-```jsonc
-{ "name": "skylake-client", "vendor": "intel",
-  "issue_width": 6, "rob": 224, "loop_buffer": 50,
-  "load_latency": 5, "mispredict": 14,
-  "high_latency": 0, "high_uops": 0,
-  "flags": [ "out_of_order", "has_stalls", "default" ],
-  "features": [ "sse2", "avx" ], "tune": [ "macrofusion" ],
-  "desc": "6-wide, 224-entry ROB" }
-```
-
-`rob` is the reorder (micro-op) buffer size; `0` means in-order. `features`
-lists architectural features (see `Feature`), `tune` lists tuning-only
-features. `flags` ∈ `in_order post_ra complete prefer_post_ram no_itineraries
-vliw predicable morphable has_stalls forwarding out_of_order bundle_width
-default`. Exactly one model per target should carry `default`.
-
-### Unit (functional unit / execution port)
-
-```jsonc
-{ "name": "p0", "model": "skylake-client", "kind": "int",
-  "count": 1, "latency": 1, "throughput": 1,
-  "flags": [ "pipelined" ] }
-```
-
-`model` names a model or is empty for a target-wide unit. `kind` ∈ `other int
-fp load store branch vector mask divider mul complex pipe system`. `flags` ∈
-`shared superscalar pipelined noncoincident`.
-
-### Isel (instruction selection)
-
-```jsonc
-{ "node": "add", "kind": "node", "form": "add#2", "cost": 1,
-  "complexity": 2, "priority": 0, "flags": [ "commutes" ],
-  "required": [ "sse4.2" ], "forbidden": [],
-  "alts": [ "add" ], "pattern": "(add GPR:$a, (i64 0))" }
-```
-
-`kind` ∈ `node pattern pseudo expansion select postisel copy aggressive`.
-`flags` ∈ `prefer expand needs_expand variadic commutes chain side_effects
-unprofitable convergent tied`. `pattern` is documentation only. `alts` lists the
-other forms of the same operation, best first.
-
-### Sched
-
-```jsonc
-{ "form": "add", "name": "WriteALU", "latency": 1, "uops": 1, "cycles": 0,
-  "flags": [ "variadic" ], "writes": [ "p0" ], "reads": [ "p0" ] }
-```
-
-`latency` of `4294967295` means variadic. `flags` ∈ `variadic multicycle
-serializing barrier may_fault side_effects fused unmodeled nop`. At most one
-sched record may name a given form.
-
-### Tune (per-model optimization hint)
-
-```jsonc
-{ "model": "atom", "kind": "latency", "name": "latency", "form": "imul",
-  "form2": "", "value": 4, "flags": [ "override" ],
-  "features": [], "desc": "in-order multiply latency" }
-```
-
-`kind` ∈ `generic latency uops cost prefer avoid threshold unroll vec_width
-pair strategy preroll split`. `prefer` raises a form's selection priority,
-`avoid` removes it from the candidate set for that model, and `latency`,
-`uops` and `cost` override the base record. `form2` scopes a `pair` hint to
-two forms. `flags` ∈ `only_if override experimental disable negative`.
-
-### Fusion
-
-```jsonc
-{ "name": "cmp-jcc", "a": "cmp", "b": "jcc", "kind": "cmp_branch",
-  "latency": 1, "flags": [ "profitable", "requires_flags" ],
-  "features": [ "macrofusion" ], "pattern": "cmp/test ; jcc" }
-```
-
-`kind` ∈ `macro cmp_branch branch_pair mem_arith mul_add shift mov load_op
-cmp_select vsetvli target`. `flags` ∈ `profitable requires_flags same_reg
-adjacent lock_eligible suppress_unfuse bidirectional`.
+reloc`.
 
 ## Layout
 
-Each file in this directory (`<arch>.dsymspec`) mirrors a canonical backend
-key from `domainlet/bekern/arch`. Register files, register classes, ABI
+Each file in this directory (`<arch>.dsymspec`) uses an architecture key.
+The original register files, register classes, ABI
 metadata, extensions, and target triples are drawn from
 `domainlet/bekern/arch/_arch_specs.py`; instruction encodings follow the
 corresponding ISA manuals and are cross-checked with the `arch_oracle` /
 `isa_reference` MCP tools.
 
-The optimization blocks are cross-checked with the `tablegen_inquiry` MCP tool,
-which reads the same LLVM `.td` files under `$TABLEGEN_LIB`
-(`llvm/lib/Target/<Arch>`): `SchedMachineModel` records supply the model
-numbers (issue width, micro-op buffer, load latency, mispredict penalty),
-`ProcResource`/`ProcResGroup` definitions supply the functional units, the
-`WriteRes<...>`/`SchedWriteRes<...>` tables supply per-class latencies, and the
-macro-fusion definitions (for example `RISCVMacroFusion.td`) supply the fusion
-pairs. Each spec names the exact files it used in a comment above its
-optimization block. Targets that LLVM does not model with a
-`SchedMachineModel` (AVR, BPF, LoongArch, SPARC, WebAssembly, NVPTX, SPIR-V,
-DirectX) take their numbers from the architecture manuals and from
-`arch_oracle`, and say so.
+## Compiler backend extension
+
+All 27 specifications load `require("backend").new("<arch>")`.
+`backend.lua` delegates to the existing DSL builder and adds the generated
+JSON object from `backend/<arch>.lua` to `emit()`. This preserves JSON
+`null`, empty arrays, and structured TableGen DAGs without requiring file
+I/O or a JSON parser in DomMune. Put this directory **before** the existing
+compiler DSL directory on the Lua module search path.
+
+The three additional architectures are:
+
+| Key | Target | Compiler-specific information |
+| --- | --- | --- |
+| `msp430` | Classic 16-bit MSP430, TI EABI | GR8/GR16 overlap, reserved PC/SP/SR/CG, conditional R4 frame pointer, normal/interrupt save sets, tied two-address operands, carry dependencies, constant-generator selection, SLEIGH p-code |
+| `lanai` | 32-bit big-endian Lanai | Constant registers, reserved aliases, conditional R14 base pointer, stack/inreg/fast argument rules, spill-offset expansion, ALU/load-store resources and LLVM scheduling model |
+| `xcore` | XS1 XCore | GRRegs allocation class, reserved CP/DP/SP/LR, conditional R10 frame pointer, argument/return registers, register scavenging, scaled short/long spill offsets, resource-I/O ordering |
+
+The assembler subsets are intentionally representative; the three new
+targets export **all target TableGen instruction records** for compiler
+selection, including pseudos and custom-packed encodings. For existing
+targets, instruction records cover every TableGen form matching a declared
+assembly mnemonic. SPIR-V and DirectX export their available target
+instructions independently of assembly spellings. `coverage` lists matched
+and unmatched mnemonics. TableGen record IDs are separate from assembler
+register names; use `AsmName`, `AltNames`, `SubRegs` and `SubRegIndices` to
+map them, and apply ISA-mode/feature predicates.
+
+### Schema (`backend.schema = 1`)
+
+The extension has these fields:
+
+* **`register_allocation`**: resolved records keyed by TableGen ID.
+  Register classes retain `RegTypes`, `Size`, `Alignment`, `MemberList`,
+  `AltOrders`, allocation priorities, copy costs and pressure-set properties.
+  Registers retain encodings, DWARF numbers, aliases and subregister
+  relations. Calling-convention actions, stack slots, shadow registers,
+  and callee-saved sets are included when provided by TableGen.
+* **`instructions`**: instruction IDs map to structured input/output
+  operand DAGs, operand ties/early-clobbers in `Constraints`, implicit
+  `Defs`/`Uses`, `Pattern` DAGs, feature predicates, commutation and
+  rematerialization flags, memory/control effects, code size, `SchedRW`,
+  itineraries, and `Inst` bit vectors. Bit-vector entries are ordered
+  least-significant bit first; integers are fixed bits, `varbit` entries
+  reference operand bits, and `null` bits are unresolved. A custom
+  encoding cannot be reconstructed by replacing null bits with zero.
+* **`instruction_selection`**: operand definitions, immediate predicates,
+  feature predicates, complex address matchers, and applicable standalone
+  selection patterns. DAGs preserve operators, arguments and operand names.
+  C++ predicate/transform bodies are data for a consumer to implement;
+  they are not executed by this DSL.
+* **`instruction_scheduling`**: CPU models, issue width, buffer sizes,
+  resources, write latency, resource occupancy, read advances, itinerary
+  stages, scheduling aliases and instruction overrides. Model coverage is
+  recorded in `coverage.selected_schedule_models`. The large X86, AArch64,
+  ARM, AMDGPU, Hexagon, Mips, RISC-V and PowerPC banks select representative CPU models;
+  other targets retain all available models. Referenced records are retained
+  in the dependency closure.
+* **`dependencies`**: transitive record references needed by the exported
+  data, including anonymous calling-convention/scheduling rules, selection
+  fragments, value types and DAG operators. A `{"kind":"def","def":"ID"}`
+  reference resolves across all these record maps. Each record retains
+  source locations and inherited TableGen class names.
+* **`compiler_policy`** (new architectures, AArch64 and RISC-V): sourced ABI
+  rules and LLVM C++ rules beyond TableGen, including reserved-register masks,
+  conditional frame/base-pointer reservations, spill requirements,
+  scavenging rules and scheduling hazards.
+* **`sleigh`** (AArch64, AVR, RV32, RV64, MSP430, TriCore): DomSleigh
+  constructors with p-code, token fields, address spaces, contexts,
+  attachments and macros. Helper constructors are included because top-level
+  semantics reference them. TriCore additionally includes its parsed compiler
+  spec: argument/return locations, preserved registers and data layout.
+* **`provenance` / `coverage`**: tool/source revision, source SHA-256s,
+  upstream links, licensing, exported instruction scope and limitations.
+
+**Allocator rules:** `MemberList` is a register-set expression, not a flat
+allocation mask. Expand `add`/`sub`/`sequence`/tuple expressions, apply
+reserved-register rules, and track overlapping subregisters. A class's
+`isAllocatable` bit does not imply every member is allocatable in every
+function. ABI-preserved subregisters may cover only part of a physical
+register.
+
+**Scheduler rules:** choose a processor model before resolving `SchedRW`,
+`InstRW`, variants, resources and read advances. Latency and resource
+occupancy are different quantities. Honor implicit register dependencies,
+memory ordering, barriers, delay slots, convergent operations and calls.
+`CompleteModel = 0` explicitly permits missing model entries. Negative
+default timing values and JSON `null` mean unspecified/unresolved; they
+are not zero-cost operations. LLVM's JSON dump can leave memory-effect
+bits unresolved pending pattern inference. MSP430 and XCore do not provide
+complete numerical timing models; their policies retain dependencies and
+ordering constraints without inventing cycle counts. Virtual ISAs such as
+SPIR-V/DirectX/Wasm do not define physical execution-port timings.
+
+### Regeneration
+
+Dependencies: Python 3, the installed `domsleigh`, Lua, `llvm-tblgen` and
+`llvm-mc`. Use target **and include** sources matching the tool version.
+The environment's unversioned architecture bank contains newer TableGen
+syntax, so this snapshot uses LLVM **22.1.8**, commit
+`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`, with LLVM 22.1.8's tool.
+
+```sh
+python stdspec/tools/extract_backend.py \
+  --src /path/to/llvm-project/llvm/lib/Target \
+  --include /path/to/llvm-project/llvm/include \
+  --revision llvmorg-22.1.8 \
+  --sleigh /path/to/Ghidra-CPU
+
+python stdspec/tools/validate_backend.py \
+  --dsl-dir /path/to/domsymas/compiler/stdspec
+```
+
+`--arch <key>` can be repeated to regenerate selected architectures.
+`tools/backend_policies.json` contains the manually reviewed C++/ABI rules
+and their web references. Web searches were supplemented by reading LLVM's
+upstream calling-convention and register-info files directly. In particular,
+Lanai C arguments are normally stack-passed, and XCore's frame pointer is
+R10, not an extra architectural register. AAPCS64 and the RISC-V psABI were
+also checked on the web: AArch64 v8-v15 preservation covers only the low
+64 bits under the base PCS, and RISC-V gp/tp are unallocatable. Their
+policies include conditional reservations and vector/partial-register ABI
+constraints useful for allocation.
+
+Validation executes every spec through the real DSL, parses the emitted
+JSON, checks transitive record references and implicit registers, verifies
+representative ties/reservations/scheduling facts, and compares new MSP430
+and Lanai encoders against `llvm-mc`. XCore has no LLVM assembly parser;
+its exposed short encoders are checked against resolved TableGen bit vectors
+at register/immediate boundaries.
+
+To emit a document, for example:
+
+```sh
+LUA_PATH='stdspec/?.lua;/path/to/domsymas/compiler/stdspec/?.lua;;' \
+  lua stdspec/msp430.dsymspec > msp430.json
+```
+
+## C++ access (`Symspec.hpp`)
+
+`../Symspec.hpp` is a header-only C++20 API for loading, parsing,
+serializing and feeding these files to other apps. It links only
+Boost.JSON (`-lboost_json`).
+
+```cpp
+#include "Symspec.hpp"
+symspec::Repository repo("stdspec");
+auto spec = repo.load("msp430").value(); // backend Lua, no Lua runtime
+auto add = spec.record("ADD16rr").value(); // ties, Defs/Uses, Pattern, SchedRW
+auto members = spec.register_members("GR16").value(); // allocation order
+spec.save("msp430.json");
+spec.feed([](std::string_view json) -> symspec::Status {
+    return forward_to_app(json);
+});
+```
+
+It parses emitted JSON, generated `backend/*.lua` modules and the original
+`.dsymspec` DSL (via the existing Lua runtime or a host `Evaluator`),
+validates schema/references, runs backend queries (record lookup,
+dependency closure, register-set expansion, reserved registers, CPU models),
+edits/copies specs, emits JSON/Lua/NDJSON, integrates with `dsl::Serializer`
+via `symspec::Codec`, and discovers architectures lazily through
+`symspec::Repository`. See `../tests/symspec_test.cc` for roundtrips,
+bank validation and app-integration coverage.
+
+## Sandstone compiler integration
+
+The compiler core uses `Symspec.hpp` and links Boost.JSON. Its public API
+provides `domsymas::cc::compile_spec(spec, builder)`, `compile_file(path,
+builder, options)` and the existing `compile_document(json, builder)`.
+`Result::spec_json` preserves the complete document, including backend
+metadata and unknown extensions. Backend-only modules can be loaded and
+exported, but cannot produce assembler banks.
+
+The CLI loads JSON, original DSL sources and generated backend modules:
+
+```sh
+sandstone-spec-compiler --dsl-dir /path/to/existing/compiler/stdspec \
+  --validate -o msp430.symas stdspec/msp430.dsymspec
+sandstone-spec-compiler --emit-backend msp430.backend.json \
+  stdspec/backend/msp430.lua
+```
+
+`--lua` selects the Lua executable; `--spec-dir` adds a module search
+directory. `--dsl-dir` supplies the existing `dsl.lua` implementation,
+or set `SANDSTONE_DSL_DIRECTORY` in the environment. The Python wrapper
+`scripts/spec-compiler.py` also accepts `--dsl-dir`. Multiple exports are
+one JSON document per input, separated by newlines.
+
+Configure CMake with `-DSANDSTONE_DSL_DIRECTORY=/path/to/dsl/runtime` to
+enable source-loading checks and provide the runtime to the pipeline test.
+The `sandstone_symspec` interface target supplies C++20, includes and
+Boost.JSON linkage. Installation includes `Symspec.hpp` and the standard
+backend modules.

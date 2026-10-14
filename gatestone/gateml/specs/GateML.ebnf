@@ -1,0 +1,20 @@
+document     = "frontend", identifier, ";", { section } ;
+section      = lexer | parser | ast | adapter | profile ;
+lexer        = "lexer", "{", { lexdecl }, "}" ;
+lexdecl      = ("token" | "skip"), identifier, "=", string, ";" ;
+parser       = "parser", "{", { start | rule }, "}" ;
+start        = "start", identifier, ";" ;
+rule         = "rule", identifier, "=", alternative,
+               { "|", alternative }, ";" ;
+alternative  = { identifier }, "=>", identifier ;
+ast          = "ast", "{", { "node", identifier, ";" }, "}" ;
+adapter      = "adapter", "{", { "lower", identifier, "=", identifier, ";" }, "}" ;
+profile      = "profile", "{", { "option", identifier, "=", string, ";" }, "}" ;
+identifier   = (letter | "_"), { letter | digit | "_" } ;
+letter       = "A".."Z" | "a".."z" ;
+digit        = "0".."9" ;
+string       = '"', { ordinary | escape }, '"' ;
+escape       = "\\", ('"' | "\\" | "n" | "r" | "t") ;
+(* ordinary excludes double quote, backslash, newline, and NUL. *)
+(* Whitespace and // line comments are discarded between tokens. *)
+(* Reserved keywords cannot be identifiers. __np_ is reserved by NovoParse. *)

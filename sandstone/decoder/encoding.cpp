@@ -4,6 +4,7 @@
 #include "sandstone.hpp"
 
 #include <cctype>
+#include <bit>
 
 namespace domsymas::encoding {
 namespace {
@@ -76,7 +77,12 @@ static bool lex_one(const std::string &src, size_t &pos, Tok &out,
             return false;
         }
         try {
-            out.num = std::stoll(src.substr(save, pos - save), nullptr, base);
+            // Hex literals describe instruction bit patterns, including bit 63.
+            // Preserve all 64 bits in the interpreter's signed storage.
+            out.num = base == 16
+                ? std::bit_cast<int64_t>(static_cast<uint64_t>(
+                      std::stoull(src.substr(save, pos - save), nullptr, base)))
+                : std::stoll(src.substr(save, pos - save), nullptr, base);
         } catch (const std::exception &) {
             err = "integer out of range";
             return false;

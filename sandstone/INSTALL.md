@@ -8,8 +8,10 @@
 | C++ compiler | C++20 (GCC 10+, Clang 12+) | Core library, compiler, assembler |
 | C compiler | C11 | C ABI + assembler |
 | zlib | any | **Required**: default SymAS payload codec |
+| Boost.JSON | 1.75+ | Required when building the spec compiler; also used by `Symspec.hpp` |
 | Python | 3.8+ | `scripts/spec-compiler.py`, ISA loader, tests |
 | stock Lua | 5.3+ | Running `.dsymspec` specs (any `lua` on `PATH`) |
+| DSL runtime | `dsl.lua` | Existing DomSymAsCC DSL module; set `--dsl-dir` or `SANDSTONE_DSL_DIRECTORY` |
 | libzstd | any | Optional: zstd banks (auto-detected) |
 | SWIG | 4.0+ | Optional: language bindings |
 | Doxygen | any | Optional: API docs (`-DSANDSTONE_BUILD_DOCS=ON`) |
@@ -18,7 +20,7 @@
 Debian/Ubuntu:
 
 ```sh
-sudo apt install cmake g++ zlib1g-dev python3 lua5.4 libzstd-dev swig doxygen
+sudo apt install cmake g++ zlib1g-dev libboost-json-dev python3 lua5.4 libzstd-dev swig doxygen
 ```
 
 ## Build
@@ -37,11 +39,17 @@ Useful flags:
 -DSANDSTONE_BUILD_TESTS=ON      # smoke + pipeline + ISA tests (default ON)
 -DSANDSTONE_BUILD_DOCS=ON       # Doxygen reference (default OFF)
 -DSANDSTONE_WITH_MUNE=ON        # legacy DomMune CLI (needs DomWEAVE sources)
+-DSANDSTONE_DSL_DIRECTORY=/path/to/compiler/stdspec # external dsl.lua for source tests
 -DCMAKE_INSTALL_PREFIX=/usr/local
 ```
 
 Without libzstd the build still succeeds; requesting or opening zstd
 banks then fails with `DOMSYMAS_ERR_BAD_COMPRESSION`.
+
+JSON documents and generated `stdspec/backend/*.lua` data modules load
+without Lua or the DSL runtime. Original `.dsymspec` sources need both.
+The CMake DSL directory setting supplies the runtime to source/pipeline
+tests; use `--dsl-dir` or the environment variable when running the CLI.
 
 ## Install
 

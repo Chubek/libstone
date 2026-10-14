@@ -1,4 +1,4 @@
-// sandstone-spec-compiler — JSON spec documents -> SymAS databank (.symas).
+// sandstone-spec-compiler — Symspec documents -> SymAS banks / backend JSON.
 //
 // Pipeline:
 //
@@ -8,10 +8,10 @@
 //
 // Multiple JSON inputs are folded into a single databank, so one bank may
 // describe several instruction sets, syntaxes, and object formats. This
-// driver is intentionally dependency-free (C++20 + the sandstone library
-// only); the DomMune-embedded driver in main.cpp is built only when the
-// SANDSTONE_SPEC_COMPILER_MUNE option is enabled and DomMune is available.
+// JSON and generated backend modules use Boost.JSON through Symspec.hpp.
+// Original DSL sources use stock Lua or the optional DomMune driver.
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -27,44 +27,31 @@ void usage(const char *argv0) {
     std::cerr
         << "usage: " << argv0
         << " [-o OUT.symas] [--compression none|zlib|zstd] [--validate]\n"
-        << "                  [--emit-spec [FILE]] [--spec-dir DIR] inputs...\n"
+        << "                  [--emit-spec [FILE] | --emit-backend [FILE]]\n"
+        << "                  [--spec-dir DIR] [--dsl-dir DIR] [--lua LUA] inputs...\n"
         << "\n"
-        << "Compile JSON spec documents (as emitted by the dsl.lua DSL,\n"
-        << "see compiler/stdspec/README.md) into a SymAS (.symas) databank.\n"
-        << "Use scripts/spec-compiler.py to compile .dsymspec sources; it\n"
-        << "drives stock Lua to produce the JSON this tool consumes.\n"
+        << "Load JSON, .dsymspec Lua sources, or generated backend .lua modules.\n"
+        << "Assembler documents compile into SymAS banks; backend-only modules\n"
+        << "can be validated and exported with --emit-backend.\n"
         << "\n"
         << "  -o OUT            output .symas path (required with several inputs\n"
         << "                    or --emit-spec to a file; with one input the\n"
         << "                    default replaces the input suffix with .symas)\n"
         << "  --compression C   none, zlib (default), or zstd\n"
         << "  --validate        reload the bank and run semantic validation\n"
-        << "  --emit-spec [F]   write the merged JSON document to F ('-' or\n"
+        << "  --emit-spec [F]   write one JSON document per input to F ('-' or\n"
         << "                    absent = stdout) instead of building a bank\n"
-        << "  --spec-dir DIR    accepted for CLI compatibility with\n"
-        << "                    scripts/spec-compiler.py; otherwise unused\n"
+        << "  --emit-backend [F] export backend JSON (one document per input)\n"
+        << "  --spec-dir DIR    extra Lua module directory for backend modules\n"
+        << "  --dsl-dir DIR     directory containing the external dsl.lua runtime\n"
+        << "  --lua LUA         Lua executable (default: lua)\n"
         << "  --help            print this text\n";
 }
 
-std::string read_file(const std::string &path, bool &ok) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        ok = false;
-        return {};
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    ok = !f.bad();
-    return ss.str();
-}
-
 std::string default_output(const std::string &input) {
-    const std::string kSuffix = ".json";
-    if (input.size() >= kSuffix.size() &&
-        input.compare(input.size() - kSuffix.size(), kSuffix.size(), kSuffix) ==
-            0)
-        return input.substr(0, input.size() - kSuffix.size()) + ".symas";
-    return input + ".symas";
+    auto path = std::filesystem::path(input);
+    path.replace_extension(".symas");
+    return path.string();
 }
 
 } // namespace
@@ -75,6 +62,10 @@ int main(int argc, char **argv) {
     std::string spec_dir;
     bool validate = false;
     bool emit_spec = false;
+    bool emit_backend = false;
+    symspec::LoadOptions load_options;
+    if (const char *directory = std::getenv("SANDSTONE_DSL_DIRECTORY"))
+        load_options.lua.dsl_directory = directory;
     std::string emit_dest = "-";
     std::vector<std::string> inputs;
 
@@ -97,12 +88,23 @@ int main(int argc, char **argv) {
             compression = need_value("--compression");
         } else if (a == "--validate") {
             validate = true;
-        } else if (a == "--emit-spec") {
-            emit_spec = true;
+        } else if (a == "--emit-spec" || a == "--emit-backend") {
+            if (emit_spec || emit_backend) {
+                std::cerr << "sandstone-spec-compiler: choose one export mode\n";
+                return 2;
+            }
+            emit_spec = a == "--emit-spec";
+            emit_backend = a == "--emit-backend";
             if (i + 1 < argc && argv[i + 1][0] != '-')
+                emit_dest = argv[++i];
+            else if (i + 1 < argc && std::string(argv[i + 1]) == "-")
                 emit_dest = argv[++i];
         } else if (a == "--spec-dir") {
             spec_dir = need_value("--spec-dir");
+        } else if (a == "--dsl-dir") {
+            load_options.lua.dsl_directory = need_value("--dsl-dir");
+        } else if (a == "--lua") {
+            load_options.lua.executable = need_value("--lua");
         } else if (!a.empty() && a[0] == '-') {
             std::cerr << "sandstone-spec-compiler: unknown option '" << a
                       << "'\n";
@@ -111,32 +113,38 @@ int main(int argc, char **argv) {
             inputs.push_back(a);
         }
     }
-    (void)spec_dir; // informational only for this driver
+    if (!spec_dir.empty()) load_options.lua.module_directories.emplace_back(spec_dir);
 
     if (inputs.empty()) {
-        std::cerr << "sandstone-spec-compiler: at least one JSON input is "
+        std::cerr << "sandstone-spec-compiler: at least one input is "
                      "required\n";
         return 2;
     }
 
-    std::vector<std::string> documents;
+    std::vector<symspec::Spec> documents;
     for (const auto &input : inputs) {
-        bool ok = false;
-        std::string text = read_file(input, ok);
-        if (!ok) {
-            std::cerr << "sandstone-spec-compiler: cannot read '" << input
-                      << "'\n";
+        auto spec = symspec::Spec::load(input, load_options);
+        if (!spec) {
+            std::cerr << "sandstone-spec-compiler: " << input << ": "
+                      << spec.error().message << "\n";
             return 1;
         }
-        documents.push_back(std::move(text));
+        documents.push_back(std::move(*spec));
     }
 
-    if (emit_spec) {
+    if (emit_spec || emit_backend) {
         std::string joined;
         for (size_t i = 0; i < documents.size(); i++) {
             if (i)
                 joined += "\n";
-            joined += documents[i];
+            auto json = documents[i].serialize(emit_backend ? symspec::OutputFormat::backend_json
+                                                           : symspec::OutputFormat::json);
+            if (!json) {
+                std::cerr << "sandstone-spec-compiler: " << inputs[i] << ": "
+                          << json.error().message << "\n";
+                return 1;
+            }
+            joined += *json;
         }
         if (emit_dest == "-") {
             std::cout << joined;
@@ -150,8 +158,10 @@ int main(int argc, char **argv) {
                 return 1;
             }
             f << joined << "\n";
+            f.close();
+            if (!f) return 1;
         }
-        return 0;
+        return std::cout ? 0 : 1;
     }
 
     domsymas::Builder builder(true);
@@ -169,7 +179,7 @@ int main(int argc, char **argv) {
 
     for (size_t i = 0; i < documents.size(); i++) {
         domsymas::cc::Result r =
-            domsymas::cc::compile_document(documents[i], builder);
+            domsymas::cc::compile_spec(documents[i], builder);
         if (!r.ok) {
             std::cerr << "sandstone-spec-compiler: " << inputs[i] << ": "
                       << r.error << "\n";

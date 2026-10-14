@@ -18,7 +18,7 @@
 #include <string>
 
 #include "sandstone.hpp"     // domsymas::Builder, domsymas::Databank
-#include "json.hpp"          // domsymas::cc::json
+#include "Symspec.hpp"
 
 namespace domsymas::cc {
 
@@ -38,6 +38,15 @@ struct Result {
 // On success the supplied builder has been populated with all records and
 // cross-links; the caller still owns the final `build()`/`save_file()` step.
 Result compile_document(const std::string &document_json, domsymas::Builder &builder);
+
+// Compile the assembler records of a validated specification. Backend metadata
+// is retained in Result::spec_json; the current SymAS bank cannot encode it.
+// Backend-only specs can be queried/exported, but cannot build an assembler bank.
+Result compile_spec(const symspec::Spec &spec, domsymas::Builder &builder);
+
+// Load JSON, a .dsymspec source, or a generated backend module via Symspec.
+Result compile_file(const symspec::Path &path, domsymas::Builder &builder,
+                    const symspec::LoadOptions &options = {});
 
 // Convenience: compile a document straight into an in-memory databank.
 Result compile_document_to_bank(const std::string &document_json, domsymas::Databank &out);
