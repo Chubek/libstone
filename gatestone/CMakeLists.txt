@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(Gatestone VERSION 0.1.0 LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/LibstoneBuild.cmake")
+if(LIBSTONE_BUILD_TESTS)
+  enable_testing()
+endif()
+add_subdirectory(gateml)

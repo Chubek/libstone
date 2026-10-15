@@ -1,0 +1,5 @@
+#pragma once
+#include <string_view>
+namespace gateml {
+inline constexpr std::string_view library_source = R"GateMLStdlib(@GATEML_STDLIB_SOURCE@)GateMLStdlib";
+}

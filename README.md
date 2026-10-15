@@ -44,6 +44,9 @@ cmake -S libstone/yellowstone/qbfd -B build-qbfd
 - `LIBSTONE_BUILD_TESTS`, `LIBSTONE_BUILD_TOOLS`, and
   `LIBSTONE_ENABLE_WARNINGS` are the top-level defaults. Standalone tests
   default to `BUILD_TESTING`.
+- `LIBSTONE_BUILD_GATESTONE=ON` builds the C++20 MetaChain-based GateML
+  language, embedded ML standard library, and `gateml-cli` (off by default).
+  See [the GateML manual](gatestone/gateml/README.md).
 - Each component has its own `*_BUILD_TESTS` option. Components with tools also
   have `*_BUILD_TOOLS`. Tests may build CLI executables as test helpers even
   when tool installation is disabled.
