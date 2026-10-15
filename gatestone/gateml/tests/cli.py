@@ -15,6 +15,8 @@ BUNDLES = {
     "Python": 31,
     "Ruby": 30,
     "Delphi": 29,
+    "Typescript": 29,
+    "Scheme": 10,
 }
 
 
@@ -90,10 +92,27 @@ with tempfile.TemporaryDirectory(dir=build) as directory:
         run(novoparse, "generate", str(grammar), "--profile", "C",
             "-o", str(temporary / f"{descriptor['name']}.h"))
         sample = temporary / f"sample.{name}"
-        sample.write_text("1 + 2 * 3\n")
+        sample.write_text("(+ 1 (* 2 3))\n" if name == "Scheme" else "1 + 2 * 3\n")
         tree = json.loads(run(cli, "parse", bundle, str(sample)).stdout)
         assert contains(tree, "Add"), name
         ir = run(cli, "lower", bundle, str(sample)).stdout
         assert "mul" in ir and "add" in ir and "ret" in ir, name
+
+        assert descriptor["options"]["visitor_order"] == "postorder"
+        handlers = {key[6:]: value for key, value in descriptor["options"].items()
+                    if key.startswith("visit_")}
+        assert handlers == descriptor["lowering"], name
+
+    for name, source, kind in (("Typescript", "$x = 8 >>> 1", "Assign"),
+                               ("Scheme", "(f -12)", "NamedCall")):
+        bundle = str(Path(gatebindle) / name)
+        sample.write_text(source)
+        assert contains(json.loads(run(cli, "parse", bundle, str(sample)).stdout), kind)
+        assert "unresolved lowering facility" in run(cli, "lower", bundle, str(sample), status=1).stderr
+
+    sample.write_text("(- -12) ; comment\n")
+    assert "ret" in run(cli, "lower", str(Path(gatebindle) / "Scheme"), str(sample)).stdout
+    sample.write_text("(+ 1 2 3)")
+    run(cli, "parse", str(Path(gatebindle) / "Scheme"), str(sample), status=1)
 
 print("GateML CLI/artifact tests passed")

@@ -1,0 +1,8 @@
+namespace gateml.serde;
+
+table Envelope {
+  json:string (required);
+}
+
+root_type Envelope;
+file_identifier "GMLF";

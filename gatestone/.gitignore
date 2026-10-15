@@ -1,0 +1,7 @@
+# These are D source modules and bundle inputs, not generated prerequisites
+# or Python packaging manifests (both ignored by the repository defaults).
+!gateml/*.d
+!gateml/serde/*.d
+!gateml/ipc/*.d
+!gateml/tests/*.d
+!gatebindle/*/MANIFEST

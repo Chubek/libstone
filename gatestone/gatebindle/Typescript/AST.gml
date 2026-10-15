@@ -1,0 +1,21 @@
+ast {
+    node Assign;
+    node BitOr;
+    node BitXor;
+    node BitAnd;
+    node Shl;
+    node Shr;
+    node Urshr;
+    node Add;
+    node Subtract;
+    node Multiply;
+    node Divide;
+    node Remainder;
+    node Negate;
+    node BitNot;
+    node Call;
+    node CallEmpty;
+    node Integer;
+    node Variable;
+    node Pass;
+}

@@ -30,7 +30,10 @@ and built-in profiles. Generated artifacts never enter the source tree.
 Jiterati's core is header-only, so GateML does not build unrelated Jiterati
 CLIs, machine backends, Lua bindings, or documentation. IR modules produced
 by GateML can subsequently be compiled by applications linking those backends.
-The empty GateML D scaffold is preserved while the native bootstrap API is C++.
+The D reference library is self-contained: it depends only on Phobos, so it adds
+no vendored components to the C++ bootstrap. Its `ipc` modules call POSIX/Linux
+syscalls directly and are compiled and tested only on Linux (they need `-lrt`);
+the remaining D modules are portable.
 
 Each dependency retains its existing license. GateML's dependency adapters
 change build composition only, not third-party source. The native baseline

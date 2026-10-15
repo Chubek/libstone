@@ -99,12 +99,20 @@ Options are preserved for later facility backends; they do not alter lexer,
 parser, or lowering algorithms. The current semantic value type is always
 i64, regardless of metadata.
 
+The D reference visitor reads `visitor_order` (`preorder` or `postorder`),
+`visitor_terminals` (`true` or `false`), and `visit_NODE` handler-name options.
+The reference bundles declare postorder, nonterminal-only handlers matching
+their lowering facilities. These remain opaque metadata to the C++ bootstrap.
+
 A bundle directory contains `MANIFEST`, with one local `.gml` filename per
 line. Blank lines and lines beginning with `#` are ignored. Filenames cannot
-contain parent directories or be absolute, and cannot repeat. Files are
-concatenated in manifest order with newline separators. The first fragment
-provides the frontend header. Located failures are mapped back to their
-original fragment, including the fragment-relative line and byte column.
+contain parent directories or be absolute, cannot contain NUL, and cannot repeat.
+Both LF and CRLF line endings are accepted. Files are concatenated in manifest
+order with newline separators. The first fragment provides the frontend header.
+Located failures are mapped back to their original fragment, including the
+fragment-relative line and byte column. A `MANIFEST` that cannot be read, a
+missing fragment, and an invalid entry are located failures rather than raw
+filesystem exceptions.
 
 ## Descriptor format
 
@@ -116,7 +124,8 @@ and `code` (null for trivia). Productions contain `head`, ordered `body`, and
 order. JSON excludes source locations for reproducibility across bundle paths.
 
 The descriptor is a frontend contract for future generators and facility
-backends. Version 0.1 exposes serialization; it does not provide a descriptor
-loader. `grammar` exports validated NovoParse BNF over token codes, suitable
+backends. The C++ bootstrap exposes serialization but no descriptor loader;
+the D reference library provides `serde.JSON.readDescriptor` with validation.
+`grammar` exports validated NovoParse BNF over token codes, suitable
 for NovoParse's C, C++, D, or Python generator profiles. Generated parsers
 expect the token tape, with the lexical mapping in the frontend descriptor.
