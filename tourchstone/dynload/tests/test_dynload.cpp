@@ -1,11 +1,21 @@
+#undef NDEBUG
 #include "dynload.h"
 
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <filesystem>
 
 int main(int argc, char** argv) {
   assert(argc == 2);
+  tdyn_library_t* bad = reinterpret_cast<tdyn_library_t*>(1);
+  assert(tdyn_library_open(argv[1], TDYN_OPEN_NOW | TDYN_OPEN_LAZY, &bad) == TDYN_INVALID_ARGUMENT);
+  assert(bad == nullptr);
+  assert(tdyn_library_open(argv[1], 1u << 31, &bad) == TDYN_INVALID_ARGUMENT);
+  assert(bad == nullptr);
+  // Inspect-only must fail, not return a useless successful handle.
+  assert(tdyn_library_open(__FILE__, TDYN_OPEN_INSPECT_ONLY, &bad) == TDYN_INSPECT_ERROR);
+  assert(bad == nullptr);
   tdyn_env_t* env = nullptr;
   assert(tdyn_env_create(&env) == TDYN_OK);
 
@@ -43,6 +53,38 @@ int main(int argc, char** argv) {
   assert(tdyn_library_section_count(lib) > 0);
   (void)tdyn_library_needed_count(lib);
 
+  size_t needed = 0;
+  assert(tdyn_env_add_search_path(env, std::filesystem::path(argv[1]).parent_path().string().c_str()) == TDYN_OK);
+  const auto name = std::filesystem::path(argv[1]).filename().string();
+  assert(tdyn_env_resolve_library(env, name.c_str(), nullptr, &needed) == TDYN_BUFFER_TOO_SMALL);
+  assert(needed > 1);
+  char tiny[1] = {'x'};
+  size_t capacity = sizeof(tiny);
+  assert(tdyn_env_resolve_library(env, name.c_str(), tiny, &capacity) == TDYN_BUFFER_TOO_SMALL);
+  assert(capacity == needed && tiny[0] == 'x');
+
+  raw = reinterpret_cast<void*>(1);
+  assert(tdyn_library_symbol(lib, "no_such_symbol_12345", &raw) == TDYN_NOT_FOUND);
+  assert(raw == nullptr);
+  // An environment-owned library can be explicitly closed without dangling
+  // promoted entries or a second delete during environment teardown.
+  tdyn_library_close(lib);
+  assert(tdyn_env_library_count(env) == 0);
+  promoted = reinterpret_cast<void*>(1);
+  owner = reinterpret_cast<tdyn_library_t*>(1);
+  assert(tdyn_env_symbol(env, "tdynload_fixture_add", &promoted, &owner) == TDYN_NOT_FOUND);
+  assert(promoted == nullptr && owner == nullptr);
+
   tdyn_env_destroy(env);
+  env = tdyn_env_new();
+  assert(env);
+  tdyn_env_destroy(env);
+  lib = tdyn_library_load(argv[1], flags);
+  assert(lib);
+  env = tdyn_env_new();
+  assert(env);
+  assert(tdyn_env_promote(env, lib, TDYN_SYMBOL_TABLE_DYNAMIC) == TDYN_INVALID_ARGUMENT);
+  tdyn_env_destroy(env);
+  tdyn_library_close(lib);
   return 0;
 }

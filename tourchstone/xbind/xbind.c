@@ -71,26 +71,29 @@ static xbind_status xbind_join_path(char *output,
   size_t left_len;
   size_t right_len;
   size_t needs_sep;
-  size_t needed;
   if (!output || output_size == 0 || !left || !right) {
     return XBIND_STATUS_INVALID_ARGUMENT;
   }
   left_len = strlen(left);
   right_len = strlen(right);
   needs_sep = left_len > 0 && left[left_len - 1] != '/';
-  needed = left_len + needs_sep + right_len + 1;
-  if (needed > output_size) {
+  if (left_len >= output_size || needs_sep > output_size - left_len - 1 ||
+      right_len > output_size - left_len - needs_sep - 1) {
     return XBIND_STATUS_BUFFER_TOO_SMALL;
   }
+  memcpy(output, left, left_len);
   if (needs_sep) {
-    snprintf(output, output_size, "%s/%s", left, right);
-  } else {
-    snprintf(output, output_size, "%s%s", left, right);
+    output[left_len] = '/';
   }
+  memcpy(output + left_len + needs_sep, right, right_len + 1);
   return XBIND_STATUS_OK;
 }
 
 static int xbind_file_exists(const char *path) {
+  struct stat info;
+  if (!path || stat(path, &info) != 0 || !S_ISREG(info.st_mode)) {
+    return 0;
+  }
   FILE *file = fopen(path, "rb");
   if (!file) {
     return 0;

@@ -5,7 +5,7 @@ tools used by the rest of libstone.
 
 | Subproject | Option | Purpose |
 | --- | --- | --- |
-| `xbind/` | `TOURCHSTONE_BUILD_XBIND` | XBind spec runner/scaffold CLI plus the all-backend binding-spec inventory. |
+| `xbind/` | `TOURCHSTONE_BUILD_XBIND` | Strict spec runner, JSON IR, compiler signature probes, Lua/DomLuaBind generator and nine-target inventory. |
 | `dynload/` | `TOURCHSTONE_BUILD_DYNLOAD` | Native dynamic-loader wrapper with Yellowstone qBFD-backed object inspection. |
 | `dyninvoke/` | `TOURCHSTONE_BUILD_DYNINVOKE` | libffi/dyncall-style ABI layout, call, and closure support over qBFD and Sandstone ISA data. |
 
@@ -39,12 +39,14 @@ Tourchstone owns the aggregate `Tourchstone.xbind` plus component specs for
 | --- | --- |
 | `Tourchstone.xbind` | Aggregate version/status/query functions from `xbind`, `dyninvoke`, and `dynload`. |
 | `xbind/Dogfooding.xbind` | Self-binding for the stable `xbind.h` query surface. |
-| `dynload/DynLOAD.xbind` | Dynamic-loader and object-inspection query subset. |
-| `dyninvoke/DynINVOKE.xbind` | ABI/type/layout query subset. |
+| `dynload/DynLOAD.xbind` | Pointer-return loader/environment lifecycle plus object-inspection queries. |
+| `dyninvoke/DynINVOKE.xbind` | Execution capability, named builtin types, ABI/layout queries and cif destruction. |
 
-Each spec targets D, Go, Java, Lua, NodeJS, OCaml, Python, Ruby, and Rust. The
-current specs intentionally avoid callbacks, records, and out-buffer APIs until
-the XBind IR and target emitters support those shapes.
+Each spec lists D, Go, Java, Lua, NodeJS, OCaml, Python, Ruby, and Rust. Only the
+Lua scalar/string/explicit-opaque emitter is implemented. Callbacks, records and
+automatic buffer/ownership marshalling remain unsupported. The test suite checks
+all repository C spec signatures against their headers and compiles/executes Lua
+hello and self-binding modules. See [REGIMEN.md](REGIMEN.md) for hardening coverage.
 
 See `xbind/MANUAL.md` for the spec authoring guide and current repository-wide
 binding coverage.

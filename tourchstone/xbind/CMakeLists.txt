@@ -17,13 +17,14 @@ else()
   endfunction()
 endif()
 
-option(XBIND_BUILD_TESTS "Build XBind scaffold tests" "${LIBSTONE_BUILD_TESTS}")
+option(XBIND_BUILD_TESTS "Build XBind contract and generated-binding tests" "${LIBSTONE_BUILD_TESTS}")
 option(XBIND_BUILD_DOMBIND "Build the DomBind runtime subproject" OFF)
 option(XBIND_BUILD_QAMRPP_BINDING "Build the QaMRpp Lua binding for XBind" ON)
 
 include(cmake/XBindQaMRpp.cmake)
 
 add_library(xbind xbind.c)
+set_target_properties(xbind PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(XBind::xbind ALIAS xbind)
 target_compile_features(xbind PUBLIC c_std_11)
 target_include_directories(xbind PUBLIC
@@ -32,7 +33,8 @@ target_include_directories(xbind PUBLIC
 target_compile_definitions(xbind PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 libstone_warnings(xbind)
 
-add_library(xbind_qamrpp STATIC xbind_qamrpp.cpp)
+add_library(xbind_qamrpp STATIC xbind_qamrpp.cpp xbind_codegen.cpp)
+set_target_properties(xbind_qamrpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(XBind::QaMRppSpec ALIAS xbind_qamrpp)
 target_compile_features(xbind_qamrpp PUBLIC cxx_std_20)
 target_include_directories(xbind_qamrpp PUBLIC
@@ -51,7 +53,10 @@ target_link_libraries(xbind_cli PRIVATE XBind::xbind XBind::QaMRppSpec)
 libstone_warnings(xbind_cli)
 
 if(XBIND_BUILD_QAMRPP_BINDING)
-  add_library(qamrpp_xbind MODULE lxbind/qamrpp_xbind.cpp)
+  add_library(qamrpp_xbind MODULE xbind_qamrpp.cpp lxbind/qamrpp_xbind.cpp)
+  # QaMRpp.hpp defines its C plugin API (non-inline). Keep its users in one
+  # translation unit while sharing the exact constructor/validation source.
+  set_target_properties(qamrpp_xbind PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 2)
   target_compile_features(qamrpp_xbind PRIVATE cxx_std_20)
   target_include_directories(qamrpp_xbind PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR})
@@ -75,7 +80,7 @@ install(TARGETS xbind_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(TARGET qamrpp_xbind)
   install(TARGETS qamrpp_xbind LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/qamrpp)
 endif()
-install(FILES xbind.h xbind.hpp xbind_qamrpp.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xbind)
+install(FILES xbind.h xbind.hpp xbind_qamrpp.hpp xbind_codegen.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xbind)
 install(DIRECTORY lxbind/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/lxbind)
 install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/stdlib)
 install(DIRECTORY typedefs/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/typedefs)
@@ -84,6 +89,11 @@ install(FILES XFeats.schema.json DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind)
 if(XBIND_BUILD_TESTS)
   enable_testing()
   find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
+  add_executable(xbind_core_tests tests/test_core.c)
+  target_link_libraries(xbind_core_tests PRIVATE XBind::xbind)
+  libstone_warnings(xbind_core_tests)
+  add_test(NAME xbind.core
+    COMMAND xbind_core_tests ${CMAKE_CURRENT_SOURCE_DIR}/examples/hello)
   add_test(NAME xbind.layout
     COMMAND xbind_cli --check-layout ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME xbind.regimen
@@ -92,6 +102,12 @@ if(XBIND_BUILD_TESTS)
       --cli $<TARGET_FILE:xbind_cli>)
   add_test(NAME xbind.spec
     COMMAND xbind_cli --check-spec hello ${CMAKE_CURRENT_SOURCE_DIR}/examples/hello)
+  add_test(NAME xbind.codegen
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen.py
+      --root ${CMAKE_CURRENT_SOURCE_DIR} --cli $<TARGET_FILE:xbind_cli>
+      --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER}
+      --work ${CMAKE_CURRENT_BINARY_DIR})
+  set_tests_properties(xbind.codegen PROPERTIES TIMEOUT 180)
   if(TARGET qamrpp_xbind)
     add_executable(xbind_qamrpp_module_test tests/qamrpp_module.cpp)
     target_link_libraries(xbind_qamrpp_module_test PRIVATE XBind::QaMRpp)

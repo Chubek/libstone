@@ -129,6 +129,8 @@ TDYN_API const char* tdyn_symbol_binding_name(tdyn_symbol_binding_t binding);
 TDYN_API const char* tdyn_symbol_kind_name(tdyn_symbol_kind_t kind);
 
 TDYN_API tdyn_status_t tdyn_env_create(tdyn_env_t** out);
+// Pointer-return convenience; NULL on failure, diagnostic via tdyn_last_error.
+TDYN_API tdyn_env_t* tdyn_env_new(void);
 TDYN_API void tdyn_env_destroy(tdyn_env_t* env);
 TDYN_API tdyn_status_t tdyn_env_add_search_path(tdyn_env_t* env,
                                                 const char* path);
@@ -143,8 +145,11 @@ TDYN_API tdyn_status_t tdyn_env_resolve_library(tdyn_env_t* env,
 TDYN_API tdyn_status_t tdyn_library_open(const char* path,
                                          uint32_t flags,
                                          tdyn_library_t** out);
+TDYN_API tdyn_library_t* tdyn_library_load(const char* path, uint32_t flags);
 TDYN_API tdyn_status_t tdyn_library_open_self(uint32_t flags,
                                               tdyn_library_t** out);
+// Closing an environment-owned handle removes it and its promoted symbols.
+// All pointers into that library are invalid after close (including aliases).
 TDYN_API void tdyn_library_close(tdyn_library_t* library);
 
 TDYN_API tdyn_status_t tdyn_env_open(tdyn_env_t* env,
@@ -224,6 +229,7 @@ TDYN_API tdyn_status_t tdyn_library_bytes_at_address(
 TDYN_API tdyn_status_t tdyn_env_insert_symbol(tdyn_env_t* env,
                                               const char* name,
                                               void* address);
+// The promoted library must have been opened by this environment.
 TDYN_API tdyn_status_t tdyn_env_promote(tdyn_env_t* env,
                                         tdyn_library_t* library,
                                         tdyn_symbol_table_t table);

@@ -1,8 +1,8 @@
 // dyninvoke.h - Tourchstone foreign-call library (libffi/dyncall analogue).
 //
 // Lowering is driven by Yellowstone qBFD (Format/Arch -> ABI, see qABI.hpp)
-// and cross-checked against Sandstone .isa register files. Layout queries work
-// for all supported ABIs on any host; execution requires host support.
+// and cross-checked against Sandstone .isa register files. Implemented layout
+// subsets are queryable cross-host; execution requires a host trampoline.
 #ifndef TOURCHSTONE_DYNINVOKE_H
 #define TOURCHSTONE_DYNINVOKE_H
 
@@ -82,6 +82,8 @@ DINV_API extern const dinv_type_t dinv_type_ptr;
 
 typedef struct dinv_cif dinv_cif_t;
 typedef struct dinv_closure dinv_closure_t;
+// Callback cif is borrowed from the closure; do not destroy or retain it beyond
+// closure destruction. Callbacks must not throw across the native ABI boundary.
 typedef void (*dinv_closure_fn_t)(dinv_cif_t* cif, void* ret, void** args,
                                   void* user);
 
@@ -107,17 +109,22 @@ DINV_API const char* dinv_last_error(void);
 DINV_API const char* dinv_abi_name(dinv_abi_t abi);
 DINV_API dinv_status_t dinv_abi_for_name(const char* name, dinv_abi_t* out);
 DINV_API dinv_abi_t dinv_abi_host(void);
+// Nonzero only when this build provides execution for the selected host ABI.
+DINV_API int dinv_abi_can_execute(dinv_abi_t abi);
 DINV_API const char* dinv_abi_isa_arch(dinv_abi_t abi);
 DINV_API const char* dinv_abi_isa_file(dinv_abi_t abi);
 
 DINV_API const char* dinv_kind_name(dinv_kind_t kind);
 DINV_API dinv_status_t dinv_type_for_name(const char* name,
                                           const dinv_type_t** out);
+// Borrowed immutable builtin descriptor; NULL on failure (dinv_last_error).
+DINV_API const dinv_type_t* dinv_type_named(const char* name);
 DINV_API size_t dinv_type_size(const dinv_type_t* type);
 DINV_API size_t dinv_type_align(const dinv_type_t* type);
 
 // Precompute a call interface. `args` is an array of `nargs` type pointers
-// (borrowed). The cif owns its layout copy.
+// (borrowed during creation). The cif owns a deep copy of the type graph and
+// layout. Closures retain their own cif and may outlive the source cif.
 DINV_API dinv_status_t dinv_cif_create(dinv_abi_t abi,
                                        const dinv_type_t* ret,
                                        size_t nargs,

@@ -5,11 +5,13 @@ local xbind = require("lxbind")
 -- qbfd/ (qBFD.hpp, qELF.hpp, ...) have no stable C ABI yet, so this spec
 -- binds the two stable C surfaces: binscript/binscript.h (BS_VM) and
 -- ld/ld.h (qobjld one-shot linker). Out-pointers (char ** errmsg, BS_Error
--- diagnostics) are spelled exactly as in the headers; each backend lowers
--- them through its DomBind runtime (string-out / error-out).
+-- diagnostics) are spelled exactly as in the headers. Signature verification
+-- covers them, but Lua generation rejects out-string APIs instead of pretending
+-- to marshal them. The other eight target emitters are not implemented.
 return xbind.library {
   name = "yellowstone",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership", "out-string-required" },
   headers = { "binscript/binscript.h", "ld/ld.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -29,7 +31,7 @@ return xbind.library {
     xbind.typedef("qld_options_t *", "opaque", { ownership = "opaque" }),
     xbind.typedef("const qld_options_t *", "opaque", { ownership = "opaque" }),
     xbind.typedef("char **", "opaque", { ownership = "out_string" }),
-    xbind.typedef("char *", "string", { ownership = "borrowed" }),
+    xbind.typedef("char *", "opaque", { ownership = "borrowed" }),
     xbind.typedef("const char *", "string", { ownership = "borrowed" }),
     xbind.typedef("uint8_t *", "opaque", { ownership = "borrowed" }),
   },

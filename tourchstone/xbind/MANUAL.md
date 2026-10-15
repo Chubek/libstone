@@ -1,14 +1,15 @@
 # XBind manual
 
-XBind is Tourchstone's binding-spec and binding-generator scaffold. A spec is a
+XBind is Tourchstone's binding-spec runner and Lua binding generator. A spec is a
 Lua file (`.xbind` or `.lua`) that declares which C headers, symbols, target
 languages, and type overrides a library wants. The current implementation can
-resolve, execute, validate, and summarize specs through QaMRpp. Header parsing,
-normalized IR emission, and target code generation are the next pipeline stages.
+resolve, execute, recursively validate, and summarize specs through QaMRpp. It
+also emits JSON IR, exact C-signature probes, and Lua 5.4 bindings through
+DomLuaBind. Header parsing and the other eight language emitters remain unimplemented.
 
 ## Quick start
 
-Build the standalone driver and run the scaffold regimen:
+Build the standalone driver and run the regimen:
 
 ```sh
 cmake -S tourchstone/xbind -B /tmp/opencode/xbind-build -DXBIND_BUILD_TESTS=ON
@@ -29,7 +30,8 @@ Useful probes:
 
 ## Target backends
 
-Every committed `.xbind` spec now targets the full scaffold matrix:
+Every committed `.xbind` spec lists the full target inventory. Only Lua has an
+implemented emitter; the presence of a target is not a code-generation guarantee.
 
 | Target | Target option examples | DomBind runtime | Default typedef map |
 | --- | --- | --- | --- |
@@ -43,8 +45,8 @@ Every committed `.xbind` spec now targets the full scaffold matrix:
 | Ruby | `{ extension = "name" }` | `dombind/domrubybind` | `typedefs/Ruby-Default.sexpr` |
 | Rust | `{ crate = "name_sys" }` | `dombind/domrustbind` | `typedefs/Rust-Default.sexpr` |
 
-Target option keys are carried in the manifest for future backend-specific
-lowering. The current dump only prints target names.
+`--dump-ir` preserves target options and target-local typedefs. Lua emission
+honors its `module` option (a C identifier); the default is the library name.
 
 ## Spec shape
 
@@ -98,6 +100,7 @@ return xbind.library {
 | `typedefs` | no | Spec-local type-map overrides applied after defaults. |
 | `functions` | no | `xbind.func` declarations to bind. |
 | `modules` | no | Future grouping surface for larger libraries. |
+| `features` | no | Descriptive tags retained in IR; not executable transformation plugins. |
 
 ### Constructor contract
 
@@ -110,12 +113,15 @@ return xbind.library {
 - `xbind.func(name, options)` defaults `returns` to `void` and `params` /
   `features` to arrays.
 - `xbind.module(name, options)` groups future function/typedef sets.
-- `xbind.validate_library(manifest)` checks the top-level shape and constructor
-  provenance.
+- `xbind.validate_library(manifest)` checks dense arrays, constructor kinds,
+  supported canonical target names, duplicate targets/functions/params/typedefs,
+  nonempty fields, identifiers and boolean nullability. Nonempty `modules` are
+  rejected rather than silently discarded.
 
-The helper intentionally performs only structural validation. The driver and
-future compiler stages own header matching, type-map resolution, ownership
-diagnostics, and target-specific errors.
+The driver and loadable QaMRpp module share their constructor and validation
+implementation. Stock Lua validates the same structural contract. No spec is a
+sandbox: execute only trusted Lua. Header checking is a separate compile step;
+`--check-spec` alone does not certify the declared C ABI.
 
 ## Current repository specs
 
@@ -126,16 +132,18 @@ diagnostics, and target-specific errors.
 | `limestone/Limestone.xbind` | `limestone` | `limestone/*.h` | Compile/module/target/program/buffer query subset. Callback-heavy APIs deferred. |
 | `blackstone/Blackstone.xbind` | `blackstone` | `blackstone.h` | Runtime load/query subset. `blackstone_run` is deferred until callbacks land. |
 | `firestone/Firestone.xbind` | `firestone` | `Firestone.hpp`, `FireIR.hpp` | Header inventory and all-target matrix only; Firestone has no stable C ABI yet. |
+| `jiterati/Jiterati.xbind` | `jiterati` | `include/Jiterati*.hpp` | Optional checkout's C++ JIT/DocIR/DSL/SIMD/native/disassembly inventory; no invented C ABI. |
 | `tourchstone/Tourchstone.xbind` | `tourchstone` | `xbind/xbind.h`, `dyninvoke/dyninvoke.h`, `dynload/dynload.h` | Aggregate version/status/query surface. |
-| `tourchstone/dyninvoke/DynINVOKE.xbind` | `dyninvoke` | `dyninvoke.h` | ABI/type/layout query subset. Calls and closures deferred. |
-| `tourchstone/dynload/DynLOAD.xbind` | `dynload` | `dynload.h` | Loader/object-inspection query subset. Struct-return APIs deferred. |
+| `tourchstone/dyninvoke/DynINVOKE.xbind` | `dyninvoke` | `dyninvoke.h` | ABI execution capability, named builtin types, layout queries and cif destruction. Calls and closures deferred. |
+| `tourchstone/dynload/DynLOAD.xbind` | `dynload` | `dynload.h` | Environment creation/destruction/search paths, pointer-return library load/close and inspection queries. Records deferred. |
 | `tourchstone/xbind/Dogfooding.xbind` | `dogfooding` | `xbind.h` | XBind's own callback-free query surface. |
 | `tourchstone/xbind/examples/hello/hello.xbind` | `hello` | `hello.h` | Minimal fixture with integer, double, and borrowed-string functions. |
 
 ## Type maps
 
-XBind loads `typedefs/<Target>-Default.sexpr` before applying spec-local
-`xbind.typedef` entries. Defaults cover:
+Lua emission parses `typedefs/Lua-Default.sexpr`, applies library-local
+`xbind.typedef` entries, then Lua target-local overrides. Other targets' map files
+are inventories only. Defaults cover:
 
 - `void`
 - `bool`, `_Bool`
@@ -145,8 +153,7 @@ XBind loads `typedefs/<Target>-Default.sexpr` before applying spec-local
 - `const unsigned char *`
 - `void *`
 
-Any ABI-visible type outside that set must be listed in `typedefs` until the
-type-map parser and final C-to-native report are implemented. Opaque handle
+Any ABI-visible type outside that set must be listed in `typedefs`. Opaque handle
 patterns used by the repository specs include:
 
 ```lua
@@ -155,6 +162,55 @@ xbind.typedef("const library_handle *", "opaque", { ownership = "opaque" })
 xbind.typedef("status_t", "int", { range = "status" })
 xbind.typedef("uint64_t", "int", { range = "uint64" })
 ```
+
+Lua supports `integer` (including the spec alias `int`), `number`, `boolean`,
+borrowed `const char *` strings, and `lightuserdata` (including `opaque`). Integer
+conversions check the actual compiled C type, including enum underlying types.
+Unsigned results above `LUA_MAXINTEGER` raise an error rather than losing bits.
+Inputs require exact arity and types; embedded NULs in C strings are rejected.
+`nullable=true` permits Lua nil only for pointer inputs. Null pointer results
+become nil. Mutable strings, owned-string returns and out-string annotations
+are rejected. Buffers may be passed only as explicit, caller-managed opaque
+pointers; no length validation or allocation is inferred.
+
+`ownership="owned"` and `ownership="consumed"` describe opaque-handle lifetimes
+in IR; they do **not** install a finalizer or prevent double destruction. Call
+the matching destructor once and invalidate all aliases. Borrowed strings are
+copied into Lua strings; opaque pointers retain no owner.
+
+## IR, signature checks and Lua generation
+
+```sh
+xb=/tmp/opencode/xbind-build/xbind
+"$xb" --dump-ir hello tourchstone/xbind/examples/hello > /tmp/opencode/hello.json
+"$xb" --emit-check hello tourchstone/xbind/examples/hello > /tmp/opencode/hello-check.cpp
+c++ -std=c++20 -fsyntax-only -Itourchstone/xbind/examples/hello /tmp/opencode/hello-check.cpp
+"$xb" --emit-lua hello tourchstone/xbind/examples/hello > /tmp/opencode/hello-bind.cpp
+
+# Generate the actual DomLuaBind C API, using its bundled Q compiler.
+PYTHONPATH=tourchstone/xbind/dombind/domqlib \
+  python3 tourchstone/xbind/dombind/domluabind/generate.py /tmp/opencode/domluabind/capi.h
+cc -fPIC -c tourchstone/xbind/examples/hello/hello.c -o /tmp/opencode/hello.o
+c++ -std=c++20 -shared -fPIC -I/tmp/opencode -Itourchstone/xbind/examples/hello \
+  /tmp/opencode/hello-bind.cpp /tmp/opencode/hello.o \
+  $(pkg-config --cflags --libs lua5.4) -o /tmp/opencode/hello.so
+LUA_CPATH='/tmp/opencode/?.so' lua5.4 -e 'assert(require("hello").hello_add(2,5)==7)'
+```
+
+IR schema version 1 preserves declaration order, sorted annotation keys,
+library/version/path, headers, stdlib and feature tags, target options and
+typedefs, function signatures and parameter annotations. The path records spec
+provenance; repeated invocations with the same path produce identical bytes.
+The IR is a spec IR, not a header AST. `--emit-check` emits `std::is_same_v`
+assertions against the included declarations, diagnosing missing symbols and
+return/parameter mismatches without linking. Generated Lua source includes the
+same assertions. Empty C surfaces (Firestone/Jiterati) cannot emit a Lua module.
+
+Generation writes source to stdout, diagnostics to stderr, and never emits a
+partial source on lowering failure. Exit codes: 0 success, 1 spec/lowering error,
+2 invalid command usage. Lua generation defaults to the source-tree map;
+set `XBIND_DATA_DIR=/prefix/share/xbind` for installed or relocated data. The
+C++ `emit_lua` API accepts an explicit data root.
 
 ## Validation regimen
 
@@ -169,7 +225,7 @@ cmake --build /tmp/opencode/tourchstone-build --parallel
 ctest --test-dir /tmp/opencode/tourchstone-build --output-on-failure
 ```
 
-For spec-only work, these checks are sufficient:
+For spec-only work, run the signature and generated-module tests as well:
 
 ```sh
 cmake -S tourchstone/xbind -B /tmp/opencode/xbind-build -DXBIND_BUILD_TESTS=ON
@@ -201,12 +257,15 @@ lua5.4 -e 'package.path="tourchstone/xbind/lxbind/?.lua;"..package.path; local x
 ## Current limitations
 
 - Header parsing and source-span preservation are not implemented yet.
-- The compiler directories are placeholders; they do not emit target glue yet.
-- Structs/records, enums, callbacks, `T **` out-parameters, byte buffers, and
-  ownership-transfer wrappers are documented in specs but not lowered yet.
+- `compilers/` directories remain reserved; the working Lua emitter is
+  `xbind_codegen.cpp`. The other eight target emitters are not implemented.
+- Enums explicitly mapped to integers work. Records, callbacks, automatic
+  `T **` out-parameter/buffer marshalling and ownership-transfer wrappers do not.
+- `Yellowstone.xbind` requires out-string marshalling: signature checks pass,
+  but Lua emission fails explicitly instead of producing unsafe fake wrappers.
 - `firestone/Firestone.xbind` is intentionally a header inventory because
   Firestone currently exposes C++ headers, not a stable extern-C surface.
-- `xbind --dump-spec` summarizes headers, stdlib modules, targets, and function
-  signatures. It does not print target options or typedef option details yet.
+- `--dump-spec` remains the concise summary; use `--dump-ir` for annotations,
+  typedefs, target options and feature tags.
 
 See `REGIMEN.md` for staged implementation goals.

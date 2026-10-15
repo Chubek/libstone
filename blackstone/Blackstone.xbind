@@ -6,10 +6,11 @@ local xbind = require("lxbind")
 -- load or destruction. blackstone_run (callback + available-analysis list)
 -- is intentionally deferred until XBind IR gains callbacks and string
 -- arrays; everything below uses only opaque handles, strings, ints, and
--- size_t so all nine backends lower it today.
+-- size_t. Lua emits working glue; the other eight targets remain inventories.
 return xbind.library {
   name = "blackstone",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "blackstone.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -35,6 +36,7 @@ return xbind.library {
     }),
     xbind.func("blackstone_create", {
       returns = "blackstone_runtime *",
+      ownership = "owned",
       params = {},
     }),
     xbind.func("blackstone_destroy", {

@@ -6,11 +6,13 @@ local xbind = require("lxbind")
 -- support (closures currently SysV AMD64 only). ABIs, kinds, and statuses
 -- are int-like enums; type/cif/closure handles are opaque and caller-owned
 -- (cif owns its layout copy). Only the layout/query slice is bound here so
--- every backend lowers today; dinv_call / dinv_call_simple / closure create
+-- every target can describe it; Lua glue and signature probes are executable.
+-- dinv_call / dinv_call_simple / closure create
 -- (void* fn, void** args out-vectors) wait for buffer/callback IR.
 return xbind.library {
   name = "dyninvoke",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "dyninvoke.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -57,6 +59,19 @@ return xbind.library {
     xbind.func("dinv_abi_host", {
       returns = "dinv_abi_t",
       params = {},
+    }),
+    xbind.func("dinv_abi_can_execute", {
+      returns = "int",
+      params = { xbind.param("abi", "dinv_abi_t") },
+    }),
+    xbind.func("dinv_type_named", {
+      returns = "const dinv_type_t *",
+      ownership = "borrowed",
+      params = { xbind.param("name", "const char *") },
+    }),
+    xbind.func("dinv_cif_destroy", {
+      returns = "void",
+      params = { xbind.param("cif", "dinv_cif_t *", { nullable = true, ownership = "consumed" }) },
     }),
     xbind.func("dinv_abi_isa_arch", {
       returns = "const char *",

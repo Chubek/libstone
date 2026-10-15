@@ -6,10 +6,12 @@ local xbind = require("lxbind")
 -- target inventory. xbind_resolve_spec (out-buffer) and xbind_check_layout
 -- (diagnostic callback) wait for buffer/callback IR. This spec is the
 -- self-host check: if XBind cannot describe and regenerate its own queries
--- for every backend, the all-target promise is hollow.
+-- through the Lua emitter, the self-hosting slice is incomplete. Other targets
+-- remain inventory-only, not implemented emitters.
 return xbind.library {
   name = "dogfooding",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "xbind.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -26,8 +28,17 @@ return xbind.library {
   typedefs = {
     xbind.typedef("xbind_status", "int", { range = "status" }),
     xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+    xbind.typedef("const xbind_target_info *", "opaque", { ownership = "borrowed" }),
   },
   functions = {
+    xbind.func("xbind_target_at", {
+      returns = "const xbind_target_info *", ownership = "borrowed",
+      params = { xbind.param("index", "size_t") },
+    }),
+    xbind.func("xbind_find_target", {
+      returns = "const xbind_target_info *", ownership = "borrowed",
+      params = { xbind.param("name", "const char *") },
+    }),
     xbind.func("xbind_version", {
       returns = "const char *",
       params = {},

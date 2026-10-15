@@ -1,4 +1,5 @@
 // test_dyninvoke.cpp - execute calls through dyninvoke on the host ABI.
+#undef NDEBUG
 #include "dyninvoke.h"
 
 #include <cassert>
@@ -147,11 +148,71 @@ int main(int argc, char** argv) {
   }
   // closure: build (i32,i32)->i32 adder, pass to call_cb.
   if (host == DINV_ABI_SYSV_AMD64) {
+    // Mixed return register banks each start at zero, not at the eightbyte index.
+    struct Mixed { int64_t integer; double real; } mixed{};
+    struct Reverse { double real; int64_t integer; } reverse{};
+    const dinv_type_t* me[] = {&dinv_type_i64, &dinv_type_f64, nullptr};
+    const dinv_type_t mt{DINV_STRUCT, me};
+    const dinv_type_t* re[] = {&dinv_type_f64, &dinv_type_i64, nullptr};
+    const dinv_type_t rt{DINV_STRUCT, re};
+    int64_t integer = 40;
+    double real = 1.25;
+    checkCall(host, &mt, sym(handle, "dinvk_mixed_pair"), &mixed,
+              {&dinv_type_i64, &dinv_type_f64}, {&integer, &real});
+    assert(mixed.integer == 41 && mixed.real == 2.5);
+    checkCall(host, &rt, sym(handle, "dinvk_reverse_pair"), &reverse,
+              {&dinv_type_f64, &dinv_type_i64}, {&real, &integer});
+    assert(reverse.real == 3.75 && reverse.integer == 42);
+
+    // Snapshot nested struct element arrays, not just their top-level pointer.
+    dinv_cif_t* nested_cif = nullptr;
+    {
+      dinv_type_t inner = mt;
+      const dinv_type_t* fields[] = {&inner, nullptr};
+      dinv_type_t outer{DINV_STRUCT, fields};
+      const dinv_type_t* args[] = {&dinv_type_i64, &dinv_type_f64};
+      assert(dinv_cif_create(host, &outer, 2, args, &nested_cif) == DINV_OK);
+      inner.kind = DINV_VOID;
+      fields[0] = nullptr;
+    }
+    void* mixed_args[] = {&integer, &real};
+    assert(dinv_call(nested_cif, sym(handle, "dinvk_mixed_pair"), &mixed, mixed_args) == DINV_OK);
+    assert(mixed.integer == 41 && mixed.real == 2.5);
+    dinv_cif_destroy(nested_cif);
+
+    // Invoke a generated mixed-return closure through a real typed native call.
+    auto mixed_cb = [](dinv_cif_t* cif, void* ret, void** args, void*) {
+      assert(dinv_cif_nargs(cif) == 2);
+      *static_cast<Mixed*>(ret) = {*static_cast<int64_t*>(args[0]) + 3,
+                                  *static_cast<double*>(args[1]) * 4};
+    };
+    const dinv_type_t* mixed_types[] = {&dinv_type_i64, &dinv_type_f64};
+    dinv_cif_t* mixed_cif = nullptr;
+    assert(dinv_cif_create(host, &mt, 2, mixed_types, &mixed_cif) == DINV_OK);
+    dinv_closure_t* mixed_closure = nullptr;
+    void* mixed_code = nullptr;
+    assert(dinv_closure_create(mixed_cif, +mixed_cb, nullptr, &mixed_closure, &mixed_code) == DINV_OK);
+    dinv_cif_destroy(mixed_cif);
+    Mixed (*mixed_function)(int64_t, double) = nullptr;
+    static_assert(sizeof(mixed_function) == sizeof(mixed_code));
+    std::memcpy(&mixed_function, &mixed_code, sizeof(mixed_code));
+    mixed = mixed_function(integer, real);
+    assert(mixed.integer == 43 && mixed.real == 5);
+    dinv_closure_destroy(mixed_closure);
+
+    struct Big { int64_t x, y, z; } big{};
+    const dinv_type_t* be[] = {&dinv_type_i64, &dinv_type_i64, &dinv_type_i64, nullptr};
+    const dinv_type_t bt{DINV_STRUCT, be};
+    checkCall(host, &bt, sym(handle, "dinvk_big"), &big, {&dinv_type_i64}, {&integer});
+    assert(big.x == 40 && big.y == 41 && big.z == 42);
+
     struct AddCtx {
       int base = 0;
     };
     AddCtx ctx{100};
-    auto cb = [](dinv_cif_t*, void* ret, void** args, void* user) {
+    auto cb = [](dinv_cif_t* cif, void* ret, void** args, void* user) {
+      assert(dinv_cif_nargs(cif) == 2);
+      assert(dinv_cif_abi(cif) == DINV_ABI_SYSV_AMD64);
       int a = *(int*)args[0], b = *(int*)args[1];
       *(int*)ret = a + b + ((AddCtx*)user)->base;
     };
@@ -161,6 +222,7 @@ int main(int argc, char** argv) {
     dinv_closure_t* cl = nullptr;
     void* fnptr = nullptr;
     assert(dinv_closure_create(cbCif, +cb, &ctx, &cl, &fnptr) == DINV_OK);
+    dinv_cif_destroy(cbCif); // Closure owns the complete signature snapshot.
     void* callCb = sym(handle, "dinvk_call_cb");
     assert(callCb);
     int32_t a = 2, b = 5, r = 0;
@@ -173,8 +235,29 @@ int main(int argc, char** argv) {
     assert(r == 107);
     dinv_cif_destroy(callCif);
     dinv_closure_destroy(cl);
-    dinv_cif_destroy(cbCif);
   }
+
+  // The cif must not retain temporary user descriptors.
+  dinv_cif_t* persistent = nullptr;
+  {
+    dinv_type_t temporary{DINV_I32, nullptr};
+    const dinv_type_t* types[] = {&temporary, &temporary};
+    assert(dinv_cif_create(host, &temporary, 2, types, &persistent) == DINV_OK);
+    temporary.kind = DINV_VOID;
+  }
+  int32_t a = 3, b = 4, result = 0;
+  void* values[] = {&a, &b};
+  assert(dinv_call(persistent, sym(handle, "dinvk_add2"), &result, values) == DINV_OK);
+  assert(result == 7);
+  values[0] = nullptr;
+  assert(dinv_call(persistent, sym(handle, "dinvk_add2"), &result, values) == DINV_INVALID_ARGUMENT);
+  dinv_cif_destroy(persistent);
+
+#if defined(_WIN32)
+  FreeLibrary((HMODULE)handle);
+#else
+  dlclose(handle);
+#endif
 
   std::cout << "dyninvoke execute tests passed\n";
   return 0;

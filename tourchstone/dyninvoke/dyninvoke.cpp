@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <deque>
+#include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -26,11 +29,6 @@
 
 #ifndef DINV_ISA_DIR
 #define DINV_ISA_DIR ""
-#endif
-
-#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv) || \
-    defined(_M_X64) || defined(_M_ARM64)
-#define DINV_HAS_TRAMPOLINE 1
 #endif
 
 extern "C" {
@@ -114,6 +112,8 @@ struct Leaf {
 bool typeSizeAlignRec(const dinv_type_t* t, size_t& size, size_t& align,
                       std::vector<const dinv_type_t*>& stack) {
   if (!t) return false;
+  if (stack.size() >= 64 || t->kind < DINV_VOID || t->kind > DINV_STRUCT)
+    return false;
   if (t->kind != DINV_STRUCT) {
     size = scalarSize(t->kind);
     align = scalarAlign(t->kind);
@@ -133,11 +133,20 @@ bool typeSizeAlignRec(const dinv_type_t* t, size_t& size, size_t& align,
       stack.pop_back();
       return false;
     }
+    if (t->elements[i]->kind == DINV_VOID || fs == 0 ||
+        off > std::numeric_limits<size_t>::max() - (fa - 1) - fs) {
+      stack.pop_back();
+      return false;
+    }
     off = alignUp(off, fa);
     off += fs;
     if (fa > mal) mal = fa;
   }
   if (mal == 0) mal = 1;
+  if (off > std::numeric_limits<size_t>::max() - (mal - 1)) {
+    stack.pop_back();
+    return false;
+  }
   size = alignUp(off, mal);
   align = mal;
   stack.pop_back();
@@ -156,17 +165,10 @@ bool collectLeavesRec(const dinv_type_t* t, size_t base,
     if (p == t) return false;
   stack.push_back(t);
   size_t off = base;
-  size_t mal = 1;
   // Need per-field offsets: recompute layout.
   for (size_t i = 0; t->elements && t->elements[i]; ++i) {
     size_t fs = 0, fa = 1;
-    std::vector<const dinv_type_t*> tmp = stack;
-    // size of field (without re-pushing? use helper without cycle double-count:
-    // use typeSizeAlignRec with a fresh stack copy that already contains ancestors)
     std::vector<const dinv_type_t*> s2(stack.begin(), stack.end());
-    // pop current (already pushed) to avoid self false-positive? Actually
-    // typeSizeAlignRec pushes again; give it ancestors excluding current.
-    s2.pop_back();
     if (!typeSizeAlignRec(t->elements[i], fs, fa, s2)) {
       stack.pop_back();
       return false;
@@ -177,7 +179,6 @@ bool collectLeavesRec(const dinv_type_t* t, size_t base,
       return false;
     }
     off += fs;
-    if (fa > mal) mal = fa;
   }
   stack.pop_back();
   return true;
@@ -199,7 +200,28 @@ size_t typeAlign(const dinv_type_t* t) {
 }
 
 // ---- layout ----
+// Stable, owned descriptors: a cif and its closures survive the caller's
+// temporary type arrays. Shared storage makes closure layout copies cheap.
+struct TypeStorage {
+  std::deque<dinv_type_t> types;
+  std::deque<std::vector<const dinv_type_t*>> elements;
+  const dinv_type_t* copy(const dinv_type_t* source) {
+    types.push_back({source->kind, nullptr});
+    auto* result = &types.back();
+    if (source->kind == DINV_STRUCT) {
+      elements.emplace_back();
+      auto& fields = elements.back();
+      for (size_t i = 0; source->elements[i]; ++i)
+        fields.push_back(copy(source->elements[i]));
+      fields.push_back(nullptr);
+      result->elements = fields.data();
+    }
+    return result;
+  }
+};
+
 struct CifLayout {
+  std::shared_ptr<TypeStorage> types;
   dinv_abi_t abi = DINV_ABI_AUTO;
   const dinv_type_t* ret = nullptr;
   std::vector<const dinv_type_t*> args;
@@ -235,13 +257,23 @@ dinv_abi_t resolveAbi(dinv_abi_t a) {
 #elif defined(__riscv)
   return DINV_ABI_RISCV64;
 #else
-  return DINV_ABI_SYSV_AMD64;
+  return DINV_ABI_AUTO;
 #endif
 }
 
 bool hostCanExecute(dinv_abi_t abi) {
-  dinv_abi_t host = resolveAbi(DINV_ABI_AUTO);
-  return abi == host;
+  abi = resolveAbi(abi);
+#if defined(__x86_64__) && !defined(_WIN32)
+  return abi == DINV_ABI_SYSV_AMD64;
+#elif defined(__x86_64__) || defined(_M_X64)
+  return abi == DINV_ABI_WIN64;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  return abi == DINV_ABI_AAPCS64;
+#elif defined(__riscv) && __riscv_xlen == 64
+  return abi == DINV_ABI_RISCV64;
+#else
+  return false;
+#endif
 }
 
 // SysV eightbyte classification.
@@ -296,14 +328,15 @@ dinv_status_t layoutSysv(CifLayout& L) {
       if (!sysvClassifyStruct(L.ret, retSize, ebs))
         return fail(DINV_LAYOUT_ERROR, "cannot classify struct return");
       L.hiddenRet = false;
+      int gi = 0, fi = 0;
       for (size_t i = 0; i < ebs.size(); ++i) {
         size_t off = i * 8, sz = retSize - off > 8 ? 8 : retSize - off;
         if (ebs[i].hasInt && !ebs[i].hasFp)
-          L.retSlots.push_back(makeSlot(DINV_LOC_GPR, (int)i, 0, sz, off));
+          L.retSlots.push_back(makeSlot(DINV_LOC_GPR, gi++, 0, sz, off));
         else if (ebs[i].hasFp && !ebs[i].hasInt)
-          L.retSlots.push_back(makeSlot(DINV_LOC_FPR, (int)i, 0, sz, off));
+          L.retSlots.push_back(makeSlot(DINV_LOC_FPR, fi++, 0, sz, off));
         else
-          L.retSlots.push_back(makeSlot(DINV_LOC_GPR, (int)i, 0, sz, off));
+          L.retSlots.push_back(makeSlot(DINV_LOC_GPR, gi++, 0, sz, off));
       }
     }
   } else if (L.ret) {
@@ -395,7 +428,7 @@ dinv_status_t layoutWin64(CifLayout& L) {
     L.hiddenRet = false;
   } else if (retStruct) {
     if (retSize == 0) return fail(DINV_LAYOUT_ERROR, "empty struct return");
-    if (retSize <= 8) {
+    if (retSize == 1 || retSize == 2 || retSize == 4 || retSize == 8) {
       L.hiddenRet = false;
       L.retSlots.push_back(makeSlot(DINV_LOC_GPR, 0, 0, retSize, 0));
     } else {
@@ -408,7 +441,7 @@ dinv_status_t layoutWin64(CifLayout& L) {
       L.retSlots.push_back(makeSlot(DINV_LOC_FPR, 0, 0, typeSize(L.ret), 0));
   }
   int slot = L.hiddenRet ? 1 : 0;
-  int gpr = 0, fpr = 0;
+  int gpr = L.hiddenRet ? 1 : 0, fpr = 0;
   size_t stack = 0;
   L.slots.assign(L.args.size(), {});
   for (size_t i = 0; i < L.args.size(); ++i) {
@@ -419,14 +452,8 @@ dinv_status_t layoutWin64(CifLayout& L) {
     size_t sz = typeSize(t);
     if (isStruct && sz == 0)
       return fail(DINV_LAYOUT_ERROR, "empty struct argument");
-    if (isStruct && sz > 8) {
-      // Large struct: consume a slot, data on stack.
-      size_t off = alignUp(stack, 8);
-      L.slots[i].push_back(makeSlot(DINV_LOC_STACK, -1, off, sz, 0));
-      stack = off + alignUp(sz, 8);
-      slot++;
-      continue;
-    }
+    if (isStruct && sz != 1 && sz != 2 && sz != 4 && sz != 8)
+      return fail(DINV_UNSUPPORTED, "Win64 indirect aggregate arguments are not implemented");
     if (slot < 4) {
       if (isFloatKind(t->kind)) {
         L.slots[i].push_back(makeSlot(DINV_LOC_FPR, slot, 0, 8, 0));
@@ -521,12 +548,14 @@ dinv_status_t layoutAapcs64(CifLayout& L) {
           fpr += (int)c;
           continue;
         }
-        size_t al = typeAlign(t);
-        size_t off = alignUp(stack, al > 8 ? 8 : al);
+        fpr = 8; // Once an HFA spills, following FP arguments also spill.
+        size_t off = alignUp(stack, 8);
         L.slots[i].push_back(makeSlot(DINV_LOC_STACK, -1, off, sz, 0));
-        stack = off + alignUp(sz, al > 8 ? 8 : al);
+        stack = off + alignUp(sz, 8);
         continue;
       }
+      if (sz > 16)
+        return fail(DINV_UNSUPPORTED, "AAPCS64 indirect aggregate arguments are not implemented");
       if (sz <= 16) {
         int need = sz <= 8 ? 1 : 2;
         if (gpr + need <= 8) {
@@ -541,29 +570,27 @@ dinv_status_t layoutAapcs64(CifLayout& L) {
           continue;
         }
       }
-      size_t al = typeAlign(t);
-      size_t off = alignUp(stack, al > 8 ? 8 : al);
+      gpr = 8;
+      size_t off = alignUp(stack, 8);
       L.slots[i].push_back(makeSlot(DINV_LOC_STACK, -1, off, sz, 0));
-      stack = off + alignUp(sz, al > 8 ? 8 : al);
+      stack = off + alignUp(sz, 8);
       continue;
     }
     if (isIntKind(t->kind)) {
       if (gpr < 8) {
         L.slots[i].push_back(makeSlot(DINV_LOC_GPR, gpr++, 0, 8, 0));
       } else {
-        size_t al = typeAlign(t);
-        size_t off = alignUp(stack, al);
+        size_t off = alignUp(stack, 8);
         L.slots[i].push_back(makeSlot(DINV_LOC_STACK, -1, off, typeSize(t), 0));
-        stack = off + typeSize(t);
+        stack = off + 8;
       }
     } else {
       if (fpr < 8) {
         L.slots[i].push_back(makeSlot(DINV_LOC_FPR, fpr++, 0, 8, 0));
       } else {
-        size_t al = typeAlign(t);
-        size_t off = alignUp(stack, al);
+        size_t off = alignUp(stack, 8);
         L.slots[i].push_back(makeSlot(DINV_LOC_STACK, -1, off, typeSize(t), 0));
-        stack = off + typeSize(t);
+        stack = off + 8;
       }
     }
   }
@@ -749,7 +776,7 @@ struct dinv_cif {
 };
 
 struct dinv_closure {
-  CifLayout layout;
+  dinv_cif cif;
   dinv_closure_fn_t fn = nullptr;
   void* user = nullptr;
   void* code = nullptr;
@@ -793,9 +820,6 @@ void packArgs(const CifLayout& L, void** args, uint64_t* gpr, uint64_t* fpr,
           if (n > 8) n = 8;
         }
         memcpy(&v, src + s.field_offset, n);
-        gpr[s.reg] |= 0;  // regs zeroed; struct halves OR? No overlap, assign.
-        // Struct halves target distinct regs; scalars single reg.
-        // For safety OR only when multiple slots share a reg (never here).
         gpr[s.reg] = v;
         // For RISC-V 32-bit GPR slots with size xlen=4, upper 4 must be zero;
         // memcpy already zero-extends.
@@ -841,7 +865,7 @@ void unpackReturn(const CifLayout& L, const uint64_t* gpr, const uint64_t* fpr,
 dinv_status_t closureUnpackAndCall(dinv_closure* c, const uint64_t* gpr,
                                   const uint64_t* fpr, const uint8_t* stack,
                                   uint64_t* outGpr, uint64_t* outFpr) {
-  const CifLayout& L = c->layout;
+  const CifLayout& L = c->cif.layout;
   std::vector<std::vector<uint8_t>> bufs(L.args.size());
   std::vector<void*> argv(L.args.size());
   for (size_t i = 0; i < L.args.size(); ++i) {
@@ -873,10 +897,14 @@ dinv_status_t closureUnpackAndCall(dinv_closure* c, const uint64_t* gpr,
   if (L.hiddenRet) {
     retPtr = (void*)(uintptr_t)gpr[0];
   }
-  c->fn((dinv_cif_t*)&c->layout, retPtr, argv.data(), c->user);
+  c->fn(&c->cif, retPtr, argv.data(), c->user);
   for (int i = 0; i < 2; ++i) outGpr[i] = 0;
   for (int i = 0; i < 4; ++i) outFpr[i] = 0;
-  if (L.hiddenRet || !retSize || L.ret->kind == DINV_VOID) return ok();
+  if (L.hiddenRet) {
+    outGpr[0] = gpr[0];  // SysV sret returns the destination in RAX.
+    return ok();
+  }
+  if (!retSize || L.ret->kind == DINV_VOID) return ok();
   for (auto& s : L.retSlots) {
     uint64_t v = 0;
     memcpy(&v, retBuf.data() + s.field_offset, s.size);
@@ -976,6 +1004,7 @@ dinv_status_t dinv_abi_for_name(const char* name, dinv_abi_t* out) {
 }
 
 dinv_abi_t dinv_abi_host(void) { return resolveAbi(DINV_ABI_AUTO); }
+int dinv_abi_can_execute(dinv_abi_t abi) { return hostCanExecute(abi) ? 1 : 0; }
 
 const char* dinv_abi_isa_arch(dinv_abi_t abi) {
   switch (resolveAbi(abi)) {
@@ -1042,6 +1071,12 @@ dinv_status_t dinv_type_for_name(const char* name, const dinv_type_t** out) {
   return ok();
 }
 
+const dinv_type_t* dinv_type_named(const char* name) {
+  const dinv_type_t* result = nullptr;
+  (void)dinv_type_for_name(name, &result);
+  return result;
+}
+
 size_t dinv_type_size(const dinv_type_t* t) { return typeSize(t); }
 size_t dinv_type_align(const dinv_type_t* t) { return typeAlign(t); }
 
@@ -1056,16 +1091,16 @@ dinv_status_t dinv_cif_create(dinv_abi_t abi, const dinv_type_t* ret,
   dinv_abi_t r = resolveAbi(abi);
   if (r == DINV_ABI_AUTO) return fail(DINV_UNSUPPORTED, "cannot resolve ABI");
   try {
-    auto* c = new dinv_cif();
+    auto c = std::make_unique<dinv_cif>();
     c->layout.abi = r;
     c->layout.ret = ret;
-    c->layout.args.assign(args, args + nargs);
+    if (nargs) c->layout.args.assign(args, args + nargs);
     // Validate types.
     {
       size_t s = 0, a = 1;
       std::vector<const dinv_type_t*> st;
-      if (!typeSizeAlignRec(ret, s, a, st) && ret->kind == DINV_STRUCT)
-        return fail(DINV_LAYOUT_ERROR, "invalid return struct");
+      if (!typeSizeAlignRec(ret, s, a, st))
+        return fail(DINV_LAYOUT_ERROR, "invalid return type");
       for (size_t i = 0; i < nargs; ++i) {
         if (!c->layout.args[i])
           return fail(DINV_INVALID_ARGUMENT, "null argument type");
@@ -1083,12 +1118,14 @@ dinv_status_t dinv_cif_create(dinv_abi_t abi, const dinv_type_t* ret,
         if (ss == 0) return fail(DINV_LAYOUT_ERROR, "empty struct return");
       }
     }
+    c->layout.types = std::make_shared<TypeStorage>();
+    c->layout.ret = c->layout.types->copy(ret);
+    for (auto& arg : c->layout.args) arg = c->layout.types->copy(arg);
     dinv_status_t rc = buildLayout(c->layout);
     if (rc != DINV_OK) {
-      delete c;
       return rc;
     }
-    *out = c;
+    *out = c.release();
     return ok();
   } catch (const std::bad_alloc&) {
     return fail(DINV_NO_MEMORY, "out of memory");
@@ -1139,74 +1176,62 @@ dinv_status_t dinv_call(dinv_cif_t* cif, void* func, void* ret, void** args) {
   const CifLayout& L = cif->layout;
   if (L.args.size() && !args)
     return fail(DINV_INVALID_ARGUMENT, "args required");
+  for (size_t i = 0; i < L.args.size(); ++i)
+    if (!args[i]) return fail(DINV_INVALID_ARGUMENT, "null argument storage");
   if (!hostCanExecute(L.abi))
     return fail(DINV_UNSUPPORTED,
                 "call ABI is not the host ABI; layout query only");
-  size_t retSize = typeSize(L.ret);
-  if (L.hiddenRet && !ret)
-    return fail(DINV_INVALID_ARGUMENT, "hidden return needs a buffer");
-  if (!L.hiddenRet && retSize && !ret)
-    return fail(DINV_INVALID_ARGUMENT, "return buffer required");
-  uint64_t gpr[8] = {0};
-  uint64_t fpr[8] = {0};
-  std::vector<uint8_t> stack(L.stackBytes, 0);
-  const void* hidden = nullptr;
-  if (L.hiddenRet) {
-    hidden = ret;
-    if (L.abi == DINV_ABI_SYSV_AMD64 || L.abi == DINV_ABI_WIN64 ||
-        L.abi == DINV_ABI_RISCV64 || L.abi == DINV_ABI_RISCV32) {
+  try {
+    size_t retSize = typeSize(L.ret);
+    if (retSize && !ret)
+      return fail(DINV_INVALID_ARGUMENT, "return buffer required");
+    uint64_t gpr[8] = {0};
+    uint64_t fpr[8] = {0};
+    std::vector<uint8_t> stack(L.stackBytes, 0);
+    const void* hidden = L.hiddenRet ? ret : nullptr;
+    packArgs(L, args, gpr, fpr, stack.data());
+    // AArch64's trampoline uses x8; other ABIs reserve the first GPR.
+    if (L.hiddenRet && L.abi != DINV_ABI_AAPCS64)
       gpr[0] = (uint64_t)(uintptr_t)ret;
-    }
-  }
-  packArgs(L, args, gpr, fpr, stack.data());
-  // Re-apply hidden for ABIs where pack does not (AArch64 uses hidden param).
-  if (L.hiddenRet && L.abi == DINV_ABI_AAPCS64) {
-    hidden = ret;
-  } else if (L.hiddenRet) {
-    hidden = ret;
-    gpr[0] = (uint64_t)(uintptr_t)ret;
-  }
-  uint64_t outGpr[2] = {0, 0};
-  uint64_t outFpr[4] = {0, 0, 0, 0};
-  const uint8_t* stackPtr = stack.empty() ? nullptr : stack.data();
-  switch (L.abi) {
+    uint64_t outGpr[2] = {0, 0};
+    uint64_t outFpr[4] = {0, 0, 0, 0};
+    const uint8_t* stackPtr = stack.empty() ? nullptr : stack.data();
+    switch (L.abi) {
 #if defined(__x86_64__) && !defined(_WIN32)
-    case DINV_ABI_SYSV_AMD64:
-      dinv_trampoline_sysv_amd64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
-                                 outGpr, outFpr);
-      break;
+      case DINV_ABI_SYSV_AMD64:
+        dinv_trampoline_sysv_amd64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
+                                   outGpr, outFpr);
+        break;
 #endif
 #if defined(__x86_64__) || defined(_M_X64)
-    case DINV_ABI_WIN64:
-      dinv_trampoline_win64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
-                            outGpr, outFpr);
-      break;
+      case DINV_ABI_WIN64:
+        dinv_trampoline_win64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
+                               outGpr, outFpr);
+        break;
 #endif
 #if defined(__aarch64__) || defined(_M_ARM64)
-    case DINV_ABI_AAPCS64:
-      dinv_trampoline_aapcs64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
-                              outGpr, outFpr);
-      break;
-#endif
-#if defined(__riscv)
-    case DINV_ABI_RISCV64:
-      dinv_trampoline_riscv64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
-                              outGpr, outFpr);
-      break;
-#endif
-    default:
-#if defined(__x86_64__) && !defined(_WIN32)
-      if (L.abi == DINV_ABI_SYSV_AMD64) {
-        dinv_trampoline_sysv_amd64(func, gpr, fpr, stackPtr, L.stackBytes,
-                                   hidden, outGpr, outFpr);
+      case DINV_ABI_AAPCS64:
+        dinv_trampoline_aapcs64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
+                                 outGpr, outFpr);
         break;
-      }
 #endif
-      return fail(DINV_UNSUPPORTED, "no trampoline for this host/ABI");
+#if defined(__riscv) && __riscv_xlen == 64
+      case DINV_ABI_RISCV64:
+        dinv_trampoline_riscv64(func, gpr, fpr, stackPtr, L.stackBytes, hidden,
+                                 outGpr, outFpr);
+        break;
+#endif
+      default:
+        return fail(DINV_UNSUPPORTED, "no trampoline for this host/ABI");
+    }
+    if (!L.hiddenRet && retSize)
+      unpackReturn(L, outGpr, outFpr, ret);
+    return ok();
+  } catch (const std::bad_alloc&) {
+    return fail(DINV_NO_MEMORY, "cannot allocate call storage");
+  } catch (const std::exception& error) {
+    return fail(DINV_CALL_ERROR, error.what());
   }
-  if (!L.hiddenRet && retSize && L.ret->kind != DINV_VOID)
-    unpackReturn(L, outGpr, outFpr, ret);
-  return ok();
 }
 
 dinv_status_t dinv_call_simple(dinv_abi_t abi, const dinv_type_t* ret,
@@ -1224,6 +1249,8 @@ dinv_status_t dinv_call_simple(dinv_abi_t abi, const dinv_type_t* ret,
 dinv_status_t dinv_closure_create(dinv_cif_t* cif, dinv_closure_fn_t fn,
                                   void* user, dinv_closure_t** out_closure,
                                   void** out_fn) {
+  if (out_closure) *out_closure = nullptr;
+  if (out_fn) *out_fn = nullptr;
   if (!cif || !fn || !out_closure || !out_fn)
     return fail(DINV_INVALID_ARGUMENT, "cif, fn and outputs required");
   if (cif->layout.abi != DINV_ABI_SYSV_AMD64)
@@ -1234,15 +1261,15 @@ dinv_status_t dinv_closure_create(dinv_cif_t* cif, dinv_closure_fn_t fn,
   return fail(DINV_UNSUPPORTED, "closures need an x86_64 SysV host");
 #else
   try {
-    auto* c = new dinv_closure();
-    c->layout = cif->layout;
+    auto owner = std::make_unique<dinv_closure>();
+    auto* c = owner.get();
+    c->cif.layout = cif->layout;
     c->fn = fn;
     c->user = user;
 #if defined(_WIN32)
     void* mem = VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE,
                              PAGE_EXECUTE_READWRITE);
     if (!mem) {
-      delete c;
       return fail(DINV_NO_MEMORY, "VirtualAlloc failed");
     }
     c->allocBase = mem;
@@ -1255,7 +1282,6 @@ dinv_status_t dinv_closure_create(dinv_cif_t* cif, dinv_closure_fn_t fn,
         mmap(nullptr, (size_t)ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
              -1, 0);
     if (mem == MAP_FAILED) {
-      delete c;
       return fail(DINV_NO_MEMORY, "mmap failed");
     }
     c->allocBase = mem;
@@ -1282,11 +1308,10 @@ dinv_status_t dinv_closure_create(dinv_cif_t* cif, dinv_closure_fn_t fn,
     __builtin___clear_cache((char*)c->code, (char*)c->code + 24);
     if (mprotect(c->allocBase, c->allocSize, PROT_READ | PROT_EXEC) != 0) {
       munmap(c->allocBase, c->allocSize);
-      delete c;
       return fail(DINV_ERROR, "mprotect failed");
     }
 #endif
-    *out_closure = c;
+    *out_closure = owner.release();
     *out_fn = c->code;
     return ok();
   } catch (const std::bad_alloc&) {

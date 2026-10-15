@@ -1,7 +1,28 @@
-# XBind initial validation regimen
+# XBind validation regimen
 
-This regimen keeps the scaffold useful while the real C parser, XBind IR, and
-target emitters are being implemented.
+The current suite implements the first executable slice: strict spec contracts,
+deterministic JSON IR, compiler-verified signatures and Lua/DomLuaBind generation.
+General header parsing, records, callbacks, buffers, automatic ownership and eight
+other language emitters remain explicitly incomplete.
+
+## Implemented acceptance gates
+
+- All repository specs load under stock Lua and QaMRpp; the optional Jiterati
+  checkout is a C++ header inventory, not a fabricated C ABI.
+- Every nonempty C spec emits exact-signature assertions and compiles against its
+  real headers. A deliberately wrong prototype must fail compilation.
+- JSON IR retains typedefs, target options, ownership, nullability and feature
+  tags, and is byte-identical across repeated invocations.
+- Duplicate entries, sparse/keyed arrays, malformed constructor kinds, invalid
+  nullability and nonempty unsupported modules fail explicitly.
+- Driver and loadable QaMRpp module share the same constructors/validator.
+- Lua defaults, library overrides and target overrides feed the real emitter.
+- Hello and self-binding modules compile through DomLuaBind and execute under
+  Lua 5.4; range, arity, type, nil and embedded-NUL failures are exercised.
+- Unsupported lowering fails with empty stdout, never a partial/fake wrapper.
+
+The stages below retain the roadmap; their "checks to add" entries are not
+claims of implemented general-purpose parsing or all-target emission.
 
 ## Stage 0: scaffold integrity
 

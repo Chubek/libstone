@@ -40,7 +40,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
   endif()
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
   list(APPEND DYNINVOKE_ABI_SOURCES abi/aarch64.S)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
   list(APPEND DYNINVOKE_ABI_SOURCES abi/riscv64.S)
 endif()
 
@@ -53,6 +53,8 @@ target_include_directories(tdyninvoke PUBLIC
 target_include_directories(tdyninvoke PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../sandstone/isa)
 target_link_libraries(tdyninvoke PUBLIC qbfd::qbfd)
+target_compile_definitions(tdyninvoke PUBLIC
+  $<$<BOOL:${BUILD_SHARED_LIBS}>:TDYNINVOKE_SHARED>)
 set_target_properties(tdyninvoke PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(DEFINED LIBSTONE_SOURCE_DIR)
   target_compile_definitions(tdyninvoke PRIVATE

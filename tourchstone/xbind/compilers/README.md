@@ -23,13 +23,11 @@ The first backend should implement a small traceable pipeline:
 3. request DomBind primitives,
 4. emit source files plus a target-native smoke test.
 
-Current status: these directories are placeholders only. The repository specs
-are kept to callback-free/query-oriented surfaces so the future IR and emitter
-work can start from the same all-target contract instead of per-language one-off
-fixtures. The recommended bring-up order is:
+Current status: the directories are reserved. `../xbind_codegen.cpp` implements
+the JSON spec IR, compiler signature checks, and the working Lua emitter through
+DomLuaBind. `../tests/test_codegen.py` compiles and executes hello and self-binding
+modules. The other eight emitters are not implemented. Next steps:
 
-1. emit a target-neutral IR dump for `examples/hello/hello.xbind`,
-2. lower that IR through `Lua.c` and `domluabind`,
-3. add `Dogfooding.xbind` as the second fixture,
-4. expand the same IR to the remaining target directories,
-5. only then add records, callbacks, buffers, and ownership-transfer lowering.
+1. add header AST/source-span ingestion alongside the exact compiler checks;
+2. extend the same IR to additional target emitters;
+3. add records, callbacks, buffers and automatic ownership with runtime tests.

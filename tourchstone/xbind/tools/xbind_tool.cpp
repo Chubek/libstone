@@ -1,8 +1,11 @@
 #include "xbind.h"
 #include "xbind_qamrpp.hpp"
+#include "xbind_codegen.hpp"
 
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -18,6 +21,8 @@ bool has_suffix(const std::string &value, const std::string &suffix) {
 }
 
 bool file_exists(const std::string &path) {
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(path, error)) return false;
   std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
   return input.good();
 }
@@ -34,7 +39,10 @@ void print_usage(std::ostream &stream) {
          << "  --check-layout [ROOT]          Validate the scaffold layout.\n"
          << "  --find-spec LIB [DIR]          Resolve LIB.xbind or LIB.lua.\n"
          << "  --check-spec LIB [DIR]         Execute and validate a Lua spec with QaMRpp.\n"
-         << "  --dump-spec LIB [DIR]          Execute and summarize a Lua spec with QaMRpp.\n";
+         << "  --dump-spec LIB [DIR]          Execute and summarize a Lua spec with QaMRpp.\n"
+         << "  --dump-ir LIB [DIR]            Write deterministic spec IR as JSON.\n"
+         << "  --emit-check LIB [DIR]         Write C++20 exact-signature assertions.\n"
+         << "  --emit-lua LIB [DIR]           Write Lua 5.4 glue through DomLuaBind.\n";
 }
 
 void print_target(const xbind_target_info &target) {
@@ -66,9 +74,9 @@ std::string resolve_spec_or_throw(const std::string &library,
   return resolved;
 }
 
-int command_spec(int argc, char **argv, bool dump) {
-  if (argc < 3) {
-    std::cerr << "xbind: " << (dump ? "--dump-spec" : "--check-spec")
+int command_spec(int argc, char **argv) {
+  if (argc < 3 || argc > 4) {
+    std::cerr << "xbind: " << argv[1]
               << " requires a library name or spec path\n";
     return 2;
   }
@@ -77,7 +85,14 @@ int command_spec(int argc, char **argv, bool dump) {
   try {
     const std::string spec = resolve_spec_or_throw(argv[2], directory);
     const xbind::qamrpp::Manifest manifest = xbind::qamrpp::load_spec_file(spec);
-    if (dump) {
+    if (std::strcmp(argv[1], "--dump-ir") == 0) {
+      std::cout << xbind::codegen::dump_ir(manifest);
+    } else if (std::strcmp(argv[1], "--emit-check") == 0) {
+      std::cout << xbind::codegen::emit_check(manifest);
+    } else if (std::strcmp(argv[1], "--emit-lua") == 0) {
+      const char* data = std::getenv("XBIND_DATA_DIR");
+      std::cout << xbind::codegen::emit_lua(manifest, data && *data ? data : XBIND_SOURCE_DIR);
+    } else if (std::strcmp(argv[1], "--dump-spec") == 0) {
       std::cout << xbind::qamrpp::dump_manifest(manifest);
     } else {
       std::cout << "XBind spec OK: " << manifest.name << " (" << spec << ")\n";
@@ -158,12 +173,10 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (std::strcmp(argv[1], "--check-spec") == 0) {
-    return command_spec(argc, argv, false);
-  }
-
-  if (std::strcmp(argv[1], "--dump-spec") == 0) {
-    return command_spec(argc, argv, true);
+  if (std::strcmp(argv[1], "--check-spec") == 0 || std::strcmp(argv[1], "--dump-spec") == 0 ||
+      std::strcmp(argv[1], "--dump-ir") == 0 || std::strcmp(argv[1], "--emit-check") == 0 ||
+      std::strcmp(argv[1], "--emit-lua") == 0) {
+    return command_spec(argc, argv);
   }
 
   std::cerr << "xbind: unknown command: " << argv[1] << "\n";

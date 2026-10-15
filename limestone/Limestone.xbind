@@ -7,11 +7,13 @@ local xbind = require("lxbind")
 -- limestone_status is int-like; limestone_error * diagnostics are nullable.
 -- This slice covers compile/module/target/program/config stages with only
 -- string, integer, size_t, and opaque-handle types so every backend can
--- lower it today. Callback/installer and PBQP-cost-struct entry points are
+-- describe it. Lua glue and exact-signature probes are implemented; the other
+-- targets remain inventories. Callback/installer and PBQP-cost-struct APIs are
 -- deferred until XBind IR gains callbacks and records.
 return xbind.library {
   name = "limestone",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = {
     "limestone/limestone.h",
     "limestone/il.h",
@@ -48,6 +50,7 @@ return xbind.library {
   functions = {
     xbind.func("limestone_compile", {
       returns = "limestone_module *",
+      ownership = "owned",
       params = {
         xbind.param("input", "const char *"),
       },
@@ -66,6 +69,7 @@ return xbind.library {
     }),
     xbind.func("limestone_target_load", {
       returns = "limestone_target *",
+      ownership = "owned",
       params = {
         xbind.param("umd", "const char *"),
         xbind.param("error", "limestone_error *", { nullable = true }),
@@ -79,6 +83,7 @@ return xbind.library {
     }),
     xbind.func("limestone_program_create", {
       returns = "limestone_program *",
+      ownership = "owned",
       params = {},
     }),
     xbind.func("limestone_program_destroy", {

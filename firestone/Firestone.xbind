@@ -12,6 +12,7 @@ local xbind = require("lxbind")
 return xbind.library {
   name = "firestone",
   version = "0.1.0",
+  features = { "inventory-only", "cxx-headers" },
   headers = { "Firestone.hpp", "FireIR.hpp" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {

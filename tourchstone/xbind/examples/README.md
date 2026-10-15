@@ -1,6 +1,6 @@
 # XBind examples
 
-- `hello/` is the initial fixture used by the scaffold regimen. It describes a
+- `hello/` is the fixture used by the spec regimen and executable Lua generator tests. It describes a
   tiny C library with a Lua `.xbind` spec and enough annotations to exercise all
   nine backend targets, functions, params, and type overrides.
 

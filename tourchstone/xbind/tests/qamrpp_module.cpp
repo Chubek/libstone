@@ -47,5 +47,30 @@ int main(int argc, char **argv) {
     std::cerr << "unexpected manifest from QaMRpp module\n";
     return 1;
   }
+  // The plugin must preserve annotations, typedefs and version, not rebuild a
+  // lossy subset of the manifest with a separate set of constructors.
+  auto probe = ctx.run(R"(
+local x=require("lxbind")
+local options={nullable=true,ownership="borrowed"}
+local a=x.param("a","const char *",options)
+local b=x.param("b","const char *",options)
+return x.validate_library(x.library{name="probe",version="2.0",targets={x.target("Java",{package="stone.probe"})},
+typedefs={x.typedef("status_t","int")},functions={x.func("f",{params={a,b}})}})
+)");
+  if (field(ctx, probe, "version") != "2.0") return 1;
+  auto functions = ctx.table_raw_get(probe, string_key("functions"));
+  auto function = ctx.table_raw_get(functions, std::make_shared<qamrpp::Value>(int64_t(1)));
+  auto params = ctx.table_raw_get(function, string_key("params"));
+  auto first = ctx.table_raw_get(params, std::make_shared<qamrpp::Value>(int64_t(1)));
+  auto nullable = ctx.table_raw_get(first, string_key("nullable"));
+  if (field(ctx, first, "name") != "a" || field(ctx, first, "ownership") != "borrowed" ||
+      !nullable || nullable->type != qamrpp::Value::BOOL || !nullable->bool_value) return 1;
+  try {
+    ctx.run("local x=require('lxbind'); return x.validate_library(x.library{name='a',functions={x.func('f'),x.func('f')}})");
+    std::cerr << "plugin accepted duplicate function\n";
+    return 1;
+  } catch (const std::exception& error) {
+    if (std::string(error.what()).find("duplicate function") == std::string::npos) throw;
+  }
   return 0;
 }

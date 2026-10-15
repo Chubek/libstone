@@ -112,6 +112,7 @@ function M.library(options)
   result.functions = list(result.functions, "library.functions")
   result.modules = list(result.modules, "library.modules")
   result.stdlib = list(result.stdlib, "library.stdlib")
+  result.features = list(result.features, "library.features")
   result.version = result.version or M.VERSION
   return result
 end
@@ -121,14 +122,100 @@ function M.validate_library(manifest)
     fail("manifest must be produced by xbind.library")
   end
   require_string(manifest.name, "library name")
-  for index, target in ipairs(manifest.targets or {}) do
+  require_string(manifest.version, "library version")
+  local supported = {D=true, Go=true, Java=true, Lua=true, NodeJS=true,
+                     OCaml=true, Python=true, Ruby=true, Rust=true}
+  local function options(value)
+    for _, key in ipairs({"ownership", "range", "encoding", "direction",
+        "module", "package", "class", "addon", "library", "extension", "crate"}) do
+      if value[key] ~= nil then require_string(value[key], key) end
+    end
+    if value.nullable ~= nil and type(value.nullable) ~= "boolean" then
+      fail("nullable must be a boolean")
+    end
+  end
+  local function strings(value, field)
+    for _, item in ipairs(list(value, field)) do require_string(item, field) end
+  end
+  local function identifier(value)
+    require_string(value, "identifier")
+    if not value:match("^[A-Za-z_][A-Za-z_0-9]*$") then fail("invalid C identifier: " .. value) end
+  end
+  local function c_type(value)
+    require_string(value, "C type")
+    local first = value:find("*", 1, true)
+    local base = first and value:sub(1, first - 1) or value
+    if not base:match("^[A-Za-z_]") then fail("unsupported C type spelling: " .. value) end
+    for word in base:gmatch("%S+") do
+      if not word:match("^[A-Za-z_][A-Za-z_0-9]*$") then fail("unsupported C type spelling: " .. value) end
+    end
+    local tail = first and value:sub(first) or ""
+    while tail ~= "" do
+      if tail:sub(1, 1) ~= "*" then fail("unsupported C type spelling: " .. value) end
+      tail = tail:sub(2):gsub("^%s+", "")
+      if tail:sub(1, 5) == "const" and not tail:sub(6, 6):match("[A-Za-z_0-9]") then
+        tail = tail:sub(6):gsub("^%s+", "")
+      end
+    end
+  end
+  local function typedefs(value)
+    local seen = {}
+    for _, item in ipairs(list(value, "typedefs")) do
+      if type(item) ~= "table" or item.kind ~= "typedef" then fail("invalid typedef") end
+      require_string(item.c, "typedef c type")
+      c_type(item.c)
+      require_string(item.native, "typedef native type")
+      if seen[item.c] then fail("duplicate typedef: " .. item.c) end
+      seen[item.c] = true
+      options(item)
+    end
+  end
+  strings(manifest.headers, "headers")
+  for _, header in ipairs(manifest.headers or {}) do
+    if header:find('["\n\r\\]') then fail("invalid header path: " .. header) end
+  end
+  strings(manifest.stdlib, "stdlib")
+  strings(manifest.features, "features")
+  typedefs(manifest.typedefs)
+  if #list(manifest.modules, "modules") ~= 0 then fail("module lowering is not supported; use library.functions") end
+  local targets = {}
+  for index, target in ipairs(list(manifest.targets, "targets")) do
     if type(target) ~= "table" or target.kind ~= "target" then
       fail("library.targets[" .. index .. "] must be produced by xbind.target")
     end
+    require_string(target.name, "target name")
+    if not supported[target.name] then fail("unknown target: " .. target.name) end
+    if targets[target.name] then fail("duplicate target: " .. target.name) end
+    targets[target.name] = true
+    options(target)
+    typedefs(target.typedefs)
+    strings(target.features, "target.features")
   end
-  for index, fn in ipairs(manifest.functions or {}) do
+  local functions = {}
+  for index, fn in ipairs(list(manifest.functions, "functions")) do
     if type(fn) ~= "table" or fn.kind ~= "function" then
       fail("library.functions[" .. index .. "] must be produced by xbind.func")
+    end
+    identifier(fn.name)
+    require_string(fn.returns, "function returns")
+    c_type(fn.returns)
+    if functions[fn.name] then fail("duplicate function: " .. fn.name) end
+    functions[fn.name] = true
+    options(fn)
+    strings(fn.features, "function.features")
+    local params = {}
+    for _, param in ipairs(list(fn.params, "params")) do
+      if type(param) ~= "table" or param.kind ~= "param" then fail("invalid parameter") end
+      identifier(param.name)
+      require_string(param.c, "param c type")
+      c_type(param.c)
+      if param.c == "void" then fail("void parameter: " .. fn.name) end
+      if params[param.name] then fail("duplicate parameter: " .. param.name) end
+      params[param.name] = true
+      options(param)
+      if param.nullable ~= nil and not param.c:find("*", 1, true) then
+        fail("nullable requires a pointer: " .. param.name)
+      end
     end
   end
   return manifest

@@ -32,3 +32,19 @@ FIX_API int dinvk_call_cb(int (*cb)(int, int), int a, int b) {
   return cb(a, b);
 }
 FIX_API const char* dinvk_name(void) { return "dyninvoke-fixture"; }
+
+typedef struct { long long integer; double real; } DinVKMixed;
+FIX_API DinVKMixed dinvk_mixed_pair(long long a, double b) {
+  DinVKMixed result = {a + 1, b * 2};
+  return result;
+}
+typedef struct { double real; long long integer; } DinVKReverse;
+FIX_API DinVKReverse dinvk_reverse_pair(double a, long long b) {
+  DinVKReverse result = {a * 3, b + 2};
+  return result;
+}
+typedef struct { long long x, y, z; } DinVKBig;
+FIX_API DinVKBig dinvk_big(long long a) {
+  DinVKBig result = {a, a + 1, a + 2};
+  return result;
+}

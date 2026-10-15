@@ -12,6 +12,7 @@ local xbind = require("lxbind")
 return xbind.library {
   name = "sandstone",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "include/sandstone.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -133,6 +134,7 @@ return xbind.library {
     }),
     xbind.func("domsymas_builder_new", {
       returns = "DomSymAs_Builder *",
+      ownership = "owned",
       params = {
         xbind.param("little_endian", "int"),
       },

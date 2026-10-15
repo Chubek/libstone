@@ -1,14 +1,14 @@
 # XBind
 
-XBind is the Tourchstone binding generator scaffold. It is intended to play the
+XBind is the Tourchstone binding-spec runner and Lua binding generator. It aims to serve the
 same role as SWIG for this tree: read a C API, apply a Lua-written binding spec,
 normalize the requested surface, map C types into a target language, then lower
 the result through the DomBind runtime libraries.
 
-This directory is currently an initial vertical scaffold, not a complete C parser
-or binding generator. The committed pieces establish the project shape, target
-inventory, Lua spec vocabulary, default type-map format, examples, repository
-spec inventory, and checks that future compiler stages can grow into. See
+The implemented slice includes recursive manifest validation, deterministic JSON
+IR, compiler-checked C signatures, Lua type-map resolution, and executable
+Lua 5.4 glue through DomLuaBind. The other eight language targets remain
+inventories, not working emitters. There is no general C header parser. See
 [`MANUAL.md`](MANUAL.md) for the spec authoring guide and current binding
 coverage.
 
@@ -18,6 +18,7 @@ coverage.
 | --- | --- |
 | `xbind.c`, `xbind.h`, `xbind.hpp` | Small C/C++ API plus a scaffold CLI for discovery and layout checks. |
 | `xbind_qamrpp.*` | QaMRpp-backed executor for `.xbind` Lua specs. |
+| `xbind_codegen.*` | Deterministic IR, exact-signature probes, Lua/DomLuaBind emitter. |
 | `MANUAL.md` | Spec authoring guide, target matrix, current repository specs, and limitations. |
 | `cmake/XBindQaMRpp.cmake` | CMake locator for the configured `third_party/qamrpp` checkout (`XBIND_QAMRPP_ROOT`). |
 | `lxbind/` | Lua helpers used by `.xbind`/`.lua` specs. |
@@ -29,7 +30,7 @@ coverage.
 | `Dogfooding.xbind` | XBind's self-binding spec for the stable `xbind.h` query surface. |
 | `XFeats.schema.json` | Feature-manifest schema for binding transformation features. |
 
-## Supported target scaffold
+## Target inventory (Lua emission implemented)
 
 | Target | DomBind library | Default type map |
 | --- | --- | --- |
@@ -75,13 +76,12 @@ return xbind.library {
 }
 ```
 
-User specs may also add type overrides. XBind loads the relevant
-`typedefs/<Target>-Default.sexpr` first, then applies spec-local entries and any
-requested standard-library helpers.
+Lua emission parses `typedefs/Lua-Default.sexpr`, then applies library overrides
+and target-local overrides, in that order. Requested `stdlib` entries are retained
+as metadata; their placeholder implementations are not executed.
 
-Repository specs currently target all supported backends. The first implemented
-surface is deliberately callback-free and record-free so every backend can share
-the same lowering contract while header parsing and IR generation are brought up.
+Repository specs list all nine targets. The implemented Lua surface is deliberately
+callback-free and record-free; explicit opaque pointers are unmanaged handles.
 See `MANUAL.md` for the per-spec coverage table.
 
 ## Build and smoke checks
@@ -101,6 +101,9 @@ Useful CLI probes:
 /tmp/opencode/xbind-build/xbind --check-layout tourchstone/xbind
 /tmp/opencode/xbind-build/xbind --find-spec hello tourchstone/xbind/examples/hello
 /tmp/opencode/xbind-build/xbind --dump-spec hello tourchstone/xbind/examples/hello
+/tmp/opencode/xbind-build/xbind --dump-ir hello tourchstone/xbind/examples/hello
+/tmp/opencode/xbind-build/xbind --emit-check hello tourchstone/xbind/examples/hello
+/tmp/opencode/xbind-build/xbind --emit-lua hello tourchstone/xbind/examples/hello
 ```
 
 The `--check-spec` and `--dump-spec` commands execute the spec with the
@@ -120,12 +123,14 @@ cmake -S tourchstone/xbind -B /tmp/opencode/xbind-build \
 
 1. Resolve the spec (`<library>.xbind`, then `<library>.lua`) and execute it with
    `lxbind` on the Lua path through QaMRpp.
-2. Parse the referenced C headers and collect exported declarations.
-3. Merge default target type maps with user overrides.
-4. Build a normalized XBind IR: modules, functions, records, enums, ownership,
-   errors, callbacks, and enabled XFeats.
-5. Lower XBind IR into the selected `compilers/<Target>.c` backend.
-6. Emit target glue using the matching `dombind/dom<target>bind` runtime.
-7. Compile and run generated smoke tests for each requested target.
+2. Validate dense arrays, constructor kinds, names, duplicates, annotations and types.
+3. Preserve typedefs, target options, function/parameter annotations in JSON IR.
+4. Emit exact C++ function-pointer assertions; the compiler verifies the headers.
+5. Resolve Lua defaults, library overrides and target-local overrides.
+6. Emit scalar/string/opaque-pointer glue using DomLuaBind primitives.
+7. Compile and execute hello and self-binding modules in the test suite.
+
+Header AST ingestion, source spans, automatic ownership, records, callbacks,
+out-buffer marshalling and the other language emitters remain future work.
 
 See [`REGIMEN.md`](REGIMEN.md) for the staged validation plan.

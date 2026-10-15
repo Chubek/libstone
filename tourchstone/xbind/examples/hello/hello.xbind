@@ -1,6 +1,6 @@
 local xbind = require("lxbind")
 
--- hello fixture: minimal C library used by the XBind scaffold regimen.
+-- hello fixture: compiled and executed through the Lua/DomLuaBind emitter.
 -- Targets every supported backend so the all-target smoke matrix has a
 -- trivial first row. C types are intentionally limited to the default
 -- typedef maps (int/double/string) so no per-target override is needed
@@ -8,6 +8,7 @@ local xbind = require("lxbind")
 return xbind.library {
   name = "hello",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "hello.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {

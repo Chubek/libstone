@@ -8,8 +8,8 @@ Yellowstone qBFD and Sandstone ISA data.
 - Sandstone `.isa` files (`sandstone/isa/x86.isa`, `aarch64.isa`,
   `riscv64.isa`, `riscv32.isa`) are loaded at runtime to cross-check the
   compiled-in GPR/FPR register files.
-- Layout queries (which args go to GPR/FPR/stack, hidden struct-return
-  pointers) work for every ABI on any host.
+- Layout queries (register/stack locations and hidden struct-return pointers)
+  are available cross-host for the implemented subset of each ABI.
 - Execution uses per-ABI trampolines and currently requires the requested
   ABI to match the host ABI. Closures are implemented for SysV AMD64.
 
@@ -31,6 +31,22 @@ Structs are described with NULL-terminated element lists:
 static const dinv_type_t* pairElems[] = {&dinv_type_i32, &dinv_type_i32, NULL};
 static const dinv_type_t pairT = {DINV_STRUCT, pairElems};
 ```
+
+Call interfaces deep-copy their type graph; temporary descriptors may be released
+after creation. Closures retain a signature snapshot and may outlive the source
+cif. Cyclic graphs, void fields/arguments, invalid kinds and nesting beyond 64
+levels are rejected. Null argument-value storage is rejected before marshalling.
+`dinv_type_named` returns borrowed immutable builtin descriptors without an
+out-pointer; `dinv_abi_can_execute` reports whether the build has the host-ABI
+trampoline (not full signature/ABI conformance).
+
+SysV mixed integer/FP return banks use independent register indices, and hidden
+closure returns preserve the destination in RAX. AAPCS64 scalar stack slots use
+eight-byte strides. Win64/AAPCS64 indirect aggregate arguments are explicitly
+unsupported rather than incorrectly copied by value. Varargs, packed records,
+vectors and long double are not modeled; broader cross-ABI aggregate conformance
+still needs native target tests. Native functions/callbacks must not throw across
+the C/assembly boundary.
 
 ## Tool
 

@@ -49,8 +49,7 @@ bool hasPathSeparator(std::string_view s) {
 
 bool existsRegular(const std::filesystem::path& path) {
   std::error_code ec;
-  return std::filesystem::is_regular_file(path, ec) ||
-         std::filesystem::exists(path, ec);
+  return std::filesystem::is_regular_file(path, ec);
 }
 
 std::filesystem::path absoluteIfPossible(const std::filesystem::path& path) {
@@ -151,16 +150,25 @@ tdyn_status_t nativeOpen(const char* path, uint32_t flags, NativeHandle* out,
   }
   if (flags & TDYN_OPEN_NOLOAD) {
     HMODULE module = nullptr;
-    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            path, &module))
+    if (!GetModuleHandleExA(0, path, &module))
       return fail(TDYN_NOT_FOUND, windowsError());
     *out = module;
+    *owned = true;
     return ok();
   }
   HMODULE module = LoadLibraryExA(path, nullptr, 0);
   if (!module) return fail(TDYN_NATIVE_ERROR, windowsError());
+  if (flags & TDYN_OPEN_NODELETE) {
+    HMODULE pinned = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN, path, &pinned)) {
+      auto message = windowsError();
+      FreeLibrary(module);
+      return fail(TDYN_NATIVE_ERROR, std::move(message));
+    }
+  }
   *out = module;
-  *owned = (flags & TDYN_OPEN_NODELETE) == 0;
+  // Pinning controls unmapping, not ownership of this open's reference.
+  *owned = true;
   return ok();
 }
 
@@ -206,7 +214,7 @@ tdyn_status_t nativeOpen(const char* path, uint32_t flags, NativeHandle* out,
   mode |= (flags & TDYN_OPEN_GLOBAL) ? RTLD_GLOBAL : RTLD_LOCAL;
 #ifdef RTLD_NODELETE
   if (flags & TDYN_OPEN_NODELETE) mode |= RTLD_NODELETE;
-#elif defined(__APPLE__)
+#else
   if (flags & TDYN_OPEN_NODELETE) {
     return fail(TDYN_UNSUPPORTED,
                 "TDYN_OPEN_NODELETE is not supported by this loader");
@@ -234,7 +242,7 @@ tdyn_status_t nativeOpen(const char* path, uint32_t flags, NativeHandle* out,
                 err ? err : "dlopen failed");
   }
   *out = handle;
-  *owned = (flags & TDYN_OPEN_NODELETE) == 0;
+  *owned = true;
   return ok();
 }
 
@@ -294,6 +302,7 @@ struct tdyn_library {
   std::filesystem::path path;
   std::string label;
   uint32_t flags = 0;
+  tdyn_env* owner = nullptr;
   Native native;
   std::string inspectError;
   std::shared_ptr<qbfd::Buffer> buffer;
@@ -363,6 +372,15 @@ std::unique_ptr<tdyn_library> makeLibrary(const char* path, uint32_t flags,
                                           bool self, tdyn_env* env,
                                           tdyn_status_t* status) {
   if (status) *status = TDYN_ERROR;
+  constexpr uint32_t known = TDYN_OPEN_LAZY | TDYN_OPEN_NOW | TDYN_OPEN_LOCAL |
+      TDYN_OPEN_GLOBAL | TDYN_OPEN_NODELETE | TDYN_OPEN_NOLOAD | TDYN_OPEN_DEEPBIND |
+      TDYN_OPEN_REQUIRE_INSPECT | TDYN_OPEN_INSPECT_ONLY;
+  if ((flags & ~known) ||
+      ((flags & TDYN_OPEN_LAZY) && (flags & TDYN_OPEN_NOW)) ||
+      ((flags & TDYN_OPEN_LOCAL) && (flags & TDYN_OPEN_GLOBAL))) {
+    if (status) *status = fail(TDYN_INVALID_ARGUMENT, "invalid or conflicting open flags");
+    return nullptr;
+  }
   if (!self && (!path || !*path)) {
     if (status) *status = fail(TDYN_INVALID_ARGUMENT, "library path is required");
     return nullptr;
@@ -404,7 +422,7 @@ std::unique_ptr<tdyn_library> makeLibrary(const char* path, uint32_t flags,
                         : (inspectPath.empty() ? nativePath : inspectPath.string());
   library->flags = flags;
   inspectLibrary(*library);
-  if ((flags & TDYN_OPEN_REQUIRE_INSPECT) && !library->object) {
+  if ((flags & (TDYN_OPEN_REQUIRE_INSPECT | TDYN_OPEN_INSPECT_ONLY)) && !library->object) {
     std::string message = library->inspectError.empty()
                               ? "qBFD inspection failed"
                               : library->inspectError;
@@ -574,6 +592,12 @@ tdyn_status_t tdyn_env_create(tdyn_env_t** out) {
   }
 }
 
+tdyn_env_t* tdyn_env_new(void) {
+  tdyn_env_t* result = nullptr;
+  (void)tdyn_env_create(&result);
+  return result;
+}
+
 void tdyn_env_destroy(tdyn_env_t* env) { delete env; }
 
 tdyn_status_t tdyn_env_add_search_path(tdyn_env_t* env, const char* path) {
@@ -630,6 +654,12 @@ tdyn_status_t tdyn_library_open(const char* path, uint32_t flags,
   }
 }
 
+tdyn_library_t* tdyn_library_load(const char* path, uint32_t flags) {
+  tdyn_library_t* result = nullptr;
+  (void)tdyn_library_open(path, flags, &result);
+  return result;
+}
+
 tdyn_status_t tdyn_library_open_self(uint32_t flags, tdyn_library_t** out) {
   if (!out) return fail(TDYN_INVALID_ARGUMENT, "output library is required");
   *out = nullptr;
@@ -648,20 +678,31 @@ tdyn_status_t tdyn_library_open_self(uint32_t flags, tdyn_library_t** out) {
 
 void tdyn_library_close(tdyn_library_t* library) {
   if (!library) return;
+  if (auto* env = library->owner) {
+    for (auto it = env->symbols.begin(); it != env->symbols.end();) {
+      if (it->second.owner == library) it = env->symbols.erase(it);
+      else ++it;
+    }
+    auto it = std::find_if(env->libraries.begin(), env->libraries.end(),
+                          [library](const auto& entry) { return entry.get() == library; });
+    if (it != env->libraries.end()) env->libraries.erase(it);
+    return;
+  }
   closeLibrary(library);
   delete library;
 }
 
 tdyn_status_t tdyn_env_open(tdyn_env_t* env, const char* path, uint32_t flags,
                             tdyn_library_t** out) {
+  if (out) *out = nullptr;
   if (!env || !out)
     return fail(TDYN_INVALID_ARGUMENT, "environment and output are required");
-  *out = nullptr;
   try {
     tdyn_status_t status = TDYN_ERROR;
     auto library = makeLibrary(path, flags, false, env, &status);
     if (!library) return status;
     tdyn_library_t* raw = library.get();
+    raw->owner = env;
     env->libraries.push_back(std::move(library));
     *out = raw;
     return ok();
@@ -674,14 +715,15 @@ tdyn_status_t tdyn_env_open(tdyn_env_t* env, const char* path, uint32_t flags,
 
 tdyn_status_t tdyn_env_open_self(tdyn_env_t* env, uint32_t flags,
                                  tdyn_library_t** out) {
+  if (out) *out = nullptr;
   if (!env || !out)
     return fail(TDYN_INVALID_ARGUMENT, "environment and output are required");
-  *out = nullptr;
   try {
     tdyn_status_t status = TDYN_ERROR;
     auto library = makeLibrary(nullptr, flags, true, env, &status);
     if (!library) return status;
     tdyn_library_t* raw = library.get();
+    raw->owner = env;
     env->libraries.push_back(std::move(library));
     *out = raw;
     return ok();
@@ -749,6 +791,7 @@ uint64_t tdyn_library_image_base(const tdyn_library_t* library) {
 
 tdyn_status_t tdyn_library_symbol(tdyn_library_t* library, const char* name,
                                   void** out) {
+  if (out) *out = nullptr;
   if (!library || !name || !out)
     return fail(TDYN_INVALID_ARGUMENT, "library, symbol name and output are required");
   if (!library->native.handle)
@@ -989,6 +1032,8 @@ tdyn_status_t tdyn_env_promote(tdyn_env_t* env, tdyn_library_t* library,
                                tdyn_symbol_table_t table) {
   if (!env || !library)
     return fail(TDYN_INVALID_ARGUMENT, "environment and library are required");
+  if (library->owner != env)
+    return fail(TDYN_INVALID_ARGUMENT, "promoted library must belong to the environment");
   if (!library->object)
     return fail(TDYN_INSPECT_ERROR, "library has no qBFD inspection data");
   if (!library->native.handle)
@@ -1021,6 +1066,8 @@ tdyn_status_t tdyn_env_promote(tdyn_env_t* env, tdyn_library_t* library,
 
 tdyn_status_t tdyn_env_symbol(tdyn_env_t* env, const char* name, void** out,
                               tdyn_library_t** owner) {
+  if (out) *out = nullptr;
+  if (owner) *owner = nullptr;
   if (!env || !name || !out)
     return fail(TDYN_INVALID_ARGUMENT, "environment, symbol name and output are required");
   auto it = env->symbols.find(name);

@@ -3,13 +3,15 @@ local xbind = require("lxbind")
 -- Tourchstone aggregate: the stable query surface across xbind, dyninvoke,
 -- and dynload. Headers are relative to tourchstone/. Each function below
 -- exists verbatim in its header with the spelled C type; opaque handles
--- and int-like enums keep every backend lowerable today. Full lifecycle
--- calls (cif create, library open, spec resolve) stay in their component
--- specs (xbind/Dogfooding, dyninvoke/DynINVOKE, dynload/DynLOAD) until
--- buffers, out-pointers, and callbacks land in XBind IR.
+-- and int-like enums keep the surface representable in every target inventory.
+-- Lua scalar/string/opaque glue and compiler signature probes are executable.
+-- Pointer-return lifecycle helpers live in the component specs. APIs requiring
+-- buffers/out-pointers/callbacks (cif create, library open, spec resolve) are
+-- deliberately not represented as automatically marshalled calls.
 return xbind.library {
   name = "tourchstone",
   version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
   headers = { "xbind/xbind.h", "dyninvoke/dyninvoke.h", "dynload/dynload.h" },
   stdlib = { "typedef", "sexp", "json" },
   targets = {
@@ -71,6 +73,15 @@ return xbind.library {
     xbind.func("dinv_abi_host", {
       returns = "dinv_abi_t",
       params = {},
+    }),
+    xbind.func("dinv_abi_can_execute", {
+      returns = "int",
+      params = { xbind.param("abi", "dinv_abi_t") },
+    }),
+    xbind.func("dinv_type_named", {
+      returns = "const dinv_type_t *",
+      ownership = "borrowed",
+      params = { xbind.param("name", "const char *") },
     }),
     xbind.func("dinv_kind_name", {
       returns = "const char *",

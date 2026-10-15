@@ -44,6 +44,10 @@ REPOSITORY_SPECS = {
     "tourchstone/xbind/examples/hello/hello.xbind": "hello",
 }
 
+# Jiterati is a gitlink and may be absent in a non-recursive checkout.
+if (Path(__file__).resolve().parents[3] / "jiterati/Jiterati.xbind").is_file():
+    REPOSITORY_SPECS["jiterati/Jiterati.xbind"] = "jiterati"
+
 
 def balanced_sexpr(text: str) -> bool:
     depth = 0

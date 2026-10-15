@@ -40,6 +40,18 @@ tdyn_env_destroy(env);
 are borrowed from the library handle and remain valid until it is closed or its
 owning environment is destroyed.
 
+`tdyn_env_new` and `tdyn_library_load` are pointer-return convenience functions
+for bindings: NULL signals failure and `tdyn_last_error` provides the diagnostic.
+Close standalone libraries once with `tdyn_library_close`. Closing an
+environment-owned library removes it and its promoted symbols; all aliases and
+metadata pointers become invalid. Promotion requires membership in that same
+environment, preventing stale symbols from a separately owned library.
+
+Inspect-only opens require successful qBFD inspection. Unknown flags and mutually
+exclusive lazy/now or local/global flags are rejected. Failed symbol lookups
+clear outputs. POSIX nodelete handles still release their acquired loader
+reference; Windows nodelete pins the module explicitly.
+
 ## Tool
 
 `tdynload` opens a library, inspects it, and resolves symbols:
