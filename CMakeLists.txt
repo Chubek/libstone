@@ -12,7 +12,7 @@ foreach(component IN ITEMS blackstone firestone limestone sandstone yellowstone 
     add_subdirectory(${component})
   endif()
 endforeach()
-option(LIBSTONE_BUILD_GATESTONE "Build the MetaChain-based GateML language" OFF)
+option(LIBSTONE_BUILD_GATESTONE "Build the GateML frontend-definition compiler" OFF)
 if(LIBSTONE_BUILD_GATESTONE)
   add_subdirectory(gatestone)
 endif()
