@@ -38,9 +38,15 @@ module example level high {
   types { T = i32; U = tuple<param<T>, ptr<generic>>; }
   dialect math { factor = 3; }
   attrs { producer = "my frontend"; schema = 1; }
+  import "std";
   // Functions follow.
 }
 ```
+
+An `import "name";` declaration names a standard library module. Imports are
+resolved explicitly before verification; see
+[the standard library chapter](10-stdlib-and-imports.md). Library names are
+plain identifiers, never paths, and duplicates are parse errors.
 
 The default target is the explicitly defined portable VM layout: 64-bit
 pointers/indices and little-endian byte order. This is not host detection.

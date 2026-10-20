@@ -80,6 +80,7 @@ int main(void) {
 | `flintstone_parse_text` | NUL-terminated convenience parser, owning handle or null. |
 | `flintstone_module_destroy` | Releases an owning module handle. |
 | `flintstone_verify` | Semantic verification with the context's registry. |
+| `flintstone_resolve_imports` | Resolve `import` declarations (NULL = default stdlib directory). |
 | `flintstone_lower` | Verified transactional conversion using a checked integer level code. |
 | `flintstone_optimize` | Private high-to-core conversion if necessary, named Blackstone kernel and DCE; commits only on success. |
 | `flintstone_print` / `flintstone_module_text` | Canonical text, borrowed from the module's print cache. |

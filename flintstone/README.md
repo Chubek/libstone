@@ -13,6 +13,9 @@ native targets with verified machine encodings, all four RegTL allocators, and
 all nine Tourchstone binding targets (plus a 27-architecture Sandstone
 registry).
 
+A standard library lives in `stdlib/` and is imported with `import "std";`;
+see the [manual](manual/10-stdlib-and-imports.md).
+
 ```sh
 cmake -S flintstone -B /tmp/opencode/flintstone-build -DCMAKE_BUILD_TYPE=Debug
 cmake --build /tmp/opencode/flintstone-build --parallel 2
