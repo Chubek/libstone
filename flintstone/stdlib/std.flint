@@ -1,0 +1,9 @@
+// Flintstone standard library umbrella: imports math, bit, fp and mem.
+module std level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  import "math";
+  import "bit";
+  import "fp";
+  import "mem";
+  dialect arith { overflow = "modular"; }
+}

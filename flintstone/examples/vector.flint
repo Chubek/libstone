@@ -1,0 +1,11 @@
+module vector_demo level high {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+  func @dot(%x:i32) -> i32 {
+    ^entry:
+      %v:vector<4,i32> = vector.splat(%x);
+      %w:vector<4,i32> = vector.mul(%v, %v);
+      %r:i32 = vector.extract(%w) attrs {lane = 2;};
+      func.return(%r);
+  }
+}

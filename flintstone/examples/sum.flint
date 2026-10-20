@@ -1,0 +1,17 @@
+module sum level core {
+  func @sum(%limit:i32) -> i32 {
+    ^entry:
+      cf.jump() to [^loop];
+    ^loop:
+      %i:i32 = cf.phi(0:i32, %next) from [^entry, ^body];
+      %acc:i32 = cf.phi(0:i32, %total) from [^entry, ^body];
+      %continue:i1 = arith.lt(%i, %limit);
+      cf.branch(%continue) to [^body, ^exit];
+    ^body:
+      %total:i32 = arith.add(%acc, %i);
+      %next:i32 = arith.add(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%acc);
+  }
+}

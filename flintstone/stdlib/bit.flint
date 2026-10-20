@@ -1,0 +1,90 @@
+// Flintstone standard library: bit manipulation over 32-bit integers.
+module std.bit level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+
+  func @std.bit.popcount_i32(%x:i32) -> i32 {
+    ^entry:
+      cf.jump() to [^loop];
+    ^loop:
+      %i:i32 = cf.phi(0:i32, %ni) from [^entry, ^step];
+      %acc:i32 = cf.phi(0:i32, %nacc) from [^entry, ^step];
+      %cont:i1 = arith.lt(%i, 32:i32);
+      cf.branch(%cont) to [^step, ^exit];
+    ^step:
+      %shifted:i32 = arith.shr(%x, %i);
+      %bit:i32 = arith.and(%shifted, 1:i32);
+      %nacc:i32 = arith.add(%acc, %bit);
+      %ni:i32 = arith.add(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%acc);
+  }
+
+  func @std.bit.ctz_i32(%x:i32) -> i32 {
+    ^entry:
+      %zero:i1 = arith.eq(%x, 0:i32);
+      cf.branch(%zero) to [^ret32, ^loop];
+    ^ret32:
+      func.return(32:i32);
+    ^loop:
+      %i:i32 = cf.phi(0:i32, %ni) from [^entry, ^step];
+      %shifted:i32 = arith.shr(%x, %i);
+      %bit:i32 = arith.and(%shifted, 1:i32);
+      %found:i1 = arith.ne(%bit, 0:i32);
+      cf.branch(%found) to [^exit, ^step];
+    ^step:
+      %ni:i32 = arith.add(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%i);
+  }
+
+  func @std.bit.clz_i32(%x:i32) -> i32 {
+    ^entry:
+      %zero:i1 = arith.eq(%x, 0:i32);
+      cf.branch(%zero) to [^ret32, ^loop];
+    ^ret32:
+      func.return(32:i32);
+    ^loop:
+      %i:i32 = cf.phi(31:i32, %ni) from [^entry, ^step];
+      %shifted:i32 = arith.shr(%x, %i);
+      %bit:i32 = arith.and(%shifted, 1:i32);
+      %found:i1 = arith.ne(%bit, 0:i32);
+      cf.branch(%found) to [^exit, ^step];
+    ^step:
+      %ni:i32 = arith.sub(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      %r:i32 = arith.sub(31:i32, %i);
+      func.return(%r);
+  }
+
+  func @std.bit.is_pow2_i32(%x:i32) -> i1 {
+    ^entry:
+      %pos:i1 = arith.gt(%x, 0:i32);
+      %dec:i32 = arith.sub(%x, 1:i32);
+      %m:i32 = arith.and(%x, %dec);
+      %single:i1 = arith.eq(%m, 0:i32);
+      %r:i1 = arith.and(%pos, %single);
+      func.return(%r);
+  }
+
+  func @std.bit.bswap_i32(%x:i32) -> i32 {
+    ^entry:
+      %b0:i32 = arith.and(%x, 255:i32);
+      %s0:i32 = arith.shl(%b0, 24:i32);
+      %t1:i32 = arith.shr(%x, 8:i32);
+      %b1:i32 = arith.and(%t1, 255:i32);
+      %s1:i32 = arith.shl(%b1, 16:i32);
+      %t2:i32 = arith.shr(%x, 16:i32);
+      %b2:i32 = arith.and(%t2, 255:i32);
+      %s2:i32 = arith.shl(%b2, 8:i32);
+      %t3:i32 = arith.shr(%x, 24:i32);
+      %b3:i32 = arith.and(%t3, 255:i32);
+      %u0:i32 = arith.or(%s0, %s1);
+      %u1:i32 = arith.or(%s2, %b3);
+      %r:i32 = arith.or(%u0, %u1);
+      func.return(%r);
+  }
+}

@@ -1,0 +1,22 @@
+// Flintstone standard library: VM heap-cell helpers (ptr<generic>).
+module std.mem level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+
+  func @std.mem.swap_i32(%p:ptr<generic>, %q:ptr<generic>) -> void {
+    ^entry:
+      %a:i32 = mem.load(%p);
+      %b:i32 = mem.load(%q);
+      mem.store(%p, %b);
+      mem.store(%q, %a);
+      func.return();
+  }
+
+  func @std.mem.fetch_add_i32(%p:ptr<generic>, %delta:i32) -> i32 {
+    ^entry:
+      %old:i32 = mem.load(%p);
+      %next:i32 = arith.add(%old, %delta);
+      mem.store(%p, %next);
+      func.return(%old);
+  }
+}

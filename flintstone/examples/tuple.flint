@@ -1,0 +1,12 @@
+module tuple_demo level high {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+  func @swap_add(%x:i32, %y:i32) -> i32 {
+    ^entry:
+      %t:tuple<i32,i32> = tuple.build(%x, %y);
+      %a:i32 = tuple.extract(%t) attrs {index = 1;};
+      %b:i32 = tuple.extract(%t) attrs {index = 0;};
+      %r:i32 = arith.add(%a, %b);
+      func.return(%r);
+  }
+}

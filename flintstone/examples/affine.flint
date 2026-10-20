@@ -1,0 +1,12 @@
+module affine level high {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  types { T = i32; }
+  dialect arith { overflow = "modular"; }
+  dialect math { factor = 3; }
+  func @affine(%x:param<T>) -> param<T> {
+    ^entry:
+      %scaled:param<T> = math.scale(%x);
+      %answer:param<T> = arith.add(%scaled, 12:param<T>);
+      func.return(%answer);
+  }
+}

@@ -1,0 +1,42 @@
+// Flintstone standard library: binary64 floating-point utilities.
+module std.fp level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+
+  func @std.fp.abs_f64(%x:f64) -> f64 {
+    ^entry:
+      %lt:i1 = arith.lt(%x, 0.0:f64);
+      %neg:f64 = arith.neg(%x);
+      %r:f64 = arith.select(%lt, %neg, %x);
+      func.return(%r);
+  }
+
+  func @std.fp.min_f64(%a:f64, %b:f64) -> f64 {
+    ^entry:
+      %lt:i1 = arith.lt(%a, %b);
+      %r:f64 = arith.select(%lt, %a, %b);
+      func.return(%r);
+  }
+
+  func @std.fp.max_f64(%a:f64, %b:f64) -> f64 {
+    ^entry:
+      %gt:i1 = arith.gt(%a, %b);
+      %r:f64 = arith.select(%gt, %a, %b);
+      func.return(%r);
+  }
+
+  func @std.fp.clamp_f64(%x:f64, %lo:f64, %hi:f64) -> f64 {
+    ^entry:
+      %m:f64 = func.call(%x, %lo) attrs { callee = "std.fp.max_f64"; };
+      %r:f64 = func.call(%m, %hi) attrs { callee = "std.fp.min_f64"; };
+      func.return(%r);
+  }
+
+  func @std.fp.lerp_f64(%a:f64, %b:f64, %t:f64) -> f64 {
+    ^entry:
+      %diff:f64 = arith.sub(%b, %a);
+      %scaled:f64 = arith.mul(%diff, %t);
+      %r:f64 = arith.add(%a, %scaled);
+      func.return(%r);
+  }
+}

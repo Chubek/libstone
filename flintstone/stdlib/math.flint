@@ -1,0 +1,155 @@
+// Flintstone standard library: integer math utilities (i32, modular semantics).
+module std.math level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+
+  func @std.math.min_i32(%a:i32, %b:i32) -> i32 {
+    ^entry:
+      %lt:i1 = arith.lt(%a, %b);
+      %r:i32 = arith.select(%lt, %a, %b);
+      func.return(%r);
+  }
+
+  func @std.math.max_i32(%a:i32, %b:i32) -> i32 {
+    ^entry:
+      %gt:i1 = arith.gt(%a, %b);
+      %r:i32 = arith.select(%gt, %a, %b);
+      func.return(%r);
+  }
+
+  func @std.math.clamp_i32(%x:i32, %lo:i32, %hi:i32) -> i32 {
+    ^entry:
+      %m:i32 = func.call(%x, %lo) attrs { callee = "std.math.max_i32"; };
+      %r:i32 = func.call(%m, %hi) attrs { callee = "std.math.min_i32"; };
+      func.return(%r);
+  }
+
+  func @std.math.abs_i32(%x:i32) -> i32 {
+    ^entry:
+      %lt:i1 = arith.lt(%x, 0:i32);
+      %neg:i32 = arith.neg(%x);
+      %r:i32 = arith.select(%lt, %neg, %x);
+      func.return(%r);
+  }
+
+  func @std.math.sign_i32(%x:i32) -> i32 {
+    ^entry:
+      %pos:i1 = arith.gt(%x, 0:i32);
+      %neg:i1 = arith.lt(%x, 0:i32);
+      %nval:i32 = arith.select(%neg, -1:i32, 0:i32);
+      %r:i32 = arith.select(%pos, 1:i32, %nval);
+      func.return(%r);
+  }
+
+  func @std.math.gcd_i32(%a:i32, %b:i32) -> i32 {
+    ^entry:
+      %ua:i32 = func.call(%a) attrs { callee = "std.math.abs_i32"; };
+      %ub:i32 = func.call(%b) attrs { callee = "std.math.abs_i32"; };
+      cf.jump() to [^loop];
+    ^loop:
+      %x:i32 = cf.phi(%ua, %y) from [^entry, ^step];
+      %y:i32 = cf.phi(%ub, %rem) from [^entry, ^step];
+      %done:i1 = arith.eq(%y, 0:i32);
+      cf.branch(%done) to [^exit, ^step];
+    ^step:
+      %rem:i32 = arith.mod(%x, %y);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%x);
+  }
+
+  func @std.math.lcm_i32(%a:i32, %b:i32) -> i32 {
+    ^entry:
+      %az:i1 = arith.eq(%a, 0:i32);
+      %bz:i1 = arith.eq(%b, 0:i32);
+      %zero:i1 = arith.or(%az, %bz);
+      cf.branch(%zero) to [^ret_zero, ^compute];
+    ^ret_zero:
+      func.return(0:i32);
+    ^compute:
+      %ua:i32 = func.call(%a) attrs { callee = "std.math.abs_i32"; };
+      %ub:i32 = func.call(%b) attrs { callee = "std.math.abs_i32"; };
+      %g:i32 = func.call(%ua, %ub) attrs { callee = "std.math.gcd_i32"; };
+      %q:i32 = arith.div(%ua, %g);
+      %r:i32 = arith.mul(%q, %ub);
+      func.return(%r);
+  }
+
+  func @std.math.pow_i32(%base:i32, %exp:i32) -> i32 {
+    ^entry:
+      %neg:i1 = arith.lt(%exp, 0:i32);
+      cf.branch(%neg) to [^ret_zero, ^loop];
+    ^ret_zero:
+      func.return(0:i32);
+    ^loop:
+      %acc:i32 = cf.phi(1:i32, %nacc) from [^entry, ^step];
+      %b:i32 = cf.phi(%base, %nb) from [^entry, ^step];
+      %e:i32 = cf.phi(%exp, %ne) from [^entry, ^step];
+      %done:i1 = arith.eq(%e, 0:i32);
+      cf.branch(%done) to [^exit, ^step];
+    ^step:
+      %bit:i32 = arith.and(%e, 1:i32);
+      %odd:i1 = arith.ne(%bit, 0:i32);
+      %mul:i32 = arith.mul(%acc, %b);
+      %nacc:i32 = arith.select(%odd, %mul, %acc);
+      %nb:i32 = arith.mul(%b, %b);
+      %ne:i32 = arith.shr(%e, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%acc);
+  }
+
+  func @std.math.factorial_i32(%n:i32) -> i32 {
+    ^entry:
+      cf.jump() to [^loop];
+    ^loop:
+      %i:i32 = cf.phi(1:i32, %next) from [^entry, ^body];
+      %acc:i32 = cf.phi(1:i32, %prod) from [^entry, ^body];
+      %cont:i1 = arith.le(%i, %n);
+      cf.branch(%cont) to [^body, ^exit];
+    ^body:
+      %prod:i32 = arith.mul(%acc, %i);
+      %next:i32 = arith.add(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%acc);
+  }
+
+  func @std.math.fib_i32(%n:i32) -> i32 {
+    ^entry:
+      %le0:i1 = arith.le(%n, 0:i32);
+      cf.branch(%le0) to [^zero, ^loop];
+    ^zero:
+      func.return(0:i32);
+    ^loop:
+      %i:i32 = cf.phi(0:i32, %ni) from [^entry, ^body];
+      %a:i32 = cf.phi(0:i32, %b) from [^entry, ^body];
+      %b:i32 = cf.phi(1:i32, %sum) from [^entry, ^body];
+      %cont:i1 = arith.lt(%i, %n);
+      cf.branch(%cont) to [^body, ^exit];
+    ^body:
+      %sum:i32 = arith.add(%a, %b);
+      %ni:i32 = arith.add(%i, 1:i32);
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%a);
+  }
+
+  func @std.math.isqrt_i32(%n:i32) -> i32 {
+    ^entry:
+      %lt1:i1 = arith.le(%n, 0:i32);
+      cf.branch(%lt1) to [^zero, ^loop];
+    ^zero:
+      func.return(0:i32);
+    ^loop:
+      %r:i32 = cf.phi(0:i32, %nr) from [^entry, ^step];
+      %nr:i32 = arith.add(%r, 1:i32);
+      %q:i32 = arith.div(%n, %nr);
+      %cont:i1 = arith.le(%nr, %q);
+      cf.branch(%cont) to [^step, ^exit];
+    ^step:
+      cf.jump() to [^loop];
+    ^exit:
+      func.return(%r);
+  }
+}

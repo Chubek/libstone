@@ -1,0 +1,59 @@
+local xbind = require("lxbind")
+-- Scalar/string/opaque surface supported by the existing Tourchstone emitter.
+-- Length-delimited input, output pointers and argument buffers remain C/C++ APIs.
+return xbind.library {
+  name = "flintstone", version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership" },
+  headers = { "Flintstone.h" }, stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "flintstone" }),
+    xbind.target("Go", { package = "flintstone" }),
+    xbind.target("Java", { package = "stone.flintstone", class = "Flintstone" }),
+    xbind.target("Lua", { module = "flintstone" }),
+    xbind.target("NodeJS", { addon = "flintstone" }),
+    xbind.target("OCaml", { library = "flintstone" }),
+    xbind.target("Python", { module = "flintstone" }),
+    xbind.target("Ruby", { extension = "flintstone" }),
+    xbind.target("Rust", { crate = "flintstone_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("flintstone_context *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("flintstone_module *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const flintstone_module *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("flintstone_status", "int"),
+    xbind.typedef("flintstone_level", "int"),
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("flintstone_version", { returns = "const char *", params = {} }),
+    xbind.func("flintstone_last_error", { returns = "const char *", params = {} }),
+    xbind.func("flintstone_context_create", { returns = "flintstone_context *", ownership = "owned", params = {} }),
+    xbind.func("flintstone_context_destroy", { returns = "void", params = {
+      xbind.param("context", "flintstone_context *", { nullable = true }),
+    }}),
+    xbind.func("flintstone_parse_text", { returns = "flintstone_module *", ownership = "owned", params = {
+      xbind.param("context", "flintstone_context *"), xbind.param("source", "const char *"),
+    }}),
+    xbind.func("flintstone_module_destroy", { returns = "void", params = {
+      xbind.param("module", "flintstone_module *", { nullable = true }),
+    }}),
+    xbind.func("flintstone_verify", { returns = "flintstone_status", params = {
+      xbind.param("context", "flintstone_context *"), xbind.param("module", "const flintstone_module *"),
+    }}),
+    xbind.func("flintstone_resolve_imports", { returns = "flintstone_status", params = {
+      xbind.param("context", "flintstone_context *"), xbind.param("module", "flintstone_module *"),
+      xbind.param("stdlib_dir", "const char *", { nullable = true }),
+    }}),
+    xbind.func("flintstone_lower", { returns = "flintstone_status", params = {
+      xbind.param("context", "flintstone_context *"), xbind.param("module", "flintstone_module *"),
+      xbind.param("level", "flintstone_level"),
+    }}),
+    xbind.func("flintstone_module_text", { returns = "const char *", params = {
+      xbind.param("module", "flintstone_module *"),
+    }}),
+    xbind.func("flintstone_binding_target_count", { returns = "size_t", params = {} }),
+    xbind.func("flintstone_binding_target_at", { returns = "const char *", params = {
+      xbind.param("index", "size_t"),
+    }}),
+  },
+}

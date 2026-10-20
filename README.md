@@ -23,15 +23,22 @@ The aggregate and individual components can be configured independently:
 ```sh
 cmake -S libstone -B build-stone
 cmake -S libstone/sandstone -B build-sandstone
-cmake -S libstone/yellowstone/qbfd -B build-qbfd
+cmake -S libstone/flintstone -B build-flintstone
 ```
 
 ## Options
 
 - `LIBSTONE_BUILD_BLACKSTONE`, `LIBSTONE_BUILD_FIRESTONE`,
   `LIBSTONE_BUILD_LIMESTONE`, `LIBSTONE_BUILD_SANDSTONE`,
-  `LIBSTONE_BUILD_YELLOWSTONE`, and `LIBSTONE_BUILD_TOURCHSTONE` select
+  `LIBSTONE_BUILD_FLINTSTONE`, and `LIBSTONE_BUILD_TOURCHSTONE` select
   components in the aggregate build.
+- Yellowstone has moved to `.decomissioned/` and is not built by default.
+  `LIBSTONE_BUILD_YELLOWSTONE=ON` requires a Yellowstone directory in the active
+  tree. Tourchstone's qBFD-dependent native facilities default off without it;
+  XBind remains available. The move is not undone by the build.
+- Flintstone provides parametric dialects/types/targets, verified high-to-core-to-VM
+  lowering, Blackstone optimization, Firestone execution, Limestone/Sandstone
+  native backend handoffs and a C ABI. See [its manual](flintstone/manual/README.md).
 - `TOURCHSTONE_BUILD_DYNLOAD` enables the qBFD-backed dynamic loader and
   `tdynload` inspection tool under `tourchstone/dynload`.
 - `TOURCHSTONE_BUILD_DYNINVOKE` enables the libffi/dyncall-style foreign-call

@@ -9,7 +9,10 @@ tools used by the rest of libstone.
 | `dynload/` | `TOURCHSTONE_BUILD_DYNLOAD` | Native dynamic-loader wrapper with Yellowstone qBFD-backed object inspection. |
 | `dyninvoke/` | `TOURCHSTONE_BUILD_DYNINVOKE` | libffi/dyncall-style ABI layout, call, and closure support over qBFD and Sandstone ISA data. |
 
-All options default to `ON` in the Tourchstone aggregate build.
+XBind defaults to `ON`. The native loader/invocation options default to `ON`
+only when the active Yellowstone qBFD component is available. With Yellowstone
+decommissioned, they default to `OFF`; requesting them explicitly without qBFD
+produces a configuration error rather than reviving the retired source tree.
 
 ## Build and test
 

@@ -1,0 +1,12 @@
+module stdlib_demo level core {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  import "std";
+  dialect arith { overflow = "modular"; }
+  func @compute(%a:i32, %b:i32) -> i32 {
+    ^entry:
+      %g:i32 = func.call(%a, %b) attrs { callee = "std.math.gcd_i32"; };
+      %p:i32 = func.call(%g) attrs { callee = "std.bit.popcount_i32"; };
+      %r:i32 = arith.add(%g, %p);
+      func.return(%r);
+  }
+}

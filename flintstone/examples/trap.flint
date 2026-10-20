@@ -1,0 +1,12 @@
+module trap_demo level high {
+  target "vm" { pointer_bits = 64; index_bits = 64; endian = "little"; }
+  dialect arith { overflow = "modular"; }
+  func @guarded(%c:i1) -> i32 {
+    ^entry:
+      cf.branch(%c) to [^abort, ^live];
+    ^abort:
+      cf.trap();
+    ^live:
+      func.return(42:i32);
+  }
+}
