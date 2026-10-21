@@ -1,0 +1,79 @@
+-- YARV-inspired Ruby integer/array profile, not MRI instruction sequence data.
+-- Tagged integers (61-bit wrapping), nil/false/true, arrays of two elements,
+-- 16 local slots per activation, closed one-argument methods.
+-- No Ruby parser, method lookup, strings, bignums, blocks, exceptions or GC.
+local v = require("vmweave")
+local vm = v.vm {
+  name = "YARVM", execution = "switch", stack = { cell = "int64_t", capacity = 256 },
+  frame_capacity = 64,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = { { name = "locals", type = "i64", count = 1040 },
+    { name = "self", type = "i64", count = 65 }, { name = "depth", type = "u64" },
+    { name = "arrays", type = "i64", count = 128 }, { name = "array_top", type = "u64" },
+    { name = "out", type = "i64" } },
+  subsystems = { token = [[
+static int64_t YARVM_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t YARVM_vw_int(uint64_t n) { return YARVM_vw_bits((n << 3) | 1u); }
+static int64_t YARVM_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+]] },
+  instructions = {
+    { name = "PUTOBJECT", operands = { "cell" }, stack_effect = "( -- i )",
+      semantics = "vm_push(YARVM_vw_int((uint64_t)operand0));" },
+    { name = "PUTNIL", stack_effect = "( -- nil )", semantics = "vm_push(0);" },
+    { name = "PUTTRUE", stack_effect = "( -- true )", semantics = "vm_push(6);" },
+    { name = "PUTFALSE", stack_effect = "( -- false )", semantics = "vm_push(2);" },
+    { name = "PUTSELF", stack_effect = "( -- receiver )", semantics = "vm_push(vm->self[vm->depth]);" },
+    { name = "GETLOCAL", operands = { "cell" }, stack_effect = "( -- value )", semantics = [[
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);]] },
+    { name = "SETLOCAL", operands = { "cell" }, stack_effect = "( value -- )", semantics = [[
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = vm_pop();]] },
+    { name = "DUP", stack_effect = "( a -- a a )", semantics = "cell a = vm_pop(); vm_push(a); vm_push(a);" },
+    { name = "POP", stack_effect = "( a -- )", semantics = "(void)vm_pop();" },
+    { name = "NEWARRAY2", stack_effect = "( a b -- array )", semantics = [[
+cell b = vm_pop(), a = vm_pop(); size_t i;
+if(vm->array_top >= 64u) { vm_fail(-3); return; }
+i = vm->array_top++; vm->arrays[i * 2u] = a; vm->arrays[i * 2u + 1u] = b;
+vm_push((cell)((i << 3) | 3u));]] },
+    { name = "OPT_AREF", stack_effect = "( array index -- value )", semantics = [[
+cell index = vm_pop(), array = vm_pop(); uint64_t i = (uint64_t)array >> 3; cell n;
+if(((uint64_t)array & 7u) != 3u || i >= vm->array_top || ((uint64_t)index & 7u) != 1u) { vm_fail(-4); return; }
+n = YARVM_vw_value(index); if(n < 0) n += 2;
+vm_push(n < 0 || n >= 2 ? 0 : vm->arrays[i * 2u + (size_t)n]);]] },
+    { name = "OPT_EQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(), a = vm_pop(); vm_push(a == b ? 6 : 2);" },
+    { name = "JUMP", operands = { "label" }, flow = "jump", semantics = "vm_jump(operand0);" },
+    { name = "BRANCHIF", operands = { "label" }, flow = "branch", stack_effect = "( value -- )",
+      semantics = "cell value = vm_pop(); if(value != 0 && value != 2) vm_jump(operand0);" },
+    { name = "BRANCHUNLESS", operands = { "label" }, flow = "branch", stack_effect = "( value -- )",
+      semantics = "cell value = vm_pop(); if(value == 0 || value == 2) vm_jump(operand0);" },
+    { name = "SEND1", operands = { "label" }, flow = "call", stack_effect = "( receiver arg -- )", semantics = [[
+cell arg = vm_pop(), self = vm_pop();
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->self[vm->depth] = self;
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+vm->locals[vm->depth * 16u] = arg;]] },
+    { name = "LEAVE", flow = "return", stack_effect = "( value -- value )", semantics = [[
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);]] },
+    { name = "PRINT", stack_effect = "( value -- )", semantics = [[
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = YARVM_vw_value(value);]] },
+    { name = "HALT", flow = "halt", semantics = "vm_halt();" },
+  },
+}
+for _, op in ipairs { { "OPT_PLUS", "+" }, { "OPT_MINUS", "-" }, { "OPT_MULT", "*" } } do
+  vm:instruction(op[1], { stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(YARVM_vw_int((uint64_t)YARVM_vw_value(a) ]] .. op[2] .. [[ (uint64_t)YARVM_vw_value(b)));]] })
+end
+return vm

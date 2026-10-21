@@ -1,0 +1,148 @@
+stk-00 1
+vm "ART"
+configuration "switch" "int64_t" 16 64 64 "custom" 0
+source "VMCollection/ART/ART.vmw" 5
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "depth" "u64" 0
+field "out" "i64" 0
+field "regs" "i64" 1040
+field "result" "i64" 0
+subsystem "token" c{ 232
+static int64_t ART_vw_i32(uint32_t x) {
+  return x <= INT32_MAX ? (int64_t)x : -1 - (int64_t)(UINT32_MAX - x);
+}
+static int ART_vw_reg(ART_vm *vm, ART_cell r) {
+  if(r < 0 || r >= 16) { ART_vw_fail(vm,-4); return 0; }
+  return 1;
+}
+
+}c
+: "ADD_INT" opcode 0 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a + b);
+}c ;
+: "AND_INT" opcode 1 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a & b);
+}c ;
+: "CONST" opcode 2 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 5
+c{ 115
+if(!ART_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32((uint32_t)operand1);
+}c ;
+: "DIV_INT" opcode 3 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 5
+c{ 314
+cell a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = vm->regs[vm->depth * 16u + (size_t)operand1]; b = vm->regs[vm->depth * 16u + (size_t)operand2];
+if(!b) { vm_fail(-10); return; }
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32((uint32_t)(a / b));
+}c ;
+: "GOTO" opcode 4 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/ART/ART.vmw" 5
+c{ 18
+vm_jump(operand0);
+}c ;
+: "HALT" opcode 5 operands 0 effect "( -- )" flow "halt" source "VMCollection/ART/ART.vmw" 5
+c{ 10
+vm_halt();
+}c ;
+: "IF_EQZ" opcode 6 operands 2 "cell" "label" effect "( -- )" flow "branch" source "VMCollection/ART/ART.vmw" 5
+c{ 105
+if(!ART_vw_reg(vm,operand0)) return;
+if(!vm->regs[vm->depth * 16u + (size_t)operand0]) vm_jump(operand1);
+}c ;
+: "IF_LT" opcode 7 operands 3 "cell" "cell" "label" effect "( -- )" flow "branch" source "VMCollection/ART/ART.vmw" 5
+c{ 179
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1)) return;
+if(vm->regs[vm->depth * 16u + (size_t)operand0] < vm->regs[vm->depth * 16u + (size_t)operand1]) vm_jump(operand2);
+}c ;
+: "INVOKE_STATIC0" opcode 8 operands 1 "label" effect "( -- )" flow "call" source "VMCollection/ART/ART.vmw" 5
+c{ 150
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->regs[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+}c ;
+: "INVOKE_STATIC1" opcode 9 operands 2 "label" "cell" effect "( -- )" flow "call" source "VMCollection/ART/ART.vmw" 5
+c{ 276
+cell a;
+if(!ART_vw_reg(vm,operand1)) return;
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+a = vm->regs[vm->depth * 16u + (size_t)operand1];
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->regs[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+vm->regs[vm->depth * 16u] = a;
+}c ;
+: "MOVE" opcode 10 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 5
+c{ 157
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->regs[vm->depth * 16u + (size_t)operand1];
+}c ;
+: "MOVE_RESULT" opcode 11 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 5
+c{ 95
+if(!ART_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->result;
+}c ;
+: "MUL_INT" opcode 12 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a * b);
+}c ;
+: "OR_INT" opcode 13 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a | b);
+}c ;
+: "PRINT" opcode 14 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 5
+c{ 92
+if(!ART_vw_reg(vm,operand0)) return;
+vm->out = vm->regs[vm->depth * 16u + (size_t)operand0];
+}c ;
+: "RETURN" opcode 15 operands 1 "cell" effect "( -- )" flow "return" source "VMCollection/ART/ART.vmw" 5
+c{ 190
+if(!ART_vw_reg(vm,operand0)) return;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+vm->result = vm->regs[vm->depth * 16u + (size_t)operand0];
+--vm->depth; (void)vm_return();
+}c ;
+: "RETURN_VOID" opcode 16 operands 0 effect "( -- )" flow "return" source "VMCollection/ART/ART.vmw" 5
+c{ 94
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();
+}c ;
+: "SUB_INT" opcode 17 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a - b);
+}c ;
+: "XOR_INT" opcode 18 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/ART/ART.vmw" 72
+c{ 293
+uint32_t a, b;
+if(!ART_vw_reg(vm,operand0) || !ART_vw_reg(vm,operand1) || !ART_vw_reg(vm,operand2)) return;
+a = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand1];
+b = (uint32_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = ART_vw_i32(a ^ b);
+}c ;
+end

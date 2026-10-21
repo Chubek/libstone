@@ -28,6 +28,7 @@ struct FAM_vm {
   uint64_t mark[128];
   uint64_t mark_top;
   int64_t out;
+  int64_t saved_env[32768];
   FAM_cell vw_stack[512];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -35,7 +36,7 @@ struct FAM_vm {
   FAM_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t FAM_vw_abi(void) { return UINT64_C(0x7e11cd0694f9da29); }
+static inline uint64_t FAM_vw_abi(void) { return UINT64_C(0x8d91598ee6a401b); }
 static const FAM_metadata FAM_vw_table[] = {
   {"ACCESS", 0u, 1, 0, 1, "next"},
   {"ADD", 1u, 0, 2, 1, "next"},
@@ -234,8 +235,14 @@ const char *FAM_token(uint32_t opcode) { const FAM_metadata *info=FAM_lookup(opc
 #define FAM_vw_block(i) ((FAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
 #define FAM_vw_is_int(x) (FAM_vw_tag(x) == (uintptr_t)1u)
 #define FAM_vw_is_block(x) (FAM_vw_tag(x) == (uintptr_t)2u)
-#define FAM_vw_value(x) ((FAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+static FAM_cell FAM_vw_value(FAM_cell x) {
+  return x >= 0 ? x / 8 : -1 - (FAM_cell)(~(uintptr_t)x >> 3);
+}
 #define FAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+static void FAM_vw_save_env(FAM_vm *vm) {
+  memcpy(&vm->saved_env[vm->mark_top * 256u], vm->env, sizeof(vm->env));
+  vm->mark[vm->mark_top++] = vm->env_top;
+}
 
 
 /* .opcode */
@@ -281,12 +288,14 @@ const char *FAM_token(uint32_t opcode) { const FAM_metadata *info=FAM_lookup(opc
 void FAM_ACCESS(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 #line 1 "<VMWeave generated>"
 }
 void FAM_ADD(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -296,6 +305,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) + FAM_vw_value(pb)));
 void FAM_ALLOC(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 uintmax_t index;
 if(operand0 < 0 || vm->env_top + (uintmax_t)operand0 > 256u) { vm_fail(-3); return; }
 for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0;
@@ -304,6 +314,7 @@ for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0
 void FAM_APPLY1(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -311,7 +322,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] + 1u > 8u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 1u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -322,6 +333,7 @@ vm->env[vm->env_top++] = (int64_t)a0;
 void FAM_APPLY2(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -329,7 +341,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] > 6u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 2u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -341,6 +353,7 @@ vm->env[vm->env_top++] = (int64_t)a1;
 void FAM_APPLY3(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -348,7 +361,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] > 5u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 3u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -361,6 +374,7 @@ vm->env[vm->env_top++] = (int64_t)a2;
 void FAM_APPTERM1(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -377,6 +391,7 @@ vm_jump((cell)vm->blk_code[index]);
 void FAM_APPTERM2(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -394,6 +409,7 @@ vm_jump((cell)vm->blk_code[index]);
 void FAM_APPTERM3(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell block = vm_pop(); cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
@@ -412,21 +428,25 @@ vm_jump((cell)vm->blk_code[index]);
 void FAM_BRANCH(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FAM_BRANCHIF(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell flag = vm_pop();
 if(vm->vw_error) return;
-if(flag) vm_jump(operand0);
+if(!FAM_vw_is_int(flag)) { vm_fail(-4); return; }
+if(FAM_vw_value(flag)) vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FAM_CLOSURE(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
+#line 100 "VMCollection/regenerate.lua"
 uintmax_t index, field;
 if(operand1 < 0 || (uintmax_t)operand1 > 8u) { vm_fail(-4); return; }
 if((uintmax_t)operand1 > vm->env_top) { vm_fail(-4); return; }
@@ -441,6 +461,7 @@ vm_push(FAM_vw_block(index));
 }
 void FAM_DIV(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -450,6 +471,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) / FAM_vw_value(pb)));
 }
 void FAM_EQ(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -458,6 +480,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) == FAM_vw_value(pb) ? 1 : 0));
 }
 void FAM_GE(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -467,6 +490,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) >= FAM_vw_value(pb) ? 1 : 0));
 void FAM_GETFIELD(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop(); uintmax_t index;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(value)) { vm_fail(-4); return; }
@@ -478,6 +502,7 @@ vm_push((cell)vm->blk_fields[index * 8u + (uintmax_t)operand0]);
 }
 void FAM_GT(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -487,11 +512,13 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) > FAM_vw_value(pb) ? 1 : 0));
 void FAM_INT(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(FAM_vw_int(operand0));
 #line 1 "<VMWeave generated>"
 }
 void FAM_LE(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -500,6 +527,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) <= FAM_vw_value(pb) ? 1 : 0));
 }
 void FAM_LT(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -508,14 +536,16 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) < FAM_vw_value(pb) ? 1 : 0));
 }
 void FAM_MUL(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(FAM_vw_int(FAM_vw_value(pa) * FAM_vw_value(pb)));
+vm_push(FAM_vw_int((uintptr_t)FAM_vw_value(pa) * (uintptr_t)FAM_vw_value(pb)));
 #line 1 "<VMWeave generated>"
 }
 void FAM_NEG(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa)) { vm_fail(-4); return; }
@@ -524,11 +554,13 @@ vm_push(FAM_vw_int(-FAM_vw_value(pa)));
 }
 void FAM_POPACC(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->acc = (int64_t)vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void FAM_PRINT(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(value)) { vm_fail(-4); return; }
@@ -537,11 +569,13 @@ vm->out = (int64_t)FAM_vw_value(value);
 }
 void FAM_PUSHACC(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_push((cell)vm->acc);
 #line 1 "<VMWeave generated>"
 }
 void FAM_RETURN(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
@@ -549,14 +583,18 @@ if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
 vm->acc = (int64_t)result;
-if(vm->mark_top) vm->env_top = vm->mark[--vm->mark_top];
+if(vm->mark_top) {
+  vm->env_top = vm->mark[--vm->mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->mark_top * 256u], sizeof(vm->env));
+}
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
 void FAM_SETFIELD(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
-cell value = vm_pop(); cell block = vm_pop(); uintmax_t index;
+#line 100 "VMCollection/regenerate.lua"
+cell block = vm_pop(); cell value = vm_pop(); uintmax_t index;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
 index = FAM_vw_index(block);
@@ -567,11 +605,13 @@ vm->blk_fields[index * 8u + (uintmax_t)operand0] = (int64_t)value;
 }
 void FAM_STOP(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void FAM_SUB(FAM_vm *vm) {
   typedef FAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }

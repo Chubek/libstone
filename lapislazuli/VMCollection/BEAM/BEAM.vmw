@@ -1,0 +1,92 @@
+-- BEAM-inspired single-process profile: 16 X registers, 16 Y slots per call,
+-- tagged small integers and lists, and a bounded FIFO mailbox.
+-- Not Erlang .beam encoding: no scheduler, atoms, binaries, bignums, selective
+-- receive or exceptions. RECEIVE branches to an empty-mailbox label, not sleep.
+local v = require("vmweave")
+local vm = v.vm {
+  name = "BEAM", execution = "switch", stack = { cell = "int64_t", capacity = 16 },
+  frame_capacity = 64, ipc_capacity = 64,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame", "ipc" },
+  fields = { { name = "x", type = "i64", count = 16 },
+    { name = "y", type = "i64", count = 1040 }, { name = "depth", type = "u64" },
+    { name = "heads", type = "i64", count = 512 }, { name = "tails", type = "i64", count = 512 },
+    { name = "heap_top", type = "u64" }, { name = "out", type = "i64" } },
+  subsystems = { token = [[
+static int BEAM_vw_reg(BEAM_vm *vm, BEAM_cell r) {
+  if(r < 0 || r >= 16) { BEAM_vw_fail(vm,-4); return 0; } return 1;
+}
+static int64_t BEAM_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t BEAM_vw_int(uint64_t n) { return BEAM_vw_bits((n << 3) | 1u); }
+static int64_t BEAM_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+]] },
+  instructions = {
+    { name = "MOVE_INT", operands = { "cell", "cell" }, semantics = [[
+if(!BEAM_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)operand1);]] },
+    { name = "MOVE", operands = { "cell", "cell" }, semantics = [[
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->x[(size_t)operand0] = vm->x[(size_t)operand1];]] },
+    { name = "PUT_NIL", operands = { "cell" }, semantics = [[
+if(!BEAM_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = 0;]] },
+    { name = "PUT_LIST", operands = { "cell", "cell", "cell" }, semantics = [[
+size_t index; cell head, tail;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+if(vm->heap_top >= 512u) { vm_fail(-3); return; }
+head = vm->x[(size_t)operand1]; tail = vm->x[(size_t)operand2]; index = vm->heap_top++;
+vm->heads[index] = head; vm->tails[index] = tail;
+vm->x[(size_t)operand0] = (cell)((index << 3) | 2u);]] },
+    { name = "GET_LIST", operands = { "cell", "cell", "cell" }, semantics = [[
+cell list; size_t index;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+list = vm->x[(size_t)operand0]; index = (size_t)((uint64_t)list >> 3);
+if(((uint64_t)list & 7u) != 2u || index >= vm->heap_top) { vm_fail(-4); return; }
+vm->x[(size_t)operand1] = vm->heads[index]; vm->x[(size_t)operand2] = vm->tails[index];]] },
+    { name = "STORE_Y", operands = { "cell", "cell" }, semantics = [[
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->y[vm->depth * 16u + (size_t)operand0] = vm->x[(size_t)operand1];]] },
+    { name = "LOAD_Y", operands = { "cell", "cell" }, semantics = [[
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->x[(size_t)operand0] = vm->y[vm->depth * 16u + (size_t)operand1];]] },
+    { name = "CALL", operands = { "label" }, flow = "call", semantics = [[
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->y[vm->depth * 16u], 0, 16u * sizeof(int64_t));]] },
+    { name = "RETURN", flow = "return", semantics = [[
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();]] },
+    { name = "JUMP", operands = { "label" }, flow = "jump", semantics = "vm_jump(operand0);" },
+    { name = "IS_EQ", operands = { "cell", "cell", "label" }, flow = "branch", semantics = [[
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+if(vm->x[(size_t)operand0] != vm->x[(size_t)operand1]) vm_jump(operand2);]] },
+    { name = "SEND", operands = { "cell" }, semantics = [[
+int status;
+if(!BEAM_vw_reg(vm,operand0)) return;
+status = BEAM_ipc_send(vm,vm->x[(size_t)operand0]); if(status) vm_fail(status);]] },
+    { name = "RECEIVE", operands = { "cell", "label" }, flow = "branch", semantics = [[
+cell value;
+if(!BEAM_vw_reg(vm,operand0)) return;
+if(BEAM_ipc_receive(vm,&value)) vm_jump(operand1);
+else vm->x[(size_t)operand0] = value;]] },
+    { name = "PRINT", operands = { "cell" }, semantics = [[
+cell value;
+if(!BEAM_vw_reg(vm,operand0)) return;
+value = vm->x[(size_t)operand0];
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = BEAM_vw_value(value);]] },
+    { name = "HALT", flow = "halt", semantics = "vm_halt();" },
+  },
+}
+for _, op in ipairs { { "ADD", "+" }, { "SUB", "-" }, { "MUL", "*" } } do
+  vm:instruction(op[1], { operands = { "cell", "cell", "cell" }, semantics = [[
+cell a, b;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+a = vm->x[(size_t)operand1]; b = vm->x[(size_t)operand2];
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)BEAM_vw_value(a) ]] .. op[2] .. [[ (uint64_t)BEAM_vw_value(b));]] })
+end
+return vm

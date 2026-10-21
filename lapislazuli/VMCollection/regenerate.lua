@@ -1,8 +1,8 @@
 -- Regenerate the C artifacts for every VM in this collection.
 --
--- Each VM directory holds three files:
+-- Each VM directory holds four files:
 --
---   <Dir>.vmw    the VMWeave description (hand written, the source of truth)
+--   <Dir>.vmw    the VMWeave description (plus any shared Lua model it loads)
 --   <Dir>.h      the generated public interface
 --   <Dir>.c      the generated self-contained implementation
 --   <Dir>.stk00  the generated STK-00 interchange form
@@ -14,6 +14,8 @@
 --
 --   lua5.4 VMCollection/regenerate.lua            # every VM
 --   lua5.4 VMCollection/regenerate.lua ART FORTH  # selected VMs
+--   lua5.4 VMCollection/regenerate.lua --check   # reject stale/missing artifacts
+--   lua5.4 VMCollection/regenerate.lua --list    # list available descriptions
 --
 -- Output is deterministic; regenerating an unchanged description rewrites
 -- byte-identical files.
@@ -24,19 +26,18 @@ end
 
 local script = arg and arg[0] or "regenerate.lua"
 local here = parent(script) or "."
-local root = parent(here) or "."
+local root = here .. "/.."
 
-package.path = root .. "/VMWeave/?.lua;" .. root .. "/VMWeave/?/init.lua;" .. package.path
+package.path = root .. "/Weavers/VMWeave/?.lua;" .. root .. "/Weavers/VMWeave/?/init.lua;" .. package.path
 local vmweave = require("vmweave")
 
--- Directory entries, in the order the collection documents them.  Discovery is
--- still structural (a directory is a VM when it holds `<Dir>/<Dir>.vmw`).
+-- Discovery is structural: a directory is a VM when it has <Dir>/<Dir>.vmw.
 local function listdir(path)
   local names = {}
   local pipe = io.popen("ls -1 '" .. path:gsub("'", "'\\''") .. "' 2>/dev/null")
-  if not pipe then return names end
+  assert(pipe, "cannot discover descriptions in " .. path)
   for name in pipe:lines() do names[#names + 1] = name end
-  pipe:close()
+  assert(pipe:close(), "cannot list " .. path)
   table.sort(names)
   return names
 end
@@ -52,37 +53,75 @@ end
 local function write_file(path, text)
   local handle, message = io.open(path, "wb")
   assert(handle, message)
-  handle:write(text)
-  handle:close()
+  assert(handle:write(text))
+  assert(handle:close())
 end
 
-local wanted = {}
-for index = 1, #arg do wanted[arg[index]] = true end
+local wanted, checking, listing = {}, false, false
+for index = 1, #arg do
+  local option = arg[index]
+  if option == "--check" then checking = true
+  elseif option == "--list" then listing = true
+  elseif option:sub(1, 1) == "-" then error("unknown option: " .. option)
+  else wanted[option] = true end
+end
+
+-- Stable #line paths regardless of working directory or absolute invocation.
+local function canonical_source(source)
+  if not source or not source.file then return end
+  local path = source.file
+  assert(path:sub(1, #here + 1) == here .. "/", "source outside collection: " .. path)
+  local parts = {}
+  for part in path:sub(#here + 2):gmatch("[^/]+") do
+    if part == ".." then assert(#parts > 0); table.remove(parts)
+    elseif part ~= "." then parts[#parts + 1] = part end
+  end
+  source.file = "VMCollection/" .. table.concat(parts, "/")
+end
+
+local entries, known = {}, {}
+for _, entry in ipairs(listdir(here)) do
+  if not entry:match("^%.") and read_file(here .. "/" .. entry .. "/" .. entry .. ".vmw") then
+    entries[#entries + 1] = entry; known[entry] = true
+  end
+end
+for entry in pairs(wanted) do assert(known[entry], "unknown VM: " .. entry) end
+assert(#entries > 0, "no VM descriptions found")
+local selected = next(wanted) ~= nil
 
 local generated, failed = 0, 0
-for _, entry in ipairs(listdir(here)) do
+for _, entry in ipairs(entries) do
   local spec_path = here .. "/" .. entry .. "/" .. entry .. ".vmw"
-  local spec = not entry:match("^%.") and read_file(spec_path)
-  if spec and (#arg == 0 or wanted[entry]) then
-    local ok, description = pcall(vmweave.load, spec_path)
-    if not ok then
-      io.stderr:write("FAIL " .. entry .. ": " .. tostring(description) .. "\n")
-      failed = failed + 1
+  if not selected or wanted[entry] then
+    if listing then
+      io.write(entry .. "\n")
     else
-      local header = description:emit_header()
-      local source = description:emit()
-      local interchange = description:emit_stk()
-      -- A regenerated description must round-trip to identical C.
-      assert(description:emit() == source, entry .. ": non-deterministic emission")
-      write_file(here .. "/" .. entry .. "/" .. entry .. ".h", header)
-      write_file(here .. "/" .. entry .. "/" .. entry .. ".c", source)
-      write_file(here .. "/" .. entry .. "/" .. entry .. ".stk00", interchange)
-      io.write(string.format("generated %-14s %-12s %2d instructions, %d components\n",
-        entry, description.name, #description.instructions, #description.components))
-      generated = generated + 1
+      local ok, description = pcall(function()
+        local description = vmweave.load(spec_path)
+        canonical_source(description.source)
+        for _, field in ipairs(description.fields) do canonical_source(field.source) end
+        for _, word in ipairs(description.instructions) do canonical_source(word.source) end
+        local artifacts = { h = description:emit_header(), c = description:emit(), stk00 = description:emit_stk() }
+        assert(description:emit_header() == artifacts.h and description:emit() == artifacts.c
+          and description:emit_stk() == artifacts.stk00, entry .. ": non-deterministic emission")
+        for _, extension in ipairs { "h", "c", "stk00" } do
+          local path = here .. "/" .. entry .. "/" .. entry .. "." .. extension
+          if checking then assert(read_file(path) == artifacts[extension], "stale or missing: " .. path)
+          else write_file(path, artifacts[extension]) end
+        end
+        return description
+      end)
+      if not ok then
+        io.stderr:write("FAIL " .. entry .. ": " .. tostring(description) .. "\n")
+        failed = failed + 1
+      else
+        io.write(string.format("%s %-14s %-12s %2d instructions, %d components\n",
+          checking and "checked" or "generated", entry, description.name, #description.instructions, #description.components))
+        generated = generated + 1
+      end
     end
   end
 end
 
-io.write(string.format("%d generated, %d failed\n", generated, failed))
+if not listing then io.write(string.format("%d %s, %d failed\n", generated, checking and "checked" or "generated", failed)) end
 if failed > 0 then os.exit(1) end

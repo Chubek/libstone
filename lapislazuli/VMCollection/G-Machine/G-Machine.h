@@ -45,7 +45,7 @@ static const GMachine_metadata GMachine_vw_table[] = {
   {"GE", 9u, 0, 2, 1, "next"},
   {"GET", 10u, 0, 0, 1, "next"},
   {"GT", 11u, 0, 2, 1, "next"},
-  {"JFALSE", 12u, 1, 0, 0, "jump"},
+  {"JFALSE", 12u, 1, 0, 0, "branch"},
   {"JMP", 13u, 1, 0, 0, "jump"},
   {"LE", 14u, 0, 2, 1, "next"},
   {"LT", 15u, 0, 2, 1, "next"},

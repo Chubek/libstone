@@ -1,0 +1,144 @@
+stk-00 1
+vm "BEAM"
+configuration "switch" "int64_t" 16 64 64 "custom" 0
+source "VMCollection/BEAM/BEAM.vmw" 6
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "ipc"
+component "compile"
+component "tape"
+component "frame"
+field "depth" "u64" 0
+field "heads" "i64" 512
+field "heap_top" "u64" 0
+field "out" "i64" 0
+field "tails" "i64" 512
+field "x" "i64" 16
+field "y" "i64" 1040
+subsystem "token" c{ 422
+static int BEAM_vw_reg(BEAM_vm *vm, BEAM_cell r) {
+  if(r < 0 || r >= 16) { BEAM_vw_fail(vm,-4); return 0; } return 1;
+}
+static int64_t BEAM_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t BEAM_vw_int(uint64_t n) { return BEAM_vw_bits((n << 3) | 1u); }
+static int64_t BEAM_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+
+}c
+: "ADD" opcode 0 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 85
+c{ 342
+cell a, b;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+a = vm->x[(size_t)operand1]; b = vm->x[(size_t)operand2];
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)BEAM_vw_value(a) + (uint64_t)BEAM_vw_value(b));
+}c ;
+: "CALL" opcode 1 operands 1 "label" effect "( -- )" flow "call" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 147
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->y[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+}c ;
+: "GET_LIST" opcode 2 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 361
+cell list; size_t index;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+list = vm->x[(size_t)operand0]; index = (size_t)((uint64_t)list >> 3);
+if(((uint64_t)list & 7u) != 2u || index >= vm->heap_top) { vm_fail(-4); return; }
+vm->x[(size_t)operand1] = vm->heads[index]; vm->x[(size_t)operand2] = vm->tails[index];
+}c ;
+: "HALT" opcode 3 operands 0 effect "( -- )" flow "halt" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 10
+vm_halt();
+}c ;
+: "IS_EQ" opcode 4 operands 3 "cell" "cell" "label" effect "( -- )" flow "branch" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 140
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+if(vm->x[(size_t)operand0] != vm->x[(size_t)operand1]) vm_jump(operand2);
+}c ;
+: "JUMP" opcode 5 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LOAD_Y" opcode 6 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 135
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->x[(size_t)operand0] = vm->y[vm->depth * 16u + (size_t)operand1];
+}c ;
+: "MOVE" opcode 7 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 117
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->x[(size_t)operand0] = vm->x[(size_t)operand1];
+}c ;
+: "MOVE_INT" opcode 8 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 96
+if(!BEAM_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)operand1);
+}c ;
+: "MUL" opcode 9 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 85
+c{ 342
+cell a, b;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+a = vm->x[(size_t)operand1]; b = vm->x[(size_t)operand2];
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)BEAM_vw_value(a) * (uint64_t)BEAM_vw_value(b));
+}c ;
+: "PRINT" opcode 10 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 172
+cell value;
+if(!BEAM_vw_reg(vm,operand0)) return;
+value = vm->x[(size_t)operand0];
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = BEAM_vw_value(value);
+}c ;
+: "PUT_LIST" opcode 11 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 367
+size_t index; cell head, tail;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+if(vm->heap_top >= 512u) { vm_fail(-3); return; }
+head = vm->x[(size_t)operand1]; tail = vm->x[(size_t)operand2]; index = vm->heap_top++;
+vm->heads[index] = head; vm->tails[index] = tail;
+vm->x[(size_t)operand0] = (cell)((index << 3) | 2u);
+}c ;
+: "PUT_NIL" opcode 12 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 66
+if(!BEAM_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = 0;
+}c ;
+: "RECEIVE" opcode 13 operands 2 "cell" "label" effect "( -- )" flow "branch" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 138
+cell value;
+if(!BEAM_vw_reg(vm,operand0)) return;
+if(BEAM_ipc_receive(vm,&value)) vm_jump(operand1);
+else vm->x[(size_t)operand0] = value;
+}c ;
+: "RETURN" opcode 14 operands 0 effect "( -- )" flow "return" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 94
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();
+}c ;
+: "SEND" opcode 15 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 129
+int status;
+if(!BEAM_vw_reg(vm,operand0)) return;
+status = BEAM_ipc_send(vm,vm->x[(size_t)operand0]); if(status) vm_fail(status);
+}c ;
+: "STORE_Y" opcode 16 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 6
+c{ 135
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1)) return;
+vm->y[vm->depth * 16u + (size_t)operand0] = vm->x[(size_t)operand1];
+}c ;
+: "SUB" opcode 17 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/BEAM/BEAM.vmw" 85
+c{ 342
+cell a, b;
+if(!BEAM_vw_reg(vm,operand0) || !BEAM_vw_reg(vm,operand1) || !BEAM_vw_reg(vm,operand2)) return;
+a = vm->x[(size_t)operand1]; b = vm->x[(size_t)operand2];
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm->x[(size_t)operand0] = BEAM_vw_int((uint64_t)BEAM_vw_value(a) - (uint64_t)BEAM_vw_value(b));
+}c ;
+end

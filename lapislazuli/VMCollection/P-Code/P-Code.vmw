@@ -70,11 +70,11 @@ cell addr = vm_pop(); cell value = vm_pop();
 if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
 vm->locals[(uintmax_t)addr] = (int64_t)value;]] },
     { name = "ADI", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));" },
     { name = "SBI", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));" },
     { name = "MPI", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));" },
     { name = "DVI", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
@@ -84,9 +84,9 @@ cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));]] },
     { name = "NGI", stack_effect = "( a -- b )",
-      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+      semantics = "cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));" },
     { name = "ABSI", stack_effect = "( a -- b )",
-      semantics = "cell a = vm_pop(); vm_push(a < 0 ? (cell)(0 - a) : a);" },
+      semantics = "cell a = vm_pop(); vm_push(a < 0 ? (cell)(0u - (uintptr_t)a) : a);" },
     { name = "EQU", stack_effect = "( a b -- flag )",
       semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
     { name = "NEQ", stack_effect = "( a b -- flag )",
@@ -106,30 +106,38 @@ vm_push((cell)(a % b));]] },
     { name = "WRINT", stack_effect = "( v -- )",
       semantics = "vm->out = vm_pop();" },
     { name = "CALL", operands = { "label" }, flow = "call", stack_effect = "( -- )", semantics = [[
+if(!vm->ltop) vm->ltop = 16u; /* root activation owns locals 0..15 */
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 (void)vm_call(operand0);]] },
     { name = "CALL1", operands = { "label" }, flow = "call", stack_effect = "( a -- )", semantics = [[
 cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 (void)vm_call(operand0);]] },
     { name = "CALL2", operands = { "label" }, flow = "call", stack_effect = "( a b -- )", semantics = [[
 cell a1 = vm_pop(); cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 vm->locals[vm->lbase + 1u] = (int64_t)a1;
 (void)vm_call(operand0);]] },
     { name = "CALL3", operands = { "label" }, flow = "call", stack_effect = "( a b c -- )", semantics = [[
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 vm->locals[vm->lbase + 1u] = (int64_t)a1;
 vm->locals[vm->lbase + 2u] = (int64_t)a2;
@@ -138,7 +146,7 @@ vm->locals[vm->lbase + 2u] = (int64_t)a2;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
 (void)vm_return();]] },
-    { name = "RETV", flow = "return", stack_effect = "( v -- )", semantics = [[
+    { name = "RETV", flow = "return", stack_effect = "( v -- v )", semantics = [[
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();

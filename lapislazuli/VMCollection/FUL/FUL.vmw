@@ -1,0 +1,81 @@
+-- Collection-defined FUL strict functional profile. The empty original gave
+-- no dialect/version. This is a closure/environment machine, not a claim of
+-- binary compatibility with a historical FUL implementation.
+-- Persistent linked bindings make closures survive scope exit and later calls.
+-- Tagged 61-bit wrapping integers; 128 closures, 512 bindings; no GC or pairs.
+local v = require("vmweave")
+local vm = v.vm {
+  name = "FUL", execution = "switch", stack = { cell = "int64_t", capacity = 256 },
+  frame_capacity = 64,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = {
+    { name = "bindings", type = "i64", count = 512 },
+    { name = "parents", type = "u64", count = 512 }, { name = "binding_top", type = "u64" },
+    { name = "env", type = "u64" }, { name = "saved_env", type = "u64", count = 64 },
+    { name = "closure_code", type = "i64", count = 128 },
+    { name = "closure_env", type = "u64", count = 128 }, { name = "closure_top", type = "u64" },
+    { name = "out", type = "i64" },
+  },
+  subsystems = { token = [[
+static int64_t FUL_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t FUL_vw_int(uint64_t n) { return FUL_vw_bits((n << 3) | 1u); }
+static int64_t FUL_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+]] },
+  instructions = {
+    { name = "CONST", operands = { "cell" }, stack_effect = "( -- i )",
+      semantics = "vm_push(FUL_vw_int((uint64_t)operand0));" },
+    { name = "BIND", stack_effect = "( value -- )", semantics = [[
+size_t i;
+if(vm->binding_top >= 512u) { vm_fail(-3); return; }
+i = vm->binding_top++; vm->bindings[i] = vm_pop(); vm->parents[i] = vm->env; vm->env = i + 1u;]] },
+    { name = "UNBIND", semantics = [[
+if(!vm->env) { vm_fail(-2); return; }
+vm->env = vm->parents[vm->env - 1u];]] },
+    { name = "ACCESS", operands = { "cell" }, stack_effect = "( -- value )", semantics = [[
+uint64_t env = vm->env; cell n = operand0;
+if(n < 0) { vm_fail(-4); return; }
+while(n && env) { env = vm->parents[env - 1u]; --n; }
+if(!env) { vm_fail(-4); return; }
+vm_push(vm->bindings[env - 1u]);]] },
+    { name = "CLOSURE", operands = { "label" }, stack_effect = "( -- closure )", semantics = [[
+size_t i;
+if(vm->closure_top >= 128u) { vm_fail(-3); return; }
+i = vm->closure_top++; vm->closure_code[i] = operand0; vm->closure_env[i] = vm->env;
+vm_push((cell)((i << 3) | 3u));]] },
+    { name = "APPLY", flow = "call", stack_effect = "( closure arg -- )", semantics = [[
+cell arg = vm_pop(), closure = vm_pop(); uint64_t i = (uint64_t)closure >> 3; size_t b, depth;
+if(((uint64_t)closure & 7u) != 3u || i >= vm->closure_top) { vm_fail(-4); return; }
+if(vm->binding_top >= 512u || vm->vw_frame_count >= 64u) { vm_fail(-3); return; }
+depth = vm->vw_frame_count; if(vm_call(vm->closure_code[i])) return;
+vm->saved_env[depth] = vm->env;
+b = vm->binding_top++; vm->bindings[b] = arg; vm->parents[b] = vm->closure_env[i]; vm->env = b + 1u;]] },
+    { name = "RETURN", flow = "return", stack_effect = "( value -- value )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); vm->env = vm->saved_env[vm->vw_frame_count - 1u];
+(void)vm_return(); vm_push(result);]] },
+    { name = "DUP", stack_effect = "( a -- a a )", semantics = "cell a = vm_pop(); vm_push(a); vm_push(a);" },
+    { name = "DROP", stack_effect = "( a -- )", semantics = "(void)vm_pop();" },
+    { name = "JUMP", operands = { "label" }, flow = "jump", semantics = "vm_jump(operand0);" },
+    { name = "JZERO", operands = { "label" }, flow = "branch", stack_effect = "( i -- )", semantics = [[
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+if(!FUL_vw_value(value)) vm_jump(operand0);]] },
+    { name = "PRINT", stack_effect = "( i -- )", semantics = [[
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = FUL_vw_value(value);]] },
+    { name = "HALT", flow = "halt", semantics = "vm_halt();" },
+  },
+}
+for _, op in ipairs { { "ADD", "+" }, { "SUB", "-" }, { "MUL", "*" } } do
+  vm:instruction(op[1], { stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(FUL_vw_int((uint64_t)FUL_vw_value(a) ]] .. op[2] .. [[ (uint64_t)FUL_vw_value(b)));]] })
+end
+return vm

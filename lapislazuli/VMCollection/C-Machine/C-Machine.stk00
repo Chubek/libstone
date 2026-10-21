@@ -1,7 +1,7 @@
 stk-00 1
 vm "CMachine"
 configuration "switch" "intptr_t" 512 128 64 "custom" 0
-source "=[C]" 0
+source "VMCollection/C-Machine/C-Machine.vmw" 70
 component "token"
 component "opcode"
 component "insncode"
@@ -13,35 +13,35 @@ field "ep" "u64" 0
 field "fp" "u64" 0
 field "np" "u64" 0
 field "out" "i64" 0
-: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 61
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
+c{ 83
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 }c ;
-: "ALLOC0" opcode 1 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+: "ALLOC0" opcode 1 operands 0 effect "( -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 9
 (void)vm;
 }c ;
-: "ALLOC1" opcode 2 operands 0 effect "( -- l0 )" flow "next" source "=[C]" 0
+: "ALLOC1" opcode 2 operands 0 effect "( -- l0 )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 11
 vm_push(0);
 }c ;
-: "ALLOC2" opcode 3 operands 0 effect "( -- l0 l1 )" flow "next" source "=[C]" 0
+: "ALLOC2" opcode 3 operands 0 effect "( -- l0 l1 )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 23
 vm_push(0); vm_push(0);
 }c ;
-: "ALLOC3" opcode 4 operands 0 effect "( -- l0 l1 l2 )" flow "next" source "=[C]" 0
+: "ALLOC3" opcode 4 operands 0 effect "( -- l0 l1 l2 )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 35
 vm_push(0); vm_push(0); vm_push(0);
 }c ;
-: "ALLOC4" opcode 5 operands 0 effect "( -- l0 l1 l2 l3 )" flow "next" source "=[C]" 0
+: "ALLOC4" opcode 5 operands 0 effect "( -- l0 l1 l2 l3 )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 47
 vm_push(0); vm_push(0); vm_push(0); vm_push(0);
 }c ;
-: "AND" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "AND" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 61
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));
 }c ;
-: "CALL0" opcode 7 operands 1 "label" effect "( r f e c -- r f e c )" flow "call" source "=[C]" 0
+: "CALL0" opcode 7 operands 1 "label" effect "( r f e c -- r f e c )" flow "call" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 239
 size_t base;
 if(vm->vw_sp < 4u) { vm_fail(-2); return; }
@@ -52,7 +52,7 @@ vm->fp = (uint64_t)base;
 vm->ep = (uint64_t)base + 4u;
 (void)vm_call(operand0);
 }c ;
-: "CALL1" opcode 8 operands 1 "label" effect "( a r f e c -- a r f e c )" flow "call" source "=[C]" 0
+: "CALL1" opcode 8 operands 1 "label" effect "( a r f e c -- a r f e c )" flow "call" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 239
 size_t base;
 if(vm->vw_sp < 5u) { vm_fail(-2); return; }
@@ -63,7 +63,7 @@ vm->fp = (uint64_t)base;
 vm->ep = (uint64_t)base + 5u;
 (void)vm_call(operand0);
 }c ;
-: "CALL2" opcode 9 operands 1 "label" effect "( a b r f e c -- a b r f e c )" flow "call" source "=[C]" 0
+: "CALL2" opcode 9 operands 1 "label" effect "( a b r f e c -- a b r f e c )" flow "call" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 239
 size_t base;
 if(vm->vw_sp < 6u) { vm_fail(-2); return; }
@@ -74,7 +74,7 @@ vm->fp = (uint64_t)base;
 vm->ep = (uint64_t)base + 6u;
 (void)vm_call(operand0);
 }c ;
-: "CALL3" opcode 10 operands 1 "label" effect "( a b c r f e c -- a b c r f e c )" flow "call" source "=[C]" 0
+: "CALL3" opcode 10 operands 1 "label" effect "( a b c r f e c -- a b c r f e c )" flow "call" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 239
 size_t base;
 if(vm->vw_sp < 7u) { vm_fail(-2); return; }
@@ -85,93 +85,93 @@ vm->fp = (uint64_t)base;
 vm->ep = (uint64_t)base + 7u;
 (void)vm_call(operand0);
 }c ;
-: "DIV" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "DIV" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 126
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a / b));
 }c ;
-: "ENTER" opcode 12 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+: "ENTER" opcode 12 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 250
 uintmax_t size = (uintmax_t)operand0;
 if(operand0 < 0 || vm->fp > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0])) || size > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0])) - vm->fp) { vm_fail(-4); return; }
 vm->ep = vm->fp + size;
 }c ;
-: "EQ" opcode 13 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "EQ" opcode 13 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 62
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
 }c ;
-: "GEQ" opcode 14 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "GEQ" opcode 14 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 62
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
 }c ;
-: "GR" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "GR" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 61
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
 }c ;
-: "JMP" opcode 16 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+: "JMP" opcode 16 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 18
 vm_jump(operand0);
 }c ;
-: "JMPZ" opcode 17 operands 1 "label" effect "( v -- )" flow "branch" source "=[C]" 0
+: "JMPZ" opcode 17 operands 1 "label" effect "( v -- )" flow "branch" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 77
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!value) vm_jump(operand0);
 }c ;
-: "LE" opcode 18 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "LE" opcode 18 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 61
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
 }c ;
-: "LEQ" opcode 19 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "LEQ" opcode 19 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 62
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
 }c ;
-: "LOAD" opcode 20 operands 0 effect "( a -- v )" flow "next" source "=[C]" 0
+: "LOAD" opcode 20 operands 0 effect "( a -- v )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 216
 cell address = vm_pop();
 if(vm->vw_error) return;
 if(address < 0 || (uintmax_t)address >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm_push(vm->vw_stack[(uintmax_t)address]);
 }c ;
-: "LOADA" opcode 21 operands 1 "cell" effect "( -- a )" flow "next" source "=[C]" 0
+: "LOADA" opcode 21 operands 1 "cell" effect "( -- a )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 144
 if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm_push(operand0);
 }c ;
-: "LOADC" opcode 22 operands 1 "cell" effect "( -- q )" flow "next" source "=[C]" 0
+: "LOADC" opcode 22 operands 1 "cell" effect "( -- q )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 18
 vm_push(operand0);
 }c ;
-: "LOADR" opcode 23 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+: "LOADR" opcode 23 operands 1 "cell" effect "( -- v )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 216
 intmax_t index = (intmax_t)vm->fp + (intmax_t)operand0;
 if(index < 0 || (uintmax_t)index >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm_push(vm->vw_stack[(uintmax_t)index]);
 }c ;
-: "MARK" opcode 24 operands 0 effect "( -- r f e c )" flow "next" source "=[C]" 0
+: "MARK" opcode 24 operands 0 effect "( -- r f e c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 47
 vm_push(0); vm_push(0); vm_push(0); vm_push(0);
 }c ;
-: "MOD" opcode 25 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "MOD" opcode 25 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 126
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));
 }c ;
-: "MUL" opcode 26 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 61
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+: "MUL" opcode 26 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
+c{ 83
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 }c ;
-: "NEG" opcode 27 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
-c{ 42
-cell a = vm_pop(); vm_push((cell)(0 - a));
+: "NEG" opcode 27 operands 0 effect "( a -- b )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
+c{ 54
+cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));
 }c ;
-: "NEQ" opcode 28 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "NEQ" opcode 28 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 62
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
 }c ;
-: "NEW" opcode 29 operands 0 effect "( n -- p )" flow "next" source "=[C]" 0
+: "NEW" opcode 29 operands 0 effect "( n -- p )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 317
 cell size = vm_pop();
 if(vm->vw_error) return;
@@ -181,26 +181,27 @@ if((uintmax_t)size > vm->np || vm->np - (uintmax_t)size < (uint64_t)vm->vw_sp) {
 vm->np -= (uintmax_t)size;
 vm_push((cell)vm->np);
 }c ;
-: "NOT" opcode 30 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+: "NOT" opcode 30 operands 0 effect "( a -- b )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 38
 cell a = vm_pop(); vm_push(a ? 0 : 1);
 }c ;
-: "OR" opcode 31 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "OR" opcode 31 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 61
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));
 }c ;
-: "POP" opcode 32 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+: "POP" opcode 32 operands 0 effect "( v -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 15
 (void)vm_pop();
 }c ;
-: "PRINT" opcode 33 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+: "PRINT" opcode 33 operands 0 effect "( v -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 28
 vm->out = (int64_t)vm_pop();
 }c ;
-: "RETURN" opcode 34 operands 0 effect "( v -- v )" flow "return" source "=[C]" 0
-c{ 472
+: "RETURN" opcode 34 operands 0 effect "( r f e c v -- v )" flow "return" source "VMCollection/C-Machine/C-Machine.vmw" 70
+c{ 526
 cell result; uint64_t frame, saved_fp, saved_ep;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 5u) { vm_fail(-6); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 frame = vm->fp;
@@ -213,25 +214,76 @@ vm->fp = saved_fp;
 vm->ep = saved_ep;
 (void)vm_return();
 }c ;
-: "STOP" opcode 35 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+: "RETURN1" opcode 35 operands 0 effect "( r f e c arg v -- v )" flow "return" source "VMCollection/C-Machine/C-Machine.vmw" 243
+c{ 526
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 6u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+}c ;
+: "RETURN2" opcode 36 operands 0 effect "( r f e c arg arg v -- v )" flow "return" source "VMCollection/C-Machine/C-Machine.vmw" 243
+c{ 526
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 7u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+}c ;
+: "RETURN3" opcode 37 operands 0 effect "( r f e c arg arg arg v -- v )" flow "return" source "VMCollection/C-Machine/C-Machine.vmw" 243
+c{ 526
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 8u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+}c ;
+: "STOP" opcode 38 operands 0 effect "( -- )" flow "halt" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 10
 vm_halt();
 }c ;
-: "STORE" opcode 36 operands 0 effect "( v a -- )" flow "next" source "=[C]" 0
+: "STORE" opcode 39 operands 0 effect "( v a -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 238
 cell address = vm_pop(); cell value = vm_pop();
 if(vm->vw_error) return;
 if(address < 0 || (uintmax_t)address >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm->vw_stack[(uintmax_t)address] = value;
 }c ;
-: "STOREA" opcode 37 operands 1 "cell" effect "( v -- )" flow "next" source "=[C]" 0
+: "STOREA" opcode 40 operands 1 "cell" effect "( v -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 216
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm->vw_stack[(uintmax_t)operand0] = value;
 }c ;
-: "STORER" opcode 38 operands 1 "cell" effect "( v -- )" flow "next" source "=[C]" 0
+: "STORER" opcode 41 operands 1 "cell" effect "( v -- )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 270
 cell value = vm_pop(); intmax_t index;
 if(vm->vw_error) return;
@@ -239,11 +291,11 @@ index = (intmax_t)vm->fp + (intmax_t)operand0;
 if(index < 0 || (uintmax_t)index >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm->vw_stack[(uintmax_t)index] = value;
 }c ;
-: "SUB" opcode 39 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 61
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+: "SUB" opcode 42 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
+c{ 83
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 }c ;
-: "XOR" opcode 40 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "XOR" opcode 43 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/C-Machine/C-Machine.vmw" 70
 c{ 61
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));
 }c ;

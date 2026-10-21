@@ -95,11 +95,12 @@ static GMachine_cell GMachine_vw_node(GMachine_vm *vm, int kind, GMachine_cell a
 static GMachine_cell GMachine_vw_deref(GMachine_vm *vm, GMachine_cell node) {
   uintmax_t guard = 0;
   if(!vm || vm->vw_error) return node;
-  while((uintmax_t)node < GMachine_vw_gnodes
+  while((uintmax_t)node < vm->node_top
         && vm->node_kind[(uintmax_t)node] == GMachine_vw_ind) {
     if(guard++ > GMachine_vw_gnodes) { GMachine_vw_fail(vm,-4); return 0; }
     node = (GMachine_cell)vm->node_a[(uintmax_t)node];
   }
+  if((uintmax_t)node >= vm->node_top) { GMachine_vw_fail(vm,-4); return 0; }
   return node;
 }
 
@@ -123,7 +124,7 @@ static GMachine_cell GMachine_vw_peeks(GMachine_vm *vm, uintmax_t depth) {
 static int GMachine_vw_inspect(GMachine_vm *vm, GMachine_cell node, int *kind, GMachine_cell *field) {
   node = GMachine_vw_deref(vm, node);
   if(vm && vm->vw_error) return -1;
-  if((uintmax_t)node >= GMachine_vw_gnodes) return -1;
+  if((uintmax_t)node >= vm->node_top) return -1;
   *kind = (int)vm->node_kind[(uintmax_t)node];
   *field = (GMachine_cell)vm->node_a[(uintmax_t)node];
   return 0;
@@ -180,7 +181,7 @@ if(vm->vw_error) return;
 cell target;
 if(vm->sp < 2u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 2u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;
@@ -189,7 +190,7 @@ vm->sp -= 1u;]] },
 cell target;
 if(vm->sp < 3u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 3u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;
@@ -198,7 +199,7 @@ vm->sp -= 1u;]] },
 cell target;
 if(vm->sp < 4u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 4u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;
@@ -247,15 +248,15 @@ if(vm->vw_error) return;
     { name = "ADD", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a + b));]] },
+vm_push((cell)((uintptr_t)a + (uintptr_t)b));]] },
     { name = "SUB", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a - b));]] },
+vm_push((cell)((uintptr_t)a - (uintptr_t)b));]] },
     { name = "MUL", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a * b));]] },
+vm_push((cell)((uintptr_t)a * (uintptr_t)b));]] },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
@@ -264,7 +265,7 @@ vm_push((cell)(a / b));]] },
     { name = "NEG", stack_effect = "( a -- b )", semantics = [[
 cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(0 - a));]] },
+vm_push((cell)(0u - (uintptr_t)a));]] },
     { name = "EQ", stack_effect = "( a b -- flag )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
@@ -289,7 +290,7 @@ vm_push(a > b ? 1 : 0);]] },
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a >= b ? 1 : 0);]] },
-    { name = "JFALSE", operands = { "label" }, flow = "jump", stack_effect = "( -- )", semantics = [[
+    { name = "JFALSE", operands = { "label" }, flow = "branch", stack_effect = "( -- )", semantics = [[
 cell node = GMachine_vw_pops(vm);
 int kind = 0; cell field = 0;
 if(vm->vw_error) return;
@@ -304,8 +305,13 @@ cell redex, spine[64];
 uintmax_t count = 0, i;
 int kind = 0;
 if(vm->vw_error) return;
+node = GMachine_vw_deref(vm, node);
+if(vm->vw_error) return;
 if(GMachine_vw_inspect(vm, node, &kind, &redex)) { vm_fail(-4); return; }
-if(kind != GMachine_vw_ap) { (void)GMachine_vw_pokes(vm, node); return; }
+if(kind != GMachine_vw_ap && kind != GMachine_vw_fun) {
+  if(kind == GMachine_vw_hole) { vm_fail(-4); return; }
+  (void)GMachine_vw_pokes(vm, node); return;
+}
 redex = node;
 for(;;) {
   if(kind != GMachine_vw_ap) break;
@@ -314,7 +320,7 @@ for(;;) {
   count += 1u;
   node = GMachine_vw_deref(vm, (cell)vm->node_a[(uintmax_t)node]);
   if(vm->vw_error) return;
-  if((uintmax_t)node >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+  if((uintmax_t)node >= vm->node_top) { vm_fail(-4); return; }
   kind = (int)vm->node_kind[(uintmax_t)node];
 }
 if(kind != GMachine_vw_fun) { vm_fail(-4); return; }

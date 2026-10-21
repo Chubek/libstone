@@ -30,6 +30,7 @@ struct BMachine_vm {
   int64_t out;
   int64_t pool[512];
   uint64_t pool_top;
+  int64_t saved_env[8192];
   BMachine_cell vw_stack[256];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -37,7 +38,7 @@ struct BMachine_vm {
   BMachine_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t BMachine_vw_abi(void) { return UINT64_C(0x64e8ffb7a3702cdc); }
+static inline uint64_t BMachine_vw_abi(void) { return UINT64_C(0xd6b7d1dbfa9e9476); }
 static const BMachine_metadata BMachine_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"ALLOC", 1u, 1, 0, 0, "next"},
@@ -234,6 +235,13 @@ int BMachine_ret(BMachine_vm *);
 /* .token */
 const char *BMachine_token(uint32_t opcode) { const BMachine_metadata *info=BMachine_lookup(opcode); return info ? info->name : NULL; }
 
+/* User subsystem extension. */
+static void BMachine_vw_save_env(BMachine_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+
+
 /* .opcode */
 #define BMachine_opcode_ADD 0u
 #define BMachine_opcode_ALLOC 1u
@@ -277,12 +285,14 @@ const char *BMachine_token(uint32_t opcode) { const BMachine_metadata *info=BMac
 
 void BMachine_ADD(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa + pb));
+#line 100 "VMCollection/regenerate.lua"
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa + (uintptr_t)pb));
 #line 1 "<VMWeave generated>"
 }
 void BMachine_ALLOC(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 uintmax_t index;
 if(operand0 < 0 || vm->env_top + (uintmax_t)operand0 > 64u) { vm_fail(-3); return; }
 for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0;
@@ -291,6 +301,7 @@ for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0
 void BMachine_APP0(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -298,7 +309,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -312,6 +323,7 @@ if(vm->vw_error) return;
 void BMachine_APP1(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -319,7 +331,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -334,6 +346,7 @@ if(vm->vw_error) return;
 void BMachine_APP2(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -341,7 +354,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -357,6 +370,7 @@ if(vm->vw_error) return;
 void BMachine_APP3(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -364,7 +378,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -381,12 +395,14 @@ if(vm->vw_error) return;
 void BMachine_BRA(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_BRF(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!value) vm_jump(operand0);
@@ -394,6 +410,7 @@ if(!value) vm_jump(operand0);
 }
 void BMachine_DIV(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
 vm_push((cell)(pa / pb));
@@ -401,27 +418,32 @@ vm_push((cell)(pa / pb));
 }
 void BMachine_EQ(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa == pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_GE(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa >= pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_GT(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa > pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_LE(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa <= pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_LOAD(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 #line 1 "<VMWeave generated>"
@@ -429,11 +451,13 @@ vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 void BMachine_LOADC(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_LT(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa < pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
@@ -442,6 +466,7 @@ void BMachine_MKCLOS(BMachine_vm *vm) {
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
   cell operand2 = vm_operand(2); (void)operand2;
+#line 100 "VMCollection/regenerate.lua"
 uintmax_t index, field;
 if(operand1 < 0 || operand2 < 0) { vm_fail(-4); return; }
 if((uintmax_t)operand2 > vm->env_top) { vm_fail(-4); return; }
@@ -459,6 +484,7 @@ vm_push((cell)index);
 }
 void BMachine_MOD(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
 vm_push((cell)(pa % pb));
@@ -466,27 +492,32 @@ vm_push((cell)(pa % pb));
 }
 void BMachine_MUL(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa * pb));
+#line 100 "VMCollection/regenerate.lua"
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa * (uintptr_t)pb));
 #line 1 "<VMWeave generated>"
 }
 void BMachine_NE(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa != pb ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void BMachine_NEG(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell pa = vm_pop(); vm_push((cell)(0 - pa));
+#line 100 "VMCollection/regenerate.lua"
+cell pa = vm_pop(); vm_push((cell)(0u - (uintptr_t)pa));
 #line 1 "<VMWeave generated>"
 }
 void BMachine_PRINT(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->out = (int64_t)vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void BMachine_RAP0(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -494,7 +525,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -509,6 +540,7 @@ if(vm->vw_error) return;
 void BMachine_RAP1(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -516,7 +548,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -532,6 +564,7 @@ if(vm->vw_error) return;
 void BMachine_RAP2(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -539,7 +572,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -556,6 +589,7 @@ if(vm->vw_error) return;
 void BMachine_RAP3(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -563,7 +597,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 4u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -580,31 +614,38 @@ if(vm->vw_error) return;
 }
 void BMachine_RET(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+if(vm->env_mark_top) {
+  vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
 void BMachine_SLIDE(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 > vm->env_top) { vm_fail(-4); return; }
 vm->env_top -= (uintmax_t)operand0;
 #line 1 "<VMWeave generated>"
 }
 void BMachine_STOP(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void BMachine_SUB(BMachine_vm *vm) {
   typedef BMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa - pb));
+#line 100 "VMCollection/regenerate.lua"
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa - (uintptr_t)pb));
 #line 1 "<VMWeave generated>"
 }
 #undef vm_pop

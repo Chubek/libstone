@@ -18,6 +18,7 @@ typedef struct { const char *name; uint32_t opcode; size_t operands, inputs, out
 
 typedef struct { size_t return_address, stack_base; Krivine_cell locals[16]; } Krivine_activation;
 struct Krivine_vm {
+  int64_t clo_bindings[16384];
   uint64_t clo_code[128];
   uint64_t clo_env[128];
   uint64_t clo_top;
@@ -27,6 +28,7 @@ struct Krivine_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[16384];
   int64_t val;
   Krivine_cell vw_stack[512];
   size_t vw_sp, vw_pc, vw_code_size;
@@ -35,7 +37,7 @@ struct Krivine_vm {
   Krivine_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t Krivine_vw_abi(void) { return UINT64_C(0x7200b75efaea1e59); }
+static inline uint64_t Krivine_vw_abi(void) { return UINT64_C(0x262b4a52cde36181); }
 static const Krivine_metadata Krivine_vw_table[] = {
   {"ACCESS", 0u, 1, 0, 1, "next"},
   {"ADD", 1u, 0, 2, 1, "next"},
@@ -212,7 +214,9 @@ const char *Krivine_token(uint32_t opcode) { const Krivine_metadata *info=Krivin
 #define Krivine_vw_closure(i) ((cell)(((uintptr_t)(i) << 3) | Krivine_vw_tag_closure))
 #define Krivine_vw_is_int(x) (Krivine_vw_tag(x) == Krivine_vw_tag_int)
 #define Krivine_vw_is_closure(x) (Krivine_vw_tag(x) == Krivine_vw_tag_closure)
-#define Krivine_vw_to_int(x) ((cell)(intptr_t)((uintptr_t)(x) >> 3))
+static Krivine_cell Krivine_vw_to_int(Krivine_cell x) {
+  return x >= 0 ? x / 8 : -1 - (Krivine_cell)(~(uintptr_t)x >> 3);
+}
 #define Krivine_vw_to_closure(x) ((uint64_t)((uintptr_t)(x) >> 3))
 static void Krivine_vw_deliver(Krivine_vm *vm);
 
@@ -254,12 +258,14 @@ static void Krivine_vw_deliver(Krivine_vm *vm);
 void Krivine_ACCESS(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 #line 1 "<VMWeave generated>"
 }
 void Krivine_ADD(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -270,17 +276,20 @@ void Krivine_BRANCH(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(vm->flag ? operand0 : operand1);
 #line 1 "<VMWeave generated>"
 }
 void Krivine_CONST(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(Krivine_vw_int(operand0));
 #line 1 "<VMWeave generated>"
 }
 void Krivine_DIV(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -290,14 +299,17 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) / Krivine_vw_to_int(pb)));
 }
 void Krivine_ENTER(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(Krivine_vw_is_closure(value)) {
   uintmax_t index = Krivine_vw_to_closure(value);
   if(index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  memcpy(&vm->saved_env[vm->env_mark_top * 128u], vm->env, sizeof(vm->env));
   vm->env_mark[vm->env_mark_top++] = vm->env_top;
   vm->env_top = vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 128u], sizeof(vm->env));
   (void)vm_call((cell)vm->clo_code[index]);
 } else if(Krivine_vw_is_int(value)) {
   vm->val = (int64_t)value;
@@ -309,6 +321,7 @@ if(Krivine_vw_is_closure(value)) {
 }
 void Krivine_EQ(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -317,6 +330,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) == Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_GE(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -325,6 +339,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) >= Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_GRAB(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell argument = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_closure(argument)) { vm_fail(-4); return; }
@@ -334,6 +349,7 @@ vm->env[vm->env_top++] = (int64_t)argument;
 }
 void Krivine_GT(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -342,6 +358,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) > Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_LE(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -350,6 +367,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) <= Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_LT(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -358,14 +376,16 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) < Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_MUL(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) * Krivine_vw_to_int(pb)));
+vm_push(Krivine_vw_int((uintptr_t)Krivine_vw_to_int(pa) * (uintptr_t)Krivine_vw_to_int(pb)));
 #line 1 "<VMWeave generated>"
 }
 void Krivine_NEG(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa)) { vm_fail(-4); return; }
@@ -374,6 +394,7 @@ vm_push(Krivine_vw_int(-Krivine_vw_to_int(pa)));
 }
 void Krivine_NEQ(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -382,11 +403,13 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) != Krivine_vw_to_int(pb) ? 1 : 0));
 }
 void Krivine_POPVAL(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->val = vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void Krivine_PRINT(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(value)) { vm_fail(-4); return; }
@@ -396,31 +419,37 @@ vm->out = Krivine_vw_to_int(value);
 void Krivine_PUSH(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->clo_top >= 128u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = vm->env_top;
+memcpy(&vm->clo_bindings[vm->clo_top * 128u], vm->env, sizeof(vm->env));
 vm_push(Krivine_vw_closure(vm->clo_top));
 ++vm->clo_top;
 #line 1 "<VMWeave generated>"
 }
 void Krivine_PUSHVAL(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_push((cell)vm->val);
 #line 1 "<VMWeave generated>"
 }
 void Krivine_RET(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 Krivine_vw_deliver(vm);
 #line 1 "<VMWeave generated>"
 }
 void Krivine_STOP(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void Krivine_SUB(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -429,6 +458,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) - Krivine_vw_to_int(pb)));
 }
 void Krivine_TEST(Krivine_vm *vm) {
   typedef Krivine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 vm->flag = Krivine_vw_is_int(value) ? (Krivine_vw_to_int(value) ? 1 : 0) : 1;
@@ -607,7 +637,10 @@ int Krivine_ret(Krivine_vm *vm) {
 /* User subsystem extension. */
 /* Deliver the value in `val` to the caller, or stop at the outermost term. */
 static void Krivine_vw_deliver(Krivine_vm *vm) {
-  if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+  if(vm->env_mark_top) {
+    vm->env_top = vm->env_mark[--vm->env_mark_top];
+    memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 128u], sizeof(vm->env));
+  }
   if(vm->vw_frame_count) (void)Krivine_ret(vm);
   else Krivine_vw_halt(vm);
 }

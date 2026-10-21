@@ -18,6 +18,7 @@ typedef struct { const char *name; uint32_t opcode; size_t operands, inputs, out
 
 typedef struct { size_t return_address, stack_base; CESK_cell locals[16]; } CESK_activation;
 struct CESK_vm {
+  int64_t clo_bindings[4096];
   uint64_t clo_code[64];
   uint64_t clo_env[64];
   uint64_t clo_top;
@@ -27,6 +28,7 @@ struct CESK_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[8192];
   int64_t store[256];
   uint64_t store_top;
   CESK_cell vw_stack[512];
@@ -36,7 +38,7 @@ struct CESK_vm {
   CESK_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t CESK_vw_abi(void) { return UINT64_C(0x2b7f5a233ef9a4e3); }
+static inline uint64_t CESK_vw_abi(void) { return UINT64_C(0x3bd1a20659ee2994); }
 static const CESK_metadata CESK_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"APP1", 1u, 1, 2, 0, "call"},

@@ -56,7 +56,7 @@ static const PCode_metadata PCode_vw_table[] = {
   {"NEQ", 20u, 0, 2, 1, "next"},
   {"NGI", 21u, 0, 1, 1, "next"},
   {"RET", 22u, 0, 0, 0, "return"},
-  {"RETV", 23u, 0, 1, 0, "return"},
+  {"RETV", 23u, 0, 1, 1, "return"},
   {"SBI", 24u, 0, 2, 1, "next"},
   {"STI", 25u, 0, 2, 0, "next"},
   {"STO", 26u, 1, 1, 0, "next"},

@@ -1,0 +1,11 @@
+-- Collection-defined PROL logic profile. The empty original supplied no
+-- version/dialect, so this does not claim a particular historical PROL ISA.
+-- Implements variable/integer/list terms, unification, alternatives, rollback
+-- and calls using the shared bounded engine in logic_machine.lua.
+-- CHOICE/RETRY/COMMIT are explicit; CUT commits every outstanding choice.
+local here = debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or "."
+local build = dofile(here .. "/../logic_machine.lua")
+return build("PROL", { PUT_VARIABLE = "VARIABLE", PUT_INTEGER = "INTEGER",
+  PUT_VALUE = "MOVE", PUT_LIST = "CONS", PUT_NIL = "NIL",
+  GET_VALUE = "UNIFY", GET_INTEGER = "MATCH_INTEGER", TRY_ME_ELSE = "CHOICE",
+  RETRY_ME_ELSE = "RETRY", TRUST_ME = "COMMIT", PROCEED = "RETURN" })

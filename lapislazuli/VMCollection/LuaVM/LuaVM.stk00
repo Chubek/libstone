@@ -1,0 +1,162 @@
+stk-00 1
+vm "LuaVM"
+configuration "switch" "int64_t" 16 64 64 "custom" 0
+source "VMCollection/LuaVM/LuaVM.vmw" 6
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "depth" "u64" 0
+field "dest" "u64" 64
+field "out" "i64" 0
+field "present" "u8" 1024
+field "regs" "i64" 1040
+field "table_top" "u64" 0
+field "tables" "i64" 1024
+subsystem "token" c{ 244
+static int64_t LuaVM_vw_integer(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int LuaVM_vw_reg(LuaVM_vm *vm, LuaVM_cell r) {
+  if(r < 0 || r >= 16) { LuaVM_vw_fail(vm,-4); return 0; } return 1;
+}
+
+}c
+: "ADD" opcode 0 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a + b);
+}c ;
+: "BAND" opcode 1 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a & b);
+}c ;
+: "BOR" opcode 2 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a | b);
+}c ;
+: "BXOR" opcode 3 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a ^ b);
+}c ;
+: "CALL1" opcode 4 operands 3 "cell" "cell" "cell" effect "( -- )" flow "call" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 430
+cell target, a;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+target = vm->regs[vm->depth * 16u + (size_t)operand1]; a = vm->regs[vm->depth * 16u + (size_t)operand2];
+if(vm_call(target)) return;
+vm->dest[vm->depth++] = (uint64_t)operand0;
+memset(&vm->regs[vm->depth * 16u], 0, 16u * sizeof(int64_t)); vm->regs[vm->depth * 16u] = a;
+}c ;
+: "EQ" opcode 5 operands 3 "cell" "cell" "label" effect "( -- )" flow "branch" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 184
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+if(vm->regs[vm->depth * 16u + (size_t)operand0] == vm->regs[vm->depth * 16u + (size_t)operand1]) vm_jump(operand2);
+}c ;
+: "GETTABLE" opcode 6 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 469
+cell table; size_t index;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+table = vm->regs[vm->depth * 16u + (size_t)operand1];
+if(table <= 0 || (uint64_t)table > vm->table_top || operand2 < 0 || operand2 >= 16) { vm_fail(-4); return; }
+index = ((size_t)table - 1u) * 16u + (size_t)operand2;
+if(!vm->present[index]) { vm_fail(-4); return; } /* nil is outside this integer profile */
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->tables[index];
+}c ;
+: "HALT" opcode 7 operands 0 effect "( -- )" flow "halt" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 10
+vm_halt();
+}c ;
+: "IDIV" opcode 8 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 416
+cell a, b, q, r;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = vm->regs[vm->depth * 16u + (size_t)operand1]; b = vm->regs[vm->depth * 16u + (size_t)operand2];
+if(!b) { vm_fail(-10); return; }
+if(b == -1) q = LuaVM_vw_integer(0u - (uint64_t)a);
+else { q = a / b; r = a % b; if(r && ((r < 0) != (b < 0))) --q; }
+vm->regs[vm->depth * 16u + (size_t)operand0] = q;
+}c ;
+: "JMP" opcode 9 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LOADFUNC" opcode 10 operands 2 "cell" "label" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 95
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = operand1;
+}c ;
+: "LOADI" opcode 11 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 95
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = operand1;
+}c ;
+: "MOVE" opcode 12 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 161
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->regs[vm->depth * 16u + (size_t)operand1];
+}c ;
+: "MUL" opcode 13 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a * b);
+}c ;
+: "NEWTABLE" opcode 14 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 158
+if(!LuaVM_vw_reg(vm,operand0)) return;
+if(vm->table_top >= 64u) { vm_fail(-3); return; }
+vm->regs[vm->depth * 16u + (size_t)operand0] = (cell)++vm->table_top;
+}c ;
+: "PRINT" opcode 15 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 94
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->out = vm->regs[vm->depth * 16u + (size_t)operand0];
+}c ;
+: "RETURN1" opcode 16 operands 1 "cell" effect "( -- )" flow "return" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 285
+cell result; size_t dest;
+if(!LuaVM_vw_reg(vm,operand0)) return;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm->regs[vm->depth * 16u + (size_t)operand0];
+--vm->depth; (void)vm_return(); dest = vm->depth * 16u + vm->dest[vm->depth]; vm->regs[dest] = result;
+}c ;
+: "SETTABLE" opcode 17 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 402
+cell table; size_t index;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand2)) return;
+table = vm->regs[vm->depth * 16u + (size_t)operand0];
+if(table <= 0 || (uint64_t)table > vm->table_top || operand1 < 0 || operand1 >= 16) { vm_fail(-4); return; }
+index = ((size_t)table - 1u) * 16u + (size_t)operand1;
+vm->tables[index] = vm->regs[vm->depth * 16u + (size_t)operand2]; vm->present[index] = 1;
+}c ;
+: "SUB" opcode 18 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/LuaVM/LuaVM.vmw" 90
+c{ 305
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a - b);
+}c ;
+: "TEST" opcode 19 operands 2 "cell" "label" effect "( -- )" flow "branch" source "VMCollection/LuaVM/LuaVM.vmw" 6
+c{ 144
+if(!LuaVM_vw_reg(vm,operand0)) return;
+/* Lua integer zero is truthy, so every value in this integer-only profile is true. */
+vm_jump(operand1);
+}c ;
+end

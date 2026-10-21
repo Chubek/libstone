@@ -65,13 +65,16 @@ static const CMachine_metadata CMachine_vw_table[] = {
   {"OR", 31u, 0, 2, 1, "next"},
   {"POP", 32u, 0, 1, 0, "next"},
   {"PRINT", 33u, 0, 1, 0, "next"},
-  {"RETURN", 34u, 0, 1, 1, "return"},
-  {"STOP", 35u, 0, 0, 0, "halt"},
-  {"STORE", 36u, 0, 2, 0, "next"},
-  {"STOREA", 37u, 1, 1, 0, "next"},
-  {"STORER", 38u, 1, 1, 0, "next"},
-  {"SUB", 39u, 0, 2, 1, "next"},
-  {"XOR", 40u, 0, 2, 1, "next"},
+  {"RETURN", 34u, 0, 5, 1, "return"},
+  {"RETURN1", 35u, 0, 6, 1, "return"},
+  {"RETURN2", 36u, 0, 7, 1, "return"},
+  {"RETURN3", 37u, 0, 8, 1, "return"},
+  {"STOP", 38u, 0, 0, 0, "halt"},
+  {"STORE", 39u, 0, 2, 0, "next"},
+  {"STOREA", 40u, 1, 1, 0, "next"},
+  {"STORER", 41u, 1, 1, 0, "next"},
+  {"SUB", 42u, 0, 2, 1, "next"},
+  {"XOR", 43u, 0, 2, 1, "next"},
   {NULL, 0u, 0, 0, 0, NULL}
 };
 static inline const CMachine_metadata *CMachine_lookup(uint32_t opcode) {
@@ -144,6 +147,9 @@ static inline int CMachine_vw_label_operand(uint32_t opcode, size_t index) {
   case 38u: return 0;
   case 39u: return 0;
   case 40u: return 0;
+  case 41u: return 0;
+  case 42u: return 0;
+  case 43u: return 0;
   default: return 0;
   }
 }
@@ -208,6 +214,9 @@ void CMachine_OR(CMachine_vm *vm);
 void CMachine_POP(CMachine_vm *vm);
 void CMachine_PRINT(CMachine_vm *vm);
 void CMachine_RETURN(CMachine_vm *vm);
+void CMachine_RETURN1(CMachine_vm *vm);
+void CMachine_RETURN2(CMachine_vm *vm);
+void CMachine_RETURN3(CMachine_vm *vm);
 void CMachine_STOP(CMachine_vm *vm);
 void CMachine_STORE(CMachine_vm *vm);
 void CMachine_STOREA(CMachine_vm *vm);
@@ -249,12 +258,15 @@ void CMachine_XOR(CMachine_vm *vm);
 #define CMachine_opcode_POP 32u
 #define CMachine_opcode_PRINT 33u
 #define CMachine_opcode_RETURN 34u
-#define CMachine_opcode_STOP 35u
-#define CMachine_opcode_STORE 36u
-#define CMachine_opcode_STOREA 37u
-#define CMachine_opcode_STORER 38u
-#define CMachine_opcode_SUB 39u
-#define CMachine_opcode_XOR 40u
+#define CMachine_opcode_RETURN1 35u
+#define CMachine_opcode_RETURN2 36u
+#define CMachine_opcode_RETURN3 37u
+#define CMachine_opcode_STOP 38u
+#define CMachine_opcode_STORE 39u
+#define CMachine_opcode_STOREA 40u
+#define CMachine_opcode_STORER 41u
+#define CMachine_opcode_SUB 42u
+#define CMachine_opcode_XOR 43u
 int CMachine_step(CMachine_vm *, uint32_t);
 int CMachine_run(CMachine_vm *, const CMachine_tape *, size_t);
 const char *CMachine_token(uint32_t);

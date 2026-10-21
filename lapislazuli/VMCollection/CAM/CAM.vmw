@@ -30,7 +30,7 @@
 -- take it apart, so the same instructions serve both the compiler's
 -- environment trees and the programmer's data.
 --
--- Closures capture the height of the current environment, and `APPLY` binds one
+-- Closures capture the current environment tree, and `APPLY` binds one
 -- argument by pairing it with the closure's captured environment.  The callee
 -- leaves its result on S and `RET` slides it over the caller's argument, which
 -- is the "slide" the real implementation folds into its return sequence.
@@ -50,7 +50,9 @@ return v.vm {
 #define CAM_vw_is_int(x) (CAM_vw_tag(x) == (uintptr_t)1u)
 #define CAM_vw_is_pair(x) (CAM_vw_tag(x) == (uintptr_t)2u)
 #define CAM_vw_is_closure(x) (CAM_vw_tag(x) == (uintptr_t)3u)
-#define CAM_vw_value(x) ((CAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+static CAM_cell CAM_vw_value(CAM_cell x) {
+  return x >= 0 ? x / 8 : -1 - (CAM_cell)(~(uintptr_t)x >> 3);
+}
 #define CAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
 
 /* Build the pair (car, cdr) and return its tagged reference, or fail. */
@@ -66,9 +68,11 @@ static CAM_cell CAM_vw_cons(CAM_vm *vm, CAM_cell car, CAM_cell cdr) {
 
 /* Read one component of a pair; the caller has already checked the tag. */
 static CAM_cell CAM_vw_car(CAM_vm *vm, CAM_cell value) {
+  if(CAM_vw_index(value) >= vm->pair_top) { CAM_vw_fail(vm,-4); return 0; }
   return (CAM_cell)vm->pair_a[CAM_vw_index(value)];
 }
 static CAM_cell CAM_vw_cdr(CAM_vm *vm, CAM_cell value) {
+  if(CAM_vw_index(value) >= vm->pair_top) { CAM_vw_fail(vm,-4); return 0; }
   return (CAM_cell)vm->pair_b[CAM_vw_index(value)];
 }
 ]],
@@ -166,7 +170,7 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) - CAM_vw_value(pb)));]] },
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(CAM_vw_int(CAM_vw_value(pa) * CAM_vw_value(pb)));]] },
+vm_push(CAM_vw_int((uintptr_t)CAM_vw_value(pa) * (uintptr_t)CAM_vw_value(pb)));]] },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;

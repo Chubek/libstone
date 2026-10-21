@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF32_SPARC_BE", target="elf32-sparc", arch="sparc", class=32, endian="big", machine=2,
+  source=".info/binutils/bfd/elf32-sparc.c; include/elf/common.h (EM_SPARC); include/elf/external.h",
+}

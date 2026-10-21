@@ -28,6 +28,7 @@ struct FAM_vm {
   uint64_t mark[128];
   uint64_t mark_top;
   int64_t out;
+  int64_t saved_env[32768];
   FAM_cell vw_stack[512];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -35,7 +36,7 @@ struct FAM_vm {
   FAM_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t FAM_vw_abi(void) { return UINT64_C(0x7e11cd0694f9da29); }
+static inline uint64_t FAM_vw_abi(void) { return UINT64_C(0x8d91598ee6a401b); }
 static const FAM_metadata FAM_vw_table[] = {
   {"ACCESS", 0u, 1, 0, 1, "next"},
   {"ADD", 1u, 0, 2, 1, "next"},

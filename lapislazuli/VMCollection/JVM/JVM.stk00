@@ -1,0 +1,139 @@
+stk-00 1
+vm "JVM"
+configuration "switch" "int64_t" 256 64 64 "custom" 0
+source "VMCollection/JVM/JVM.vmw" 6
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "depth" "u64" 0
+field "locals" "i64" 1040
+field "out" "i64" 0
+subsystem "token" c{ 113
+static int64_t JVM_vw_i32(uint32_t x) {
+  return x <= INT32_MAX ? (int64_t)x : -1 - (int64_t)(UINT32_MAX - x);
+}
+
+}c
+: "DUP" opcode 0 operands 0 effect "( a -- a a )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "GOTO" opcode 1 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/JVM/JVM.vmw" 6
+c{ 18
+vm_jump(operand0);
+}c ;
+: "HALT" opcode 2 operands 0 effect "( -- )" flow "halt" source "VMCollection/JVM/JVM.vmw" 6
+c{ 10
+vm_halt();
+}c ;
+: "IADD" opcode 3 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a + b));
+}c ;
+: "IAND" opcode 4 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a & b));
+}c ;
+: "ICONST" opcode 5 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 40
+vm_push(JVM_vw_i32((uint32_t)operand0));
+}c ;
+: "IDIV" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 152
+int64_t b = JVM_vw_i32((uint32_t)vm_pop()), a = JVM_vw_i32((uint32_t)vm_pop());
+if(!b) { vm_fail(-10); return; }
+vm_push(JVM_vw_i32((uint32_t)(a / b)));
+}c ;
+: "IFEQ" opcode 7 operands 1 "label" effect "( i -- )" flow "branch" source "VMCollection/JVM/JVM.vmw" 6
+c{ 32
+if(!vm_pop()) vm_jump(operand0);
+}c ;
+: "IF_ICMPLT" opcode 8 operands 1 "label" effect "( a b -- )" flow "branch" source "VMCollection/JVM/JVM.vmw" 6
+c{ 61
+cell b = vm_pop(), a = vm_pop(); if(a < b) vm_jump(operand0);
+}c ;
+: "IINC" opcode 9 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 183
+size_t i;
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+i = vm->depth * 16u + (size_t)operand0;
+vm->locals[i] = JVM_vw_i32((uint32_t)vm->locals[i] + (uint32_t)operand1);
+}c ;
+: "ILOAD" opcode 10 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 116
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);
+}c ;
+: "IMUL" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a * b));
+}c ;
+: "INEG" opcode 12 operands 0 effect "( a -- b )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 45
+vm_push(JVM_vw_i32(0u - (uint32_t)vm_pop()));
+}c ;
+: "INVOKESTATIC" opcode 13 operands 1 "label" effect "( -- )" flow "call" source "VMCollection/JVM/JVM.vmw" 6
+c{ 152
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+}c ;
+: "INVOKESTATIC1" opcode 14 operands 1 "label" effect "( a -- )" flow "call" source "VMCollection/JVM/JVM.vmw" 6
+c{ 226
+cell a = vm_pop();
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+vm->locals[vm->depth * 16u] = JVM_vw_i32((uint32_t)a);
+}c ;
+: "IOR" opcode 15 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a | b));
+}c ;
+: "IREM" opcode 16 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 128
+int64_t b = JVM_vw_i32((uint32_t)vm_pop()), a = JVM_vw_i32((uint32_t)vm_pop());
+if(!b) { vm_fail(-10); return; }
+vm_push(a % b);
+}c ;
+: "IRETURN" opcode 17 operands 0 effect "( i -- i )" flow "return" source "VMCollection/JVM/JVM.vmw" 6
+c{ 143
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);
+}c ;
+: "ISTORE" opcode 18 operands 1 "cell" effect "( i -- )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 140
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = JVM_vw_i32((uint32_t)vm_pop());
+}c ;
+: "ISUB" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a - b));
+}c ;
+: "IXOR" opcode 20 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/JVM/JVM.vmw" 74
+c{ 84
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(JVM_vw_i32(a ^ b));
+}c ;
+: "POP" opcode 21 operands 0 effect "( a -- )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 15
+(void)vm_pop();
+}c ;
+: "PRINT" opcode 22 operands 0 effect "( i -- )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "RETURN" opcode 23 operands 0 effect "( -- )" flow "return" source "VMCollection/JVM/JVM.vmw" 6
+c{ 94
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();
+}c ;
+: "SWAP" opcode 24 operands 0 effect "( a b -- b a )" flow "next" source "VMCollection/JVM/JVM.vmw" 6
+c{ 56
+cell b = vm_pop(), a = vm_pop(); vm_push(b); vm_push(a);
+}c ;
+end

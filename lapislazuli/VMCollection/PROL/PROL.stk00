@@ -1,0 +1,185 @@
+stk-00 1
+vm "PROL"
+configuration "switch" "int64_t" 16 64 64 "custom" 0
+source "VMCollection/logic_machine.lua" 8
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "a" "i64" 1024
+field "b" "i64" 1024
+field "choice_frames" "u64" 32
+field "choice_heap" "u64" 32
+field "choice_pc" "i64" 32
+field "choice_returns" "u64" 2048
+field "choice_top" "u64" 0
+field "choice_trail" "u64" 32
+field "choice_x" "i64" 512
+field "heap_top" "u64" 0
+field "kind" "u8" 1024
+field "out" "i64" 0
+field "trail" "u64" 2048
+field "trail_top" "u64" 0
+field "x" "i64" 16
+subsystem "token" c{ 2497
+static int PROL_vw_reg(PROL_vm *vm, int64_t r) {
+  if(r < 0 || r >= 16) { PROL_vw_fail(vm,-4); return 0; } return 1;
+}
+static int64_t PROL_vw_term(PROL_vm *vm, uint8_t kind, int64_t a, int64_t b) {
+  size_t i;
+  if(vm->heap_top >= 1024u) { PROL_vw_fail(vm,-3); return 0; }
+  i = vm->heap_top++; vm->kind[i] = kind; vm->a[i] = a; vm->b[i] = b; return (int64_t)i + 1;
+}
+static int64_t PROL_vw_deref(PROL_vm *vm, int64_t term) {
+  size_t steps = 0;
+  for(;;) {
+    size_t i;
+    if(term <= 0 || (uint64_t)term > vm->heap_top) { PROL_vw_fail(vm,-4); return 0; }
+    i = (size_t)term - 1u;
+    if(vm->kind[i] != 0 || !vm->a[i]) return term;
+    if(++steps > 1024u) { PROL_vw_fail(vm,-4); return 0; }
+    term = vm->a[i];
+  }
+}
+static void PROL_vw_backtrack(PROL_vm *vm) {
+  size_t c, i;
+  if(!vm->choice_top) { PROL_vw_fail(vm,-11); return; }
+  c = vm->choice_top - 1u;
+  while(vm->trail_top > vm->choice_trail[c]) {
+    size_t var = vm->trail[--vm->trail_top]; vm->a[var] = 0;
+  }
+  vm->heap_top = vm->choice_heap[c]; memcpy(vm->x,&vm->choice_x[c * 16u],sizeof(vm->x));
+  vm->vw_frame_count = vm->choice_frames[c];
+  for(i = 0; i < vm->vw_frame_count; ++i) {
+    vm->vw_frames[i].return_address = vm->choice_returns[c * 64u + i];
+    vm->vw_frames[i].stack_base = 0;
+  }
+  PROL_vw_jump(vm,vm->choice_pc[c]);
+}
+/* Worklist unification; all bindings since the last choice are trailed. */
+static void PROL_vw_unify(PROL_vm *vm, int64_t left, int64_t right) {
+  int64_t ls[1024], rs[1024]; size_t top = 1, steps = 0;
+  ls[0] = left; rs[0] = right;
+  while(top && !vm->vw_error) {
+    int64_t l, r; size_t li, ri;
+    if(++steps > 4096u) { PROL_vw_fail(vm,-4); return; }
+    --top; l = PROL_vw_deref(vm,ls[top]); r = PROL_vw_deref(vm,rs[top]);
+    if(vm->vw_error) return;
+    if(l == r) continue;
+    li = (size_t)l - 1u; ri = (size_t)r - 1u;
+    if(vm->kind[li] == 0 || vm->kind[ri] == 0) {
+      size_t var = vm->kind[li] == 0 ? li : ri;
+      int64_t value = vm->kind[li] == 0 ? r : l;
+      if(vm->choice_top) {
+        if(vm->trail_top >= 2048u) { PROL_vw_fail(vm,-3); return; }
+        vm->trail[vm->trail_top++] = var;
+      }
+      vm->a[var] = value;
+    } else if(vm->kind[li] != vm->kind[ri]
+      || (vm->kind[li] == 1 && vm->a[li] != vm->a[ri])) {
+      PROL_vw_backtrack(vm); return;
+    } else if(vm->kind[li] == 2) {
+      if(top + 2u > 1024u) { PROL_vw_fail(vm,-3); return; }
+      ls[top] = vm->a[li]; rs[top++] = vm->a[ri];
+      ls[top] = vm->b[li]; rs[top++] = vm->b[ri];
+    }
+  }
+}
+
+}c
+: "CALL" opcode 0 operands 1 "label" effect "( -- )" flow "call" source "VMCollection/logic_machine.lua" 93
+c{ 24
+(void)vm_call(operand0);
+}c ;
+: "CHOICE" opcode 1 operands 1 "label" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 388
+size_t c, i;
+if(vm->choice_top >= 32u) { vm_fail(-3); return; }
+c = vm->choice_top++; vm->choice_pc[c] = operand0;
+vm->choice_heap[c] = vm->heap_top; vm->choice_trail[c] = vm->trail_top;
+vm->choice_frames[c] = vm->vw_frame_count;
+memcpy(&vm->choice_x[c * 16u],vm->x,sizeof(vm->x));
+for(i = 0; i < vm->vw_frame_count; ++i) vm->choice_returns[c * 64u + i] = vm->vw_frames[i].return_address;
+}c ;
+: "COMMIT" opcode 2 operands 0 effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 101
+if(!vm->choice_top) { vm_fail(-2); return; }
+--vm->choice_top; if(!vm->choice_top) vm->trail_top = 0;
+}c ;
+: "CONS" opcode 3 operands 3 "cell" "cell" "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 323
+int64_t a, b;
+if(!PROL_vw_reg(vm,operand0) || !PROL_vw_reg(vm,operand1) || !PROL_vw_reg(vm,operand2)) return;
+a = vm->x[(size_t)operand1]; b = vm->x[(size_t)operand2];
+if(a <= 0 || (uint64_t)a > vm->heap_top || b <= 0 || (uint64_t)b > vm->heap_top) { vm_fail(-4); return; }
+vm->x[(size_t)operand0] = PROL_vw_term(vm,2,a,b);
+}c ;
+: "CUT" opcode 4 operands 0 effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 38
+vm->choice_top = 0; vm->trail_top = 0;
+}c ;
+: "EXECUTE" opcode 5 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/logic_machine.lua" 93
+c{ 18
+vm_jump(operand0);
+}c ;
+: "FAIL" opcode 6 operands 0 effect "( -- )" flow "branch" source "VMCollection/logic_machine.lua" 93
+c{ 22
+PROL_vw_backtrack(vm);
+}c ;
+: "HALT" opcode 7 operands 0 effect "( -- )" flow "halt" source "VMCollection/logic_machine.lua" 93
+c{ 10
+vm_halt();
+}c ;
+: "INTEGER" opcode 8 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 94
+if(!PROL_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = PROL_vw_term(vm,1,operand1,0);
+}c ;
+: "MATCH_INTEGER" opcode 9 operands 2 "cell" "cell" effect "( -- )" flow "branch" source "VMCollection/logic_machine.lua" 93
+c{ 162
+int64_t term;
+if(!PROL_vw_reg(vm,operand0)) return;
+term = PROL_vw_term(vm,1,operand1,0); if(vm->vw_error) return;
+PROL_vw_unify(vm,vm->x[(size_t)operand0],term);
+}c ;
+: "MOVE" opcode 10 operands 2 "cell" "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 117
+if(!PROL_vw_reg(vm,operand0) || !PROL_vw_reg(vm,operand1)) return;
+vm->x[(size_t)operand0] = vm->x[(size_t)operand1];
+}c ;
+: "NIL" opcode 11 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 87
+if(!PROL_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = PROL_vw_term(vm,3,0,0);
+}c ;
+: "PRINT" opcode 12 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 224
+int64_t term;
+if(!PROL_vw_reg(vm,operand0)) return;
+term = PROL_vw_deref(vm,vm->x[(size_t)operand0]); if(vm->vw_error) return;
+if(vm->kind[(size_t)term - 1u] != 1) { vm_fail(-4); return; }
+vm->out = vm->a[(size_t)term - 1u];
+}c ;
+: "RETRY" opcode 13 operands 1 "label" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 91
+if(!vm->choice_top) { vm_fail(-2); return; }
+vm->choice_pc[vm->choice_top - 1u] = operand0;
+}c ;
+: "RETURN" opcode 14 operands 0 effect "( -- )" flow "return" source "VMCollection/logic_machine.lua" 93
+c{ 18
+(void)vm_return();
+}c ;
+: "UNIFY" opcode 15 operands 2 "cell" "cell" effect "( -- )" flow "branch" source "VMCollection/logic_machine.lua" 93
+c{ 133
+if(!PROL_vw_reg(vm,operand0) || !PROL_vw_reg(vm,operand1)) return;
+PROL_vw_unify(vm,vm->x[(size_t)operand0],vm->x[(size_t)operand1]);
+}c ;
+: "VARIABLE" opcode 16 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/logic_machine.lua" 93
+c{ 87
+if(!PROL_vw_reg(vm,operand0)) return;
+vm->x[(size_t)operand0] = PROL_vw_term(vm,0,0,0);
+}c ;
+end

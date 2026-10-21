@@ -18,6 +18,7 @@ typedef struct { const char *name; uint32_t opcode; size_t operands, inputs, out
 
 typedef struct { size_t return_address, stack_base; CESK_cell locals[16]; } CESK_activation;
 struct CESK_vm {
+  int64_t clo_bindings[4096];
   uint64_t clo_code[64];
   uint64_t clo_env[64];
   uint64_t clo_top;
@@ -27,6 +28,7 @@ struct CESK_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[8192];
   int64_t store[256];
   uint64_t store_top;
   CESK_cell vw_stack[512];
@@ -36,7 +38,7 @@ struct CESK_vm {
   CESK_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t CESK_vw_abi(void) { return UINT64_C(0x2b7f5a233ef9a4e3); }
+static inline uint64_t CESK_vw_abi(void) { return UINT64_C(0x3bd1a20659ee2994); }
 static const CESK_metadata CESK_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"APP1", 1u, 1, 2, 0, "call"},
@@ -209,6 +211,19 @@ int CESK_ret(CESK_vm *);
 /* .token */
 const char *CESK_token(uint32_t opcode) { const CESK_metadata *info=CESK_lookup(opcode); return info ? info->name : NULL; }
 
+/* User subsystem extension. */
+/* Capture store addresses, not values: SET remains visible through closures. */
+static void CESK_vw_save_env(CESK_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+static void CESK_vw_restore_env(CESK_vm *vm) {
+  if(!vm->env_mark_top) return;
+  vm->env_top = vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
+
+
 /* .opcode */
 #define CESK_opcode_ADD 0u
 #define CESK_opcode_APP1 1u
@@ -246,12 +261,14 @@ const char *CESK_token(uint32_t opcode) { const CESK_metadata *info=CESK_lookup(
 
 void CESK_ADD(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CESK_APP1(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop(); cell value = vm_pop(); cell address;
 if(vm->vw_error) return;
 if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
@@ -259,8 +276,9 @@ if(vm->store_top >= 256u) { vm_fail(-3); return; }
 if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
 address = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)value;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 1u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)address;
 (void)vm_call((cell)vm->clo_code[(uintmax_t)closure]);
@@ -269,6 +287,7 @@ vm->env[vm->env_top++] = (int64_t)address;
 void CESK_APP2(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop(); cell b = vm_pop(); cell a = vm_pop(); cell addr0, addr1;
 if(vm->vw_error) return;
 if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
@@ -278,8 +297,9 @@ addr0 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)a;
 addr1 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)b;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 2u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)addr1;
 vm->env[vm->env_top++] = (int64_t)addr0;
@@ -289,6 +309,7 @@ vm->env[vm->env_top++] = (int64_t)addr0;
 void CESK_APP3(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop(); cell c = vm_pop(); cell b = vm_pop(); cell a = vm_pop(); cell addr0, addr1, addr2;
 if(vm->vw_error) return;
 if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
@@ -300,8 +321,9 @@ addr1 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)b;
 addr2 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)c;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 3u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)addr2;
 vm->env[vm->env_top++] = (int64_t)addr1;
@@ -313,98 +335,115 @@ void CESK_BRANCH(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(vm->flag ? operand0 : operand1);
 #line 1 "<VMWeave generated>"
 }
 void CESK_CONST(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_DIV(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
-if(!b) { vm_fail(-10); return; }
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push(a / b);
 #line 1 "<VMWeave generated>"
 }
 void CESK_EQ(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_GE(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_GT(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_JUMP(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_LAM(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->clo_top >= 64u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = vm->env_top;
+memcpy(&vm->clo_bindings[vm->clo_top * 64u], vm->env, sizeof(vm->env));
 vm_push((cell)vm->clo_top);
 ++vm->clo_top;
 #line 1 "<VMWeave generated>"
 }
 void CESK_LE(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_LT(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_MUL(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CESK_NE(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CESK_NEG(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
-vm_push(-vm_pop());
+#line 100 "VMCollection/regenerate.lua"
+vm_push((cell)(0u - (uintptr_t)vm_pop()));
 #line 1 "<VMWeave generated>"
 }
 void CESK_PRINT(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->out = vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void CESK_RET(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+CESK_vw_restore_env(vm);
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
 void CESK_SET(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop(); cell address;
 if(vm->vw_error) return;
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
@@ -415,16 +454,19 @@ vm->store[(uintmax_t)address] = (int64_t)value;
 }
 void CESK_STOP(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void CESK_SUB(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CESK_TEST(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 vm->flag = value ? 1 : 0;
@@ -433,6 +475,7 @@ vm->flag = value ? 1 : 0;
 void CESK_VAR(CESK_vm *vm) {
   typedef CESK_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell address;
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 address = (cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0];

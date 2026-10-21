@@ -1,0 +1,139 @@
+stk-00 1
+vm "YARVM"
+configuration "switch" "int64_t" 256 64 64 "custom" 0
+source "VMCollection/YARVM/YARVM.vmw" 6
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "array_top" "u64" 0
+field "arrays" "i64" 128
+field "depth" "u64" 0
+field "locals" "i64" 1040
+field "out" "i64" 0
+field "self" "i64" 65
+subsystem "token" c{ 305
+static int64_t YARVM_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t YARVM_vw_int(uint64_t n) { return YARVM_vw_bits((n << 3) | 1u); }
+static int64_t YARVM_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+
+}c
+: "BRANCHIF" opcode 0 operands 1 "label" effect "( value -- )" flow "branch" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 70
+cell value = vm_pop(); if(value != 0 && value != 2) vm_jump(operand0);
+}c ;
+: "BRANCHUNLESS" opcode 1 operands 1 "label" effect "( value -- )" flow "branch" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 70
+cell value = vm_pop(); if(value == 0 || value == 2) vm_jump(operand0);
+}c ;
+: "DUP" opcode 2 operands 0 effect "( a -- a a )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "GETLOCAL" opcode 3 operands 1 "cell" effect "( -- value )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 116
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);
+}c ;
+: "HALT" opcode 4 operands 0 effect "( -- )" flow "halt" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 10
+vm_halt();
+}c ;
+: "JUMP" opcode 5 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LEAVE" opcode 6 operands 0 effect "( value -- value )" flow "return" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 143
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);
+}c ;
+: "NEWARRAY2" opcode 7 operands 0 effect "( a b -- array )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 198
+cell b = vm_pop(), a = vm_pop(); size_t i;
+if(vm->array_top >= 64u) { vm_fail(-3); return; }
+i = vm->array_top++; vm->arrays[i * 2u] = a; vm->arrays[i * 2u + 1u] = b;
+vm_push((cell)((i << 3) | 3u));
+}c ;
+: "OPT_AREF" opcode 8 operands 0 effect "( array index -- value )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 303
+cell index = vm_pop(), array = vm_pop(); uint64_t i = (uint64_t)array >> 3; cell n;
+if(((uint64_t)array & 7u) != 3u || i >= vm->array_top || ((uint64_t)index & 7u) != 1u) { vm_fail(-4); return; }
+n = YARVM_vw_value(index); if(n < 0) n += 2;
+vm_push(n < 0 || n >= 2 ? 0 : vm->arrays[i * 2u + (size_t)n]);
+}c ;
+: "OPT_EQ" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 57
+cell b = vm_pop(), a = vm_pop(); vm_push(a == b ? 6 : 2);
+}c ;
+: "OPT_MINUS" opcode 10 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 74
+c{ 196
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(YARVM_vw_int((uint64_t)YARVM_vw_value(a) - (uint64_t)YARVM_vw_value(b)));
+}c ;
+: "OPT_MULT" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 74
+c{ 196
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(YARVM_vw_int((uint64_t)YARVM_vw_value(a) * (uint64_t)YARVM_vw_value(b)));
+}c ;
+: "OPT_PLUS" opcode 12 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 74
+c{ 196
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(YARVM_vw_int((uint64_t)YARVM_vw_value(a) + (uint64_t)YARVM_vw_value(b)));
+}c ;
+: "POP" opcode 13 operands 0 effect "( a -- )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 15
+(void)vm_pop();
+}c ;
+: "PRINT" opcode 14 operands 0 effect "( value -- )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 113
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = YARVM_vw_value(value);
+}c ;
+: "PUTFALSE" opcode 15 operands 0 effect "( -- false )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 11
+vm_push(2);
+}c ;
+: "PUTNIL" opcode 16 operands 0 effect "( -- nil )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 11
+vm_push(0);
+}c ;
+: "PUTOBJECT" opcode 17 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 42
+vm_push(YARVM_vw_int((uint64_t)operand0));
+}c ;
+: "PUTSELF" opcode 18 operands 0 effect "( -- receiver )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 29
+vm_push(vm->self[vm->depth]);
+}c ;
+: "PUTTRUE" opcode 19 operands 0 effect "( -- true )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 11
+vm_push(6);
+}c ;
+: "SEND1" opcode 20 operands 1 "label" effect "( receiver arg -- )" flow "call" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 253
+cell arg = vm_pop(), self = vm_pop();
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->self[vm->depth] = self;
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+vm->locals[vm->depth * 16u] = arg;
+}c ;
+: "SETLOCAL" opcode 21 operands 1 "cell" effect "( value -- )" flow "next" source "VMCollection/YARVM/YARVM.vmw" 6
+c{ 118
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = vm_pop();
+}c ;
+end

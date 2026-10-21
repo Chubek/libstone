@@ -1,0 +1,96 @@
+-- Lua 5.4-inspired integer/register profile; not Lua's binary chunk format.
+-- 16 registers per call, wrapping 64-bit integers, floor division, integer-key
+-- tables (keys 0..15), and closed functions with one argument/result.
+-- Table handles are untagged 1-based indices; no mixed types, upvalues or GC.
+local v = require("vmweave")
+local vm = v.vm {
+  name = "LuaVM", execution = "switch", stack = { cell = "int64_t", capacity = 16 },
+  frame_capacity = 64,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = { { name = "regs", type = "i64", count = 1040 },
+    { name = "depth", type = "u64" }, { name = "dest", type = "u64", count = 64 },
+    { name = "tables", type = "i64", count = 1024 },
+    { name = "present", type = "u8", count = 1024 },
+    { name = "table_top", type = "u64" }, { name = "out", type = "i64" } },
+  subsystems = { token = [[
+static int64_t LuaVM_vw_integer(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int LuaVM_vw_reg(LuaVM_vm *vm, LuaVM_cell r) {
+  if(r < 0 || r >= 16) { LuaVM_vw_fail(vm,-4); return 0; } return 1;
+}
+]] },
+  instructions = {
+    { name = "LOADI", operands = { "cell", "cell" }, semantics = [[
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = operand1;]] },
+    { name = "MOVE", operands = { "cell", "cell" }, semantics = [[
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->regs[vm->depth * 16u + (size_t)operand1];]] },
+    { name = "IDIV", operands = { "cell", "cell", "cell" }, semantics = [[
+cell a, b, q, r;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = vm->regs[vm->depth * 16u + (size_t)operand1]; b = vm->regs[vm->depth * 16u + (size_t)operand2];
+if(!b) { vm_fail(-10); return; }
+if(b == -1) q = LuaVM_vw_integer(0u - (uint64_t)a);
+else { q = a / b; r = a % b; if(r && ((r < 0) != (b < 0))) --q; }
+vm->regs[vm->depth * 16u + (size_t)operand0] = q;]] },
+    { name = "NEWTABLE", operands = { "cell" }, semantics = [[
+if(!LuaVM_vw_reg(vm,operand0)) return;
+if(vm->table_top >= 64u) { vm_fail(-3); return; }
+vm->regs[vm->depth * 16u + (size_t)operand0] = (cell)++vm->table_top;]] },
+    { name = "SETTABLE", operands = { "cell", "cell", "cell" }, semantics = [[
+cell table; size_t index;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand2)) return;
+table = vm->regs[vm->depth * 16u + (size_t)operand0];
+if(table <= 0 || (uint64_t)table > vm->table_top || operand1 < 0 || operand1 >= 16) { vm_fail(-4); return; }
+index = ((size_t)table - 1u) * 16u + (size_t)operand1;
+vm->tables[index] = vm->regs[vm->depth * 16u + (size_t)operand2]; vm->present[index] = 1;]] },
+    { name = "GETTABLE", operands = { "cell", "cell", "cell" }, semantics = [[
+cell table; size_t index;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+table = vm->regs[vm->depth * 16u + (size_t)operand1];
+if(table <= 0 || (uint64_t)table > vm->table_top || operand2 < 0 || operand2 >= 16) { vm_fail(-4); return; }
+index = ((size_t)table - 1u) * 16u + (size_t)operand2;
+if(!vm->present[index]) { vm_fail(-4); return; } /* nil is outside this integer profile */
+vm->regs[vm->depth * 16u + (size_t)operand0] = vm->tables[index];]] },
+    { name = "LOADFUNC", operands = { "cell", "label" }, semantics = [[
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->regs[vm->depth * 16u + (size_t)operand0] = operand1;]] },
+    { name = "CALL1", operands = { "cell", "cell", "cell" }, flow = "call", semantics = [[
+cell target, a;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+target = vm->regs[vm->depth * 16u + (size_t)operand1]; a = vm->regs[vm->depth * 16u + (size_t)operand2];
+if(vm_call(target)) return;
+vm->dest[vm->depth++] = (uint64_t)operand0;
+memset(&vm->regs[vm->depth * 16u], 0, 16u * sizeof(int64_t)); vm->regs[vm->depth * 16u] = a;]] },
+    { name = "RETURN1", operands = { "cell" }, flow = "return", semantics = [[
+cell result; size_t dest;
+if(!LuaVM_vw_reg(vm,operand0)) return;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm->regs[vm->depth * 16u + (size_t)operand0];
+--vm->depth; (void)vm_return(); dest = vm->depth * 16u + vm->dest[vm->depth]; vm->regs[dest] = result;]] },
+    { name = "JMP", operands = { "label" }, flow = "jump", semantics = "vm_jump(operand0);" },
+    { name = "TEST", operands = { "cell", "label" }, flow = "branch", semantics = [[
+if(!LuaVM_vw_reg(vm,operand0)) return;
+/* Lua integer zero is truthy, so every value in this integer-only profile is true. */
+vm_jump(operand1);]] },
+    { name = "EQ", operands = { "cell", "cell", "label" }, flow = "branch", semantics = [[
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1)) return;
+if(vm->regs[vm->depth * 16u + (size_t)operand0] == vm->regs[vm->depth * 16u + (size_t)operand1]) vm_jump(operand2);]] },
+    { name = "PRINT", operands = { "cell" }, semantics = [[
+if(!LuaVM_vw_reg(vm,operand0)) return;
+vm->out = vm->regs[vm->depth * 16u + (size_t)operand0];]] },
+    { name = "HALT", flow = "halt", semantics = "vm_halt();" },
+  },
+}
+for _, op in ipairs { { "ADD", "+" }, { "SUB", "-" }, { "MUL", "*" },
+    { "BAND", "&" }, { "BOR", "|" }, { "BXOR", "^" } } do
+  vm:instruction(op[1], { operands = { "cell", "cell", "cell" }, semantics = [[
+uint64_t a, b;
+if(!LuaVM_vw_reg(vm,operand0) || !LuaVM_vw_reg(vm,operand1) || !LuaVM_vw_reg(vm,operand2)) return;
+a = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand1]; b = (uint64_t)vm->regs[vm->depth * 16u + (size_t)operand2];
+vm->regs[vm->depth * 16u + (size_t)operand0] = LuaVM_vw_integer(a ]] .. op[2] .. [[ b);]] })
+end
+return vm

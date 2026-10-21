@@ -59,8 +59,14 @@ return v.vm {
 #define FAM_vw_block(i) ((FAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
 #define FAM_vw_is_int(x) (FAM_vw_tag(x) == (uintptr_t)1u)
 #define FAM_vw_is_block(x) (FAM_vw_tag(x) == (uintptr_t)2u)
-#define FAM_vw_value(x) ((FAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+static FAM_cell FAM_vw_value(FAM_cell x) {
+  return x >= 0 ? x / 8 : -1 - (FAM_cell)(~(uintptr_t)x >> 3);
+}
 #define FAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+static void FAM_vw_save_env(FAM_vm *vm) {
+  memcpy(&vm->saved_env[vm->mark_top * 256u], vm->env, sizeof(vm->env));
+  vm->mark[vm->mark_top++] = vm->env_top;
+}
 ]],
   },
   fields = {
@@ -69,6 +75,7 @@ return v.vm {
     { name = "env_top", type = "u64" },
     { name = "mark", type = "u64", count = 128 },
     { name = "mark_top", type = "u64" },
+    { name = "saved_env", type = "i64", count = 32768 },
     { name = "blk_code", type = "u64", count = 64 },
     { name = "blk_size", type = "u64", count = 64 },
     { name = "blk_fields", type = "i64", count = 512 },
@@ -109,7 +116,7 @@ if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->blk_size[index]) { vm_fail(-4); return; }
 vm_push((cell)vm->blk_fields[index * 8u + (uintmax_t)operand0]);]] },
     { name = "SETFIELD", operands = { "cell" }, stack_effect = "( v block -- )", semantics = [[
-cell value = vm_pop(); cell block = vm_pop(); uintmax_t index;
+cell block = vm_pop(); cell value = vm_pop(); uintmax_t index;
 if(vm->vw_error) return;
 if(!FAM_vw_is_block(block)) { vm_fail(-4); return; }
 index = FAM_vw_index(block);
@@ -121,7 +128,8 @@ vm->blk_fields[index * 8u + (uintmax_t)operand0] = (int64_t)value;]] },
     { name = "BRANCHIF", operands = { "label" }, flow = "branch", stack_effect = "( flag -- )", semantics = [[
 cell flag = vm_pop();
 if(vm->vw_error) return;
-if(flag) vm_jump(operand0);]] },
+if(!FAM_vw_is_int(flag)) { vm_fail(-4); return; }
+if(FAM_vw_value(flag)) vm_jump(operand0);]] },
     { name = "APPLY1", operands = { "label" }, flow = "call", stack_effect = "( a block -- )", semantics = [[
 cell block = vm_pop(); cell a0 = vm_pop(); uintmax_t index, field;
 if(vm->vw_error) return;
@@ -130,7 +138,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] + 1u > 8u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 1u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -144,7 +152,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] > 6u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 2u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -159,7 +167,7 @@ index = FAM_vw_index(block);
 if(index >= vm->blk_top) { vm_fail(-4); return; }
 if(vm->blk_size[index] > 5u || vm->mark_top >= 128u) { vm_fail(-3); return; }
 if(vm->blk_size[index] + 3u > 256u) { vm_fail(-3); return; }
-vm->mark[vm->mark_top++] = vm->env_top;
+FAM_vw_save_env(vm);
 vm->env_top = 0u;
 for(field = 0u; field < vm->blk_size[index]; ++field)
   vm->env[vm->env_top++] = vm->blk_fields[index * 8u + field];
@@ -214,7 +222,10 @@ if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
 vm->acc = (int64_t)result;
-if(vm->mark_top) vm->env_top = vm->mark[--vm->mark_top];
+if(vm->mark_top) {
+  vm->env_top = vm->mark[--vm->mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->mark_top * 256u], sizeof(vm->env));
+}
 (void)vm_return();]] },
     { name = "ADD", stack_effect = "( a b -- c )", semantics = [[
 cell pb = vm_pop(); cell pa = vm_pop();
@@ -230,7 +241,7 @@ vm_push(FAM_vw_int(FAM_vw_value(pa) - FAM_vw_value(pb)));]] },
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!FAM_vw_is_int(pa) || !FAM_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(FAM_vw_int(FAM_vw_value(pa) * FAM_vw_value(pb)));]] },
+vm_push(FAM_vw_int((uintptr_t)FAM_vw_value(pa) * (uintptr_t)FAM_vw_value(pb)));]] },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;

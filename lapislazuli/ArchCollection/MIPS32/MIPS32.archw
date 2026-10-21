@@ -1,0 +1,35 @@
+-- Real 32-bit encodings, not VMWeave opcodes. A small MIPS integer subset.
+-- Reference: .info/binutils/opcodes/mips-opc.c (literal match/mask entries),
+-- .info/binutils/bfd/cpu-mips.c and bfd/archures.c (mips:isa32, machine 32).
+-- Branch operands are byte displacements relative to PC+4. j/jal encode the
+-- low 28 target-address bits, not an absolute address. Delay slots are not run.
+local w = require("archweave")
+local function f(name, shift, bits, signed, scale)
+  return { name=name, shift=shift, bits=bits, signed=signed, scale=scale }
+end
+local function r(name, match)
+  return { name=name, match=match, mask=0xfc0007ff,
+    operands={ f("rd",11,5), f("rs",21,5), f("rt",16,5) } }
+end
+local function i(name, match, signed, scale)
+  return { name=name, match=match, mask=0xfc000000,
+    operands={ f("rt",16,5), f("rs",21,5), f("imm",0,16,signed,scale) } }
+end
+return w.arch {
+  name="MIPS32", arch="mips", machine=32, word_bits=32, address_bits=32, endian="big",
+  source=".info/binutils/opcodes/mips-opc.c; bfd/cpu-mips.c; bfd/archures.c",
+  instructions={
+    r("addu",0x00000021), r("subu",0x00000023),
+    i("addiu",0x24000000,true), i("ori",0x34000000,false),
+    i("lw",0x8c000000,true), i("sw",0xac000000,true),
+    { name="beq", match=0x10000000, mask=0xfc000000,
+      operands={ f("rs",21,5), f("rt",16,5), f("disp",0,16,true,4) } },
+    { name="bne", match=0x14000000, mask=0xfc000000,
+      operands={ f("rs",21,5), f("rt",16,5), f("disp",0,16,true,4) } },
+    { name="lui", match=0x3c000000, mask=0xffe00000, operands={ f("rt",16,5), f("imm",0,16) } },
+    { name="sll", match=0, mask=0xffe0003f, operands={ f("rd",11,5), f("rt",16,5), f("shamt",6,5) } },
+    { name="j", match=0x08000000, mask=0xfc000000, operands={ f("target",0,26,false,4) } },
+    { name="jal", match=0x0c000000, mask=0xfc000000, operands={ f("target",0,26,false,4) } },
+    { name="jr", match=8, mask=0xfc1fffff, operands={ f("rs",21,5) } },
+  },
+}

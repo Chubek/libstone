@@ -43,6 +43,18 @@ return v.vm {
   stack = { cell = "intptr_t", capacity = 512 },
   frame_capacity = 128,
   components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  subsystems = { token = [[
+/* Capture store addresses, not values: SET remains visible through closures. */
+static void CESK_vw_save_env(CESK_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+static void CESK_vw_restore_env(CESK_vm *vm) {
+  if(!vm->env_mark_top) return;
+  vm->env_top = vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
+]] },
   fields = {
     { name = "env", type = "i64", count = 64 },
     { name = "env_top", type = "u64" },
@@ -51,6 +63,8 @@ return v.vm {
     { name = "clo_code", type = "u64", count = 64 },
     { name = "clo_env", type = "u64", count = 64 },
     { name = "clo_top", type = "u64" },
+    { name = "clo_bindings", type = "i64", count = 4096 },
+    { name = "saved_env", type = "i64", count = 8192 },
     { name = "env_mark", type = "u64", count = 128 },
     { name = "env_mark_top", type = "u64" },
     { name = "flag", type = "i64" },
@@ -76,6 +90,7 @@ vm->store[(uintmax_t)address] = (int64_t)value;]] },
 if(vm->clo_top >= 64u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = vm->env_top;
+memcpy(&vm->clo_bindings[vm->clo_top * 64u], vm->env, sizeof(vm->env));
 vm_push((cell)vm->clo_top);
 ++vm->clo_top;]] },
     { name = "APP1", operands = { "label" }, flow = "call", stack_effect = "( v clos -- )", semantics = [[
@@ -86,8 +101,9 @@ if(vm->store_top >= 256u) { vm_fail(-3); return; }
 if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
 address = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)value;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 1u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)address;
 (void)vm_call((cell)vm->clo_code[(uintmax_t)closure]);]] },
@@ -101,8 +117,9 @@ addr0 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)a;
 addr1 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)b;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 2u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)addr1;
 vm->env[vm->env_top++] = (int64_t)addr0;
@@ -119,8 +136,9 @@ addr1 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)b;
 addr2 = (cell)vm->store_top;
 vm->store[vm->store_top++] = (int64_t)c;
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+CESK_vw_save_env(vm);
 vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+memcpy(vm->env, &vm->clo_bindings[(uintmax_t)closure * 64u], sizeof(vm->env));
 if(vm->env_top + 3u > 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = (int64_t)addr2;
 vm->env[vm->env_top++] = (int64_t)addr1;
@@ -133,7 +151,7 @@ result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+CESK_vw_restore_env(vm);
 (void)vm_return();]] },
     { name = "TEST", stack_effect = "( v -- )", semantics = [[
 cell value = vm_pop();
@@ -144,16 +162,16 @@ vm->flag = value ? 1 : 0;]] },
     { name = "JUMP", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
       semantics = "vm_jump(operand0);" },
     { name = "ADD", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));" },
     { name = "SUB", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));" },
     { name = "MUL", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));" },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
-if(!b) { vm_fail(-10); return; }
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push(a / b);]] },
-    { name = "NEG", stack_effect = "( a -- b )", semantics = "vm_push(-vm_pop());" },
+    { name = "NEG", stack_effect = "( a -- b )", semantics = "vm_push((cell)(0u - (uintptr_t)vm_pop()));" },
     { name = "EQ", stack_effect = "( a b -- b )",
       semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
     { name = "NE", stack_effect = "( a b -- b )",

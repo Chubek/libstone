@@ -18,6 +18,7 @@ typedef struct { const char *name; uint32_t opcode; size_t operands, inputs, out
 
 typedef struct { size_t return_address, stack_base; Krivine_cell locals[16]; } Krivine_activation;
 struct Krivine_vm {
+  int64_t clo_bindings[16384];
   uint64_t clo_code[128];
   uint64_t clo_env[128];
   uint64_t clo_top;
@@ -27,6 +28,7 @@ struct Krivine_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[16384];
   int64_t val;
   Krivine_cell vw_stack[512];
   size_t vw_sp, vw_pc, vw_code_size;
@@ -35,7 +37,7 @@ struct Krivine_vm {
   Krivine_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t Krivine_vw_abi(void) { return UINT64_C(0x7200b75efaea1e59); }
+static inline uint64_t Krivine_vw_abi(void) { return UINT64_C(0x262b4a52cde36181); }
 static const Krivine_metadata Krivine_vw_table[] = {
   {"ACCESS", 0u, 1, 0, 1, "next"},
   {"ADD", 1u, 0, 2, 1, "next"},

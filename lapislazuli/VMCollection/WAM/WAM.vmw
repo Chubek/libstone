@@ -1,0 +1,9 @@
+-- Warren Abstract Machine reference/integer/list profile.
+-- Reference: Hassan Ait-Kaci, Warren's Abstract Machine: A Tutorial
+-- Reconstruction (1991). Symbolic tape, 16 X registers, heap, trail and
+-- choice points. CALL/PROCEED use VMWeave frames; no Y environments/functors.
+-- CUT commits all current choices (not a predicate-local ISO Prolog cut).
+-- Terminal logical failure is -11. See logic_machine.lua for shared semantics.
+local here = debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or "."
+local build = dofile(here .. "/../logic_machine.lua")
+return build("WAM", {})

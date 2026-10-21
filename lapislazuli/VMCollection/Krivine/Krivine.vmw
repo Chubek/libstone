@@ -63,14 +63,19 @@ return v.vm {
 #define Krivine_vw_closure(i) ((cell)(((uintptr_t)(i) << 3) | Krivine_vw_tag_closure))
 #define Krivine_vw_is_int(x) (Krivine_vw_tag(x) == Krivine_vw_tag_int)
 #define Krivine_vw_is_closure(x) (Krivine_vw_tag(x) == Krivine_vw_tag_closure)
-#define Krivine_vw_to_int(x) ((cell)(intptr_t)((uintptr_t)(x) >> 3))
+static Krivine_cell Krivine_vw_to_int(Krivine_cell x) {
+  return x >= 0 ? x / 8 : -1 - (Krivine_cell)(~(uintptr_t)x >> 3);
+}
 #define Krivine_vw_to_closure(x) ((uint64_t)((uintptr_t)(x) >> 3))
 static void Krivine_vw_deliver(Krivine_vm *vm);
 ]],
     frame = [[
 /* Deliver the value in `val` to the caller, or stop at the outermost term. */
 static void Krivine_vw_deliver(Krivine_vm *vm) {
-  if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+  if(vm->env_mark_top) {
+    vm->env_top = vm->env_mark[--vm->env_mark_top];
+    memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 128u], sizeof(vm->env));
+  }
   if(vm->vw_frame_count) (void)Krivine_ret(vm);
   else Krivine_vw_halt(vm);
 }
@@ -85,6 +90,8 @@ static void Krivine_vw_deliver(Krivine_vm *vm) {
     { name = "clo_code", type = "u64", count = 128 },
     { name = "clo_env", type = "u64", count = 128 },
     { name = "clo_top", type = "u64" },
+    { name = "clo_bindings", type = "i64", count = 16384 },
+    { name = "saved_env", type = "i64", count = 16384 },
     { name = "flag", type = "i64" },
     { name = "out", type = "i64" },
   },
@@ -95,6 +102,7 @@ static void Krivine_vw_deliver(Krivine_vm *vm) {
 if(vm->clo_top >= 128u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = vm->env_top;
+memcpy(&vm->clo_bindings[vm->clo_top * 128u], vm->env, sizeof(vm->env));
 vm_push(Krivine_vw_closure(vm->clo_top));
 ++vm->clo_top;]] },
     { name = "ACCESS", operands = { "cell" }, stack_effect = "( -- x )", semantics = [[
@@ -115,8 +123,10 @@ if(Krivine_vw_is_closure(value)) {
   uintmax_t index = Krivine_vw_to_closure(value);
   if(index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  memcpy(&vm->saved_env[vm->env_mark_top * 128u], vm->env, sizeof(vm->env));
   vm->env_mark[vm->env_mark_top++] = vm->env_top;
   vm->env_top = vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 128u], sizeof(vm->env));
   (void)vm_call((cell)vm->clo_code[index]);
 } else if(Krivine_vw_is_int(value)) {
   vm->val = (int64_t)value;
@@ -147,7 +157,7 @@ vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) - Krivine_vw_to_int(pb)));]] },
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) * Krivine_vw_to_int(pb)));]] },
+vm_push(Krivine_vw_int((uintptr_t)Krivine_vw_to_int(pa) * (uintptr_t)Krivine_vw_to_int(pb)));]] },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;

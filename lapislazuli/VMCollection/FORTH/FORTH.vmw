@@ -25,8 +25,8 @@
 --     `index+1 <> limit`.  The (rarely used) wrap-around case of a zero-trip
 --     `DO` is not reproduced: this LOOP tests for equality after the
 --     increment, which is the ANS `LOOP` and not the `+LOOP` family.
---   * Division is symmetric, matching C99 `/` and `%`, which is what the
---     standard specifies for `/`, `MOD` and `/MOD` on the default word set.
+--   * Division is symmetric, matching C99 `/` and `%`. ANS permits either
+--     symmetric or floored division; this profile chooses symmetric division.
 --     Division by zero fails the machine with -10 rather than faulting.
 local v = require("vmweave")
 return v.vm {
@@ -62,11 +62,11 @@ vm_push(b); vm_push(c); vm_push(a);]] },
 cell b = vm_pop(); cell a = vm_pop();
 vm_push(b); vm_push(a); vm_push(b);]] },
     { name = "ADD", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));" },
     { name = "SUB", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));" },
     { name = "MUL", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));" },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
@@ -76,7 +76,7 @@ cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));]] },
     { name = "NEG", stack_effect = "( a -- b )",
-      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+      semantics = "cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));" },
     { name = "AND", stack_effect = "( a b -- c )",
       semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));" },
     { name = "OR", stack_effect = "( a b -- c )",
@@ -87,10 +87,10 @@ vm_push((cell)(a % b));]] },
       semantics = "cell a = vm_pop(); vm_push((cell)(~(uintptr_t)a));" },
     { name = "LSHIFT", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
-vm_push((cell)((uintptr_t)a << ((uintptr_t)b & (uintptr_t)63)));]] },
+vm_push((cell)((uintptr_t)a << ((uintptr_t)b % (sizeof(uintptr_t) * CHAR_BIT))));]] },
     { name = "RSHIFT", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
-vm_push((cell)((uintptr_t)a >> ((uintptr_t)b & (uintptr_t)63)));]] },
+vm_push((cell)((uintptr_t)a >> ((uintptr_t)b % (sizeof(uintptr_t) * CHAR_BIT))));]] },
     { name = "EQ", stack_effect = "( a b -- flag )",
       semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? (cell)-1 : (cell)0);" },
     { name = "NE", stack_effect = "( a b -- flag )",
@@ -121,7 +121,7 @@ cell index, limit;
 if(vm->rsp < 2u) { vm_fail(-2); return; }
 index = (cell)vm->rstack[vm->rsp - 1u];
 limit = (cell)vm->rstack[vm->rsp - 2u];
-index = (cell)(index + 1);
+index = (cell)((uintptr_t)index + 1u);
 if(index == limit) vm->rsp -= 2u;
 else { vm->rstack[vm->rsp - 1u] = (int64_t)index; vm_jump(operand0); }]] },
     { name = "I", stack_effect = "( -- n )", semantics = [[

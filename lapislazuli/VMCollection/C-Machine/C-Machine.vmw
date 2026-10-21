@@ -53,6 +53,9 @@
 --     maximum stack depth, which is exactly what an assembler would fold in.
 --   * NP is established lazily by the first `new`: the book's loader puts it at
 --     the top of S, and the generated `init` zeroes the state.
+--   * RETURN (arity zero) and RETURN1..3 consume the organizational cells and
+--     parameters explicitly. Callees must discard locals before returning;
+--     an arbitrary frame collapse cannot have a static value-stack effect.
 --   * The machine has no output word -- the book reads the result from location
 --     1 -- so `print` records one value in `out`.
 --   * Division by zero, and the `INTPTR_MIN / -1` overflow, fail the machine
@@ -64,7 +67,7 @@ local v = require("vmweave")
 local S = "vm->vw_stack"
 local N = "(sizeof(" .. S .. ")/sizeof(" .. S .. "[0]))"
 
-return v.vm {
+local machine = v.vm {
   name = "CMachine",
   execution = "switch",
   stack = { cell = "intptr_t", capacity = 512 },
@@ -110,11 +113,11 @@ if(index < 0 || (uintmax_t)index >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); ret
     { name = "POP", stack_effect = "( v -- )",
       semantics = "(void)vm_pop();" },
     { name = "ADD", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));" },
     { name = "SUB", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));" },
     { name = "MUL", stack_effect = "( a b -- c )",
-      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));" },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
@@ -132,7 +135,7 @@ vm_push((cell)(a % b));]] },
     { name = "NOT", stack_effect = "( a -- b )",
       semantics = "cell a = vm_pop(); vm_push(a ? 0 : 1);" },
     { name = "NEG", stack_effect = "( a -- b )",
-      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+      semantics = "cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));" },
     { name = "EQ", stack_effect = "( a b -- flag )",
       semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
     { name = "NEQ", stack_effect = "( a b -- flag )",
@@ -200,9 +203,10 @@ base = vm->vw_sp - 7u;
 vm->fp = (uint64_t)base;
 vm->ep = (uint64_t)base + 7u;
 (void)vm_call(operand0);]] },
-    { name = "RETURN", flow = "return", stack_effect = "( v -- v )", semantics = [[
+    { name = "RETURN", flow = "return", stack_effect = "( r f e c v -- v )", semantics = [[
 cell result; uint64_t frame, saved_fp, saved_ep;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 5u) { vm_fail(-6); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 frame = vm->fp;
@@ -228,3 +232,17 @@ vm_push((cell)vm->np);]] },
       semantics = "vm_halt();" },
   },
 }
+-- The arity-named returns have exactly the same memory transition as RETURN,
+-- but account for each parameter in VMWeave's static stack-effect contract.
+local body
+for _, word in ipairs(machine.instructions) do
+  if word.name == "RETURN" then body = word.semantics end
+end
+for arity = 1, 3 do
+  local arguments = string.rep("arg ", arity)
+  machine:instruction("RETURN" .. arity, {
+    flow = "return", stack_effect = "( r f e c " .. arguments .. "v -- v )",
+    semantics = (body:gsub("vm%->fp %+ 5u", "vm->fp + " .. (5 + arity) .. "u")),
+  })
+end
+return machine

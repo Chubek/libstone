@@ -56,7 +56,7 @@ static const PCode_metadata PCode_vw_table[] = {
   {"NEQ", 20u, 0, 2, 1, "next"},
   {"NGI", 21u, 0, 1, 1, "next"},
   {"RET", 22u, 0, 0, 0, "return"},
-  {"RETV", 23u, 0, 1, 0, "return"},
+  {"RETV", 23u, 0, 1, 1, "return"},
   {"SBI", 24u, 0, 2, 1, "next"},
   {"STI", 25u, 0, 2, 0, "next"},
   {"STO", 26u, 1, 1, 0, "next"},
@@ -266,30 +266,38 @@ const char *PCode_token(uint32_t opcode) { const PCode_metadata *info=PCode_look
 
 void PCode_ABSI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
-cell a = vm_pop(); vm_push(a < 0 ? (cell)(0 - a) : a);
+#line 100 "VMCollection/regenerate.lua"
+cell a = vm_pop(); vm_push(a < 0 ? (cell)(0u - (uintptr_t)a) : a);
 #line 1 "<VMWeave generated>"
 }
 void PCode_ADI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void PCode_CALL(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
+if(!vm->ltop) vm->ltop = 16u; /* root activation owns locals 0..15 */
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 (void)vm_call(operand0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_CALL1(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 (void)vm_call(operand0);
 #line 1 "<VMWeave generated>"
@@ -297,10 +305,13 @@ vm->locals[vm->lbase + 0u] = (int64_t)a0;
 void PCode_CALL2(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a1 = vm_pop(); cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 vm->locals[vm->lbase + 1u] = (int64_t)a1;
 (void)vm_call(operand0);
@@ -309,10 +320,13 @@ vm->locals[vm->lbase + 1u] = (int64_t)a1;
 void PCode_CALL3(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop();
+if(!vm->ltop) vm->ltop = 16u;
 if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
 vm->mark[vm->mark_top++] = vm->lbase;
 vm->lbase = vm->ltop; vm->ltop += 16u;
+memset(&vm->locals[vm->lbase], 0, 16u * sizeof(int64_t));
 vm->locals[vm->lbase + 0u] = (int64_t)a0;
 vm->locals[vm->lbase + 1u] = (int64_t)a1;
 vm->locals[vm->lbase + 2u] = (int64_t)a2;
@@ -321,6 +335,7 @@ vm->locals[vm->lbase + 2u] = (int64_t)a2;
 }
 void PCode_DVI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a / b));
@@ -328,27 +343,32 @@ vm_push((cell)(a / b));
 }
 void PCode_EQU(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_FJP(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell flag = vm_pop(); if(!flag) vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_GEQ(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_GRT(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_IND(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell addr = vm_pop();
 if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
 vm_push((cell)vm->locals[(uintmax_t)addr]);
@@ -357,12 +377,14 @@ vm_push((cell)vm->locals[(uintmax_t)addr]);
 void PCode_JMP(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_LDA(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
 vm_push((cell)(vm->lbase + (uintmax_t)operand0));
 #line 1 "<VMWeave generated>"
@@ -370,28 +392,33 @@ vm_push((cell)(vm->lbase + (uintmax_t)operand0));
 void PCode_LDC(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_LEQ(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_LOD(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
 vm_push((cell)vm->locals[vm->lbase + (uintmax_t)operand0]);
 #line 1 "<VMWeave generated>"
 }
 void PCode_LSS(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_MODI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));
@@ -399,21 +426,25 @@ vm_push((cell)(a % b));
 }
 void PCode_MPI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void PCode_NEQ(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void PCode_NGI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
-cell a = vm_pop(); vm_push((cell)(0 - a));
+#line 100 "VMCollection/regenerate.lua"
+cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));
 #line 1 "<VMWeave generated>"
 }
 void PCode_RET(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
 (void)vm_return();
@@ -421,6 +452,7 @@ if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
 }
 void PCode_RETV(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
@@ -433,11 +465,13 @@ if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
 }
 void PCode_SBI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void PCode_STI(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell addr = vm_pop(); cell value = vm_pop();
 if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
 vm->locals[(uintmax_t)addr] = (int64_t)value;
@@ -446,6 +480,7 @@ vm->locals[(uintmax_t)addr] = (int64_t)value;
 void PCode_STO(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
 vm->locals[vm->lbase + (uintmax_t)operand0] = (int64_t)value;
@@ -453,11 +488,13 @@ vm->locals[vm->lbase + (uintmax_t)operand0] = (int64_t)value;
 }
 void PCode_STP(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void PCode_WRINT(PCode_vm *vm) {
   typedef PCode_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->out = vm_pop();
 #line 1 "<VMWeave generated>"
 }

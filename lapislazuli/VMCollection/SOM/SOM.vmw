@@ -1,0 +1,8 @@
+-- Simple Object Machine-inspired core. SOM is an intentionally small teaching
+-- VM; this profile uses symbolic selectors/classes rather than SOM source or
+-- bytecode files. Shared object/send semantics live in object_machine.lua.
+-- No superclass lookup, blocks, non-local returns or garbage collector.
+local here = debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or "."
+local build = dofile(here .. "/../object_machine.lua")
+return build("SOM", { PUSH_LOCAL = "PUSH_ARGUMENT", POP_LOCAL = "POP_ARGUMENT",
+  RETURN = "RETURN_LOCAL" })

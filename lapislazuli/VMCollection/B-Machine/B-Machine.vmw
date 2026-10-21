@@ -45,11 +45,18 @@ return v.vm {
   stack = { cell = "intptr_t", capacity = 256 },
   frame_capacity = 128,
   components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  subsystems = { token = [[
+static void BMachine_vw_save_env(BMachine_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+]] },
   fields = {
     { name = "env", type = "i64", count = 64 },
     { name = "env_top", type = "u64" },
     { name = "env_mark", type = "u64", count = 128 },
     { name = "env_mark_top", type = "u64" },
+    { name = "saved_env", type = "i64", count = 8192 },
     { name = "clo_code", type = "u64", count = 64 },
     { name = "clo_arity", type = "u64", count = 64 },
     { name = "clo_base", type = "u64", count = 64 },
@@ -94,7 +101,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -111,7 +118,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -129,7 +136,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -148,7 +155,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -168,7 +175,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -186,7 +193,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -205,7 +212,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -225,7 +232,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 4u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -245,7 +252,10 @@ result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+if(vm->env_mark_top) {
+  vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
 (void)vm_return();]] },
     { name = "BRA", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
       semantics = "vm_jump(operand0);" },
@@ -254,11 +264,11 @@ cell value = vm_pop();
 if(vm->vw_error) return;
 if(!value) vm_jump(operand0);]] },
     { name = "ADD", stack_effect = "( a b -- c )",
-      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa + pb));" },
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa + (uintptr_t)pb));" },
     { name = "SUB", stack_effect = "( a b -- c )",
-      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa - pb));" },
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa - (uintptr_t)pb));" },
     { name = "MUL", stack_effect = "( a b -- c )",
-      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa * pb));" },
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa * (uintptr_t)pb));" },
     { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
 cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
@@ -268,7 +278,7 @@ cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
 vm_push((cell)(pa % pb));]] },
     { name = "NEG", stack_effect = "( a -- b )",
-      semantics = "cell pa = vm_pop(); vm_push((cell)(0 - pa));" },
+      semantics = "cell pa = vm_pop(); vm_push((cell)(0u - (uintptr_t)pa));" },
     { name = "EQ", stack_effect = "( a b -- flag )",
       semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa == pb ? 1 : 0);" },
     { name = "NE", stack_effect = "( a b -- flag )",

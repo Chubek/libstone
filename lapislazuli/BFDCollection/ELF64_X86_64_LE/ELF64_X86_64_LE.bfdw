@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF64_X86_64_LE", target="elf64-x86-64", arch="i386", class=64, endian="little", machine=62,
+  source=".info/binutils/bfd/elf64-x86-64.c; include/elf/common.h (EM_X86_64); include/elf/external.h",
+}

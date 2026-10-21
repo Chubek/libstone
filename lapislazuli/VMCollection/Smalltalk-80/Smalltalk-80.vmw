@@ -1,0 +1,11 @@
+-- Smalltalk-80-inspired object/message profile. See object_machine.lua for
+-- the bounded model and limitations. References: Goldberg and Robson (1983),
+-- Smalltalk-80: The Language and its Implementation, interpreter chapter.
+-- Mnemonics are symbolic; integer class/selector IDs replace image objects.
+local here = debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]") or "."
+local build = dofile(here .. "/../object_machine.lua")
+return build("Smalltalk80", {
+  PUSH_INT = "PUSH_CONSTANT", PUSH_SELF = "PUSH_RECEIVER",
+  PUSH_LOCAL = "PUSH_TEMPORARY", POP_LOCAL = "STORE_TEMPORARY",
+  POP_FIELD = "STORE_FIELD", RETURN = "RETURN_TOP",
+})

@@ -1,0 +1,154 @@
+stk-00 1
+vm "CLR"
+configuration "switch" "int64_t" 256 64 64 "custom" 0
+source "VMCollection/CLR/CLR.vmw" 5
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "args" "i64" 65
+field "depth" "u64" 0
+field "locals" "i64" 1040
+field "out" "i64" 0
+subsystem "token" c{ 112
+static int64_t CLR_vw_i4(uint32_t x) {
+  return x <= INT32_MAX ? (int64_t)x : -1 - (int64_t)(UINT32_MAX - x);
+}
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a + b));
+}c ;
+: "ADD_OVF" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 183
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+cell result = a + b;
+if(result < INT32_MIN || result > INT32_MAX) { vm_fail(-10); return; }
+vm_push(result);
+}c ;
+: "AND" opcode 2 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a & b));
+}c ;
+: "BR" opcode 3 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/CLR/CLR.vmw" 5
+c{ 18
+vm_jump(operand0);
+}c ;
+: "BRFALSE" opcode 4 operands 1 "label" effect "( i -- )" flow "branch" source "VMCollection/CLR/CLR.vmw" 5
+c{ 32
+if(!vm_pop()) vm_jump(operand0);
+}c ;
+: "BRTRUE" opcode 5 operands 1 "label" effect "( i -- )" flow "branch" source "VMCollection/CLR/CLR.vmw" 5
+c{ 31
+if(vm_pop()) vm_jump(operand0);
+}c ;
+: "CALL0" opcode 6 operands 1 "label" effect "( -- )" flow "call" source "VMCollection/CLR/CLR.vmw" 5
+c{ 177
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->args[vm->depth] = 0;
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+}c ;
+: "CALL1" opcode 7 operands 1 "label" effect "( a -- )" flow "call" source "VMCollection/CLR/CLR.vmw" 5
+c{ 217
+cell a = vm_pop();
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->args[vm->depth] = CLR_vw_i4((uint32_t)a);
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+}c ;
+: "CEQ" opcode 8 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/CLR/CLR.vmw" 80
+c{ 57
+cell b = vm_pop(), a = vm_pop(); vm_push(a == b ? 1 : 0);
+}c ;
+: "CGT" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/CLR/CLR.vmw" 80
+c{ 56
+cell b = vm_pop(), a = vm_pop(); vm_push(a > b ? 1 : 0);
+}c ;
+: "CLT" opcode 10 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/CLR/CLR.vmw" 80
+c{ 56
+cell b = vm_pop(), a = vm_pop(); vm_push(a < b ? 1 : 0);
+}c ;
+: "DIV" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 154
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+if(!b || (a == INT32_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push(a / b);
+}c ;
+: "DUP" opcode 12 operands 0 effect "( a -- a a )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "HALT" opcode 13 operands 0 effect "( -- )" flow "halt" source "VMCollection/CLR/CLR.vmw" 5
+c{ 10
+vm_halt();
+}c ;
+: "LDARG" opcode 14 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 86
+if(operand0 != 0 || !vm->depth) { vm_fail(-4); return; }
+vm_push(vm->args[vm->depth]);
+}c ;
+: "LDC_I4" opcode 15 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 39
+vm_push(CLR_vw_i4((uint32_t)operand0));
+}c ;
+: "LDLOC" opcode 16 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 116
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);
+}c ;
+: "MUL" opcode 17 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a * b));
+}c ;
+: "NEG" opcode 18 operands 0 effect "( a -- b )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 44
+vm_push(CLR_vw_i4(0u - (uint32_t)vm_pop()));
+}c ;
+: "OR" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a | b));
+}c ;
+: "POP" opcode 20 operands 0 effect "( a -- )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 15
+(void)vm_pop();
+}c ;
+: "PRINT" opcode 21 operands 0 effect "( i -- )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "REM" opcode 22 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 123
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+if(!b) { vm_fail(-10); return; }
+vm_push(a % b);
+}c ;
+: "RET" opcode 23 operands 0 effect "( i -- i )" flow "return" source "VMCollection/CLR/CLR.vmw" 5
+c{ 143
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);
+}c ;
+: "RET_VOID" opcode 24 operands 0 effect "( -- )" flow "return" source "VMCollection/CLR/CLR.vmw" 5
+c{ 94
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();
+}c ;
+: "STLOC" opcode 25 operands 1 "cell" effect "( i -- )" flow "next" source "VMCollection/CLR/CLR.vmw" 5
+c{ 139
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = CLR_vw_i4((uint32_t)vm_pop());
+}c ;
+: "SUB" opcode 26 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a - b));
+}c ;
+: "XOR" opcode 27 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/CLR/CLR.vmw" 76
+c{ 83
+uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a ^ b));
+}c ;
+end

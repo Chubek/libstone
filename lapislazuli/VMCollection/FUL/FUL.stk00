@@ -1,0 +1,123 @@
+stk-00 1
+vm "FUL"
+configuration "switch" "int64_t" 256 64 64 "custom" 0
+source "VMCollection/FUL/FUL.vmw" 7
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "binding_top" "u64" 0
+field "bindings" "i64" 512
+field "closure_code" "i64" 128
+field "closure_env" "u64" 128
+field "closure_top" "u64" 0
+field "env" "u64" 0
+field "out" "i64" 0
+field "parents" "u64" 512
+field "saved_env" "u64" 64
+subsystem "token" c{ 297
+static int64_t FUL_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t FUL_vw_int(uint64_t n) { return FUL_vw_bits((n << 3) | 1u); }
+static int64_t FUL_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+
+}c
+: "ACCESS" opcode 0 operands 1 "cell" effect "( -- value )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 198
+uint64_t env = vm->env; cell n = operand0;
+if(n < 0) { vm_fail(-4); return; }
+while(n && env) { env = vm->parents[env - 1u]; --n; }
+if(!env) { vm_fail(-4); return; }
+vm_push(vm->bindings[env - 1u]);
+}c ;
+: "ADD" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/FUL/FUL.vmw" 76
+c{ 190
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(FUL_vw_int((uint64_t)FUL_vw_value(a) + (uint64_t)FUL_vw_value(b)));
+}c ;
+: "APPLY" opcode 2 operands 0 effect "( closure arg -- )" flow "call" source "VMCollection/FUL/FUL.vmw" 7
+c{ 462
+cell arg = vm_pop(), closure = vm_pop(); uint64_t i = (uint64_t)closure >> 3; size_t b, depth;
+if(((uint64_t)closure & 7u) != 3u || i >= vm->closure_top) { vm_fail(-4); return; }
+if(vm->binding_top >= 512u || vm->vw_frame_count >= 64u) { vm_fail(-3); return; }
+depth = vm->vw_frame_count; if(vm_call(vm->closure_code[i])) return;
+vm->saved_env[depth] = vm->env;
+b = vm->binding_top++; vm->bindings[b] = arg; vm->parents[b] = vm->closure_env[i]; vm->env = b + 1u;
+}c ;
+: "BIND" opcode 3 operands 0 effect "( value -- )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 157
+size_t i;
+if(vm->binding_top >= 512u) { vm_fail(-3); return; }
+i = vm->binding_top++; vm->bindings[i] = vm_pop(); vm->parents[i] = vm->env; vm->env = i + 1u;
+}c ;
+: "CLOSURE" opcode 4 operands 1 "label" effect "( -- closure )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 179
+size_t i;
+if(vm->closure_top >= 128u) { vm_fail(-3); return; }
+i = vm->closure_top++; vm->closure_code[i] = operand0; vm->closure_env[i] = vm->env;
+vm_push((cell)((i << 3) | 3u));
+}c ;
+: "CONST" opcode 5 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 40
+vm_push(FUL_vw_int((uint64_t)operand0));
+}c ;
+: "DROP" opcode 6 operands 0 effect "( a -- )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 15
+(void)vm_pop();
+}c ;
+: "DUP" opcode 7 operands 0 effect "( a -- a a )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "HALT" opcode 8 operands 0 effect "( -- )" flow "halt" source "VMCollection/FUL/FUL.vmw" 7
+c{ 10
+vm_halt();
+}c ;
+: "JUMP" opcode 9 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/FUL/FUL.vmw" 7
+c{ 18
+vm_jump(operand0);
+}c ;
+: "JZERO" opcode 10 operands 1 "label" effect "( i -- )" flow "branch" source "VMCollection/FUL/FUL.vmw" 7
+c{ 124
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+if(!FUL_vw_value(value)) vm_jump(operand0);
+}c ;
+: "MUL" opcode 11 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/FUL/FUL.vmw" 76
+c{ 190
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(FUL_vw_int((uint64_t)FUL_vw_value(a) * (uint64_t)FUL_vw_value(b)));
+}c ;
+: "PRINT" opcode 12 operands 0 effect "( i -- )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 111
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = FUL_vw_value(value);
+}c ;
+: "RETURN" opcode 13 operands 0 effect "( value -- value )" flow "return" source "VMCollection/FUL/FUL.vmw" 7
+c{ 166
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); vm->env = vm->saved_env[vm->vw_frame_count - 1u];
+(void)vm_return(); vm_push(result);
+}c ;
+: "SUB" opcode 14 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/FUL/FUL.vmw" 76
+c{ 190
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(FUL_vw_int((uint64_t)FUL_vw_value(a) - (uint64_t)FUL_vw_value(b)));
+}c ;
+: "UNBIND" opcode 15 operands 0 effect "( -- )" flow "next" source "VMCollection/FUL/FUL.vmw" 7
+c{ 74
+if(!vm->env) { vm_fail(-2); return; }
+vm->env = vm->parents[vm->env - 1u];
+}c ;
+end

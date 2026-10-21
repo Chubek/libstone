@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF32_PPC_BE", target="elf32-powerpc", arch="powerpc", class=32, endian="big", machine=20,
+  source=".info/binutils/bfd/elf32-ppc.c; include/elf/common.h (EM_PPC); include/elf/external.h",
+}

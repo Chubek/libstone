@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF32_MIPS_LE", target="elf32-littlemips", arch="mips", class=32, endian="little", machine=8,
+  source=".info/binutils/bfd/elf32-mips.c; include/elf/common.h (EM_MIPS); include/elf/external.h",
+}

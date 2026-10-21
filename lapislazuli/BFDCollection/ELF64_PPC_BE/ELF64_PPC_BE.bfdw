@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF64_PPC_BE", target="elf64-powerpc", arch="powerpc", class=64, endian="big", machine=21,
+  source=".info/binutils/bfd/elf64-ppc.c; include/elf/common.h (EM_PPC64); include/elf/external.h",
+}

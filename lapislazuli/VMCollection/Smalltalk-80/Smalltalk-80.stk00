@@ -1,0 +1,154 @@
+stk-00 1
+vm "Smalltalk80"
+configuration "switch" "int64_t" 256 64 64 "custom" 0
+source "VMCollection/object_machine.lua" 7
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "classes" "i64" 64
+field "depth" "u64" 0
+field "locals" "i64" 1040
+field "method_class" "i64" 64
+field "method_code" "i64" 64
+field "method_selector" "i64" 64
+field "method_top" "u64" 0
+field "object_top" "u64" 0
+field "objects" "i64" 1024
+field "out" "i64" 0
+field "self" "i64" 65
+subsystem "token" c{ 552
+static int64_t Smalltalk80_vw_bits(uint64_t x) {
+  return x <= INT64_MAX ? (int64_t)x : -1 - (int64_t)(UINT64_MAX - x);
+}
+static int64_t Smalltalk80_vw_int(uint64_t n) { return Smalltalk80_vw_bits((n << 3) | 1u); }
+static int64_t Smalltalk80_vw_value(int64_t n) {
+  return n >= 0 ? n / 8 : -1 - (int64_t)((~(uint64_t)n) >> 3);
+}
+static int Smalltalk80_vw_object(Smalltalk80_vm *vm, int64_t ref) {
+  uint64_t index = (uint64_t)ref >> 3;
+  if(((uint64_t)ref & 7u) != 2u || index >= vm->object_top) { Smalltalk80_vw_fail(vm,-4); return 0; }
+  return 1;
+}
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 214
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(Smalltalk80_vw_int((uint64_t)Smalltalk80_vw_value(a) + (uint64_t)Smalltalk80_vw_value(b)));
+}c ;
+: "DUP" opcode 1 operands 0 effect "( a -- a a )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "HALT" opcode 2 operands 0 effect "( -- )" flow "halt" source "VMCollection/object_machine.lua" 37
+c{ 10
+vm_halt();
+}c ;
+: "JUMP" opcode 3 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/object_machine.lua" 37
+c{ 18
+vm_jump(operand0);
+}c ;
+: "JUMP_IF_NIL" opcode 4 operands 1 "label" effect "( value -- )" flow "branch" source "VMCollection/object_machine.lua" 37
+c{ 32
+if(!vm_pop()) vm_jump(operand0);
+}c ;
+: "METHOD" opcode 5 operands 3 "cell" "cell" "label" effect "( -- )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 370
+size_t i;
+if(operand0 < 0 || operand1 < 0) { vm_fail(-4); return; }
+for(i = 0; i < vm->method_top; ++i)
+  if(vm->method_class[i] == operand0 && vm->method_selector[i] == operand1) break;
+if(i == vm->method_top) {
+  if(i >= 64u) { vm_fail(-3); return; } ++vm->method_top;
+}
+vm->method_class[i] = operand0; vm->method_selector[i] = operand1; vm->method_code[i] = operand2;
+}c ;
+: "MUL" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 214
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(Smalltalk80_vw_int((uint64_t)Smalltalk80_vw_value(a) * (uint64_t)Smalltalk80_vw_value(b)));
+}c ;
+: "NEW" opcode 7 operands 1 "cell" effect "( -- object )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 183
+size_t i;
+if(operand0 < 0) { vm_fail(-4); return; }
+if(vm->object_top >= 64u) { vm_fail(-3); return; }
+i = vm->object_top++; vm->classes[i] = operand0; vm_push((cell)((i << 3) | 2u));
+}c ;
+: "POP" opcode 8 operands 0 effect "( a -- )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 15
+(void)vm_pop();
+}c ;
+: "PRINT" opcode 9 operands 0 effect "( value -- )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 119
+cell value = vm_pop();
+if(((uint64_t)value & 7u) != 1u) { vm_fail(-4); return; }
+vm->out = Smalltalk80_vw_value(value);
+}c ;
+: "PUSH_CONSTANT" opcode 10 operands 1 "cell" effect "( -- i )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 48
+vm_push(Smalltalk80_vw_int((uint64_t)operand0));
+}c ;
+: "PUSH_FIELD" opcode 11 operands 1 "cell" effect "( -- value )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 197
+cell self = vm->self[vm->depth];
+if(operand0 < 0 || operand0 >= 16 || !Smalltalk80_vw_object(vm,self)) { vm_fail(-4); return; }
+vm_push(vm->objects[((uint64_t)self >> 3) * 16u + (size_t)operand0]);
+}c ;
+: "PUSH_NIL" opcode 12 operands 0 effect "( -- nil )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 11
+vm_push(0);
+}c ;
+: "PUSH_RECEIVER" opcode 13 operands 0 effect "( -- receiver )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 29
+vm_push(vm->self[vm->depth]);
+}c ;
+: "PUSH_TEMPORARY" opcode 14 operands 1 "cell" effect "( -- value )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 116
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);
+}c ;
+: "RETURN_TOP" opcode 15 operands 0 effect "( value -- value )" flow "return" source "VMCollection/object_machine.lua" 37
+c{ 143
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);
+}c ;
+: "SEND" opcode 16 operands 1 "cell" effect "( receiver arg -- )" flow "call" source "VMCollection/object_machine.lua" 37
+c{ 560
+cell arg = vm_pop(), self = vm_pop(), klass; size_t i;
+if(!Smalltalk80_vw_object(vm,self)) return;
+klass = vm->classes[(uint64_t)self >> 3];
+for(i = 0; i < vm->method_top; ++i)
+  if(vm->method_class[i] == klass && vm->method_selector[i] == operand0) break;
+if(i == vm->method_top) { vm_fail(-4); return; } /* message not understood */
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(vm->method_code[i])) return;
+++vm->depth; vm->self[vm->depth] = self;
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));
+vm->locals[vm->depth * 16u] = arg;
+}c ;
+: "STORE_FIELD" opcode 17 operands 1 "cell" effect "( value -- )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 199
+cell self = vm->self[vm->depth];
+if(operand0 < 0 || operand0 >= 16 || !Smalltalk80_vw_object(vm,self)) { vm_fail(-4); return; }
+vm->objects[((uint64_t)self >> 3) * 16u + (size_t)operand0] = vm_pop();
+}c ;
+: "STORE_TEMPORARY" opcode 18 operands 1 "cell" effect "( value -- )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 118
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = vm_pop();
+}c ;
+: "SUB" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/object_machine.lua" 37
+c{ 214
+cell b = vm_pop(), a = vm_pop();
+if(((uint64_t)a & 7u) != 1u || ((uint64_t)b & 7u) != 1u) { vm_fail(-4); return; }
+vm_push(Smalltalk80_vw_int((uint64_t)Smalltalk80_vw_value(a) - (uint64_t)Smalltalk80_vw_value(b)));
+}c ;
+end

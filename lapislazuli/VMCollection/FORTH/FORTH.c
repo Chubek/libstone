@@ -324,33 +324,39 @@ const char *FORTH_token(uint32_t opcode) { const FORTH_metadata *info=FORTH_look
 
 void FORTH_ADD(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_AND(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_BRANCH(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_BYE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void FORTH_CALL(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 (void)vm_call(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_DIV(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a / b));
@@ -358,6 +364,7 @@ vm_push((cell)(a / b));
 }
 void FORTH_DO(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->rsp + 2u > 128u) { vm_fail(-3); return; }
 {
   cell start = vm_pop(); cell limit = vm_pop();
@@ -368,27 +375,32 @@ if(vm->rsp + 2u > 128u) { vm_fail(-3); return; }
 }
 void FORTH_DROP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void FORTH_DUP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell a = vm_pop(); vm_push(a); vm_push(a);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_EQ(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_EXIT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
 void FORTH_FETCH(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell addr = vm_pop();
 if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
 vm_push((cell)vm->vars[(uintmax_t)addr]);
@@ -396,33 +408,39 @@ vm_push((cell)vm->vars[(uintmax_t)addr]);
 }
 void FORTH_GE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_GT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_I(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->rsp < 1u) { vm_fail(-2); return; }
 vm_push((cell)vm->rstack[vm->rsp - 1u]);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_INVERT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell a = vm_pop(); vm_push((cell)(~(uintptr_t)a));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_LE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_LEAVE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->rsp < 2u) { vm_fail(-2); return; }
 vm->rsp -= 2u;
 vm_jump(operand0);
@@ -431,34 +449,39 @@ vm_jump(operand0);
 void FORTH_LIT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_LOOP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell index, limit;
 if(vm->rsp < 2u) { vm_fail(-2); return; }
 index = (cell)vm->rstack[vm->rsp - 1u];
 limit = (cell)vm->rstack[vm->rsp - 2u];
-index = (cell)(index + 1);
+index = (cell)((uintptr_t)index + 1u);
 if(index == limit) vm->rsp -= 2u;
 else { vm->rstack[vm->rsp - 1u] = (int64_t)index; vm_jump(operand0); }
 #line 1 "<VMWeave generated>"
 }
 void FORTH_LSHIFT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
-vm_push((cell)((uintptr_t)a << ((uintptr_t)b & (uintptr_t)63)));
+vm_push((cell)((uintptr_t)a << ((uintptr_t)b % (sizeof(uintptr_t) * CHAR_BIT))));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_LT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_MOD(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));
@@ -466,54 +489,64 @@ vm_push((cell)(a % b));
 }
 void FORTH_MUL(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_NE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_NEG(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
-cell a = vm_pop(); vm_push((cell)(0 - a));
+#line 100 "VMCollection/regenerate.lua"
+cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_NIP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); (void)vm_pop(); vm_push(b);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_OR(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_OVER(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 vm_push(a); vm_push(b); vm_push(a);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_PRINT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->out = vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void FORTH_ROT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell c = vm_pop(); cell b = vm_pop(); cell a = vm_pop();
 vm_push(b); vm_push(c); vm_push(a);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_RSHIFT(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
-vm_push((cell)((uintptr_t)a >> ((uintptr_t)b & (uintptr_t)63)));
+vm_push((cell)((uintptr_t)a >> ((uintptr_t)b % (sizeof(uintptr_t) * CHAR_BIT))));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_STORE(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell addr = vm_pop(); cell value = vm_pop();
 if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
 vm->vars[(uintmax_t)addr] = (int64_t)value;
@@ -521,22 +554,26 @@ vm->vars[(uintmax_t)addr] = (int64_t)value;
 }
 void FORTH_SUB(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_SWAP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(b); vm_push(a);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_TUCK(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 vm_push(b); vm_push(a); vm_push(b);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_UNLOOP(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->rsp < 2u) { vm_fail(-2); return; }
 vm->rsp -= 2u;
 #line 1 "<VMWeave generated>"
@@ -544,23 +581,27 @@ vm->rsp -= 2u;
 void FORTH_VARADDR(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= 64u) { vm_fail(-4); return; }
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_XOR(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));
 #line 1 "<VMWeave generated>"
 }
 void FORTH_ZBRANCH(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell flag = vm_pop(); if(!flag) vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void FORTH_ZEQ(FORTH_vm *vm) {
   typedef FORTH_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell a = vm_pop(); vm_push(a == 0 ? (cell)-1 : (cell)0);
 #line 1 "<VMWeave generated>"
 }

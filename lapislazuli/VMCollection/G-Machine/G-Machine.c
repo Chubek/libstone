@@ -45,7 +45,7 @@ static const GMachine_metadata GMachine_vw_table[] = {
   {"GE", 9u, 0, 2, 1, "next"},
   {"GET", 10u, 0, 0, 1, "next"},
   {"GT", 11u, 0, 2, 1, "next"},
-  {"JFALSE", 12u, 1, 0, 0, "jump"},
+  {"JFALSE", 12u, 1, 0, 0, "branch"},
   {"JMP", 13u, 1, 0, 0, "jump"},
   {"LE", 14u, 0, 2, 1, "next"},
   {"LT", 15u, 0, 2, 1, "next"},
@@ -303,11 +303,12 @@ static GMachine_cell GMachine_vw_node(GMachine_vm *vm, int kind, GMachine_cell a
 static GMachine_cell GMachine_vw_deref(GMachine_vm *vm, GMachine_cell node) {
   uintmax_t guard = 0;
   if(!vm || vm->vw_error) return node;
-  while((uintmax_t)node < GMachine_vw_gnodes
+  while((uintmax_t)node < vm->node_top
         && vm->node_kind[(uintmax_t)node] == GMachine_vw_ind) {
     if(guard++ > GMachine_vw_gnodes) { GMachine_vw_fail(vm,-4); return 0; }
     node = (GMachine_cell)vm->node_a[(uintmax_t)node];
   }
+  if((uintmax_t)node >= vm->node_top) { GMachine_vw_fail(vm,-4); return 0; }
   return node;
 }
 
@@ -331,7 +332,7 @@ static GMachine_cell GMachine_vw_peeks(GMachine_vm *vm, uintmax_t depth) {
 static int GMachine_vw_inspect(GMachine_vm *vm, GMachine_cell node, int *kind, GMachine_cell *field) {
   node = GMachine_vw_deref(vm, node);
   if(vm && vm->vw_error) return -1;
-  if((uintmax_t)node >= GMachine_vw_gnodes) return -1;
+  if((uintmax_t)node >= vm->node_top) return -1;
   *kind = (int)vm->node_kind[(uintmax_t)node];
   *field = (GMachine_cell)vm->node_a[(uintmax_t)node];
   return 0;
@@ -391,29 +392,34 @@ static int GMachine_vw_inspect(GMachine_vm *vm, GMachine_cell node, int *kind, G
 
 void GMachine_ADD(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a + b));
+vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_ALLOC0(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)vm;
 #line 1 "<VMWeave generated>"
 }
 void GMachine_ALLOC1(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_ALLOC2(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_ALLOC3(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
@@ -421,6 +427,7 @@ void GMachine_ALLOC3(GMachine_vm *vm) {
 }
 void GMachine_CONS(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell tail = GMachine_vw_pops(vm);
 cell head = GMachine_vw_pops(vm);
 if(vm->vw_error) return;
@@ -429,6 +436,7 @@ if(vm->vw_error) return;
 }
 void GMachine_DIV(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
@@ -437,6 +445,7 @@ vm_push((cell)(a / b));
 }
 void GMachine_EQ(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a == b ? 1 : 0);
@@ -444,13 +453,19 @@ vm_push(a == b ? 1 : 0);
 }
 void GMachine_EVAL(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell node = GMachine_vw_pops(vm);
 cell redex, spine[64];
 uintmax_t count = 0, i;
 int kind = 0;
 if(vm->vw_error) return;
+node = GMachine_vw_deref(vm, node);
+if(vm->vw_error) return;
 if(GMachine_vw_inspect(vm, node, &kind, &redex)) { vm_fail(-4); return; }
-if(kind != GMachine_vw_ap) { (void)GMachine_vw_pokes(vm, node); return; }
+if(kind != GMachine_vw_ap && kind != GMachine_vw_fun) {
+  if(kind == GMachine_vw_hole) { vm_fail(-4); return; }
+  (void)GMachine_vw_pokes(vm, node); return;
+}
 redex = node;
 for(;;) {
   if(kind != GMachine_vw_ap) break;
@@ -459,7 +474,7 @@ for(;;) {
   count += 1u;
   node = GMachine_vw_deref(vm, (cell)vm->node_a[(uintmax_t)node]);
   if(vm->vw_error) return;
-  if((uintmax_t)node >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+  if((uintmax_t)node >= vm->node_top) { vm_fail(-4); return; }
   kind = (int)vm->node_kind[(uintmax_t)node];
 }
 if(kind != GMachine_vw_fun) { vm_fail(-4); return; }
@@ -473,6 +488,7 @@ vm_jump((cell)vm->node_a[(uintmax_t)node]);
 }
 void GMachine_GE(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a >= b ? 1 : 0);
@@ -480,6 +496,7 @@ vm_push(a >= b ? 1 : 0);
 }
 void GMachine_GET(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell node = GMachine_vw_pops(vm);
 int kind = 0; cell field = 0;
 if(vm->vw_error) return;
@@ -490,6 +507,7 @@ vm_push(field);
 }
 void GMachine_GT(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a > b ? 1 : 0);
@@ -498,6 +516,7 @@ vm_push(a > b ? 1 : 0);
 void GMachine_JFALSE(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell node = GMachine_vw_pops(vm);
 int kind = 0; cell field = 0;
 if(vm->vw_error) return;
@@ -509,11 +528,13 @@ if(!field) vm_jump(operand0);
 void GMachine_JMP(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void GMachine_LE(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a <= b ? 1 : 0);
@@ -521,6 +542,7 @@ vm_push(a <= b ? 1 : 0);
 }
 void GMachine_LT(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a < b ? 1 : 0);
@@ -528,6 +550,7 @@ vm_push(a < b ? 1 : 0);
 }
 void GMachine_MKAP(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell argument = GMachine_vw_pops(vm);
 cell function = GMachine_vw_pops(vm);
 if(vm->vw_error) return;
@@ -536,6 +559,7 @@ if(vm->vw_error) return;
 }
 void GMachine_MKBOOL(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, value ? 1 : 0, 0));
@@ -543,6 +567,7 @@ if(vm->vw_error) return;
 }
 void GMachine_MKINT(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, value, 0));
@@ -550,13 +575,15 @@ if(vm->vw_error) return;
 }
 void GMachine_MUL(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a * b));
+vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_NE(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
 vm_push(a != b ? 1 : 0);
@@ -564,13 +591,15 @@ vm_push(a != b ? 1 : 0);
 }
 void GMachine_NEG(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(0 - a));
+vm_push((cell)(0u - (uintptr_t)a));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_PRINT(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell node = GMachine_vw_pops(vm);
 int kind = 0; cell field = 0;
 if(vm->vw_error) return;
@@ -583,6 +612,7 @@ vm->out = (int64_t)field;
 void GMachine_PUSH(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell node;
 if(operand0 < 0) { vm_fail(-4); return; }
 node = GMachine_vw_peeks(vm, (uintmax_t)operand0);
@@ -593,34 +623,40 @@ if(vm->vw_error) return;
 void GMachine_PUSHBASIC(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void GMachine_PUSHBOOL(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, operand0 ? 1 : 0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_PUSHFUN(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_fun, operand0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_PUSHINT(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, operand0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_PUSHNIL(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 (void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_nil, 0, 0));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_RET0(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->dump_top) { vm_fail(-2); return; }
 vm->dump_top -= 1u;
 vm_jump((cell)vm->dump_addr[vm->dump_top]);
@@ -628,6 +664,7 @@ vm_jump((cell)vm->dump_addr[vm->dump_top]);
 }
 void GMachine_RET1(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->dump_top) { vm_fail(-2); return; }
 (void)GMachine_vw_pops(vm);
 if(vm->vw_error) return;
@@ -637,6 +674,7 @@ vm_jump((cell)vm->dump_addr[vm->dump_top]);
 }
 void GMachine_RET2(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->dump_top) { vm_fail(-2); return; }
 (void)GMachine_vw_pops(vm);
 (void)GMachine_vw_pops(vm);
@@ -647,6 +685,7 @@ vm_jump((cell)vm->dump_addr[vm->dump_top]);
 }
 void GMachine_RET3(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(!vm->dump_top) { vm_fail(-2); return; }
 (void)GMachine_vw_pops(vm);
 (void)GMachine_vw_pops(vm);
@@ -658,6 +697,7 @@ vm_jump((cell)vm->dump_addr[vm->dump_top]);
 }
 void GMachine_SLIDE0(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell top;
 if(vm->sp < 1u) { vm_fail(-2); return; }
 top = (cell)vm->s[vm->sp - 1u];
@@ -667,6 +707,7 @@ vm->s[vm->sp++] = (int64_t)top;
 }
 void GMachine_SLIDE1(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell top;
 if(vm->sp < 2u) { vm_fail(-2); return; }
 top = (cell)vm->s[vm->sp - 1u];
@@ -676,6 +717,7 @@ vm->s[vm->sp++] = (int64_t)top;
 }
 void GMachine_SLIDE2(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell top;
 if(vm->sp < 3u) { vm_fail(-2); return; }
 top = (cell)vm->s[vm->sp - 1u];
@@ -685,6 +727,7 @@ vm->s[vm->sp++] = (int64_t)top;
 }
 void GMachine_SLIDE3(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell top;
 if(vm->sp < 4u) { vm_fail(-2); return; }
 top = (cell)vm->s[vm->sp - 1u];
@@ -694,22 +737,25 @@ vm->s[vm->sp++] = (int64_t)top;
 }
 void GMachine_STOP(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void GMachine_SUB(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
 if(vm->vw_error) return;
-vm_push((cell)(a - b));
+vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void GMachine_UPDATE1(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell target;
 if(vm->sp < 2u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 2u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;
@@ -718,10 +764,11 @@ vm->sp -= 1u;
 }
 void GMachine_UPDATE2(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell target;
 if(vm->sp < 3u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 3u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;
@@ -730,10 +777,11 @@ vm->sp -= 1u;
 }
 void GMachine_UPDATE3(GMachine_vm *vm) {
   typedef GMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell target;
 if(vm->sp < 4u) { vm_fail(-2); return; }
 target = (cell)vm->s[vm->sp - 4u];
-if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+if((uintmax_t)target >= vm->node_top) { vm_fail(-4); return; }
 vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
 vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
 vm->node_b[(uintmax_t)target] = 0;

@@ -27,6 +27,7 @@ typedef struct { size_t return_address, stack_base; SECD_cell locals[16]; } SECD
 typedef struct SECD_object { struct SECD_object *next; uint32_t kind; size_t size; unsigned char data[]; } SECD_object;
 struct SECD_vm {
   int64_t acc;
+  int64_t clo_bindings[4096];
   uint64_t clo_code[64];
   uint64_t clo_env[64];
   uint64_t clo_top;
@@ -36,6 +37,7 @@ struct SECD_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[8192];
   SECD_cell vw_stack[256];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -45,7 +47,7 @@ struct SECD_vm {
   SECD_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t SECD_vw_abi(void) { return UINT64_C(0xdb28002910e0b3d2); }
+static inline uint64_t SECD_vw_abi(void) { return UINT64_C(0xb525bc16828e9411); }
 static const SECD_metadata SECD_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"AP1", 1u, 1, 2, 0, "call"},
@@ -252,6 +254,15 @@ int SECD_object_clear(SECD_vm *);
 const char *SECD_token(uint32_t opcode) { const SECD_metadata *info=SECD_lookup(opcode); return info ? info->name : NULL; }
 
 /* User subsystem extension. */
+static void SECD_vw_save_env(SECD_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+static void SECD_vw_restore_env(SECD_vm *vm) {
+  if(!vm->env_mark_top) return;
+  vm->env_top = vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
 static int SECD_vw_pair(SECD_vm *vm, SECD_cell value, SECD_object **out) {
   SECD_object *object;
   if(!vm) { if(out) *out = NULL; return 0; }
@@ -307,20 +318,23 @@ static int SECD_vw_pair(SECD_vm *vm, SECD_cell value, SECD_object **out) {
 
 void SECD_ADD(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void SECD_AP1(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)a0;
   vm->acc = 0;
   (void)vm_call((cell)vm->clo_code[index]);
@@ -330,14 +344,16 @@ if(vm->vw_error) return;
 void SECD_AP2(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)a0;
   vm->env[vm->env_top++] = (int64_t)a1;
   (void)vm_call((cell)vm->clo_code[index]);
@@ -347,14 +363,16 @@ if(vm->vw_error) return;
 void SECD_AP3(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)a0;
   vm->env[vm->env_top++] = (int64_t)a1;
   vm->env[vm->env_top++] = (int64_t)a2;
@@ -364,6 +382,7 @@ if(vm->vw_error) return;
 }
 void SECD_ATOM(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 vm_push(SECD_vw_pair(vm, value, NULL) ? 0 : 1);
@@ -371,6 +390,7 @@ vm_push(SECD_vw_pair(vm, value, NULL) ? 0 : 1);
 }
 void SECD_CAR(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop(); cell out = 0; SECD_object *pair;
 if(vm->vw_error) return;
 if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
@@ -380,6 +400,7 @@ vm_push(out);
 }
 void SECD_CDR(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop(); cell out = 0; SECD_object *pair;
 if(vm->vw_error) return;
 if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
@@ -389,6 +410,7 @@ vm_push(out);
 }
 void SECD_CONS(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); SECD_object *pair;
 if(vm->vw_error) return;
 pair = SECD_object_new(vm, 1u, 2u * sizeof(cell));
@@ -400,47 +422,54 @@ vm_push((cell)(intptr_t)pair);
 }
 void SECD_DIV(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop();
-if(!b) { vm_fail(-10); return; }
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push(a / b);
 #line 1 "<VMWeave generated>"
 }
 void SECD_DUM(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->env_top >= 64u) { vm_fail(-3); return; }
 vm->env[vm->env_top++] = 0;
 #line 1 "<VMWeave generated>"
 }
 void SECD_EQ(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_GEQ(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_GRT(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_JOIN(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+SECD_vw_restore_env(vm);
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
 void SECD_LD(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 #line 1 "<VMWeave generated>"
@@ -448,55 +477,65 @@ vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 void SECD_LDC(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_LDF(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->clo_top >= 64u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = vm->env_top;
+memcpy(&vm->clo_bindings[vm->clo_top * 64u], vm->env, sizeof(vm->env));
 vm_push((cell)vm->clo_top);
 ++vm->clo_top;
 #line 1 "<VMWeave generated>"
 }
 void SECD_LEQ(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_LSS(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_MUL(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void SECD_NIL(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void SECD_PRINT(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->out = vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void SECD_RAP1(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)closure;
   vm->env[vm->env_top++] = (int64_t)a0;
   (void)vm_call((cell)vm->clo_code[index]);
@@ -506,14 +545,16 @@ if(vm->vw_error) return;
 void SECD_RAP2(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)closure;
   vm->env[vm->env_top++] = (int64_t)a0;
   vm->env[vm->env_top++] = (int64_t)a1;
@@ -524,14 +565,16 @@ if(vm->vw_error) return;
 void SECD_RAP3(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
   uintmax_t index = (uintmax_t)closure;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 4u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  SECD_vw_save_env(vm);
   vm->env_top = (uintmax_t)vm->clo_env[index];
+  memcpy(vm->env, &vm->clo_bindings[index * 64u], sizeof(vm->env));
   vm->env[vm->env_top++] = (int64_t)closure;
   vm->env[vm->env_top++] = (int64_t)a0;
   vm->env[vm->env_top++] = (int64_t)a1;
@@ -542,13 +585,14 @@ if(vm->vw_error) return;
 }
 void SECD_RTN(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+SECD_vw_restore_env(vm);
 (void)vm_return();
 #line 1 "<VMWeave generated>"
 }
@@ -556,23 +600,27 @@ void SECD_SEL(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
-vm->env_mark[vm->env_mark_top++] = vm->env_top;
+SECD_vw_save_env(vm);
 (void)vm_call(vm->flag ? operand0 : operand1);
 #line 1 "<VMWeave generated>"
 }
 void SECD_STOP(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void SECD_SUB(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);
+#line 100 "VMCollection/regenerate.lua"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void SECD_TEST(SECD_vm *vm) {
   typedef SECD_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm->flag = vm_pop();
 #line 1 "<VMWeave generated>"
 }

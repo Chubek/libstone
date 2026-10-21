@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF32_I386_LE", target="elf32-i386", arch="i386", class=32, endian="little", machine=3,
+  source=".info/binutils/bfd/elf32-i386.c; include/elf/common.h (EM_386); include/elf/external.h",
+}

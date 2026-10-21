@@ -65,13 +65,16 @@ static const CMachine_metadata CMachine_vw_table[] = {
   {"OR", 31u, 0, 2, 1, "next"},
   {"POP", 32u, 0, 1, 0, "next"},
   {"PRINT", 33u, 0, 1, 0, "next"},
-  {"RETURN", 34u, 0, 1, 1, "return"},
-  {"STOP", 35u, 0, 0, 0, "halt"},
-  {"STORE", 36u, 0, 2, 0, "next"},
-  {"STOREA", 37u, 1, 1, 0, "next"},
-  {"STORER", 38u, 1, 1, 0, "next"},
-  {"SUB", 39u, 0, 2, 1, "next"},
-  {"XOR", 40u, 0, 2, 1, "next"},
+  {"RETURN", 34u, 0, 5, 1, "return"},
+  {"RETURN1", 35u, 0, 6, 1, "return"},
+  {"RETURN2", 36u, 0, 7, 1, "return"},
+  {"RETURN3", 37u, 0, 8, 1, "return"},
+  {"STOP", 38u, 0, 0, 0, "halt"},
+  {"STORE", 39u, 0, 2, 0, "next"},
+  {"STOREA", 40u, 1, 1, 0, "next"},
+  {"STORER", 41u, 1, 1, 0, "next"},
+  {"SUB", 42u, 0, 2, 1, "next"},
+  {"XOR", 43u, 0, 2, 1, "next"},
   {NULL, 0u, 0, 0, 0, NULL}
 };
 static inline const CMachine_metadata *CMachine_lookup(uint32_t opcode) {
@@ -144,6 +147,9 @@ static inline int CMachine_vw_label_operand(uint32_t opcode, size_t index) {
   case 38u: return 0;
   case 39u: return 0;
   case 40u: return 0;
+  case 41u: return 0;
+  case 42u: return 0;
+  case 43u: return 0;
   default: return 0;
   }
 }
@@ -208,6 +214,9 @@ void CMachine_OR(CMachine_vm *vm);
 void CMachine_POP(CMachine_vm *vm);
 void CMachine_PRINT(CMachine_vm *vm);
 void CMachine_RETURN(CMachine_vm *vm);
+void CMachine_RETURN1(CMachine_vm *vm);
+void CMachine_RETURN2(CMachine_vm *vm);
+void CMachine_RETURN3(CMachine_vm *vm);
 void CMachine_STOP(CMachine_vm *vm);
 void CMachine_STORE(CMachine_vm *vm);
 void CMachine_STOREA(CMachine_vm *vm);
@@ -249,12 +258,15 @@ void CMachine_XOR(CMachine_vm *vm);
 #define CMachine_opcode_POP 32u
 #define CMachine_opcode_PRINT 33u
 #define CMachine_opcode_RETURN 34u
-#define CMachine_opcode_STOP 35u
-#define CMachine_opcode_STORE 36u
-#define CMachine_opcode_STOREA 37u
-#define CMachine_opcode_STORER 38u
-#define CMachine_opcode_SUB 39u
-#define CMachine_opcode_XOR 40u
+#define CMachine_opcode_RETURN1 35u
+#define CMachine_opcode_RETURN2 36u
+#define CMachine_opcode_RETURN3 37u
+#define CMachine_opcode_STOP 38u
+#define CMachine_opcode_STORE 39u
+#define CMachine_opcode_STOREA 40u
+#define CMachine_opcode_STORER 41u
+#define CMachine_opcode_SUB 42u
+#define CMachine_opcode_XOR 43u
 int CMachine_step(CMachine_vm *, uint32_t);
 int CMachine_run(CMachine_vm *, const CMachine_tape *, size_t);
 const char *CMachine_token(uint32_t);
@@ -306,12 +318,15 @@ const char *CMachine_token(uint32_t opcode) { const CMachine_metadata *info=CMac
 #define CMachine_opcode_POP 32u
 #define CMachine_opcode_PRINT 33u
 #define CMachine_opcode_RETURN 34u
-#define CMachine_opcode_STOP 35u
-#define CMachine_opcode_STORE 36u
-#define CMachine_opcode_STOREA 37u
-#define CMachine_opcode_STORER 38u
-#define CMachine_opcode_SUB 39u
-#define CMachine_opcode_XOR 40u
+#define CMachine_opcode_RETURN1 35u
+#define CMachine_opcode_RETURN2 36u
+#define CMachine_opcode_RETURN3 37u
+#define CMachine_opcode_STOP 38u
+#define CMachine_opcode_STORE 39u
+#define CMachine_opcode_STOREA 40u
+#define CMachine_opcode_STORER 41u
+#define CMachine_opcode_SUB 42u
+#define CMachine_opcode_XOR 43u
 /* .insncode */
 #define vm_pop() CMachine_vw_pop(vm)
 #define vm_push(x) CMachine_vw_push(vm,(x))
@@ -324,42 +339,50 @@ const char *CMachine_token(uint32_t opcode) { const CMachine_metadata *info=CMac
 
 void CMachine_ADD(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a + (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_ALLOC0(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 (void)vm;
 #line 1 "<VMWeave generated>"
 }
 void CMachine_ALLOC1(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_ALLOC2(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(0); vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_ALLOC3(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(0); vm_push(0); vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_ALLOC4(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(0); vm_push(0); vm_push(0); vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_AND(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_CALL0(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 size_t base;
 if(vm->vw_sp < 4u) { vm_fail(-2); return; }
 base = vm->vw_sp - 4u;
@@ -373,6 +396,7 @@ vm->ep = (uint64_t)base + 4u;
 void CMachine_CALL1(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 size_t base;
 if(vm->vw_sp < 5u) { vm_fail(-2); return; }
 base = vm->vw_sp - 5u;
@@ -386,6 +410,7 @@ vm->ep = (uint64_t)base + 5u;
 void CMachine_CALL2(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 size_t base;
 if(vm->vw_sp < 6u) { vm_fail(-2); return; }
 base = vm->vw_sp - 6u;
@@ -399,6 +424,7 @@ vm->ep = (uint64_t)base + 6u;
 void CMachine_CALL3(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 size_t base;
 if(vm->vw_sp < 7u) { vm_fail(-2); return; }
 base = vm->vw_sp - 7u;
@@ -411,6 +437,7 @@ vm->ep = (uint64_t)base + 7u;
 }
 void CMachine_DIV(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a / b));
@@ -419,6 +446,7 @@ vm_push((cell)(a / b));
 void CMachine_ENTER(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 uintmax_t size = (uintmax_t)operand0;
 if(operand0 < 0 || vm->fp > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0])) || size > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0])) - vm->fp) { vm_fail(-4); return; }
 vm->ep = vm->fp + size;
@@ -426,28 +454,33 @@ vm->ep = vm->fp + size;
 }
 void CMachine_EQ(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_GEQ(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_GR(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_JMP(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_jump(operand0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_JMPZ(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!value) vm_jump(operand0);
@@ -455,16 +488,19 @@ if(!value) vm_jump(operand0);
 }
 void CMachine_LE(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_LEQ(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_LOAD(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell address = vm_pop();
 if(vm->vw_error) return;
 if(address < 0 || (uintmax_t)address >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
@@ -474,6 +510,7 @@ vm_push(vm->vw_stack[(uintmax_t)address]);
 void CMachine_LOADA(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
@@ -481,12 +518,14 @@ vm_push(operand0);
 void CMachine_LOADC(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(operand0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_LOADR(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 intmax_t index = (intmax_t)vm->fp + (intmax_t)operand0;
 if(index < 0 || (uintmax_t)index >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
 vm_push(vm->vw_stack[(uintmax_t)index]);
@@ -494,11 +533,13 @@ vm_push(vm->vw_stack[(uintmax_t)index]);
 }
 void CMachine_MARK(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_push(0); vm_push(0); vm_push(0); vm_push(0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_MOD(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop();
 if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
 vm_push((cell)(a % b));
@@ -506,21 +547,25 @@ vm_push((cell)(a % b));
 }
 void CMachine_MUL(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a * (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_NEG(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell a = vm_pop(); vm_push((cell)(0 - a));
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
+cell a = vm_pop(); vm_push((cell)(0u - (uintptr_t)a));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_NEQ(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_NEW(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell size = vm_pop();
 if(vm->vw_error) return;
 if(size < 0) { vm_fail(-4); return; }
@@ -532,28 +577,91 @@ vm_push((cell)vm->np);
 }
 void CMachine_NOT(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell a = vm_pop(); vm_push(a ? 0 : 1);
 #line 1 "<VMWeave generated>"
 }
 void CMachine_OR(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_POP(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 (void)vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void CMachine_PRINT(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm->out = (int64_t)vm_pop();
 #line 1 "<VMWeave generated>"
 }
 void CMachine_RETURN(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell result; uint64_t frame, saved_fp, saved_ep;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 5u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+#line 1 "<VMWeave generated>"
+}
+void CMachine_RETURN1(CMachine_vm *vm) {
+  typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 243 "VMCollection/C-Machine/C-Machine.vmw"
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 6u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+#line 1 "<VMWeave generated>"
+}
+void CMachine_RETURN2(CMachine_vm *vm) {
+  typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 243 "VMCollection/C-Machine/C-Machine.vmw"
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 7u) { vm_fail(-6); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
+saved_fp = (uint64_t)vm->vw_stack[frame + 1u];
+saved_ep = (uint64_t)vm->vw_stack[frame + 2u];
+vm->vw_stack[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();
+#line 1 "<VMWeave generated>"
+}
+void CMachine_RETURN3(CMachine_vm *vm) {
+  typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 243 "VMCollection/C-Machine/C-Machine.vmw"
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->vw_sp != vm->fp + 8u) { vm_fail(-6); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 frame = vm->fp;
@@ -569,11 +677,13 @@ vm->ep = saved_ep;
 }
 void CMachine_STOP(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void CMachine_STORE(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell address = vm_pop(); cell value = vm_pop();
 if(vm->vw_error) return;
 if(address < 0 || (uintmax_t)address >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
@@ -583,6 +693,7 @@ vm->vw_stack[(uintmax_t)address] = value;
 void CMachine_STOREA(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)(sizeof(vm->vw_stack)/sizeof(vm->vw_stack[0]))) { vm_fail(-4); return; }
@@ -592,6 +703,7 @@ vm->vw_stack[(uintmax_t)operand0] = value;
 void CMachine_STORER(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell value = vm_pop(); intmax_t index;
 if(vm->vw_error) return;
 index = (intmax_t)vm->fp + (intmax_t)operand0;
@@ -601,11 +713,13 @@ vm->vw_stack[(uintmax_t)index] = value;
 }
 void CMachine_SUB(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
-cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)((uintptr_t)a - (uintptr_t)b));
 #line 1 "<VMWeave generated>"
 }
 void CMachine_XOR(CMachine_vm *vm) {
   typedef CMachine_cell cell; (void)sizeof(cell); (void)vm;
+#line 70 "VMCollection/C-Machine/C-Machine.vmw"
 cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));
 #line 1 "<VMWeave generated>"
 }
@@ -659,12 +773,15 @@ int CMachine_step(CMachine_vm *vm, uint32_t opcode) {
   case 32u: CMachine_POP(vm); break;
   case 33u: CMachine_PRINT(vm); break;
   case 34u: CMachine_RETURN(vm); break;
-  case 35u: CMachine_STOP(vm); break;
-  case 36u: CMachine_STORE(vm); break;
-  case 37u: CMachine_STOREA(vm); break;
-  case 38u: CMachine_STORER(vm); break;
-  case 39u: CMachine_SUB(vm); break;
-  case 40u: CMachine_XOR(vm); break;
+  case 35u: CMachine_RETURN1(vm); break;
+  case 36u: CMachine_RETURN2(vm); break;
+  case 37u: CMachine_RETURN3(vm); break;
+  case 38u: CMachine_STOP(vm); break;
+  case 39u: CMachine_STORE(vm); break;
+  case 40u: CMachine_STOREA(vm); break;
+  case 41u: CMachine_STORER(vm); break;
+  case 42u: CMachine_SUB(vm); break;
+  case 43u: CMachine_XOR(vm); break;
   default: return -1;
   }
   return CMachine_vw_finish(vm,base,info);
@@ -740,12 +857,15 @@ static const CMachine_metadata *CMachine_vw_mnemonic(const char *name) {
   if(strcmp(name,"POP")==0) return CMachine_lookup(32u);
   if(strcmp(name,"PRINT")==0) return CMachine_lookup(33u);
   if(strcmp(name,"RETURN")==0) return CMachine_lookup(34u);
-  if(strcmp(name,"STOP")==0) return CMachine_lookup(35u);
-  if(strcmp(name,"STORE")==0) return CMachine_lookup(36u);
-  if(strcmp(name,"STOREA")==0) return CMachine_lookup(37u);
-  if(strcmp(name,"STORER")==0) return CMachine_lookup(38u);
-  if(strcmp(name,"SUB")==0) return CMachine_lookup(39u);
-  if(strcmp(name,"XOR")==0) return CMachine_lookup(40u);
+  if(strcmp(name,"RETURN1")==0) return CMachine_lookup(35u);
+  if(strcmp(name,"RETURN2")==0) return CMachine_lookup(36u);
+  if(strcmp(name,"RETURN3")==0) return CMachine_lookup(37u);
+  if(strcmp(name,"STOP")==0) return CMachine_lookup(38u);
+  if(strcmp(name,"STORE")==0) return CMachine_lookup(39u);
+  if(strcmp(name,"STOREA")==0) return CMachine_lookup(40u);
+  if(strcmp(name,"STORER")==0) return CMachine_lookup(41u);
+  if(strcmp(name,"SUB")==0) return CMachine_lookup(42u);
+  if(strcmp(name,"XOR")==0) return CMachine_lookup(43u);
   return NULL;
 }
 /* Caller-owned output, transactional validation, labels are instruction indices. */

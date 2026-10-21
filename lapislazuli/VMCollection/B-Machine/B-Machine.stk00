@@ -1,7 +1,7 @@
 stk-00 1
 vm "BMachine"
 configuration "switch" "intptr_t" 256 128 64 "custom" 0
-source "=[C]" 0
+source "VMCollection/regenerate.lua" 100
 component "token"
 component "opcode"
 component "insncode"
@@ -21,18 +21,26 @@ field "env_top" "u64" 0
 field "out" "i64" 0
 field "pool" "i64" 512
 field "pool_top" "u64" 0
-: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 65
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa + pb));
+field "saved_env" "i64" 8192
+subsystem "token" c{ 180
+static void BMachine_vw_save_env(BMachine_vm *vm) {
+  memcpy(&vm->saved_env[vm->env_mark_top * 64u], vm->env, sizeof(vm->env));
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+}
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/regenerate.lua" 100
+c{ 87
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa + (uintptr_t)pb));
 }c ;
-: "ALLOC" opcode 1 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+: "ALLOC" opcode 1 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 183
 uintmax_t index;
 if(operand0 < 0 || vm->env_top + (uintmax_t)operand0 > 64u) { vm_fail(-3); return; }
 for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0;
 }c ;
-: "APP0" opcode 2 operands 1 "label" effect "( closure -- )" flow "call" source "=[C]" 0
-c{ 576
+: "APP0" opcode 2 operands 1 "label" effect "( closure -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 554
 cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -40,7 +48,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -50,8 +58,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "APP1" opcode 3 operands 1 "label" effect "( closure a -- )" flow "call" source "=[C]" 0
-c{ 641
+: "APP1" opcode 3 operands 1 "label" effect "( closure a -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 619
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -59,7 +67,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -70,8 +78,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "APP2" opcode 4 operands 1 "label" effect "( closure a b -- )" flow "call" source "=[C]" 0
-c{ 701
+: "APP2" opcode 4 operands 1 "label" effect "( closure a b -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 679
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -79,7 +87,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -91,8 +99,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "APP3" opcode 5 operands 1 "label" effect "( closure a b c -- )" flow "call" source "=[C]" 0
-c{ 761
+: "APP3" opcode 5 operands 1 "label" effect "( closure a b c -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 739
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -100,7 +108,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -113,52 +121,52 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "BRA" opcode 6 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+: "BRA" opcode 6 operands 1 "label" effect "( -- )" flow "jump" source "VMCollection/regenerate.lua" 100
 c{ 18
 vm_jump(operand0);
 }c ;
-: "BRF" opcode 7 operands 1 "label" effect "( v -- )" flow "branch" source "=[C]" 0
+: "BRF" opcode 7 operands 1 "label" effect "( v -- )" flow "branch" source "VMCollection/regenerate.lua" 100
 c{ 77
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!value) vm_jump(operand0);
 }c ;
-: "DIV" opcode 8 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "DIV" opcode 8 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 139
 cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
 vm_push((cell)(pa / pb));
 }c ;
-: "EQ" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "EQ" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 66
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa == pb ? 1 : 0);
 }c ;
-: "GE" opcode 10 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "GE" opcode 10 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 66
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa >= pb ? 1 : 0);
 }c ;
-: "GT" opcode 11 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "GT" opcode 11 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 65
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa > pb ? 1 : 0);
 }c ;
-: "LE" opcode 12 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "LE" opcode 12 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 66
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa <= pb ? 1 : 0);
 }c ;
-: "LOAD" opcode 13 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+: "LOAD" opcode 13 operands 1 "cell" effect "( -- v )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 143
 if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
 vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
 }c ;
-: "LOADC" opcode 14 operands 1 "cell" effect "( -- n )" flow "next" source "=[C]" 0
+: "LOADC" opcode 14 operands 1 "cell" effect "( -- n )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 18
 vm_push(operand0);
 }c ;
-: "LT" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "LT" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 65
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa < pb ? 1 : 0);
 }c ;
-: "MKCLOS" opcode 16 operands 3 "label" "cell" "cell" effect "( -- closure )" flow "next" source "=[C]" 0
+: "MKCLOS" opcode 16 operands 3 "label" "cell" "cell" effect "( -- closure )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 636
 uintmax_t index, field;
 if(operand1 < 0 || operand2 < 0) { vm_fail(-4); return; }
@@ -174,30 +182,30 @@ for(field = 0u; field < (uintmax_t)operand2; ++field)
   vm->pool[vm->pool_top++] = vm->env[vm->env_top - (uintmax_t)operand2 + field];
 vm_push((cell)index);
 }c ;
-: "MOD" opcode 17 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+: "MOD" opcode 17 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 139
 cell pb = vm_pop(); cell pa = vm_pop();
 if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
 vm_push((cell)(pa % pb));
 }c ;
-: "MUL" opcode 18 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 65
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa * pb));
+: "MUL" opcode 18 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/regenerate.lua" 100
+c{ 87
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa * (uintptr_t)pb));
 }c ;
-: "NE" opcode 19 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+: "NE" opcode 19 operands 0 effect "( a b -- flag )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 66
 cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa != pb ? 1 : 0);
 }c ;
-: "NEG" opcode 20 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
-c{ 44
-cell pa = vm_pop(); vm_push((cell)(0 - pa));
+: "NEG" opcode 20 operands 0 effect "( a -- b )" flow "next" source "VMCollection/regenerate.lua" 100
+c{ 56
+cell pa = vm_pop(); vm_push((cell)(0u - (uintptr_t)pa));
 }c ;
-: "PRINT" opcode 21 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+: "PRINT" opcode 21 operands 0 effect "( v -- )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 28
 vm->out = (int64_t)vm_pop();
 }c ;
-: "RAP0" opcode 22 operands 1 "label" effect "( closure -- )" flow "call" source "=[C]" 0
-c{ 626
+: "RAP0" opcode 22 operands 1 "label" effect "( closure -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 604
 cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -205,7 +213,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -216,8 +224,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "RAP1" opcode 23 operands 1 "label" effect "( closure a -- )" flow "call" source "=[C]" 0
-c{ 686
+: "RAP1" opcode 23 operands 1 "label" effect "( closure a -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 664
 cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -225,7 +233,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -237,8 +245,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "RAP2" opcode 24 operands 1 "label" effect "( closure a b -- )" flow "call" source "=[C]" 0
-c{ 746
+: "RAP2" opcode 24 operands 1 "label" effect "( closure a b -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 724
 cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -246,7 +254,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -259,8 +267,8 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "RAP3" opcode 25 operands 1 "label" effect "( closure a b c -- )" flow "call" source "=[C]" 0
-c{ 806
+: "RAP3" opcode 25 operands 1 "label" effect "( closure a b c -- )" flow "call" source "VMCollection/regenerate.lua" 100
+c{ 784
 cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
 if(vm->vw_error) return;
 {
@@ -268,7 +276,7 @@ if(vm->vw_error) return;
   if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
   if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
   if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 4u > 64u) { vm_fail(-3); return; }
-  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  BMachine_vw_save_env(vm);
   vm->env_top = 0u;
   {
     uintmax_t field;
@@ -282,28 +290,31 @@ if(vm->vw_error) return;
   (void)vm_call((cell)vm->clo_code[index]);
 }
 }c ;
-: "RET" opcode 26 operands 0 effect "( v -- v )" flow "return" source "=[C]" 0
-c{ 284
+: "RET" opcode 26 operands 0 effect "( v -- v )" flow "return" source "VMCollection/regenerate.lua" 100
+c{ 366
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
 if(vm->vw_error) return;
 vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
 vm_push(result);
-if(vm->env_mark_top) vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+if(vm->env_mark_top) {
+  vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+  memcpy(vm->env, &vm->saved_env[vm->env_mark_top * 64u], sizeof(vm->env));
+}
 (void)vm_return();
 }c ;
-: "SLIDE" opcode 27 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+: "SLIDE" opcode 27 operands 1 "cell" effect "( -- )" flow "next" source "VMCollection/regenerate.lua" 100
 c{ 114
 if(operand0 < 0 || (uintmax_t)operand0 > vm->env_top) { vm_fail(-4); return; }
 vm->env_top -= (uintmax_t)operand0;
 }c ;
-: "STOP" opcode 28 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+: "STOP" opcode 28 operands 0 effect "( -- )" flow "halt" source "VMCollection/regenerate.lua" 100
 c{ 10
 vm_halt();
 }c ;
-: "SUB" opcode 29 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
-c{ 65
-cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa - pb));
+: "SUB" opcode 29 operands 0 effect "( a b -- c )" flow "next" source "VMCollection/regenerate.lua" 100
+c{ 87
+cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)((uintptr_t)pa - (uintptr_t)pb));
 }c ;
 end

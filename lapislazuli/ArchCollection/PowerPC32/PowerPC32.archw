@@ -1,0 +1,31 @@
+-- Selected classic PowerPC forms, transcribed from ppc-opc.c and its OP/B/XO
+-- macros. No record/overflow forms, absolute branches, aliases or extensions.
+-- Branch disp is a signed byte offset relative to the instruction's PC.
+local w = require("archweave")
+local function f(name, shift, bits, signed, scale)
+  return { name=name, shift=shift, bits=bits, signed=signed, scale=scale }
+end
+local function d(name, op, first, second, signed)
+  return { name=name, match=op << 26, mask=0xfc000000,
+    operands={ f(first,21,5), f(second,16,5), f("imm",0,16,signed) } }
+end
+local function x(name, xo, logical)
+  return { name=name, match=(31 << 26) | (xo << 1), mask=0xfc0007ff,
+    operands=logical and { f("ra",16,5), f("rs",21,5), f("rb",11,5) }
+      or { f("rt",21,5), f("ra",16,5), f("rb",11,5) } }
+end
+return w.arch {
+  name="PowerPC32", arch="powerpc", machine=32, word_bits=32, address_bits=32, endian="big",
+  source=".info/binutils/opcodes/ppc-opc.c; bfd/cpu-powerpc.c; bfd/archures.c",
+  instructions={
+    d("addi",14,"rt","ra",true), d("addis",15,"rt","ra",true),
+    -- ori syntax orders RA before RS, unlike D-form loads/arithmetic.
+    { name="ori", match=0x60000000, mask=0xfc000000,
+      operands={ f("ra",16,5), f("rs",21,5), f("imm",0,16) } },
+    d("lwz",32,"rt","ra",true), d("stw",36,"rs","ra",true),
+    x("add",266), x("subf",40), x("or",444,true),
+    { name="b", match=0x48000000, mask=0xfc000003, operands={ f("disp",2,24,true,4) } },
+    { name="bl", match=0x48000001, mask=0xfc000003, operands={ f("disp",2,24,true,4) } },
+    { name="blr", match=0x4e800020, mask=0xffffffff, operands={} },
+  },
+}

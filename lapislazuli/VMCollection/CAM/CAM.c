@@ -197,7 +197,9 @@ const char *CAM_token(uint32_t opcode) { const CAM_metadata *info=CAM_lookup(opc
 #define CAM_vw_is_int(x) (CAM_vw_tag(x) == (uintptr_t)1u)
 #define CAM_vw_is_pair(x) (CAM_vw_tag(x) == (uintptr_t)2u)
 #define CAM_vw_is_closure(x) (CAM_vw_tag(x) == (uintptr_t)3u)
-#define CAM_vw_value(x) ((CAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+static CAM_cell CAM_vw_value(CAM_cell x) {
+  return x >= 0 ? x / 8 : -1 - (CAM_cell)(~(uintptr_t)x >> 3);
+}
 #define CAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
 
 /* Build the pair (car, cdr) and return its tagged reference, or fail. */
@@ -213,9 +215,11 @@ static CAM_cell CAM_vw_cons(CAM_vm *vm, CAM_cell car, CAM_cell cdr) {
 
 /* Read one component of a pair; the caller has already checked the tag. */
 static CAM_cell CAM_vw_car(CAM_vm *vm, CAM_cell value) {
+  if(CAM_vw_index(value) >= vm->pair_top) { CAM_vw_fail(vm,-4); return 0; }
   return (CAM_cell)vm->pair_a[CAM_vw_index(value)];
 }
 static CAM_cell CAM_vw_cdr(CAM_vm *vm, CAM_cell value) {
+  if(CAM_vw_index(value) >= vm->pair_top) { CAM_vw_fail(vm,-4); return 0; }
   return (CAM_cell)vm->pair_b[CAM_vw_index(value)];
 }
 
@@ -253,6 +257,7 @@ static CAM_cell CAM_vw_cdr(CAM_vm *vm, CAM_cell value) {
 void CAM_ACCESS(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 cell value = (cell)vm->env;
 uintmax_t step;
 if(operand0 < 0) { vm_fail(-4); return; }
@@ -266,6 +271,7 @@ vm_push(CAM_vw_car(vm, value));
 }
 void CAM_ADD(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -274,6 +280,7 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) + CAM_vw_value(pb)));
 }
 void CAM_APPLY(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell closure = vm_pop(); cell argument = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_closure(closure)) { vm_fail(-4); return; }
@@ -294,12 +301,14 @@ void CAM_BRANCH(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
   cell operand1 = vm_operand(1); (void)operand1;
+#line 100 "VMCollection/regenerate.lua"
 vm_jump(vm->flag ? operand0 : operand1);
 #line 1 "<VMWeave generated>"
 }
 void CAM_CLOSURE(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 if(vm->clo_top >= 128u) { vm_fail(-3); return; }
 vm->clo_code[vm->clo_top] = (uint64_t)operand0;
 vm->clo_env[vm->clo_top] = (uint64_t)vm->env;
@@ -309,6 +318,7 @@ vm_push(CAM_vw_closure(vm->clo_top));
 }
 void CAM_CONS(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell cdr = vm_pop(); cell car = vm_pop(); cell pair;
 if(vm->vw_error) return;
 pair = CAM_vw_cons(vm, car, cdr);
@@ -318,6 +328,7 @@ vm_push(pair);
 }
 void CAM_DIV(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -327,6 +338,7 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) / CAM_vw_value(pb)));
 }
 void CAM_EQ(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -335,6 +347,7 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) == CAM_vw_value(pb) ? 1 : 0));
 }
 void CAM_FST(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pair = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
@@ -343,6 +356,7 @@ vm_push(CAM_vw_car(vm, pair));
 }
 void CAM_LT(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -351,14 +365,16 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) < CAM_vw_value(pb) ? 1 : 0));
 }
 void CAM_MUL(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
-vm_push(CAM_vw_int(CAM_vw_value(pa) * CAM_vw_value(pb)));
+vm_push(CAM_vw_int((uintptr_t)CAM_vw_value(pa) * (uintptr_t)CAM_vw_value(pb)));
 #line 1 "<VMWeave generated>"
 }
 void CAM_NEG(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa)) { vm_fail(-4); return; }
@@ -367,6 +383,7 @@ vm_push(CAM_vw_int(-CAM_vw_value(pa)));
 }
 void CAM_PRINT(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }
@@ -376,11 +393,13 @@ vm->out = CAM_vw_value(value);
 void CAM_QUOTE(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
   cell operand0 = vm_operand(0); (void)operand0;
+#line 100 "VMCollection/regenerate.lua"
 vm_push(CAM_vw_int(operand0));
 #line 1 "<VMWeave generated>"
 }
 void CAM_RET(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell result;
 if(!vm->vw_frame_count) { vm_fail(-2); return; }
 result = vm_pop();
@@ -393,6 +412,7 @@ if(vm->env_mark_top) vm->env = vm->env_mark[--vm->env_mark_top];
 }
 void CAM_SND(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pair = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
@@ -401,11 +421,13 @@ vm_push(CAM_vw_cdr(vm, pair));
 }
 void CAM_STOP(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 vm_halt();
 #line 1 "<VMWeave generated>"
 }
 void CAM_SUB(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell pb = vm_pop(); cell pa = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
@@ -414,6 +436,7 @@ vm_push(CAM_vw_int(CAM_vw_value(pa) - CAM_vw_value(pb)));
 }
 void CAM_TEST(CAM_vm *vm) {
   typedef CAM_cell cell; (void)sizeof(cell); (void)vm;
+#line 100 "VMCollection/regenerate.lua"
 cell value = vm_pop();
 if(vm->vw_error) return;
 if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }

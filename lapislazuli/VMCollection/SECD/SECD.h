@@ -27,6 +27,7 @@ typedef struct { size_t return_address, stack_base; SECD_cell locals[16]; } SECD
 typedef struct SECD_object { struct SECD_object *next; uint32_t kind; size_t size; unsigned char data[]; } SECD_object;
 struct SECD_vm {
   int64_t acc;
+  int64_t clo_bindings[4096];
   uint64_t clo_code[64];
   uint64_t clo_env[64];
   uint64_t clo_top;
@@ -36,6 +37,7 @@ struct SECD_vm {
   uint64_t env_top;
   int64_t flag;
   int64_t out;
+  int64_t saved_env[8192];
   SECD_cell vw_stack[256];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -45,7 +47,7 @@ struct SECD_vm {
   SECD_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t SECD_vw_abi(void) { return UINT64_C(0xdb28002910e0b3d2); }
+static inline uint64_t SECD_vw_abi(void) { return UINT64_C(0xb525bc16828e9411); }
 static const SECD_metadata SECD_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"AP1", 1u, 1, 2, 0, "call"},

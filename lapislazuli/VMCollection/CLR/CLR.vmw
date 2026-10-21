@@ -1,0 +1,83 @@
+-- ECMA-335 CIL integer profile. Symbolic instructions, not a PE/CLI loader.
+-- i4 values occupy one cell; 16 locals, static calls with zero or one argument.
+-- No managed heap, metadata, exceptions, floating point or verification yet.
+local v = require("vmweave")
+local vm = v.vm {
+  name = "CLR", execution = "switch", stack = { cell = "int64_t", capacity = 256 },
+  frame_capacity = 64,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = { { name = "locals", type = "i64", count = 1040 },
+    { name = "args", type = "i64", count = 65 },
+    { name = "depth", type = "u64" }, { name = "out", type = "i64" } },
+  subsystems = { token = [[
+static int64_t CLR_vw_i4(uint32_t x) {
+  return x <= INT32_MAX ? (int64_t)x : -1 - (int64_t)(UINT32_MAX - x);
+}
+]] },
+  instructions = {
+    { name = "LDC_I4", operands = { "cell" }, stack_effect = "( -- i )",
+      semantics = "vm_push(CLR_vw_i4((uint32_t)operand0));" },
+    { name = "LDLOC", operands = { "cell" }, stack_effect = "( -- i )", semantics = [[
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm_push(vm->locals[vm->depth * 16u + (size_t)operand0]);]] },
+    { name = "STLOC", operands = { "cell" }, stack_effect = "( i -- )", semantics = [[
+if(operand0 < 0 || operand0 >= 16) { vm_fail(-4); return; }
+vm->locals[vm->depth * 16u + (size_t)operand0] = CLR_vw_i4((uint32_t)vm_pop());]] },
+    { name = "LDARG", operands = { "cell" }, stack_effect = "( -- i )", semantics = [[
+if(operand0 != 0 || !vm->depth) { vm_fail(-4); return; }
+vm_push(vm->args[vm->depth]);]] },
+    { name = "DUP", stack_effect = "( a -- a a )",
+      semantics = "cell a = vm_pop(); vm_push(a); vm_push(a);" },
+    { name = "POP", stack_effect = "( a -- )", semantics = "(void)vm_pop();" },
+    { name = "NEG", stack_effect = "( a -- b )",
+      semantics = "vm_push(CLR_vw_i4(0u - (uint32_t)vm_pop()));" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+if(!b || (a == INT32_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push(a / b);]] },
+    { name = "REM", stack_effect = "( a b -- c )", semantics = [[
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+if(!b) { vm_fail(-10); return; }
+vm_push(a % b);]] },
+    { name = "ADD_OVF", stack_effect = "( a b -- c )", semantics = [[
+cell b = CLR_vw_i4((uint32_t)vm_pop()), a = CLR_vw_i4((uint32_t)vm_pop());
+cell result = a + b;
+if(result < INT32_MIN || result > INT32_MAX) { vm_fail(-10); return; }
+vm_push(result);]] },
+    { name = "BR", operands = { "label" }, flow = "jump", semantics = "vm_jump(operand0);" },
+    { name = "BRTRUE", operands = { "label" }, flow = "branch", stack_effect = "( i -- )",
+      semantics = "if(vm_pop()) vm_jump(operand0);" },
+    { name = "BRFALSE", operands = { "label" }, flow = "branch", stack_effect = "( i -- )",
+      semantics = "if(!vm_pop()) vm_jump(operand0);" },
+    { name = "CALL0", operands = { "label" }, flow = "call", semantics = [[
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->args[vm->depth] = 0;
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));]] },
+    { name = "CALL1", operands = { "label" }, flow = "call", stack_effect = "( a -- )", semantics = [[
+cell a = vm_pop();
+if(vm->depth >= 64u) { vm_fail(-3); return; }
+if(vm_call(operand0)) return;
+++vm->depth; vm->args[vm->depth] = CLR_vw_i4((uint32_t)a);
+memset(&vm->locals[vm->depth * 16u], 0, 16u * sizeof(int64_t));]] },
+    { name = "RET", flow = "return", stack_effect = "( i -- i )", semantics = [[
+cell result;
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop(); --vm->depth; (void)vm_return(); vm_push(result);]] },
+    { name = "RET_VOID", flow = "return", semantics = [[
+if(!vm->depth || !vm->vw_frame_count) { vm_fail(-2); return; }
+--vm->depth; (void)vm_return();]] },
+    { name = "PRINT", stack_effect = "( i -- )", semantics = "vm->out = vm_pop();" },
+    { name = "HALT", flow = "halt", semantics = "vm_halt();" },
+  },
+}
+for _, op in ipairs { { "ADD", "+" }, { "SUB", "-" }, { "MUL", "*" },
+    { "AND", "&" }, { "OR", "|" }, { "XOR", "^" } } do
+  vm:instruction(op[1], { stack_effect = "( a b -- c )", semantics =
+    "uint32_t b = (uint32_t)vm_pop(), a = (uint32_t)vm_pop(); vm_push(CLR_vw_i4(a " .. op[2] .. " b));" })
+end
+for _, op in ipairs { { "CEQ", "==" }, { "CLT", "<" }, { "CGT", ">" } } do
+  vm:instruction(op[1], { stack_effect = "( a b -- flag )", semantics =
+    "cell b = vm_pop(), a = vm_pop(); vm_push(a " .. op[2] .. " b ? 1 : 0);" })
+end
+return vm

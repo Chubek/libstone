@@ -42,27 +42,29 @@ struct CMCM_vm {
 static inline uint64_t CMCM_vw_abi(void) { return UINT64_C(0xc69fd8a8e79e9c02); }
 static const CMCM_metadata CMCM_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
-  {"APPLY", 1u, 1, 2, 0, "call"},
-  {"COND", 2u, 2, 1, 0, "branch"},
-  {"DIV", 3u, 0, 2, 1, "next"},
-  {"EQ", 4u, 0, 2, 1, "next"},
-  {"GE", 5u, 0, 2, 1, "next"},
-  {"GT", 6u, 0, 2, 1, "next"},
-  {"GVAL", 7u, 0, 0, 1, "next"},
-  {"JF", 8u, 1, 0, 0, "jump"},
-  {"LAM", 9u, 2, 0, 0, "call"},
-  {"LE", 10u, 0, 2, 1, "next"},
-  {"LT", 11u, 0, 2, 1, "next"},
-  {"MKINT", 12u, 1, 0, 1, "next"},
-  {"MKVAL", 13u, 0, 1, 0, "next"},
-  {"MPAIR", 14u, 1, 1, 1, "next"},
-  {"MUL", 15u, 0, 2, 1, "next"},
-  {"NEG", 16u, 0, 1, 1, "next"},
-  {"PRINT", 17u, 0, 1, 0, "next"},
-  {"RET", 18u, 0, 0, 0, "return"},
-  {"STOP", 19u, 0, 0, 0, "halt"},
-  {"SUB", 20u, 0, 2, 1, "next"},
-  {"VAR", 21u, 1, 0, 1, "next"},
+  {"APPLY", 1u, 1, 0, 0, "call"},
+  {"CLOSURE", 2u, 2, 0, 0, "next"},
+  {"COND", 3u, 2, 1, 0, "branch"},
+  {"DIV", 4u, 0, 2, 1, "next"},
+  {"EQ", 5u, 0, 2, 1, "next"},
+  {"GE", 6u, 0, 2, 1, "next"},
+  {"GT", 7u, 0, 2, 1, "next"},
+  {"GVAL", 8u, 0, 0, 1, "next"},
+  {"JF", 9u, 1, 0, 0, "jump"},
+  {"LAM", 10u, 2, 0, 0, "call"},
+  {"LE", 11u, 0, 2, 1, "next"},
+  {"LT", 12u, 0, 2, 1, "next"},
+  {"MKINT", 13u, 1, 0, 1, "next"},
+  {"MKVAL", 14u, 0, 1, 0, "next"},
+  {"MPAIR", 15u, 1, 0, 0, "next"},
+  {"MUL", 16u, 0, 2, 1, "next"},
+  {"NEG", 17u, 0, 1, 1, "next"},
+  {"PRINT", 18u, 0, 1, 0, "next"},
+  {"PROJ", 19u, 1, 0, 0, "next"},
+  {"RET", 20u, 0, 0, 0, "return"},
+  {"STOP", 21u, 0, 0, 0, "halt"},
+  {"SUB", 22u, 0, 2, 1, "next"},
+  {"VAR", 23u, 1, 0, 0, "next"},
   {NULL, 0u, 0, 0, 0, NULL}
 };
 static inline const CMCM_metadata *CMCM_lookup(uint32_t opcode) {
@@ -96,15 +98,15 @@ static inline int CMCM_vw_label_operand(uint32_t opcode, size_t index) {
   (void)index; switch(opcode) {
   case 0u: return 0;
   case 1u: return 0 || index==0;
-  case 2u: return 0 || index==0 || index==1;
-  case 3u: return 0;
+  case 2u: return 0 || index==0;
+  case 3u: return 0 || index==0 || index==1;
   case 4u: return 0;
   case 5u: return 0;
   case 6u: return 0;
   case 7u: return 0;
-  case 8u: return 0 || index==0;
+  case 8u: return 0;
   case 9u: return 0 || index==0;
-  case 10u: return 0;
+  case 10u: return 0 || index==0;
   case 11u: return 0;
   case 12u: return 0;
   case 13u: return 0;
@@ -116,6 +118,8 @@ static inline int CMCM_vw_label_operand(uint32_t opcode, size_t index) {
   case 19u: return 0;
   case 20u: return 0;
   case 21u: return 0;
+  case 22u: return 0;
+  case 23u: return 0;
   default: return 0;
   }
 }
@@ -147,6 +151,7 @@ static inline int CMCM_vw_finish(CMCM_vm *vm, size_t base, const CMCM_metadata *
 static inline void CMCM_init(CMCM_vm *vm) { if(vm) memset(vm, 0, sizeof(*vm)); }
 void CMCM_ADD(CMCM_vm *vm);
 void CMCM_APPLY(CMCM_vm *vm);
+void CMCM_CLOSURE(CMCM_vm *vm);
 void CMCM_COND(CMCM_vm *vm);
 void CMCM_DIV(CMCM_vm *vm);
 void CMCM_EQ(CMCM_vm *vm);
@@ -163,32 +168,35 @@ void CMCM_MPAIR(CMCM_vm *vm);
 void CMCM_MUL(CMCM_vm *vm);
 void CMCM_NEG(CMCM_vm *vm);
 void CMCM_PRINT(CMCM_vm *vm);
+void CMCM_PROJ(CMCM_vm *vm);
 void CMCM_RET(CMCM_vm *vm);
 void CMCM_STOP(CMCM_vm *vm);
 void CMCM_SUB(CMCM_vm *vm);
 void CMCM_VAR(CMCM_vm *vm);
 #define CMCM_opcode_ADD 0u
 #define CMCM_opcode_APPLY 1u
-#define CMCM_opcode_COND 2u
-#define CMCM_opcode_DIV 3u
-#define CMCM_opcode_EQ 4u
-#define CMCM_opcode_GE 5u
-#define CMCM_opcode_GT 6u
-#define CMCM_opcode_GVAL 7u
-#define CMCM_opcode_JF 8u
-#define CMCM_opcode_LAM 9u
-#define CMCM_opcode_LE 10u
-#define CMCM_opcode_LT 11u
-#define CMCM_opcode_MKINT 12u
-#define CMCM_opcode_MKVAL 13u
-#define CMCM_opcode_MPAIR 14u
-#define CMCM_opcode_MUL 15u
-#define CMCM_opcode_NEG 16u
-#define CMCM_opcode_PRINT 17u
-#define CMCM_opcode_RET 18u
-#define CMCM_opcode_STOP 19u
-#define CMCM_opcode_SUB 20u
-#define CMCM_opcode_VAR 21u
+#define CMCM_opcode_CLOSURE 2u
+#define CMCM_opcode_COND 3u
+#define CMCM_opcode_DIV 4u
+#define CMCM_opcode_EQ 5u
+#define CMCM_opcode_GE 6u
+#define CMCM_opcode_GT 7u
+#define CMCM_opcode_GVAL 8u
+#define CMCM_opcode_JF 9u
+#define CMCM_opcode_LAM 10u
+#define CMCM_opcode_LE 11u
+#define CMCM_opcode_LT 12u
+#define CMCM_opcode_MKINT 13u
+#define CMCM_opcode_MKVAL 14u
+#define CMCM_opcode_MPAIR 15u
+#define CMCM_opcode_MUL 16u
+#define CMCM_opcode_NEG 17u
+#define CMCM_opcode_PRINT 18u
+#define CMCM_opcode_PROJ 19u
+#define CMCM_opcode_RET 20u
+#define CMCM_opcode_STOP 21u
+#define CMCM_opcode_SUB 22u
+#define CMCM_opcode_VAR 23u
 int CMCM_step(CMCM_vm *, uint32_t);
 int CMCM_run(CMCM_vm *, const CMCM_tape *, size_t);
 const char *CMCM_token(uint32_t);

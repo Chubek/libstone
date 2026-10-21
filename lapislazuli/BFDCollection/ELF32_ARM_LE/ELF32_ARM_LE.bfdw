@@ -1,0 +1,4 @@
+return require("bfdweave").elf {
+  name="ELF32_ARM_LE", target="elf32-littlearm", arch="arm", class=32, endian="little", machine=40,
+  source=".info/binutils/bfd/elf32-arm.c; include/elf/common.h (EM_ARM); include/elf/external.h",
+}

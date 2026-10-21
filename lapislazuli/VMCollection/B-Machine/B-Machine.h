@@ -30,6 +30,7 @@ struct BMachine_vm {
   int64_t out;
   int64_t pool[512];
   uint64_t pool_top;
+  int64_t saved_env[8192];
   BMachine_cell vw_stack[256];
   size_t vw_sp, vw_pc, vw_code_size;
   int vw_error, vw_halted;
@@ -37,7 +38,7 @@ struct BMachine_vm {
   BMachine_activation vw_frames[128];
   size_t vw_frame_count;
 };
-static inline uint64_t BMachine_vw_abi(void) { return UINT64_C(0x64e8ffb7a3702cdc); }
+static inline uint64_t BMachine_vw_abi(void) { return UINT64_C(0xd6b7d1dbfa9e9476); }
 static const BMachine_metadata BMachine_vw_table[] = {
   {"ADD", 0u, 0, 2, 1, "next"},
   {"ALLOC", 1u, 1, 0, 0, "next"},
