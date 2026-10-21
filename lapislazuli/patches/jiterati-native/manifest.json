@@ -1,0 +1,27 @@
+{
+  "archive_sha256": "e143add03e330e3cd1a1032660b2f811e76cb1726b641503fc7efd07084c6059",
+  "destination": "third_party/jiterati",
+  "files": {
+    "CMakeLists.txt": "f0ca9785d05ceec70deab43157fb5c3b3f0c0bf41ec5325e97a120f930191b45",
+    "IR/Peephole.cpp": "b75e17398998b168829359ea2af4bf3b0eb58decd57dcab857d238b898d62881",
+    "LICENSE": "b6b3e1c6797e1952a82ab917ed111bcb5f1e51e36bd1eeb1ca8f35780dcaf972",
+    "Passlib/PassSupport.hpp": "d934e12c8e72c4669cca0db22fa13f021ade2efa4928da9f1675cbdcb7eccd0e",
+    "README.md": "486691d38b7fe837f6648ee354040219dbf50e1a9ce4da4bed5ac7fe26df030e",
+    "docs/manual/16-cli.md": "48530c84673a5090e82f6ed9ff63fa3670334f1c1da6cd4487be0b21ff7d1377",
+    "docs/native-hardening.md": "00b03079e6bc127a4831dde13b80b9e2c92ea7e81423ece0bea9db9194c3061c",
+    "include/Jiterati-Asm.hpp": "3169c2ab807ff4dd3250eb30bec3f5542f93a0483a9572c7da231cf37ec609dd",
+    "include/Jiterati-Bytecode.hpp": "26eedc23342fded3a798c1f1d6400640fec4f5bfb914c0f1f234cd6622d2d831",
+    "include/Jiterati-Native.hpp": "e1f91e0270bf79e7ac74f27e01d63431b8c23d7b1f360fcb7dd95e4b0f9b5a84",
+    "include/Jiterati.hpp": "876854eaad33d54c176e86a3a0a0fb2b2b32a7807b4ef9a5f724df95c5c796d2",
+    "src/Bytecode.cpp": "b92eea42f206bd55a73808423397d93c547991b5a1f85276fa7e78be54c95532",
+    "src/Elf.hpp": "8fe76eabe8951a9fd668cbf193291e73279368531fe05e0dc3bbd5dd7a71d016",
+    "src/Jiterati-CLI.cpp": "03588dea23f729fd55e418ed6d98fb588ce0f45a1ff31470e39f83deb1411beb",
+    "src/Native.cpp": "5ef570c5995506244e7723cde4cd94179ebdffc05fc3a046f8b2fde378bd7928",
+    "src/TemporaryDirectory.hpp": "dd4fdf4b60ab6f028e0fa4ee14689ae3473897cf96b9d4a8bd8237ffae729b80",
+    "tests/test_binary_hardening.cpp": "1470985fa5f54e177815de87fd5b9a76e1e050c4836f49d12434db5ca1dd7bac",
+    "tests/test_cli_native.py": "9f408e5ca391b0b7bf516912431a55fb004e8152c50c896a96ee2cc5fab3985a",
+    "tests/test_tac_folding.cpp": "5c2eb07b49ed3ec668b33f9e7383310e8bb26568afa3bf73672c293712234eaf"
+  },
+  "format": "source-overlay-v1",
+  "reference": "lapislazuli/.info/binutils (20111121)"
+}
