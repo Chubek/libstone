@@ -263,6 +263,33 @@ def test_elf(lib, name):
             "Q" if target.bits == 64 else "I", 5, -3)  # PT_LOAD filesz > memsz
     changed(layout["shoff"] + layout["sh"] + (24 if target.bits == 64 else 16),
             "Q" if target.bits == 64 else "I", (1 << target.bits) - 1, -2)
+    changed(62 if target.bits == 64 else 50, "H", 4, -3)  # bad shstrndx
+    changed(layout["shoff"] + 2 * layout["sh"] + 4, "I", 1, -3)  # not SHT_STRTAB
+    # Extended counts must be checked without overflowing count * entry size.
+    corrupt, _ = fixture(target, extended=True)
+    struct.pack_into(endian + ("Q" if target.bits == 64 else "I"), corrupt,
+                     layout["shoff"] + (32 if target.bits == 64 else 20), (1 << target.bits) - 1)
+    opened(api, corrupt, -2)
+    # Reads work on deliberately unaligned input, without host-struct casts.
+    unaligned = C.create_string_buffer(b"x" + bytes(image), len(image) + 1)
+    view = View()
+    assert api["open"](C.byref(unaligned, 1), len(image), C.byref(view)) == 0
+    pointer, size = C.c_void_p(123), C.c_size_t(456)
+    assert api["data"](C.byref(view), 4, C.byref(pointer), C.byref(size)) == -3
+    assert (pointer.value, size.value) == (123, 456)
+    if target.bits == 64:
+        corrupt = image.copy()
+        struct.pack_into(endian + "Q", corrupt, 24, 0xFEDCBA9876543210)
+        struct.pack_into(endian + "Q", corrupt, layout["shoff"] + layout["sh"] + 16, 0xABCDEF0123456789)
+        data, view = opened(api, corrupt)
+        item = Section()
+        assert api["section"](C.byref(view), 1, C.byref(item)) == 0
+        assert view.entry == 0xFEDCBA9876543210 and item.address == 0xABCDEF0123456789
+    corrupt = image.copy()
+    struct.pack_into(endian + "H", corrupt, 62 if target.bits == 64 else 50, 0)
+    data, view = opened(api, corrupt)
+    assert api["name"](C.byref(view), 1, C.byref(pointer), C.byref(size)) == -4
+    assert (pointer.value, size.value) == (123, 456)
     # String termination is checked on access, not during structural open.
     corrupt = image.copy(); corrupt[layout["strsoff"]:] = b"x" * (len(corrupt) - layout["strsoff"])
     data, view = opened(api, corrupt)
@@ -395,8 +422,13 @@ def main():
         header_test.write_text("\n".join(headers) + "\nint main(void) { return 0; }\n")
         run(CC + FLAGS + ["-I", str(ROOT), str(header_test), "-o", str(temp / "headers")])
         if shutil.which("c++"):
+            # VMWeave's SECD header uses a C99 flexible array. Only the new
+            # native interfaces promise strict C++ headers; C99 checks all 35.
+            header_test.write_text("\n".join(h for h in headers if "VMCollection/" not in h) +
+                                   '\nint main() { return MIPS32_lookup("addu") ? 0 : 1; }\n')
             run(["c++", "-std=c++11", "-Wall", "-Wextra", "-Werror", "-pedantic", "-x", "c++", "-I", str(ROOT),
-                 str(header_test), "-o", str(temp / "headers-cxx")])
+                 str(header_test), "-x", "none", str(temp / "collections.so"), "-o", str(temp / "headers-cxx")])
+            run([str(temp / "headers-cxx")])
     if args.all:
         run([os.sys.executable, str(ROOT / "VMCollection/test_collection.py")])
     print(f"All native collections passed ({len(arch_names)} ISA codecs, {len(bfd_names)} ELF targets).")
