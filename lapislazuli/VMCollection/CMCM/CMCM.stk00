@@ -1,0 +1,192 @@
+stk-00 1
+vm "CMCM"
+configuration "switch" "intptr_t" 256 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "clo_code" "u64" 64
+field "clo_pair" "u64" 64
+field "clo_top" "u64" 0
+field "flag" "i64" 0
+field "mark" "u64" 128
+field "mark_top" "u64" 0
+field "mps" "i64" 256
+field "mps_top" "u64" 0
+field "out" "i64" 0
+field "pair_len" "u64" 64
+field "pair_off" "u64" 64
+field "pair_top" "u64" 0
+field "pool" "i64" 512
+field "pool_top" "u64" 0
+subsystem "token" c{ 617
+#define CMCM_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define CMCM_vw_int(n) ((CMCM_cell)(((uintptr_t)(intptr_t)(n) << 3) | (uintptr_t)1u))
+#define CMCM_vw_pairref(i) ((CMCM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
+#define CMCM_vw_closure(i) ((CMCM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)3u))
+#define CMCM_vw_is_int(x) (CMCM_vw_tag(x) == (uintptr_t)1u)
+#define CMCM_vw_is_pair(x) (CMCM_vw_tag(x) == (uintptr_t)2u)
+#define CMCM_vw_is_closure(x) (CMCM_vw_tag(x) == (uintptr_t)3u)
+#define CMCM_vw_value(x) ((CMCM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define CMCM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);
+}c ;
+: "APPLY" opcode 1 operands 1 "label" effect "( args fn -- )" flow "call" source "=[C]" 0
+c{ 992
+cell function = 0; cell args = 0; uintmax_t index, field, pair, count, offset, target;
+if(vm->mps_top >= 2u) {
+  function = (cell)vm->mps[vm->mps_top - 1u];
+  args = (cell)vm->mps[vm->mps_top - 2u];
+  vm->mps_top -= 2u;
+} else { vm_fail(-2); return; }
+if(!CMCM_vw_is_closure(function)) { vm_fail(-4); return; }
+if(!CMCM_vw_is_pair(args)) { vm_fail(-4); return; }
+index = CMCM_vw_index(function);
+if(index >= vm->clo_top) { vm_fail(-4); return; }
+pair = CMCM_vw_index(args);
+if(pair >= vm->pair_top) { vm_fail(-4); return; }
+count = vm->pair_len[pair];
+offset = vm->pair_off[pair];
+if(vm->mark_top >= 128u || vm->mps_top + count + 1u > 256u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->mps_top;
+for(field = 0u; field < count; ++field) vm->mps[vm->mps_top++] = (int64_t)vm->pool[offset + field];
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_pairref(vm->clo_pair[index]);
+target = vm->clo_code[index];
+if(target >= vm->vw_code_size) { vm_fail(-4); return; }
+(void)vm_call((cell)target);
+}c ;
+: "COND" opcode 2 operands 2 "label" "label" effect "( flag -- )" flow "branch" source "=[C]" 0
+c{ 83
+cell flag = vm_pop();
+if(vm->vw_error) return;
+vm_jump(flag ? operand0 : operand1);
+}c ;
+: "DIV" opcode 3 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 118
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push(a / b);
+}c ;
+: "EQ" opcode 4 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
+}c ;
+: "GE" opcode 5 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
+}c ;
+: "GT" opcode 6 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
+}c ;
+: "GVAL" opcode 7 operands 0 effect "( -- n )" flow "next" source "=[C]" 0
+c{ 174
+cell value;
+if(!vm->mps_top) { vm_fail(-2); return; }
+value = (cell)vm->mps[--vm->mps_top];
+if(!CMCM_vw_is_int(value)) { vm_fail(-4); return; }
+vm_push(CMCM_vw_value(value));
+}c ;
+: "JF" opcode 8 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LAM" opcode 9 operands 2 "label" "cell" effect "( -- )" flow "call" source "=[C]" 0
+c{ 751
+uintmax_t count, field, base, index, offset;
+if(operand1 < 0 || (uintmax_t)operand1 > 8u) { vm_fail(-4); return; }
+count = (uintmax_t)operand1;
+if(vm->mps_top < count) { vm_fail(-2); return; }
+if(vm->pair_top >= 64u || vm->clo_top >= 64u || vm->pool_top + count > 512u) { vm_fail(-3); return; }
+if(vm->mark_top >= 128u) { vm_fail(-3); return; }
+base = vm->mps_top - count;
+offset = vm->pool_top;
+for(field = 0u; field < count; ++field) vm->pool[vm->pool_top++] = vm->mps[base + field];
+index = vm->pair_top++;
+vm->pair_off[index] = offset;
+vm->pair_len[index] = count;
+vm->mps_top = base;
+vm->clo_pair[vm->clo_top] = index;
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+++vm->clo_top;
+vm->mark[vm->mark_top++] = vm->mps_top;
+(void)vm_call(operand0);
+}c ;
+: "LE" opcode 10 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
+}c ;
+: "LT" opcode 11 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
+}c ;
+: "MKINT" opcode 12 operands 1 "cell" effect "( -- n )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "MKVAL" opcode 13 operands 0 effect "( n -- )" flow "next" source "=[C]" 0
+c{ 150
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(vm->mps_top >= 256u) { vm_fail(-3); return; }
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_int(value);
+}c ;
+: "MPAIR" opcode 14 operands 1 "cell" effect "( x -- pair )" flow "next" source "=[C]" 0
+c{ 610
+uintmax_t count, field, base, index, offset;
+if(operand0 < 0 || (uintmax_t)operand0 > 8u) { vm_fail(-4); return; }
+count = (uintmax_t)operand0;
+if(!count) { vm_fail(-4); return; }
+if(vm->mps_top < count) { vm_fail(-2); return; }
+if(vm->pair_top >= 64u || vm->pool_top + count > 512u) { vm_fail(-3); return; }
+base = vm->mps_top - count;
+offset = vm->pool_top;
+for(field = 0u; field < count; ++field) vm->pool[vm->pool_top++] = vm->mps[base + field];
+index = vm->pair_top++;
+vm->pair_off[index] = offset;
+vm->pair_len[index] = count;
+vm->mps_top = base;
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_pairref(index);
+}c ;
+: "MUL" opcode 15 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);
+}c ;
+: "NEG" opcode 16 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 19
+vm_push(-vm_pop());
+}c ;
+: "PRINT" opcode 17 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "RET" opcode 18 operands 0 effect "( -- )" flow "return" source "=[C]" 0
+c{ 124
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->mark_top) vm->mps_top = vm->mark[--vm->mark_top];
+(void)vm_return();
+}c ;
+: "STOP" opcode 19 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 20 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);
+}c ;
+: "VAR" opcode 21 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 215
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->mps_top) { vm_fail(-4); return; }
+if(vm->mps_top >= 256u) { vm_fail(-3); return; }
+vm->mps[vm->mps_top] = vm->mps[vm->mps_top - 1u - (uintmax_t)operand0];
+++vm->mps_top;
+}c ;
+end

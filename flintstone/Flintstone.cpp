@@ -26,7 +26,11 @@ flintstone_status invalid() noexcept { error_text("invalid argument"); return FL
 namespace flintstone {
 std::vector<std::string> binding_targets() {
     std::vector<std::string> result;
-    for (std::size_t i = 0; i < xbind_target_count(); ++i) result.emplace_back(xbind_target_at(i)->name);
+    for (std::size_t i = 0; i < xbind_target_count(); ++i) {
+        const auto* target = xbind_target_at(i);
+        detail::check(target != nullptr, "xbind.target", "binding target " + std::to_string(i) + " returned null");
+        result.emplace_back(target->name);
+    }
     return result;
 }
 std::string binding_spec(const std::string& directory) {

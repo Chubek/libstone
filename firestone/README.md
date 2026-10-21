@@ -35,7 +35,7 @@ find_package(Firestone 0.1 CONFIG REQUIRED COMPONENTS ir rewrite eqsat)
 target_link_libraries(my_compiler PRIVATE Firestone::firestone)
 ```
 
-Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::eqsat`,
+Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::trs`, `Firestone::eqsat`,
 `Firestone::cps`, `Firestone::memory`, `Firestone::object`, `Firestone::sema`, and
 `Firestone::type`, `Firestone::vm`, `Firestone::bignum`, `Firestone::compute`,
 `Firestone::concurrency`, `Firestone::gfx`, and `Firestone::intrin`.
@@ -66,6 +66,8 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 | `ClickSeaOfNodesGraph.hpp` | Explicit value/control inputs, branches and control projections, regions, cyclic phis, effects, exits |
 | `RVSDG.hpp` | Typed ports, isolated regions, simple/stateful nodes, gamma, theta and lambda signatures |
 | `librewrite/Term.hpp`, `Rewrite.hpp` | S-expression terms, repeated-variable matching, substitution, guarded bottom-up rewriting |
+| `libtrs/Term.hpp`, `TermRewriting.hpp`, `StringRewriting.hpp` | Interoperable first-order terms and bounded leftmost string rewriting |
+| `libtrs/GraphRewriting.hpp`, `GraphReduction.hpp`, `GraphCombinators.hpp` | Immutable-root hash-consed term DAGs, guarded/bounded rewriting and shared SKI reduction |
 | `libeqsat/EGraph.hpp`, `Saturation.hpp` | Hash-consing, union-find, congruence rebuilding, e-matching, bounded saturation, minimum-cost extraction |
 | `libir/DominatorTree.hpp`, `LoopAnalysis.hpp` | Dominator forests, nearest common dominators, natural loops, nesting, SCC-based irreducible regions |
 | `libir/DataflowAnalysis.hpp`, `PassManager.hpp` | Bounded forward/backward worklists and verified, transactional SSA pass pipelines |
@@ -95,7 +97,7 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 
 Namespaces follow component names: `firestone::ir`, `firestone::rewrite`,
 `firestone::eqsat`, `firestone::cps`, `firestone::memory`, `firestone::object`,
-`firestone::sema`, `firestone::type`, `firestone::vm`, `firestone::bignum`,
+`firestone::sema`, `firestone::type`, `firestone::trs`, `firestone::vm`, `firestone::bignum`,
 `firestone::compute`, `firestone::gfx`, `firestone::intrin`, and `firestone::concurrency`.
 The original `DataDependenceGrahp.hpp` spelling remains a compatibility include
 and type alias.
@@ -142,3 +144,4 @@ See [the API guide](docs/API.md) for construction contracts and
 The [VM guide](docs/VM.md) specifies bytecode, execution, binary, and backend contracts.
 The [foundation libraries guide](docs/Foundations.md) specifies arithmetic,
 concurrency, vector semantics, and compute/graphics adapter contracts.
+The [TRS guide](docs/TRS.md) describes string, term-graph, and combinator rewriting.

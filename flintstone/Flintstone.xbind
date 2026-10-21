@@ -48,6 +48,10 @@ return xbind.library {
       xbind.param("context", "flintstone_context *"), xbind.param("module", "flintstone_module *"),
       xbind.param("level", "flintstone_level"),
     }}),
+    xbind.func("flintstone_optimize", { returns = "flintstone_status", params = {
+      xbind.param("context", "flintstone_context *"), xbind.param("module", "flintstone_module *"),
+      xbind.param("kernel_directory", "const char *"), xbind.param("kernel_name", "const char *"),
+    }}),
     xbind.func("flintstone_module_text", { returns = "const char *", params = {
       xbind.param("module", "flintstone_module *"),
     }}),

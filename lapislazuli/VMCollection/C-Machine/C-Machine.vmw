@@ -1,0 +1,230 @@
+-- C-Machine (CMa).
+--
+-- Reference: Reinhard Wilhelm and Helmut Seidl, "Compiler Design: Virtual
+-- Machines" (Springer, 2010), chapter 2, where the machine is called the
+-- C-Machine, CMa, and is specified as the target of a compiler for a subset of
+-- C.  The words below are the ones the book's translation schemes emit:
+-- `loadc`, `load`, `store`, `loada`, `storea`, `loadr`, `storer`, `pop`, the
+-- arithmetic and comparison operators, `jump`, `jumpz`, `mark`, `call`,
+-- `enter`, `alloc`, `return`, `new` and `halt`.
+--
+-- The machine's registers map onto generated state:
+--
+--   PC  the program counter  -- the tape (vw_pc)
+--   SP  the stack pointer    -- the generated value stack height (vw_sp)
+--   FP  the frame pointer    -- `fp`, an index into S
+--   EP  the extreme pointer  -- `ep`, an index into S
+--   NP  the heap pointer     -- `np`, an index into S
+--   S   the main memory      -- the generated value stack array itself
+--
+-- The book's defining memory model is kept literally: S is *one* memory, the
+-- stack grows up from address 0, the heap grows down from the top, and a
+-- pointer is an index into S whether it addresses a stack cell or a heap cell.
+-- Here S is the generated value stack, so a heap pointer is an index above SP
+-- into that same array and `load` / `store` need not know which region an
+-- address falls in.  The generated dispatcher checks the stack pointer but
+-- knows nothing of NP, so `new` performs the collision test the book asks for
+-- ("a collision may be caused by an increment of SP or a decrement of NP").
+--
+-- A frame is laid out exactly as `mark`, the parameter evaluation and `call`
+-- build it:
+--
+--   FP+0   the return value slot        (reserved by `mark`)
+--   FP+1   the caller's FP              (saved by `call`)
+--   FP+2   the caller's EP              (saved by `mark` and `call`)
+--   FP+3   the continuation address     (kept in the generated activation)
+--   FP+4.. the actual parameters, then `alloc`'s local cells
+--
+-- Deviations from the book, stated rather than hidden:
+--
+--   * `call n` names its arity, so `call0`..`call3` are separate words and the
+--     generated dispatcher can check a static stack effect.  The book's `call`
+--     reads n from the instruction word; only the encoding changed.
+--   * `alloc k` likewise becomes `alloc0`..`alloc4`.  The book's `alloc` takes
+--     an arbitrary k; the frames a compiler for the book's C subset builds fit
+--     these cases, and the device is the one SECD, FAM and P-Code already use
+--     for their arity-named calls.
+--   * `mark` reserves the four organizational cells as four pushed cells, so
+--     its stack effect is explicit.  The continuation address the book also
+--     stores in the frame lives in the generated activation instead, which is
+--     where the dispatcher keeps return addresses.
+--   * `enter q` takes the frame size rather than an absolute address, so
+--     `EP = FP + q`.  The book computes q as `maxS + k` from the compiled
+--     maximum stack depth, which is exactly what an assembler would fold in.
+--   * NP is established lazily by the first `new`: the book's loader puts it at
+--     the top of S, and the generated `init` zeroes the state.
+--   * The machine has no output word -- the book reads the result from location
+--     1 -- so `print` records one value in `out`.
+--   * Division by zero, and the `INTPTR_MIN / -1` overflow, fail the machine
+--     with -10 rather than faulting.
+local v = require("vmweave")
+
+-- The generated value stack is S, so both the memory limit and the collision
+-- test are stated once.
+local S = "vm->vw_stack"
+local N = "(sizeof(" .. S .. ")/sizeof(" .. S .. "[0]))"
+
+return v.vm {
+  name = "CMachine",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 512 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = {
+    { name = "fp", type = "u64" },
+    { name = "ep", type = "u64" },
+    { name = "np", type = "u64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "LOADC", operands = { "cell" }, stack_effect = "( -- q )",
+      semantics = "vm_push(operand0);" },
+    { name = "LOADA", operands = { "cell" }, stack_effect = "( -- a )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+vm_push(operand0);]] },
+    { name = "STOREA", operands = { "cell" }, stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(operand0 < 0 || (uintmax_t)operand0 >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+]] .. S .. [[[(uintmax_t)operand0] = value;]] },
+    { name = "LOAD", stack_effect = "( a -- v )", semantics = [[
+cell address = vm_pop();
+if(vm->vw_error) return;
+if(address < 0 || (uintmax_t)address >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+vm_push(]] .. S .. [[[(uintmax_t)address]);]] },
+    { name = "STORE", stack_effect = "( v a -- )", semantics = [[
+cell address = vm_pop(); cell value = vm_pop();
+if(vm->vw_error) return;
+if(address < 0 || (uintmax_t)address >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+]] .. S .. [[[(uintmax_t)address] = value;]] },
+    { name = "LOADR", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+intmax_t index = (intmax_t)vm->fp + (intmax_t)operand0;
+if(index < 0 || (uintmax_t)index >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+vm_push(]] .. S .. [[[(uintmax_t)index]);]] },
+    { name = "STORER", operands = { "cell" }, stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop(); intmax_t index;
+if(vm->vw_error) return;
+index = (intmax_t)vm->fp + (intmax_t)operand0;
+if(index < 0 || (uintmax_t)index >= (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+]] .. S .. [[[(uintmax_t)index] = value;]] },
+    { name = "POP", stack_effect = "( v -- )",
+      semantics = "(void)vm_pop();" },
+    { name = "ADD", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+    { name = "SUB", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+    { name = "MUL", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));]] },
+    { name = "MOD", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a % b));]] },
+    { name = "AND", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));" },
+    { name = "OR", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));" },
+    { name = "XOR", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));" },
+    { name = "NOT", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push(a ? 0 : 1);" },
+    { name = "NEG", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+    { name = "EQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
+    { name = "NEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);" },
+    { name = "LE", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);" },
+    { name = "LEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);" },
+    { name = "GR", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);" },
+    { name = "GEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);" },
+    { name = "JMP", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "JMPZ", operands = { "label" }, flow = "branch", stack_effect = "( v -- )",
+      semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!value) vm_jump(operand0);]] },
+    { name = "MARK", stack_effect = "( -- r f e c )", semantics = [[
+vm_push(0); vm_push(0); vm_push(0); vm_push(0);]] },
+    { name = "ENTER", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+uintmax_t size = (uintmax_t)operand0;
+if(operand0 < 0 || vm->fp > (uintmax_t)]] .. N .. [[ || size > (uintmax_t)]] .. N .. [[ - vm->fp) { vm_fail(-4); return; }
+vm->ep = vm->fp + size;]] },
+    { name = "ALLOC0", stack_effect = "( -- )", semantics = "(void)vm;" },
+    { name = "ALLOC1", stack_effect = "( -- l0 )", semantics = "vm_push(0);" },
+    { name = "ALLOC2", stack_effect = "( -- l0 l1 )", semantics = "vm_push(0); vm_push(0);" },
+    { name = "ALLOC3", stack_effect = "( -- l0 l1 l2 )", semantics = "vm_push(0); vm_push(0); vm_push(0);" },
+    { name = "ALLOC4", stack_effect = "( -- l0 l1 l2 l3 )",
+      semantics = "vm_push(0); vm_push(0); vm_push(0); vm_push(0);" },
+    { name = "CALL0", operands = { "label" }, flow = "call", stack_effect = "( r f e c -- r f e c )", semantics = [[
+size_t base;
+if(vm->vw_sp < 4u) { vm_fail(-2); return; }
+base = vm->vw_sp - 4u;
+]] .. S .. [[[base + 1u] = (cell)vm->fp;
+]] .. S .. [[[base + 2u] = (cell)vm->ep;
+vm->fp = (uint64_t)base;
+vm->ep = (uint64_t)base + 4u;
+(void)vm_call(operand0);]] },
+    { name = "CALL1", operands = { "label" }, flow = "call", stack_effect = "( a r f e c -- a r f e c )", semantics = [[
+size_t base;
+if(vm->vw_sp < 5u) { vm_fail(-2); return; }
+base = vm->vw_sp - 5u;
+]] .. S .. [[[base + 1u] = (cell)vm->fp;
+]] .. S .. [[[base + 2u] = (cell)vm->ep;
+vm->fp = (uint64_t)base;
+vm->ep = (uint64_t)base + 5u;
+(void)vm_call(operand0);]] },
+    { name = "CALL2", operands = { "label" }, flow = "call", stack_effect = "( a b r f e c -- a b r f e c )", semantics = [[
+size_t base;
+if(vm->vw_sp < 6u) { vm_fail(-2); return; }
+base = vm->vw_sp - 6u;
+]] .. S .. [[[base + 1u] = (cell)vm->fp;
+]] .. S .. [[[base + 2u] = (cell)vm->ep;
+vm->fp = (uint64_t)base;
+vm->ep = (uint64_t)base + 6u;
+(void)vm_call(operand0);]] },
+    { name = "CALL3", operands = { "label" }, flow = "call", stack_effect = "( a b c r f e c -- a b c r f e c )", semantics = [[
+size_t base;
+if(vm->vw_sp < 7u) { vm_fail(-2); return; }
+base = vm->vw_sp - 7u;
+]] .. S .. [[[base + 1u] = (cell)vm->fp;
+]] .. S .. [[[base + 2u] = (cell)vm->ep;
+vm->fp = (uint64_t)base;
+vm->ep = (uint64_t)base + 7u;
+(void)vm_call(operand0);]] },
+    { name = "RETURN", flow = "return", stack_effect = "( v -- v )", semantics = [[
+cell result; uint64_t frame, saved_fp, saved_ep;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+frame = vm->fp;
+if(frame + 4u > (uintmax_t)]] .. N .. [[) { vm_fail(-4); return; }
+saved_fp = (uint64_t)]] .. S .. [[[frame + 1u];
+saved_ep = (uint64_t)]] .. S .. [[[frame + 2u];
+]] .. S .. [[[frame] = result;
+vm->vw_sp = (size_t)(frame + 1u);
+vm->fp = saved_fp;
+vm->ep = saved_ep;
+(void)vm_return();]] },
+    { name = "NEW", stack_effect = "( n -- p )", semantics = [[
+cell size = vm_pop();
+if(vm->vw_error) return;
+if(size < 0) { vm_fail(-4); return; }
+if(!vm->np) vm->np = (uint64_t)]] .. N .. [[;
+if((uintmax_t)size > vm->np || vm->np - (uintmax_t)size < (uint64_t)vm->vw_sp) { vm_fail(-3); return; }
+vm->np -= (uintmax_t)size;
+vm_push((cell)vm->np);]] },
+    { name = "PRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = (int64_t)vm_pop();" },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

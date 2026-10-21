@@ -1,0 +1,210 @@
+stk-00 1
+vm "FORTH"
+configuration "switch" "intptr_t" 256 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "out" "i64" 0
+field "rsp" "u64" 0
+field "rstack" "i64" 128
+field "vars" "i64" 64
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+}c ;
+: "AND" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));
+}c ;
+: "BRANCH" opcode 2 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 18
+vm_jump(operand0);
+}c ;
+: "BYE" opcode 3 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "CALL" opcode 4 operands 1 "label" effect "( -- )" flow "call" source "=[C]" 0
+c{ 24
+(void)vm_call(operand0);
+}c ;
+: "DIV" opcode 5 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 126
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));
+}c ;
+: "DO" opcode 6 operands 0 effect "( limit start -- )" flow "next" source "=[C]" 0
+c{ 184
+if(vm->rsp + 2u > 128u) { vm_fail(-3); return; }
+{
+  cell start = vm_pop(); cell limit = vm_pop();
+  vm->rstack[vm->rsp++] = (int64_t)limit;
+  vm->rstack[vm->rsp++] = (int64_t)start;
+}
+}c ;
+: "DROP" opcode 7 operands 0 effect "( a -- )" flow "next" source "=[C]" 0
+c{ 15
+(void)vm_pop();
+}c ;
+: "DUP" opcode 8 operands 0 effect "( a -- a a )" flow "next" source "=[C]" 0
+c{ 42
+cell a = vm_pop(); vm_push(a); vm_push(a);
+}c ;
+: "EQ" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 75
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? (cell)-1 : (cell)0);
+}c ;
+: "EXIT" opcode 10 operands 0 effect "( -- )" flow "return" source "=[C]" 0
+c{ 67
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+(void)vm_return();
+}c ;
+: "FETCH" opcode 11 operands 0 effect "( addr -- v )" flow "next" source "=[C]" 0
+c{ 127
+cell addr = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
+vm_push((cell)vm->vars[(uintmax_t)addr]);
+}c ;
+: "GE" opcode 12 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 75
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? (cell)-1 : (cell)0);
+}c ;
+: "GT" opcode 13 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 74
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? (cell)-1 : (cell)0);
+}c ;
+: "I" opcode 14 operands 0 effect "( -- n )" flow "next" source "=[C]" 0
+c{ 82
+if(vm->rsp < 1u) { vm_fail(-2); return; }
+vm_push((cell)vm->rstack[vm->rsp - 1u]);
+}c ;
+: "INVERT" opcode 15 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 50
+cell a = vm_pop(); vm_push((cell)(~(uintptr_t)a));
+}c ;
+: "LE" opcode 16 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 75
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? (cell)-1 : (cell)0);
+}c ;
+: "LEAVE" opcode 17 operands 1 "label" effect "( -- )" flow "branch" source "=[C]" 0
+c{ 75
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+vm->rsp -= 2u;
+vm_jump(operand0);
+}c ;
+: "LIT" opcode 18 operands 1 "cell" effect "( -- n )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "LOOP" opcode 19 operands 1 "label" effect "( -- )" flow "branch" source "=[C]" 0
+c{ 272
+cell index, limit;
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+index = (cell)vm->rstack[vm->rsp - 1u];
+limit = (cell)vm->rstack[vm->rsp - 2u];
+index = (cell)(index + 1);
+if(index == limit) vm->rsp -= 2u;
+else { vm->rstack[vm->rsp - 1u] = (int64_t)index; vm_jump(operand0); }
+}c ;
+: "LSHIFT" opcode 20 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 102
+cell b = vm_pop(); cell a = vm_pop();
+vm_push((cell)((uintptr_t)a << ((uintptr_t)b & (uintptr_t)63)));
+}c ;
+: "LT" opcode 21 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 74
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? (cell)-1 : (cell)0);
+}c ;
+: "MOD" opcode 22 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 126
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a % b));
+}c ;
+: "MUL" opcode 23 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+}c ;
+: "NE" opcode 24 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 75
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? (cell)-1 : (cell)0);
+}c ;
+: "NEG" opcode 25 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 42
+cell a = vm_pop(); vm_push((cell)(0 - a));
+}c ;
+: "NIP" opcode 26 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 46
+cell b = vm_pop(); (void)vm_pop(); vm_push(b);
+}c ;
+: "OR" opcode 27 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));
+}c ;
+: "OVER" opcode 28 operands 0 effect "( a b -- a b a )" flow "next" source "=[C]" 0
+c{ 73
+cell b = vm_pop(); cell a = vm_pop();
+vm_push(a); vm_push(b); vm_push(a);
+}c ;
+: "PRINT" opcode 29 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "ROT" opcode 30 operands 0 effect "( a b c -- b c a )" flow "next" source "=[C]" 0
+c{ 92
+cell c = vm_pop(); cell b = vm_pop(); cell a = vm_pop();
+vm_push(b); vm_push(c); vm_push(a);
+}c ;
+: "RSHIFT" opcode 31 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 102
+cell b = vm_pop(); cell a = vm_pop();
+vm_push((cell)((uintptr_t)a >> ((uintptr_t)b & (uintptr_t)63)));
+}c ;
+: "STORE" opcode 32 operands 0 effect "( v addr -- )" flow "next" source "=[C]" 0
+c{ 152
+cell addr = vm_pop(); cell value = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
+vm->vars[(uintmax_t)addr] = (int64_t)value;
+}c ;
+: "SUB" opcode 33 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+}c ;
+: "SWAP" opcode 34 operands 0 effect "( a b -- b a )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(b); vm_push(a);
+}c ;
+: "TUCK" opcode 35 operands 0 effect "( a b -- b a b )" flow "next" source "=[C]" 0
+c{ 73
+cell b = vm_pop(); cell a = vm_pop();
+vm_push(b); vm_push(a); vm_push(b);
+}c ;
+: "UNLOOP" opcode 36 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 56
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+vm->rsp -= 2u;
+}c ;
+: "VARADDR" opcode 37 operands 1 "cell" effect "( -- addr )" flow "next" source "=[C]" 0
+c{ 90
+if(operand0 < 0 || (uintmax_t)operand0 >= 64u) { vm_fail(-4); return; }
+vm_push(operand0);
+}c ;
+: "XOR" opcode 38 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));
+}c ;
+: "ZBRANCH" opcode 39 operands 1 "label" effect "( flag -- )" flow "branch" source "=[C]" 0
+c{ 50
+cell flag = vm_pop(); if(!flag) vm_jump(operand0);
+}c ;
+: "ZEQ" opcode 40 operands 0 effect "( a -- flag )" flow "next" source "=[C]" 0
+c{ 56
+cell a = vm_pop(); vm_push(a == 0 ? (cell)-1 : (cell)0);
+}c ;
+end

@@ -1,0 +1,230 @@
+-- SECD machine.
+--
+-- Reference: Peter J. Landin, "The Mechanical Evaluation of Expressions",
+-- The Computer Journal 6(4), 1964 -- the first abstract machine.
+--
+-- The four Landin registers map onto generated state:
+--
+--   S  the data stack  -- the generated value stack (vm_pop / vm_push)
+--   E  the environment -- `env`, a flat binding stack, `env_top` its height
+--   C  the control     -- the instruction tape (vw_pc)
+--   D  the dump        -- the generated frame stack (vm_call / vm_return)
+--
+-- Two deviations from the 1964 description are stated rather than hidden:
+--
+--   * Generated dispatch validates a *static* stack effect for every word, so
+--     AP and RAP name their arity (AP1..AP3, RAP1..RAP3) instead of recovering
+--     it from the closure at run time.  The FAM/ZINC family uses the same
+--     device (APPTERM1..3).
+--   * `LD n` indexes the binding stack from the newest binding backwards, and
+--     RTN unwinds a callee's bindings through `env_mark`.  Landin's E is a
+--     list; a stack is the same list read in the other direction.
+--
+-- A closure is a (code address, environment height) pair.  Closures live in the
+-- `clo_code` / `clo_env` tables and the value pushed on S is the pair's index.
+-- Cons cells are heap objects (`.memory` and `.object`): the heap is untagged,
+-- so CAR/CDR/ATOM identify a pair by membership in the live object list rather
+-- than by trusting the value.
+local v = require("vmweave")
+return v.vm {
+  name = "SECD",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 256 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame", "memory", "object" },
+  subsystems = {
+    token = [[
+static int SECD_vw_pair(SECD_vm *vm, SECD_cell value, SECD_object **out) {
+  SECD_object *object;
+  if(!vm) { if(out) *out = NULL; return 0; }
+  for(object = vm->vw_objects; object; object = object->next)
+    if((SECD_cell)(intptr_t)object == value) { if(out) *out = object; return 1; }
+  if(out) *out = NULL;
+  return 0;
+}
+]],
+  },
+  fields = {
+    { name = "acc", type = "i64" },
+    { name = "env", type = "i64", count = 64 },
+    { name = "env_top", type = "u64" },
+    { name = "env_mark", type = "u64", count = 128 },
+    { name = "env_mark_top", type = "u64" },
+    { name = "clo_code", type = "u64", count = 64 },
+    { name = "clo_env", type = "u64", count = 64 },
+    { name = "clo_top", type = "u64" },
+    { name = "flag", type = "i64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "LDC", operands = { "cell" }, stack_effect = "( -- n )",
+      semantics = "vm_push(operand0);" },
+    { name = "LD", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);]] },
+    { name = "LDF", operands = { "label" }, stack_effect = "( -- closure )", semantics = [[
+if(vm->clo_top >= 64u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = vm->env_top;
+vm_push((cell)vm->clo_top);
+++vm->clo_top;]] },
+    { name = "DUM", stack_effect = "( -- )", semantics = [[
+if(vm->env_top >= 64u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = 0;]] },
+    { name = "AP1", operands = { "label" }, flow = "call", stack_effect = "( closure a -- )", semantics = [[
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 1u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->acc = 0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "AP2", operands = { "label" }, flow = "call", stack_effect = "( closure a b -- )", semantics = [[
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "AP3", operands = { "label" }, flow = "call", stack_effect = "( closure a b c -- )", semantics = [[
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP1", operands = { "label" }, flow = "call", stack_effect = "( closure a -- )", semantics = [[
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP2", operands = { "label" }, flow = "call", stack_effect = "( closure a b -- )", semantics = [[
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP3", operands = { "label" }, flow = "call", stack_effect = "( closure a b c -- )", semantics = [[
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 4u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RTN", flow = "return", stack_effect = "( r -- r )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();]] },
+    { name = "TEST", stack_effect = "( b -- )",
+      semantics = "vm->flag = vm_pop();" },
+    { name = "SEL", operands = { "label", "label" }, flow = "call", stack_effect = "( -- )", semantics = [[
+if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+vm->env_mark[vm->env_mark_top++] = vm->env_top;
+(void)vm_call(vm->flag ? operand0 : operand1);]] },
+    { name = "JOIN", flow = "return", stack_effect = "( r -- r )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();]] },
+    { name = "CAR", stack_effect = "( p -- v )", semantics = [[
+cell value = vm_pop(); cell out = 0; SECD_object *pair;
+if(vm->vw_error) return;
+if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
+if(SECD_object_read(pair, 0u, &out, sizeof(out))) { vm_fail(-4); return; }
+vm_push(out);]] },
+    { name = "CDR", stack_effect = "( p -- v )", semantics = [[
+cell value = vm_pop(); cell out = 0; SECD_object *pair;
+if(vm->vw_error) return;
+if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
+if(SECD_object_read(pair, sizeof(cell), &out, sizeof(out))) { vm_fail(-4); return; }
+vm_push(out);]] },
+    { name = "CONS", stack_effect = "( a b -- p )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop(); SECD_object *pair;
+if(vm->vw_error) return;
+pair = SECD_object_new(vm, 1u, 2u * sizeof(cell));
+if(!pair) return;
+if(SECD_object_write(pair, 0u, &a, sizeof(a))
+   || SECD_object_write(pair, sizeof(cell), &b, sizeof(b))) return;
+vm_push((cell)(intptr_t)pair);]] },
+    { name = "ATOM", stack_effect = "( v -- b )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+vm_push(SECD_vw_pair(vm, value, NULL) ? 0 : 1);]] },
+    { name = "NIL", stack_effect = "( -- nil )", semantics = "vm_push(0);" },
+    { name = "ADD", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);" },
+    { name = "SUB", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);" },
+    { name = "MUL", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b) { vm_fail(-10); return; }
+vm_push(a / b);]] },
+    { name = "LSS", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);" },
+    { name = "GRT", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);" },
+    { name = "LEQ", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);" },
+    { name = "GEQ", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);" },
+    { name = "EQ", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
+    { name = "PRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = vm_pop();" },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

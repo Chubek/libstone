@@ -23,10 +23,12 @@ OperationDefinition vector_op(std::string name, std::size_t inputs) {
     def.min_operands = def.max_operands = inputs;
     def.min_results = def.max_results = 1;
     def.effect = Effect::Pure;
+    // Like scalar division/remainder, these may trap even when unused.
+    if (def.name == "vector.div" || def.name == "vector.mod") def.effect = Effect::Unknown;
     // No ssa_opcode: vectors are eliminated by vector_scalarize_pass before
     // scalar lowering. Direct lowering would silently drop lane semantics.
     def.verify = [](const Operation& op, const OperationContext& context) {
-        if (!op.attributes.empty()) check(false, "attribute.unknown", "vector operations accept no attributes", op.location);
+        if (!op.attributes.empty()) fail("attribute.unknown", "vector operations accept no attributes", op.location);
         const auto& result = op.results.at(0).type;
         check_vector(result, op.location);
         for (const auto& input : op.operands)
@@ -40,7 +42,7 @@ OperationDefinition vector_op(std::string name, std::size_t inputs) {
 void check_extract(const Operation& op, const OperationContext& context) {
     if (op.attributes.size() != 1 || !op.attributes.count("lane") ||
         !std::holds_alternative<std::int64_t>(op.attributes.at("lane")))
-        check(false, "vector.lane", "vector.extract requires exactly one integer lane attribute", op.location);
+        fail("vector.lane", "vector.extract requires exactly one integer lane attribute", op.location);
     const auto lane = std::get<std::int64_t>(op.attributes.at("lane"));
     const auto& source = context.type(op.operands.at(0));
     check_vector(source, op.location);

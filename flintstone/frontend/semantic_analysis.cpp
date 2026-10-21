@@ -35,7 +35,7 @@ void attributes_check(const Attributes& attrs, const Module& module, const Regis
         detail::check(detail::valid_name(key), "attribute.name", "invalid attribute name '" + key + "'");
         if (auto number = std::get_if<double>(&value)) detail::check(std::isfinite(*number), "attribute.float", "nonfinite attribute '" + key + "'");
         if (auto text = std::get_if<std::string>(&value)) {
-            detail::check(text->size() <= 1024 * 1024, "resource.attributes", "attribute string length limit exceeded");
+            detail::check(text->size() <= max_string_bytes, "resource.attributes", "attribute string length limit exceeded");
             for (unsigned char byte : *text)
                 detail::check(byte >= 32 || byte == '\n' || byte == '\r' || byte == '\t', "attribute.string",
                               "unsupported control byte in string attribute '" + key + "'");

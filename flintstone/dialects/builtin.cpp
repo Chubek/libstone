@@ -102,10 +102,17 @@ OperationDefinition scalar(std::string name, Op code, std::size_t inputs, std::s
                   "call.callee", "call requires exactly one string callee attribute", op.location);
             const auto& callee = std::get<std::string>(op.attributes.at("callee"));
             if (callee.rfind("__flintstone_", 0) == 0) {
-                // Reserved runtime intrinsics (e.g. __flintstone_trap from the
-                // cf.trap lowering) are validated by the executing backend,
-                // which checks intrinsic names and signatures explicitly.
-                // User modules cannot declare this prefix (symbol.reserved).
+                // The reserved namespace holds the runtime intrinsics. Only the
+                // trap is reachable from IL: the cf.trap lowering produces it.
+                // The remaining intrinsics are internal to the backend's own
+                // arithmetic and width-guard lowering, and are validated when
+                // they are bound.
+                check(callee == "__flintstone_trap", "symbol.reserved",
+                      "reserved runtime intrinsic " + callee + " is not callable from IL", op.location);
+                check(op.operands.empty(), "call.arity", "the trap intrinsic takes no arguments", op.location);
+                check((context.function.result.kind == TypeKind::Void && op.results.empty()) ||
+                          (op.results.size() == 1 && op.results[0].type == context.function.result),
+                      "call.result", "the trap intrinsic yields the enclosing function's result type", op.location);
                 return;
             }
             const auto& f = context.module.function(callee);

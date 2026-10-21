@@ -1,0 +1,386 @@
+stk-00 1
+vm "GMachine"
+configuration "switch" "intptr_t" 128 64 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+field "dump_addr" "i64" 128
+field "dump_top" "u64" 0
+field "node_a" "i64" 1024
+field "node_b" "i64" 1024
+field "node_kind" "i64" 1024
+field "node_top" "u64" 0
+field "out" "i64" 0
+field "s" "i64" 512
+field "sp" "u64" 0
+subsystem "token" c{ 2336
+#define GMachine_vw_int  0
+#define GMachine_vw_bool 1
+#define GMachine_vw_nil  2
+#define GMachine_vw_ap   3
+#define GMachine_vw_fun  4
+#define GMachine_vw_cons 5
+#define GMachine_vw_hole 6
+#define GMachine_vw_ind  7
+#define GMachine_vw_gnodes 1024u
+#define GMachine_vw_slimit 512u
+#define GMachine_vw_dlimit 128u
+
+/* Allocate a node; the graph neither reclaims nor grows past GNODES. */
+static GMachine_cell GMachine_vw_node(GMachine_vm *vm, int kind, GMachine_cell a, GMachine_cell b) {
+  uintmax_t index;
+  if(!vm || vm->vw_error) return 0;
+  if(vm->node_top >= GMachine_vw_gnodes) { GMachine_vw_fail(vm,-3); return 0; }
+  index = vm->node_top++;
+  vm->node_kind[index] = (int64_t)kind;
+  vm->node_a[index] = (int64_t)a;
+  vm->node_b[index] = (int64_t)b;
+  return (GMachine_cell)index;
+}
+
+/* Follow indirections, which UPDATE leaves behind. */
+static GMachine_cell GMachine_vw_deref(GMachine_vm *vm, GMachine_cell node) {
+  uintmax_t guard = 0;
+  if(!vm || vm->vw_error) return node;
+  while((uintmax_t)node < GMachine_vw_gnodes
+        && vm->node_kind[(uintmax_t)node] == GMachine_vw_ind) {
+    if(guard++ > GMachine_vw_gnodes) { GMachine_vw_fail(vm,-4); return 0; }
+    node = (GMachine_cell)vm->node_a[(uintmax_t)node];
+  }
+  return node;
+}
+
+static int GMachine_vw_pokes(GMachine_vm *vm, GMachine_cell node) {
+  if(!vm || vm->vw_error) return vm ? vm->vw_error : -1;
+  if(vm->sp >= GMachine_vw_slimit) { GMachine_vw_fail(vm,-3); return -3; }
+  vm->s[vm->sp++] = (int64_t)node;
+  return 0;
+}
+static GMachine_cell GMachine_vw_pops(GMachine_vm *vm) {
+  if(!vm || vm->vw_error) return 0;
+  if(!vm->sp) { GMachine_vw_fail(vm,-2); return 0; }
+  return (GMachine_cell)vm->s[--vm->sp];
+}
+static GMachine_cell GMachine_vw_peeks(GMachine_vm *vm, uintmax_t depth) {
+  if(!vm || vm->vw_error) return 0;
+  if(depth >= vm->sp) { GMachine_vw_fail(vm,-2); return 0; }
+  return (GMachine_cell)vm->s[vm->sp - 1u - depth];
+}
+/* Read a node's kind and field; -1 when the pointer is not a live node. */
+static int GMachine_vw_inspect(GMachine_vm *vm, GMachine_cell node, int *kind, GMachine_cell *field) {
+  node = GMachine_vw_deref(vm, node);
+  if(vm && vm->vw_error) return -1;
+  if((uintmax_t)node >= GMachine_vw_gnodes) return -1;
+  *kind = (int)vm->node_kind[(uintmax_t)node];
+  *field = (GMachine_cell)vm->node_a[(uintmax_t)node];
+  return 0;
+}
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a + b));
+}c ;
+: "ALLOC0" opcode 1 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 9
+(void)vm;
+}c ;
+: "ALLOC1" opcode 2 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 74
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+}c ;
+: "ALLOC2" opcode 3 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 149
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+}c ;
+: "ALLOC3" opcode 4 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 224
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+}c ;
+: "CONS" opcode 5 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 173
+cell tail = GMachine_vw_pops(vm);
+cell head = GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_cons, head, tail));
+}c ;
+: "DIV" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 151
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));
+}c ;
+: "EQ" opcode 7 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 87
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a == b ? 1 : 0);
+}c ;
+: "EVAL" opcode 8 operands 0 effect "( -- )" flow "jump" source "=[C]" 0
+c{ 992
+cell node = GMachine_vw_pops(vm);
+cell redex, spine[64];
+uintmax_t count = 0, i;
+int kind = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &redex)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_ap) { (void)GMachine_vw_pokes(vm, node); return; }
+redex = node;
+for(;;) {
+  if(kind != GMachine_vw_ap) break;
+  if(count >= 64u) { vm_fail(-3); return; }
+  spine[count] = (cell)vm->node_b[(uintmax_t)node];
+  count += 1u;
+  node = GMachine_vw_deref(vm, (cell)vm->node_a[(uintmax_t)node]);
+  if(vm->vw_error) return;
+  if((uintmax_t)node >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+  kind = (int)vm->node_kind[(uintmax_t)node];
+}
+if(kind != GMachine_vw_fun) { vm_fail(-4); return; }
+if(vm->dump_top >= GMachine_vw_dlimit) { vm_fail(-3); return; }
+vm->dump_addr[vm->dump_top] = (int64_t)vm->vw_pc;
+vm->dump_top += 1u;
+if(GMachine_vw_pokes(vm, redex)) return;
+for(i = 0; i < count; ++i) if(GMachine_vw_pokes(vm, spine[i])) return;
+vm_jump((cell)vm->node_a[(uintmax_t)node]);
+}c ;
+: "GE" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 87
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a >= b ? 1 : 0);
+}c ;
+: "GET" opcode 10 operands 0 effect "( -- v )" flow "next" source "=[C]" 0
+c{ 259
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_int && kind != GMachine_vw_bool) { vm_fail(-4); return; }
+vm_push(field);
+}c ;
+: "GT" opcode 11 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a > b ? 1 : 0);
+}c ;
+: "JFALSE" opcode 12 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 246
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_bool) { vm_fail(-4); return; }
+if(!field) vm_jump(operand0);
+}c ;
+: "JMP" opcode 13 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LE" opcode 14 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 87
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a <= b ? 1 : 0);
+}c ;
+: "LT" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a < b ? 1 : 0);
+}c ;
+: "MKAP" opcode 16 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 187
+cell argument = GMachine_vw_pops(vm);
+cell function = GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_ap, function, argument));
+}c ;
+: "MKBOOL" opcode 17 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 134
+cell value = vm_pop();
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, value ? 1 : 0, 0));
+}c ;
+: "MKINT" opcode 18 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 125
+cell value = vm_pop();
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, value, 0));
+}c ;
+: "MUL" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a * b));
+}c ;
+: "NE" opcode 20 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 87
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a != b ? 1 : 0);
+}c ;
+: "NEG" opcode 21 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 67
+cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(0 - a));
+}c ;
+: "PRINT" opcode 22 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 322
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind == GMachine_vw_nil) { vm->out = 0; return; }
+if(kind != GMachine_vw_int && kind != GMachine_vw_bool) { vm_fail(-4); return; }
+vm->out = (int64_t)field;
+}c ;
+: "PUSH" opcode 23 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+c{ 163
+cell node;
+if(operand0 < 0) { vm_fail(-4); return; }
+node = GMachine_vw_peeks(vm, (uintmax_t)operand0);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, node);
+}c ;
+: "PUSHBASIC" opcode 24 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "PUSHBOOL" opcode 25 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+c{ 89
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, operand0 ? 1 : 0, 0));
+}c ;
+: "PUSHFUN" opcode 26 operands 1 "label" effect "( -- )" flow "next" source "=[C]" 0
+c{ 80
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_fun, operand0, 0));
+}c ;
+: "PUSHINT" opcode 27 operands 1 "cell" effect "( -- )" flow "next" source "=[C]" 0
+c{ 80
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, operand0, 0));
+}c ;
+: "PUSHNIL" opcode 28 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 73
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_nil, 0, 0));
+}c ;
+: "RET0" opcode 29 operands 0 effect "( -- )" flow "jump" source "=[C]" 0
+c{ 106
+if(!vm->dump_top) { vm_fail(-2); return; }
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);
+}c ;
+: "RET1" opcode 30 operands 0 effect "( -- )" flow "jump" source "=[C]" 0
+c{ 159
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);
+}c ;
+: "RET2" opcode 31 operands 0 effect "( -- )" flow "jump" source "=[C]" 0
+c{ 187
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);
+}c ;
+: "RET3" opcode 32 operands 0 effect "( -- )" flow "jump" source "=[C]" 0
+c{ 215
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);
+}c ;
+: "SLIDE0" opcode 33 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 128
+cell top;
+if(vm->sp < 1u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 1u;
+vm->s[vm->sp++] = (int64_t)top;
+}c ;
+: "SLIDE1" opcode 34 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 128
+cell top;
+if(vm->sp < 2u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 2u;
+vm->s[vm->sp++] = (int64_t)top;
+}c ;
+: "SLIDE2" opcode 35 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 128
+cell top;
+if(vm->sp < 3u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 3u;
+vm->s[vm->sp++] = (int64_t)top;
+}c ;
+: "SLIDE3" opcode 36 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 128
+cell top;
+if(vm->sp < 4u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 4u;
+vm->s[vm->sp++] = (int64_t)top;
+}c ;
+: "STOP" opcode 37 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 38 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a - b));
+}c ;
+: "UPDATE1" opcode 39 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 310
+cell target;
+if(vm->sp < 2u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 2u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;
+}c ;
+: "UPDATE2" opcode 40 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 310
+cell target;
+if(vm->sp < 3u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 3u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;
+}c ;
+: "UPDATE3" opcode 41 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 310
+cell target;
+if(vm->sp < 4u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 4u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;
+}c ;
+end

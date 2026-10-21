@@ -1,0 +1,185 @@
+stk-00 1
+vm "CESK"
+configuration "switch" "intptr_t" 512 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "clo_code" "u64" 64
+field "clo_env" "u64" 64
+field "clo_top" "u64" 0
+field "env" "i64" 64
+field "env_mark" "u64" 128
+field "env_mark_top" "u64" 0
+field "env_top" "u64" 0
+field "flag" "i64" 0
+field "out" "i64" 0
+field "store" "i64" 256
+field "store_top" "u64" 0
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);
+}c ;
+: "APP1" opcode 1 operands 1 "label" effect "( v clos -- )" flow "call" source "=[C]" 0
+c{ 601
+cell closure = vm_pop(); cell value = vm_pop(); cell address;
+if(vm->vw_error) return;
+if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
+if(vm->store_top >= 256u) { vm_fail(-3); return; }
+if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+address = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)value;
+vm->env_mark[vm->env_mark_top++] = vm->env_top;
+vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+if(vm->env_top + 1u > 64u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = (int64_t)address;
+(void)vm_call((cell)vm->clo_code[(uintmax_t)closure]);
+}c ;
+: "APP2" opcode 2 operands 1 "label" effect "( v v clos -- )" flow "call" source "=[C]" 0
+c{ 728
+cell closure = vm_pop(); cell b = vm_pop(); cell a = vm_pop(); cell addr0, addr1;
+if(vm->vw_error) return;
+if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
+if(vm->store_top + 2u > 256u) { vm_fail(-3); return; }
+if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+addr0 = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)a;
+addr1 = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)b;
+vm->env_mark[vm->env_mark_top++] = vm->env_top;
+vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+if(vm->env_top + 2u > 64u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = (int64_t)addr1;
+vm->env[vm->env_top++] = (int64_t)addr0;
+(void)vm_call((cell)vm->clo_code[(uintmax_t)closure]);
+}c ;
+: "APP3" opcode 3 operands 1 "label" effect "( v v v clos -- )" flow "call" source "=[C]" 0
+c{ 865
+cell closure = vm_pop(); cell c = vm_pop(); cell b = vm_pop(); cell a = vm_pop(); cell addr0, addr1, addr2;
+if(vm->vw_error) return;
+if(closure < 0 || (uintmax_t)closure >= vm->clo_top) { vm_fail(-4); return; }
+if(vm->store_top + 3u > 256u) { vm_fail(-3); return; }
+if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+addr0 = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)a;
+addr1 = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)b;
+addr2 = (cell)vm->store_top;
+vm->store[vm->store_top++] = (int64_t)c;
+vm->env_mark[vm->env_mark_top++] = vm->env_top;
+vm->env_top = (uintmax_t)vm->clo_env[(uintmax_t)closure];
+if(vm->env_top + 3u > 64u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = (int64_t)addr2;
+vm->env[vm->env_top++] = (int64_t)addr1;
+vm->env[vm->env_top++] = (int64_t)addr0;
+(void)vm_call((cell)vm->clo_code[(uintmax_t)closure]);
+}c ;
+: "BRANCH" opcode 4 operands 2 "label" "label" effect "( -- )" flow "branch" source "=[C]" 0
+c{ 40
+vm_jump(vm->flag ? operand0 : operand1);
+}c ;
+: "CONST" opcode 5 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "DIV" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(!b) { vm_fail(-10); return; }
+vm_push(a / b);
+}c ;
+: "EQ" opcode 7 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
+}c ;
+: "GE" opcode 8 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
+}c ;
+: "GT" opcode 9 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
+}c ;
+: "JUMP" opcode 10 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LAM" opcode 11 operands 1 "label" effect "( -- clos )" flow "next" source "=[C]" 0
+c{ 178
+if(vm->clo_top >= 64u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = vm->env_top;
+vm_push((cell)vm->clo_top);
+++vm->clo_top;
+}c ;
+: "LE" opcode 12 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
+}c ;
+: "LT" opcode 13 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
+}c ;
+: "MUL" opcode 14 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);
+}c ;
+: "NE" opcode 15 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
+}c ;
+: "NEG" opcode 16 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 19
+vm_push(-vm_pop());
+}c ;
+: "PRINT" opcode 17 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "RET" opcode 18 operands 0 effect "( v -- v )" flow "return" source "=[C]" 0
+c{ 273
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();
+}c ;
+: "SET" opcode 19 operands 1 "cell" effect "( v -- )" flow "next" source "=[C]" 0
+c{ 334
+cell value = vm_pop(); cell address;
+if(vm->vw_error) return;
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+address = (cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0];
+if(address < 0 || (uintmax_t)address >= vm->store_top) { vm_fail(-4); return; }
+vm->store[(uintmax_t)address] = (int64_t)value;
+}c ;
+: "STOP" opcode 20 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 21 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);
+}c ;
+: "TEST" opcode 22 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 73
+cell value = vm_pop();
+if(vm->vw_error) return;
+vm->flag = value ? 1 : 0;
+}c ;
+: "VAR" opcode 23 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 284
+cell address;
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+address = (cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0];
+if(address < 0 || (uintmax_t)address >= vm->store_top) { vm_fail(-4); return; }
+vm_push((cell)vm->store[(uintmax_t)address]);
+}c ;
+end

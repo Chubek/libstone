@@ -57,12 +57,15 @@ normalization, never overflowing signed C++ operations. Remainder (`mod`) needs
 no wrapper: its result always fits and `MIN%-1` is already defined as `0`.
 Arithmetic right shift (`shr`) is already sign-extending with no overflow case,
 matching modular signed semantics, so it also retains the Firestone
-implementation.
+implementation. These are explicit dependencies in the emitted bytecode, not
+hidden behavior attached to the host's ordinary arithmetic opcodes.
 
 The `__flintstone_` function namespace is reserved. Applications cannot declare
-functions there. Intrinsic names/signatures are validated before binding.
-These are explicit dependencies in the emitted bytecode, not hidden behavior
-attached to the host's ordinary arithmetic opcodes. `cf.trap` lowers to a call
+functions there, and only the trap intrinsic is callable from IL: it takes no
+arguments and yields the enclosing function's result type, which is exactly
+what the `cf.trap` lowering produces. The remaining intrinsics are internal to
+the backend's own arithmetic and width-guard lowering; their names and
+signatures are validated when they are bound. `cf.trap` lowers to a call
 to `__flintstone_trap` (which always throws `vm.trap`) followed by a return of
 a dummy value, so trapping control flow composes with the ordinary call/return
 machinery at every result type, including `void`.

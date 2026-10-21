@@ -28,3 +28,7 @@ execute_process(COMMAND "${FIRESTONE_BINARY}/install-test/consumer/foundation_co
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Firestone installed foundation consumer failed")
 endif()
+execute_process(COMMAND "${FIRESTONE_BINARY}/install-test/consumer/trs_consumer" RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "Firestone installed TRS consumer failed")
+endif()

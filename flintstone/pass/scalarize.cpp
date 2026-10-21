@@ -283,7 +283,7 @@ Pass tuple_sroa_pass() {
                                 materialize.location = op.location;
                                 materialize.results = op.results;
                                 const auto& field = found->second[index];
-                                if (field.kind == OperandKind::Value) {
+                                if (field.kind == OperandKind::Value || field.kind == OperandKind::Symbol) {
                                     materialize.name = "arith.copy";
                                     materialize.operands = {field};
                                 } else {

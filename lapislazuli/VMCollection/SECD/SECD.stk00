@@ -1,0 +1,265 @@
+stk-00 1
+vm "SECD"
+configuration "switch" "intptr_t" 256 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "memory"
+component "tape"
+component "frame"
+component "object"
+field "acc" "i64" 0
+field "clo_code" "u64" 64
+field "clo_env" "u64" 64
+field "clo_top" "u64" 0
+field "env" "i64" 64
+field "env_mark" "u64" 128
+field "env_mark_top" "u64" 0
+field "env_top" "u64" 0
+field "flag" "i64" 0
+field "out" "i64" 0
+subsystem "token" c{ 324
+static int SECD_vw_pair(SECD_vm *vm, SECD_cell value, SECD_object **out) {
+  SECD_object *object;
+  if(!vm) { if(out) *out = NULL; return 0; }
+  for(object = vm->vw_objects; object; object = object->next)
+    if((SECD_cell)(intptr_t)object == value) { if(out) *out = object; return 1; }
+  if(out) *out = NULL;
+  return 0;
+}
+
+}c
+: "ADD" opcode 0 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);
+}c ;
+: "AP1" opcode 1 operands 1 "label" effect "( closure a -- )" flow "call" source "=[C]" 0
+c{ 476
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 1u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->acc = 0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "AP2" opcode 2 operands 1 "label" effect "( closure a b -- )" flow "call" source "=[C]" 0
+c{ 521
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "AP3" opcode 3 operands 1 "label" effect "( closure a b c -- )" flow "call" source "=[C]" 0
+c{ 581
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "ATOM" opcode 4 operands 0 effect "( v -- b )" flow "next" source "=[C]" 0
+c{ 95
+cell value = vm_pop();
+if(vm->vw_error) return;
+vm_push(SECD_vw_pair(vm, value, NULL) ? 0 : 1);
+}c ;
+: "CAR" opcode 5 operands 0 effect "( p -- v )" flow "next" source "=[C]" 0
+c{ 230
+cell value = vm_pop(); cell out = 0; SECD_object *pair;
+if(vm->vw_error) return;
+if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
+if(SECD_object_read(pair, 0u, &out, sizeof(out))) { vm_fail(-4); return; }
+vm_push(out);
+}c ;
+: "CDR" opcode 6 operands 0 effect "( p -- v )" flow "next" source "=[C]" 0
+c{ 240
+cell value = vm_pop(); cell out = 0; SECD_object *pair;
+if(vm->vw_error) return;
+if(!SECD_vw_pair(vm, value, &pair)) { vm_fail(-4); return; }
+if(SECD_object_read(pair, sizeof(cell), &out, sizeof(out))) { vm_fail(-4); return; }
+vm_push(out);
+}c ;
+: "CONS" opcode 7 operands 0 effect "( a b -- p )" flow "next" source "=[C]" 0
+c{ 295
+cell b = vm_pop(); cell a = vm_pop(); SECD_object *pair;
+if(vm->vw_error) return;
+pair = SECD_object_new(vm, 1u, 2u * sizeof(cell));
+if(!pair) return;
+if(SECD_object_write(pair, 0u, &a, sizeof(a))
+   || SECD_object_write(pair, sizeof(cell), &b, sizeof(b))) return;
+vm_push((cell)(intptr_t)pair);
+}c ;
+: "DIV" opcode 8 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 86
+cell b = vm_pop(); cell a = vm_pop();
+if(!b) { vm_fail(-10); return; }
+vm_push(a / b);
+}c ;
+: "DUM" opcode 9 operands 0 effect "( -- )" flow "next" source "=[C]" 0
+c{ 75
+if(vm->env_top >= 64u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = 0;
+}c ;
+: "EQ" opcode 10 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
+}c ;
+: "GEQ" opcode 11 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
+}c ;
+: "GRT" opcode 12 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
+}c ;
+: "JOIN" opcode 13 operands 0 effect "( r -- r )" flow "return" source "=[C]" 0
+c{ 273
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();
+}c ;
+: "LD" opcode 14 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 143
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
+}c ;
+: "LDC" opcode 15 operands 1 "cell" effect "( -- n )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "LDF" opcode 16 operands 1 "label" effect "( -- closure )" flow "next" source "=[C]" 0
+c{ 178
+if(vm->clo_top >= 64u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = vm->env_top;
+vm_push((cell)vm->clo_top);
+++vm->clo_top;
+}c ;
+: "LEQ" opcode 17 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
+}c ;
+: "LSS" opcode 18 operands 0 effect "( a b -- b )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
+}c ;
+: "MUL" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);
+}c ;
+: "NIL" opcode 20 operands 0 effect "( -- nil )" flow "next" source "=[C]" 0
+c{ 11
+vm_push(0);
+}c ;
+: "PRINT" opcode 21 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->out = vm_pop();
+}c ;
+: "RAP1" opcode 22 operands 1 "label" effect "( closure a -- )" flow "call" source "=[C]" 0
+c{ 506
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "RAP2" opcode 23 operands 1 "label" effect "( closure a b -- )" flow "call" source "=[C]" 0
+c{ 566
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "RAP3" opcode 24 operands 1 "label" effect "( closure a b c -- )" flow "call" source "=[C]" 0
+c{ 626
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || (uintmax_t)vm->clo_env[index] + 4u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = (uintmax_t)vm->clo_env[index];
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "RTN" opcode 25 operands 0 effect "( r -- r )" flow "return" source "=[C]" 0
+c{ 273
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();
+}c ;
+: "SEL" opcode 26 operands 2 "label" "label" effect "( -- )" flow "call" source "=[C]" 0
+c{ 148
+if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+vm->env_mark[vm->env_mark_top++] = vm->env_top;
+(void)vm_call(vm->flag ? operand0 : operand1);
+}c ;
+: "STOP" opcode 27 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 28 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 53
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);
+}c ;
+: "TEST" opcode 29 operands 0 effect "( b -- )" flow "next" source "=[C]" 0
+c{ 20
+vm->flag = vm_pop();
+}c ;
+end

@@ -1,0 +1,363 @@
+-- G-Machine.
+--
+-- Reference: Thomas Johnsson, "Efficient Compilation of Lazy Evaluation",
+-- SIGPLAN '84 Symposium on Compiler Construction, 1984, 58-69 -- the Mark-1
+-- lineage whose later form is described by Simon L. Peyton Jones, "The
+-- Implementation of Functional Programming Languages" (Prentice-Hall, 1987),
+-- chapter 12, and restated by Werner Kluge, "Abstract Computing Machines"
+-- (Springer, 2005), chapter 9.
+--
+-- The machine evaluates a graph.  Its registers map onto generated state:
+--
+--   C  the code            -- the instruction tape (vw_pc)
+--   S  the pointer stack   -- `s`, an array of graph-node addresses, `sp` its
+--                             height; this is the argument/result stack
+--   V  the basic-value stack -- the generated value stack (vm_pop / vm_push)
+--   D  the dump            -- `dump_addr`, `dump_top`
+--   G  the graph           -- `node_kind` / `node_a` / `node_b`, `node_top`
+--   E  the environment     -- not used: supercombinator code is closed
+--
+-- A graph node is a triple.  With `node_a` written first:
+--
+--   INT   (value, -)          BOOL (value, -)      NIL  (-, -)
+--   AP    (function, argument)                     HOLE (-, -)
+--   CONS  (head, tail)                             IND  (target, -)
+--   FUN   (code address, -)
+--
+-- The stack holds *pointers into the graph*, never values, so `PUSH m` copies
+-- a pointer and therefore shares a subgraph: that is the sharing head-order
+-- reduction is built on.  `PUSHFUN f` pushes a function node whose `node_a` is
+-- the address of `f`'s code, and `EVAL` enters it.
+--
+-- Entering a function follows Johnsson's Table 2.  `EVAL` unwinds the left
+-- spine of the redex, collecting one argument per application node, and leaves
+-- the entry block on S with the redex node at its base and the arguments above
+-- it, the first formal at the top, so the compiler's `PUSH (n - r x)` offsets
+-- address the formals directly.  `UPDATE m` overwrites the node m places down
+-- the stack with an indirection to the node on top and then pops the top, which
+-- is how the redex is overwritten with the function's result; `RET m` drops the
+-- m argument copies and returns to the dump address, leaving the updated redex
+-- node as the result.  Both are what Table 2 specifies, with `m` the arity as
+-- the compiler knows it.
+--
+-- Deviations from the 1984 paper, stated rather than hidden:
+--
+--   * One `ALLOC m` / `UPDATE m` / `SLIDE m` / `RET m` word with an arbitrary
+--     m would give the generated dispatcher no static stack effect, so each
+--     becomes a family with an explicit count (`ALLOC0`..`ALLOC3`,
+--     `UPDATE1`..`UPDATE3`, `SLIDE0`..`SLIDE2`, `RET0`..`RET3`).  The device is
+--     the one SECD, FAM and P-Code already use for arity-named calls.
+--   * `EVAL` is Table 2's `EVAL` composed with `UNWIND`, because the unwind is
+--     the machine's state and the generated dispatcher has instructions rather
+--     than states.  `EVAL` on a node that is already in head normal form just
+--     pushes it back, which is Table 2's `EVAL` rule 6.
+--   * The `UNWIND` spine walk is bounded at 64 arguments; a deeper spine fails
+--     the machine with -3 rather than growing a private stack.
+--   * `PRINT` handles the basic nodes (INT, BOOL, NIL).  The paper's
+--     `PRINT` case for CONS recurses over the list, which the generated
+--     dispatcher cannot express as one word because the recursion would need a
+--     continuation; a CONS node fails with -4.
+--   * Division by zero, and the `INTPTR_MIN / -1` overflow, fail the machine
+--     with -10 rather than faulting.
+local v = require("vmweave")
+return v.vm {
+  name = "GMachine",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 128 },
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile" },
+  subsystems = {
+    token = [[
+#define GMachine_vw_int  0
+#define GMachine_vw_bool 1
+#define GMachine_vw_nil  2
+#define GMachine_vw_ap   3
+#define GMachine_vw_fun  4
+#define GMachine_vw_cons 5
+#define GMachine_vw_hole 6
+#define GMachine_vw_ind  7
+#define GMachine_vw_gnodes 1024u
+#define GMachine_vw_slimit 512u
+#define GMachine_vw_dlimit 128u
+
+/* Allocate a node; the graph neither reclaims nor grows past GNODES. */
+static GMachine_cell GMachine_vw_node(GMachine_vm *vm, int kind, GMachine_cell a, GMachine_cell b) {
+  uintmax_t index;
+  if(!vm || vm->vw_error) return 0;
+  if(vm->node_top >= GMachine_vw_gnodes) { GMachine_vw_fail(vm,-3); return 0; }
+  index = vm->node_top++;
+  vm->node_kind[index] = (int64_t)kind;
+  vm->node_a[index] = (int64_t)a;
+  vm->node_b[index] = (int64_t)b;
+  return (GMachine_cell)index;
+}
+
+/* Follow indirections, which UPDATE leaves behind. */
+static GMachine_cell GMachine_vw_deref(GMachine_vm *vm, GMachine_cell node) {
+  uintmax_t guard = 0;
+  if(!vm || vm->vw_error) return node;
+  while((uintmax_t)node < GMachine_vw_gnodes
+        && vm->node_kind[(uintmax_t)node] == GMachine_vw_ind) {
+    if(guard++ > GMachine_vw_gnodes) { GMachine_vw_fail(vm,-4); return 0; }
+    node = (GMachine_cell)vm->node_a[(uintmax_t)node];
+  }
+  return node;
+}
+
+static int GMachine_vw_pokes(GMachine_vm *vm, GMachine_cell node) {
+  if(!vm || vm->vw_error) return vm ? vm->vw_error : -1;
+  if(vm->sp >= GMachine_vw_slimit) { GMachine_vw_fail(vm,-3); return -3; }
+  vm->s[vm->sp++] = (int64_t)node;
+  return 0;
+}
+static GMachine_cell GMachine_vw_pops(GMachine_vm *vm) {
+  if(!vm || vm->vw_error) return 0;
+  if(!vm->sp) { GMachine_vw_fail(vm,-2); return 0; }
+  return (GMachine_cell)vm->s[--vm->sp];
+}
+static GMachine_cell GMachine_vw_peeks(GMachine_vm *vm, uintmax_t depth) {
+  if(!vm || vm->vw_error) return 0;
+  if(depth >= vm->sp) { GMachine_vw_fail(vm,-2); return 0; }
+  return (GMachine_cell)vm->s[vm->sp - 1u - depth];
+}
+/* Read a node's kind and field; -1 when the pointer is not a live node. */
+static int GMachine_vw_inspect(GMachine_vm *vm, GMachine_cell node, int *kind, GMachine_cell *field) {
+  node = GMachine_vw_deref(vm, node);
+  if(vm && vm->vw_error) return -1;
+  if((uintmax_t)node >= GMachine_vw_gnodes) return -1;
+  *kind = (int)vm->node_kind[(uintmax_t)node];
+  *field = (GMachine_cell)vm->node_a[(uintmax_t)node];
+  return 0;
+}
+]],
+  },
+  fields = {
+    { name = "s", type = "i64", count = 512 },
+    { name = "sp", type = "u64" },
+    { name = "node_kind", type = "i64", count = 1024 },
+    { name = "node_a", type = "i64", count = 1024 },
+    { name = "node_b", type = "i64", count = 1024 },
+    { name = "node_top", type = "u64" },
+    { name = "dump_addr", type = "i64", count = 128 },
+    { name = "dump_top", type = "u64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "PUSHINT", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, operand0, 0));]] },
+    { name = "PUSHBOOL", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, operand0 ? 1 : 0, 0));]] },
+    { name = "PUSHNIL", stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_nil, 0, 0));]] },
+    { name = "PUSHFUN", operands = { "label" }, stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_fun, operand0, 0));]] },
+    { name = "PUSH", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+cell node;
+if(operand0 < 0) { vm_fail(-4); return; }
+node = GMachine_vw_peeks(vm, (uintmax_t)operand0);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, node);]] },
+    { name = "MKAP", stack_effect = "( -- )", semantics = [[
+cell argument = GMachine_vw_pops(vm);
+cell function = GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_ap, function, argument));]] },
+    { name = "CONS", stack_effect = "( -- )", semantics = [[
+cell tail = GMachine_vw_pops(vm);
+cell head = GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_cons, head, tail));]] },
+    { name = "ALLOC0", stack_effect = "( -- )", semantics = "(void)vm;" },
+    { name = "ALLOC1", stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));]] },
+    { name = "ALLOC2", stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));]] },
+    { name = "ALLOC3", stack_effect = "( -- )", semantics = [[
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_hole, 0, 0));]] },
+    { name = "UPDATE1", stack_effect = "( -- )", semantics = [[
+cell target;
+if(vm->sp < 2u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 2u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;]] },
+    { name = "UPDATE2", stack_effect = "( -- )", semantics = [[
+cell target;
+if(vm->sp < 3u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 3u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;]] },
+    { name = "UPDATE3", stack_effect = "( -- )", semantics = [[
+cell target;
+if(vm->sp < 4u) { vm_fail(-2); return; }
+target = (cell)vm->s[vm->sp - 4u];
+if((uintmax_t)target >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+vm->node_kind[(uintmax_t)target] = GMachine_vw_ind;
+vm->node_a[(uintmax_t)target] = vm->s[vm->sp - 1u];
+vm->node_b[(uintmax_t)target] = 0;
+vm->sp -= 1u;]] },
+    { name = "SLIDE0", stack_effect = "( -- )", semantics = [[
+cell top;
+if(vm->sp < 1u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 1u;
+vm->s[vm->sp++] = (int64_t)top;]] },
+    { name = "SLIDE1", stack_effect = "( -- )", semantics = [[
+cell top;
+if(vm->sp < 2u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 2u;
+vm->s[vm->sp++] = (int64_t)top;]] },
+    { name = "SLIDE2", stack_effect = "( -- )", semantics = [[
+cell top;
+if(vm->sp < 3u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 3u;
+vm->s[vm->sp++] = (int64_t)top;]] },
+    { name = "SLIDE3", stack_effect = "( -- )", semantics = [[
+cell top;
+if(vm->sp < 4u) { vm_fail(-2); return; }
+top = (cell)vm->s[vm->sp - 1u];
+vm->sp -= 4u;
+vm->s[vm->sp++] = (int64_t)top;]] },
+    { name = "PUSHBASIC", operands = { "cell" }, stack_effect = "( -- v )",
+      semantics = "vm_push(operand0);" },
+    { name = "GET", stack_effect = "( -- v )", semantics = [[
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_int && kind != GMachine_vw_bool) { vm_fail(-4); return; }
+vm_push(field);]] },
+    { name = "MKINT", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_int, value, 0));]] },
+    { name = "MKBOOL", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+(void)GMachine_vw_pokes(vm, GMachine_vw_node(vm, GMachine_vw_bool, value ? 1 : 0, 0));]] },
+    { name = "ADD", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a + b));]] },
+    { name = "SUB", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a - b));]] },
+    { name = "MUL", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(a * b));]] },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));]] },
+    { name = "NEG", stack_effect = "( a -- b )", semantics = [[
+cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push((cell)(0 - a));]] },
+    { name = "EQ", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a == b ? 1 : 0);]] },
+    { name = "NE", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a != b ? 1 : 0);]] },
+    { name = "LT", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a < b ? 1 : 0);]] },
+    { name = "LE", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a <= b ? 1 : 0);]] },
+    { name = "GT", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a > b ? 1 : 0);]] },
+    { name = "GE", stack_effect = "( a b -- flag )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(vm->vw_error) return;
+vm_push(a >= b ? 1 : 0);]] },
+    { name = "JFALSE", operands = { "label" }, flow = "jump", stack_effect = "( -- )", semantics = [[
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_bool) { vm_fail(-4); return; }
+if(!field) vm_jump(operand0);]] },
+    { name = "JMP", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "EVAL", flow = "jump", stack_effect = "( -- )", semantics = [[
+cell node = GMachine_vw_pops(vm);
+cell redex, spine[64];
+uintmax_t count = 0, i;
+int kind = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &redex)) { vm_fail(-4); return; }
+if(kind != GMachine_vw_ap) { (void)GMachine_vw_pokes(vm, node); return; }
+redex = node;
+for(;;) {
+  if(kind != GMachine_vw_ap) break;
+  if(count >= 64u) { vm_fail(-3); return; }
+  spine[count] = (cell)vm->node_b[(uintmax_t)node];
+  count += 1u;
+  node = GMachine_vw_deref(vm, (cell)vm->node_a[(uintmax_t)node]);
+  if(vm->vw_error) return;
+  if((uintmax_t)node >= GMachine_vw_gnodes) { vm_fail(-4); return; }
+  kind = (int)vm->node_kind[(uintmax_t)node];
+}
+if(kind != GMachine_vw_fun) { vm_fail(-4); return; }
+if(vm->dump_top >= GMachine_vw_dlimit) { vm_fail(-3); return; }
+vm->dump_addr[vm->dump_top] = (int64_t)vm->vw_pc;
+vm->dump_top += 1u;
+if(GMachine_vw_pokes(vm, redex)) return;
+for(i = 0; i < count; ++i) if(GMachine_vw_pokes(vm, spine[i])) return;
+vm_jump((cell)vm->node_a[(uintmax_t)node]);]] },
+    { name = "RET0", flow = "jump", stack_effect = "( -- )", semantics = [[
+if(!vm->dump_top) { vm_fail(-2); return; }
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);]] },
+    { name = "RET1", flow = "jump", stack_effect = "( -- )", semantics = [[
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);]] },
+    { name = "RET2", flow = "jump", stack_effect = "( -- )", semantics = [[
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);]] },
+    { name = "RET3", flow = "jump", stack_effect = "( -- )", semantics = [[
+if(!vm->dump_top) { vm_fail(-2); return; }
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+(void)GMachine_vw_pops(vm);
+if(vm->vw_error) return;
+vm->dump_top -= 1u;
+vm_jump((cell)vm->dump_addr[vm->dump_top]);]] },
+    { name = "PRINT", stack_effect = "( -- )", semantics = [[
+cell node = GMachine_vw_pops(vm);
+int kind = 0; cell field = 0;
+if(vm->vw_error) return;
+if(GMachine_vw_inspect(vm, node, &kind, &field)) { vm_fail(-4); return; }
+if(kind == GMachine_vw_nil) { vm->out = 0; return; }
+if(kind != GMachine_vw_int && kind != GMachine_vw_bool) { vm_fail(-4); return; }
+vm->out = (int64_t)field;]] },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

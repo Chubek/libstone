@@ -1,0 +1,199 @@
+-- Categorical Abstract Machine (CAM).
+--
+-- Reference: G. Cousineau, P.-L. Curien and M. Mauny, "The Categorical Abstract
+-- Machine", Science of Computer Programming 8 (1987), 173-202.  Studied as the
+-- composition "CAM = As . VaL" (call-by-value, eval-apply, linked environment)
+-- by R. Douence and P. Fradet, "A Systematic Study of Functional Language
+-- Implementations", TOPLAS 20(2), 1998.
+--
+-- The CAM is a *strict* counterpart of the SECD machine: it keeps Landin's four
+-- registers, but the environment is a single value built out of pairs rather
+-- than a list of bindings, and the categorical combinators -- identity,
+-- composition, the projections, currying and application -- are the machine's
+-- primitive operations.
+--
+--   S   the term stack   -- the generated value stack
+--   E   the environment  -- `env`, one tagged value (a binary tree of pairs)
+--   C   the code         -- the tape (vw_pc)
+--   D   the dump         -- the frame component
+--
+-- Every cell on S is tagged, so the tree the environment builds and the code
+-- the machine runs can share one word:
+--
+--   tag 1   integer; the payload is the cell shifted right by three bits
+--   tag 2   pair; the payload indexes `pair_a` / `pair_b`
+--   tag 3   closure; the payload indexes `clo_code` / `clo_env`
+--
+-- The environment is a nested pair `(value, rest)`, so `ACCESS n` is "take the
+-- second component n times, then the first", which is the combinator
+-- `fst o snd^n`.  `CONS` builds a pair from two stack values and `FST` / `SND`
+-- take it apart, so the same instructions serve both the compiler's
+-- environment trees and the programmer's data.
+--
+-- Closures capture the height of the current environment, and `APPLY` binds one
+-- argument by pairing it with the closure's captured environment.  The callee
+-- leaves its result on S and `RET` slides it over the caller's argument, which
+-- is the "slide" the real implementation folds into its return sequence.
+local v = require("vmweave")
+return v.vm {
+  name = "CAM",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 512 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  subsystems = {
+    token = [[
+#define CAM_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define CAM_vw_int(n) ((CAM_cell)(((uintptr_t)(intptr_t)(n) << 3) | (uintptr_t)1u))
+#define CAM_vw_pairref(i) ((CAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
+#define CAM_vw_closure(i) ((CAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)3u))
+#define CAM_vw_is_int(x) (CAM_vw_tag(x) == (uintptr_t)1u)
+#define CAM_vw_is_pair(x) (CAM_vw_tag(x) == (uintptr_t)2u)
+#define CAM_vw_is_closure(x) (CAM_vw_tag(x) == (uintptr_t)3u)
+#define CAM_vw_value(x) ((CAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define CAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+
+/* Build the pair (car, cdr) and return its tagged reference, or fail. */
+static CAM_cell CAM_vw_cons(CAM_vm *vm, CAM_cell car, CAM_cell cdr) {
+  uintmax_t index;
+  if(!vm || vm->vw_error) return 0;
+  if(vm->pair_top >= 512u) { CAM_vw_fail(vm,-3); return 0; }
+  index = vm->pair_top++;
+  vm->pair_a[index] = (int64_t)car;
+  vm->pair_b[index] = (int64_t)cdr;
+  return CAM_vw_pairref(index);
+}
+
+/* Read one component of a pair; the caller has already checked the tag. */
+static CAM_cell CAM_vw_car(CAM_vm *vm, CAM_cell value) {
+  return (CAM_cell)vm->pair_a[CAM_vw_index(value)];
+}
+static CAM_cell CAM_vw_cdr(CAM_vm *vm, CAM_cell value) {
+  return (CAM_cell)vm->pair_b[CAM_vw_index(value)];
+}
+]],
+  },
+  fields = {
+    { name = "env", type = "i64" },
+    { name = "pair_a", type = "i64", count = 512 },
+    { name = "pair_b", type = "i64", count = 512 },
+    { name = "pair_top", type = "u64" },
+    { name = "clo_code", type = "u64", count = 128 },
+    { name = "clo_env", type = "u64", count = 128 },
+    { name = "clo_top", type = "u64" },
+    { name = "env_mark", type = "i64", count = 128 },
+    { name = "env_mark_top", type = "u64" },
+    { name = "flag", type = "i64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "QUOTE", operands = { "cell" }, stack_effect = "( -- v )",
+      semantics = "vm_push(CAM_vw_int(operand0));" },
+    { name = "ACCESS", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+cell value = (cell)vm->env;
+uintmax_t step;
+if(operand0 < 0) { vm_fail(-4); return; }
+for(step = 0; step < (uintmax_t)operand0; ++step) {
+  if(!CAM_vw_is_pair(value)) { vm_fail(-4); return; }
+  value = CAM_vw_cdr(vm, value);
+}
+if(!CAM_vw_is_pair(value)) { vm_fail(-4); return; }
+vm_push(CAM_vw_car(vm, value));]] },
+    { name = "CLOSURE", operands = { "label" }, stack_effect = "( -- clos )", semantics = [[
+if(vm->clo_top >= 128u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = (uint64_t)vm->env;
+vm_push(CAM_vw_closure(vm->clo_top));
+++vm->clo_top;]] },
+    { name = "CONS", stack_effect = "( a b -- pair )", semantics = [[
+cell cdr = vm_pop(); cell car = vm_pop(); cell pair;
+if(vm->vw_error) return;
+pair = CAM_vw_cons(vm, car, cdr);
+if(vm->vw_error) return;
+vm_push(pair);]] },
+    { name = "FST", stack_effect = "( pair -- a )", semantics = [[
+cell pair = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
+vm_push(CAM_vw_car(vm, pair));]] },
+    { name = "SND", stack_effect = "( pair -- b )", semantics = [[
+cell pair = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
+vm_push(CAM_vw_cdr(vm, pair));]] },
+    { name = "APPLY", flow = "call", stack_effect = "( arg clos -- )", semantics = [[
+cell closure = vm_pop(); cell argument = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_closure(closure)) { vm_fail(-4); return; }
+{
+  uintmax_t index = CAM_vw_index(closure);
+  cell binding;
+  if(index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  binding = CAM_vw_cons(vm, argument, (cell)vm->clo_env[index]);
+  if(vm->vw_error) return;
+  vm->env_mark[vm->env_mark_top++] = vm->env;
+  vm->env = (int64_t)binding;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RET", flow = "return", stack_effect = "( r -- r )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();]] },
+    { name = "TEST", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }
+vm->flag = CAM_vw_value(value) ? 1 : 0;]] },
+    { name = "BRANCH", operands = { "label", "label" }, flow = "branch", stack_effect = "( -- )",
+      semantics = "vm_jump(vm->flag ? operand0 : operand1);" },
+    { name = "ADD", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) + CAM_vw_value(pb)));]] },
+    { name = "SUB", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) - CAM_vw_value(pb)));]] },
+    { name = "MUL", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) * CAM_vw_value(pb)));]] },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+if(!CAM_vw_value(pb)) { vm_fail(-10); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) / CAM_vw_value(pb)));]] },
+    { name = "NEG", stack_effect = "( a -- b )", semantics = [[
+cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(-CAM_vw_value(pa)));]] },
+    { name = "EQ", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) == CAM_vw_value(pb) ? 1 : 0));]] },
+    { name = "LT", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) < CAM_vw_value(pb) ? 1 : 0));]] },
+    { name = "PRINT", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }
+vm->out = CAM_vw_value(value);]] },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

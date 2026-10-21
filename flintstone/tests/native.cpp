@@ -184,6 +184,18 @@ void shipped_tiny_targets() {
     CHECK(find_architecture("no-such-arch") == nullptr);
     CHECK(tiny_backend_names() == (std::vector<std::string>{"x86-64-tiny", "aarch64-tiny", "riscv64-tiny"}));
     CHECK(tiny_arch_name(TinyArch::X86_64) == "x86-64-tiny");
+    // The name/architecture mapping is the single source of truth for the
+    // published name list, the backend registry and the CLI's --target.
+    for (const auto& name : tiny_backend_names()) {
+        TinyArch arch;
+        CHECK(find_tiny_arch(name, arch));
+        CHECK(tiny_arch_name(arch) == name);
+    }
+    TinyArch unused;
+    CHECK(!find_tiny_arch("no-such-tiny-target", unused));
+    register_tiny_backends(registry);
+    for (const auto& name : tiny_backend_names())
+        CHECK(std::find(registry.backend_names().begin(), registry.backend_names().end(), name) != registry.backend_names().end());
     auto add_module = parse(R"(module tiny level core { func @f() -> i32 {
       ^e: %a:i32 = arith.constant(20:i32); %b:i32 = arith.constant(22:i32);
       %r:i32 = arith.add(%a, %b); func.return(%r); } })");

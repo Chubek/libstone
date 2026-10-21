@@ -19,7 +19,11 @@ const ArchInfo* find_architecture(std::string_view key);
 // straight-line i32 integer functions (constant/copy/add/sub/mul/return);
 // anything else fails explicitly with tiny.* diagnostics.
 enum class TinyArch { X86_64, AArch64, RiscV64 };
+// The canonical target name for an architecture and its inverse. The mapping
+// is defined once so the CLI, the backend registry and the published name
+// list cannot drift apart.
 std::string tiny_arch_name(TinyArch);
+bool find_tiny_arch(std::string_view name, TinyArch& arch);
 struct TinyForms {
     std::uint32_t li = 0, add = 0, sub = 0, mul = 0, mov = 0, ret = 0, model = 0;
 };

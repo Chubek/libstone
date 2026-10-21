@@ -1,8 +1,7 @@
 # 3. Textual language
 
-`frontend/Flintstone.g` records the reference EBNF. `frontend/parser.cpp` is the
-bounded recursive-descent implementation; there is no generated parser file to
-hand-edit. Parsing constructs the owning IL directly. Parsing and semantic
+`frontend/parser.cpp` is the bounded recursive-descent implementation; there is
+no separate grammar file or generated parser to hand-edit. Parsing constructs the owning IL directly. Parsing and semantic
 verification are separate operations.
 
 ## Lexical rules

@@ -212,7 +212,7 @@ SelectedFunction select_integer_subset(const Module& module, const Function& fun
             if (operand.kind == OperandKind::Integer) {
                 check(operand.type == Type::integer(32), "tiny.type", "tiny integer targets support only i32 literals");
             } else if (operand.kind != OperandKind::Value) {
-                check(false, "tiny.operand", "tiny integer targets support only value and integer operands", op.location);
+                detail::fail("tiny.operand", "tiny integer targets support only value and integer operands", op.location);
             }
     };
     (void)registry;
@@ -261,7 +261,7 @@ SelectedFunction select_integer_subset(const Module& module, const Function& fun
             result.encodings[next] = std::move(encoding);
             ++next;
         } else {
-            check(false, "tiny.unsupported", "tiny integer targets cannot select '" + op.name + "'", op.location);
+            detail::fail("tiny.unsupported", "tiny integer targets cannot select '" + op.name + "'", op.location);
         }
     }
     // Deduplicate virtual registers (defs may repeat across ops? No: SSA single
@@ -273,6 +273,13 @@ SelectedFunction select_integer_subset(const Module& module, const Function& fun
 }
 
 } // namespace
+
+struct TinyEntry { const char* name; TinyArch arch; };
+constexpr TinyEntry kTinyTargets[] = {
+    {"x86-64-tiny", TinyArch::X86_64},
+    {"aarch64-tiny", TinyArch::AArch64},
+    {"riscv64-tiny", TinyArch::RiscV64},
+};
 
 namespace {
 const std::vector<ArchInfo>& arch_table() {
@@ -297,12 +304,13 @@ const ArchInfo* find_architecture(std::string_view key) {
 }
 
 std::string tiny_arch_name(TinyArch arch) {
-    switch (arch) {
-    case TinyArch::X86_64: return "x86-64-tiny";
-    case TinyArch::AArch64: return "aarch64-tiny";
-    case TinyArch::RiscV64: return "riscv64-tiny";
-    }
+    for (const auto& entry : kTinyTargets) if (entry.arch == arch) return entry.name;
     detail::fail("tiny.arch", "unknown tiny architecture");
+}
+
+bool find_tiny_arch(std::string_view name, TinyArch& arch) {
+    for (const auto& entry : kTinyTargets) if (name == entry.name) { arch = entry.arch; return true; }
+    return false;
 }
 
 std::shared_ptr<domsymas::Databank> make_tiny_bank(TinyArch arch, TinyForms* forms) {
@@ -374,24 +382,21 @@ NativeTarget make_tiny_target(TinyArch arch) {
 }
 
 std::vector<std::string> tiny_backend_names() {
-    return {"x86-64-tiny", "aarch64-tiny", "riscv64-tiny"};
+    std::vector<std::string> names;
+    for (const auto& entry : kTinyTargets) names.emplace_back(entry.name);
+    return names;
 }
 
 void register_tiny_backends(Registry& registry) {
-    const std::pair<const char*, TinyArch> backends[] = {
-        {"x86-64-tiny", TinyArch::X86_64},
-        {"aarch64-tiny", TinyArch::AArch64},
-        {"riscv64-tiny", TinyArch::RiscV64},
-    };
-    for (const auto& [name, arch] : backends) {
+    for (const auto& entry : kTinyTargets) {
         try {
-            registry.backend(name);
+            registry.backend(entry.name);
             continue; // already registered
         } catch (const Error&) {
             // Not registered yet; install below.
         }
-        auto target = make_tiny_target(arch);
-        registry.add_backend(name, [target = std::move(target)](const Module& module, const Registry& registry) {
+        auto target = make_tiny_target(entry.arch);
+        registry.add_backend(entry.name, [target = std::move(target)](const Module& module, const Registry& registry) {
             return compile_native(module, registry, target).artifact;
         });
     }

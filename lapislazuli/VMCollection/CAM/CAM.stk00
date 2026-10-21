@@ -1,0 +1,200 @@
+stk-00 1
+vm "CAM"
+configuration "switch" "intptr_t" 512 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "clo_code" "u64" 128
+field "clo_env" "u64" 128
+field "clo_top" "u64" 0
+field "env" "i64" 0
+field "env_mark" "i64" 128
+field "env_mark_top" "u64" 0
+field "flag" "i64" 0
+field "out" "i64" 0
+field "pair_a" "i64" 512
+field "pair_b" "i64" 512
+field "pair_top" "u64" 0
+subsystem "token" c{ 1293
+#define CAM_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define CAM_vw_int(n) ((CAM_cell)(((uintptr_t)(intptr_t)(n) << 3) | (uintptr_t)1u))
+#define CAM_vw_pairref(i) ((CAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
+#define CAM_vw_closure(i) ((CAM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)3u))
+#define CAM_vw_is_int(x) (CAM_vw_tag(x) == (uintptr_t)1u)
+#define CAM_vw_is_pair(x) (CAM_vw_tag(x) == (uintptr_t)2u)
+#define CAM_vw_is_closure(x) (CAM_vw_tag(x) == (uintptr_t)3u)
+#define CAM_vw_value(x) ((CAM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define CAM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+
+/* Build the pair (car, cdr) and return its tagged reference, or fail. */
+static CAM_cell CAM_vw_cons(CAM_vm *vm, CAM_cell car, CAM_cell cdr) {
+  uintmax_t index;
+  if(!vm || vm->vw_error) return 0;
+  if(vm->pair_top >= 512u) { CAM_vw_fail(vm,-3); return 0; }
+  index = vm->pair_top++;
+  vm->pair_a[index] = (int64_t)car;
+  vm->pair_b[index] = (int64_t)cdr;
+  return CAM_vw_pairref(index);
+}
+
+/* Read one component of a pair; the caller has already checked the tag. */
+static CAM_cell CAM_vw_car(CAM_vm *vm, CAM_cell value) {
+  return (CAM_cell)vm->pair_a[CAM_vw_index(value)];
+}
+static CAM_cell CAM_vw_cdr(CAM_vm *vm, CAM_cell value) {
+  return (CAM_cell)vm->pair_b[CAM_vw_index(value)];
+}
+
+}c
+: "ACCESS" opcode 0 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 310
+cell value = (cell)vm->env;
+uintmax_t step;
+if(operand0 < 0) { vm_fail(-4); return; }
+for(step = 0; step < (uintmax_t)operand0; ++step) {
+  if(!CAM_vw_is_pair(value)) { vm_fail(-4); return; }
+  value = CAM_vw_cdr(vm, value);
+}
+if(!CAM_vw_is_pair(value)) { vm_fail(-4); return; }
+vm_push(CAM_vw_car(vm, value));
+}c ;
+: "ADD" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 192
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) + CAM_vw_value(pb)));
+}c ;
+: "APPLY" opcode 2 operands 0 effect "( arg clos -- )" flow "call" source "=[C]" 0
+c{ 515
+cell closure = vm_pop(); cell argument = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_closure(closure)) { vm_fail(-4); return; }
+{
+  uintmax_t index = CAM_vw_index(closure);
+  cell binding;
+  if(index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  binding = CAM_vw_cons(vm, argument, (cell)vm->clo_env[index]);
+  if(vm->vw_error) return;
+  vm->env_mark[vm->env_mark_top++] = vm->env;
+  vm->env = (int64_t)binding;
+  (void)vm_call((cell)vm->clo_code[index]);
+}
+}c ;
+: "BRANCH" opcode 3 operands 2 "label" "label" effect "( -- )" flow "branch" source "=[C]" 0
+c{ 40
+vm_jump(vm->flag ? operand0 : operand1);
+}c ;
+: "CLOSURE" opcode 4 operands 1 "label" effect "( -- clos )" flow "next" source "=[C]" 0
+c{ 195
+if(vm->clo_top >= 128u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = (uint64_t)vm->env;
+vm_push(CAM_vw_closure(vm->clo_top));
+++vm->clo_top;
+}c ;
+: "CONS" opcode 5 operands 0 effect "( a b -- pair )" flow "next" source "=[C]" 0
+c{ 151
+cell cdr = vm_pop(); cell car = vm_pop(); cell pair;
+if(vm->vw_error) return;
+pair = CAM_vw_cons(vm, car, cdr);
+if(vm->vw_error) return;
+vm_push(pair);
+}c ;
+: "DIV" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 240
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+if(!CAM_vw_value(pb)) { vm_fail(-10); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) / CAM_vw_value(pb)));
+}c ;
+: "EQ" opcode 7 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 201
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) == CAM_vw_value(pb) ? 1 : 0));
+}c ;
+: "FST" opcode 8 operands 0 effect "( pair -- a )" flow "next" source "=[C]" 0
+c{ 128
+cell pair = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
+vm_push(CAM_vw_car(vm, pair));
+}c ;
+: "LT" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 200
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) < CAM_vw_value(pb) ? 1 : 0));
+}c ;
+: "MUL" opcode 10 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 192
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) * CAM_vw_value(pb)));
+}c ;
+: "NEG" opcode 11 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 132
+cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(-CAM_vw_value(pa)));
+}c ;
+: "PRINT" opcode 12 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 129
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }
+vm->out = CAM_vw_value(value);
+}c ;
+: "QUOTE" opcode 13 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 30
+vm_push(CAM_vw_int(operand0));
+}c ;
+: "RET" opcode 14 operands 0 effect "( r -- r )" flow "return" source "=[C]" 0
+c{ 269
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env = vm->env_mark[--vm->env_mark_top];
+(void)vm_return();
+}c ;
+: "SND" opcode 15 operands 0 effect "( pair -- b )" flow "next" source "=[C]" 0
+c{ 128
+cell pair = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_pair(pair)) { vm_fail(-4); return; }
+vm_push(CAM_vw_cdr(vm, pair));
+}c ;
+: "STOP" opcode 16 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 17 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 192
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(pa) || !CAM_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(CAM_vw_int(CAM_vw_value(pa) - CAM_vw_value(pb)));
+}c ;
+: "TEST" opcode 18 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 138
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!CAM_vw_is_int(value)) { vm_fail(-4); return; }
+vm->flag = CAM_vw_value(value) ? 1 : 0;
+}c ;
+end

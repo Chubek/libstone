@@ -1,0 +1,153 @@
+-- P-Code (the UCSD Pascal machine).
+--
+-- Reference: the p-machine described in K. Bowles, "Beginner's Guide for the
+-- UCSD Pascal System" (Byte Books, 1980) and in the standard-workspace
+-- documents distributed with the UCSD p-System; the opcode list is the one
+-- the PASCAL compiler emits for the `P-code` p-machine of that distribution.
+-- The p-machine is a stack machine with three storages:
+--
+--   S   the evaluation stack -- the generated value stack
+--   MP  the Mark stack       -- `lbase` / `ltop` / `mark`, a local window
+--   PC  the code             -- the tape (vw_pc); calls use the frame component
+--
+-- The directory name is hyphenated because the collection names the machine
+-- `P-Code`; a C identifier cannot contain a hyphen, so the generated VM is
+-- named `PCode` and every generated symbol is prefixed `PCode_`.
+--
+-- Deviations from the p-machine, stated rather than hidden:
+--
+--   * `LOD`/`STO`/`LDA` take one operand: the offset within the current local
+--     window.  The real p-machine takes a lexicographic pair (static link
+--     level, offset) and walks the display; a static link costs an indirect
+--     load per access and adds nothing to the machine's shape, so it is left
+--     to the compiler's environment rather than modelled here.
+--   * Each activation reserves a fixed sixteen-cell local window, recorded in
+--     `mark`.  The p-machine takes the frame size from the procedure header;
+--     naming it statically is the same trick SECD and the FAM family use to
+--     give the dispatcher a checkable stack effect.
+--   * `CALL`..`CALL3` name their arity.  The p-machine pops the parameter
+--     block from the header and moves it in one `CSP`/`CUP` step; here the
+--     operands on the evaluation stack *are* the parameter block and are
+--     copied into the callee's window, exactly as `CUP` moves the parameters
+--     once the header has been read.
+--   * `RETV` returns one value and `RET` returns none, because a static stack
+--     effect cannot say "returns whatever the procedure declared".
+--   * Division by zero fails the machine with -10 rather than faulting.
+local v = require("vmweave")
+return v.vm {
+  name = "PCode",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 256 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = {
+    { name = "locals", type = "i64", count = 512 },
+    { name = "lbase", type = "u64" },
+    { name = "ltop", type = "u64" },
+    { name = "mark", type = "u64", count = 64 },
+    { name = "mark_top", type = "u64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "LDC", operands = { "cell" }, stack_effect = "( -- v )",
+      semantics = "vm_push(operand0);" },
+    { name = "LOD", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm_push((cell)vm->locals[vm->lbase + (uintmax_t)operand0]);]] },
+    { name = "STO", operands = { "cell" }, stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm->locals[vm->lbase + (uintmax_t)operand0] = (int64_t)value;]] },
+    { name = "LDA", operands = { "cell" }, stack_effect = "( -- addr )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm_push((cell)(vm->lbase + (uintmax_t)operand0));]] },
+    { name = "IND", stack_effect = "( addr -- v )", semantics = [[
+cell addr = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
+vm_push((cell)vm->locals[(uintmax_t)addr]);]] },
+    { name = "STI", stack_effect = "( v addr -- )", semantics = [[
+cell addr = vm_pop(); cell value = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
+vm->locals[(uintmax_t)addr] = (int64_t)value;]] },
+    { name = "ADI", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+    { name = "SBI", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+    { name = "MPI", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+    { name = "DVI", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));]] },
+    { name = "MODI", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a % b));]] },
+    { name = "NGI", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+    { name = "ABSI", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push(a < 0 ? (cell)(0 - a) : a);" },
+    { name = "EQU", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
+    { name = "NEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);" },
+    { name = "LSS", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);" },
+    { name = "GRT", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);" },
+    { name = "LEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);" },
+    { name = "GEQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);" },
+    { name = "JMP", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "FJP", operands = { "label" }, flow = "branch", stack_effect = "( b -- )",
+      semantics = "cell flag = vm_pop(); if(!flag) vm_jump(operand0);" },
+    { name = "WRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = vm_pop();" },
+    { name = "CALL", operands = { "label" }, flow = "call", stack_effect = "( -- )", semantics = [[
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+(void)vm_call(operand0);]] },
+    { name = "CALL1", operands = { "label" }, flow = "call", stack_effect = "( a -- )", semantics = [[
+cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+(void)vm_call(operand0);]] },
+    { name = "CALL2", operands = { "label" }, flow = "call", stack_effect = "( a b -- )", semantics = [[
+cell a1 = vm_pop(); cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+vm->locals[vm->lbase + 1u] = (int64_t)a1;
+(void)vm_call(operand0);]] },
+    { name = "CALL3", operands = { "label" }, flow = "call", stack_effect = "( a b c -- )", semantics = [[
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+vm->locals[vm->lbase + 1u] = (int64_t)a1;
+vm->locals[vm->lbase + 2u] = (int64_t)a2;
+(void)vm_call(operand0);]] },
+    { name = "RET", flow = "return", stack_effect = "( -- )", semantics = [[
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
+(void)vm_return();]] },
+    { name = "RETV", flow = "return", stack_effect = "( v -- )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
+(void)vm_return();]] },
+    { name = "STP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

@@ -1,0 +1,47 @@
+local v=require("vmweave")
+local function invalid(fn) assert(not pcall(fn), "expected rejection") end
+local function make(reverse)
+  local vm=v.vm("Ex")
+  if reverse then vm:state("pc",{type="u64"}):state("acc",{type="i64"}) else vm:state("acc",{type="i64"}):state("pc",{type="u64"}) end
+  vm:instruction("increment",{semantics="vm->acc += 2; vm->pc += 1;"})
+  vm:instruction("empty")
+  return vm
+end
+local vm=make(false)
+assert(vm:emit()==make(true):emit(), "deterministic output")
+invalid(function() v.vm("bad-name") end)
+invalid(function() v.vm("int") end)
+invalid(function() v.vm("x\n*/") end)
+invalid(function() vm:state("pc",{type="u64"}) end)
+invalid(function() vm:state("x",{type="invalid"}) end)
+invalid(function() vm:state("x",{type="u8",count=0}) end)
+invalid(function() vm:state("x",{type="u8",count=1.5}) end)
+invalid(function() vm:state("x",{type="u8",bogus=true}) end)
+invalid(function() vm:instruction("increment") end)
+invalid(function() vm:instruction("new",{body=7}) end)
+invalid(function() vm:instruction("new",{semantics="\0"}) end)
+invalid(function() vm.state("x",{type="u8"}) end)
+invalid(function() vm:emit({dispatch="bogus"}) end)
+invalid(function() vm:emit({hooks=true}) end)
+invalid(function() vm:emit({nope=1}) end)
+local d=v.vm("Disp"); d:state("acc",{type="i64"}); d:instruction("add",{opcode=7,semantics="vm->acc += 1;"})
+invalid(function() d:instruction("dup",{opcode=7}) end)
+invalid(function() d:instruction("neg",{opcode=-1}) end)
+invalid(function() d:instruction("bad",{operands={"nope"}}) end)
+assert(d:emit({dispatch="switch",hooks=true})==d:emit({dispatch="switch",hooks=true}))
+invalid(function() v.vm{name="J",components={"jit","tape"}} end)
+invalid(function() v.vm{name="O",components={"object"}} end)
+invalid(function() v.vm{name="C",instructions={{name="CALL",flow="call"}}} end)
+invalid(function() v.vm{name="H",execution="none",hooks=true} end)
+invalid(function() v.vm{name="R",components={"insncode"},rewrites={{from={"A"},to={}}},instructions={{name="A"}}} end)
+local out=assert(io.open(arg[1],"w"))
+local dispatched=d:emit({dispatch="switch",hooks=true})
+out:write(dispatched)
+out:write("\nstatic int veto(Disp_vm *vm, uint32_t opcode, void *data) { (void)vm; (void)opcode; (void)data; return 9; }\n")
+out:write([[int main(void) { Disp_vm d; Disp_init(&d);
+  if (Disp_step(&d,7) || d.acc!=1 || Disp_step(&d,123)!=-1 || d.acc!=1) return 2;
+  d.vmweave_before=veto; if (Disp_step(&d,7)!=9 || d.acc!=1) return 3;
+  return 0; }
+]])
+out:close()
+print("dsl-ok")

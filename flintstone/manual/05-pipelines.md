@@ -103,9 +103,11 @@ to hide semantic changes.
 
 `dead_code_elimination` repeatedly removes unused result-producing pure
 operations. It retains reads, writes, calls, terminators and potentially
-trapping division/remainder/shifts even when results are unused. It does not
-perform whole-program reachability, memory alias optimization or dead-cycle
-collection. Purity is supplied by the operation's registered definition.
+trapping division/remainder/shifts even when results are unused. Scalar and
+vector division/remainder are both potentially trapping, so both are retained.
+It does not perform whole-program reachability, memory alias optimization or
+dead-cycle collection. Purity is supplied by the operation's registered
+definition.
 
 `vector_scalarize_pass` unrolls vector packs to scalar `arith` operations and
 `tuple_sroa_pass` replaces tuple aggregates with their scalar fields (both

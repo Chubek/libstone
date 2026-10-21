@@ -1,0 +1,289 @@
+-- B-Machine.
+--
+-- Reference: Wolfram Kluge, "Abstract Computing Machines: A Lambda Calculus
+-- Perspective" (Springer, 2005), chapter 8, where the B-Machine is the
+-- *basic* -- that is, strict and non-graph -- sibling of the G-machine.  It
+-- evaluates terms in an environment, keeps intermediate values on a stack and
+-- returns through a dump, but unlike the G-machine it never builds or updates a
+-- graph, so every value is a basic value the moment it is produced.
+--
+-- The book's registers map onto generated state:
+--
+--   C  the code pointer   -- the instruction tape (vw_pc)
+--   S  the value stack    -- the generated value stack (vm_pop / vm_push)
+--   E  the environment    -- `env`, a flat block of basic values, with
+--                            `env_top` its height; variables are read by
+--                            de Bruijn index from the newest binding back
+--   D  the dump           -- the frame component, with `env_mark` remembering
+--                            for each activation the height E is cut back to
+--                            when the activation returns
+--
+-- A closure is a code address, an arity and *copies* of the free values that
+-- were live where the closure was built.  Entering a closure rebuilds E from
+-- the copies and then appends the actual arguments, so an environment is never
+-- shared between activations -- which is exactly the property that makes the
+-- machine basic rather than graph based.
+--
+-- Deviations from the book's presentation are stated rather than hidden:
+--
+--   * The applies name their argument count -- `APP0`..`APP3` for the ordinary
+--     applies and `RAP0`..`RAP3` for the tail applies that re-enter their own
+--     closure -- so the generated dispatcher can validate a static stack
+--     effect.  The closure's arity is still checked against the count at run
+--     time.  SECD and FAM use the same device for their arity-named calls.
+--   * `MKCLOS l a n` spells out the arity a and the number of captured values
+--     n that the book keeps implicit in the compiled code.
+--   * `SLIDE n` drops the n newest environment entries; it is the book's slide
+--     written against the flat environment block.
+--   * The book has no output word, so `PRINT` records one value in `out`.
+--   * Division by zero, and the `INTPTR_MIN / -1` overflow, fail the machine
+--     with -10 rather than faulting.
+local v = require("vmweave")
+return v.vm {
+  name = "BMachine",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 256 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = {
+    { name = "env", type = "i64", count = 64 },
+    { name = "env_top", type = "u64" },
+    { name = "env_mark", type = "u64", count = 128 },
+    { name = "env_mark_top", type = "u64" },
+    { name = "clo_code", type = "u64", count = 64 },
+    { name = "clo_arity", type = "u64", count = 64 },
+    { name = "clo_base", type = "u64", count = 64 },
+    { name = "clo_nfree", type = "u64", count = 64 },
+    { name = "clo_top", type = "u64" },
+    { name = "pool", type = "i64", count = 512 },
+    { name = "pool_top", type = "u64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "LOADC", operands = { "cell" }, stack_effect = "( -- n )",
+      semantics = "vm_push(operand0);" },
+    { name = "LOAD", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);]] },
+    { name = "ALLOC", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+uintmax_t index;
+if(operand0 < 0 || vm->env_top + (uintmax_t)operand0 > 64u) { vm_fail(-3); return; }
+for(index = 0u; index < (uintmax_t)operand0; ++index) vm->env[vm->env_top++] = 0;]] },
+    { name = "SLIDE", operands = { "cell" }, stack_effect = "( -- )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 > vm->env_top) { vm_fail(-4); return; }
+vm->env_top -= (uintmax_t)operand0;]] },
+    { name = "MKCLOS", operands = { "label", "cell", "cell" }, stack_effect = "( -- closure )", semantics = [[
+uintmax_t index, field;
+if(operand1 < 0 || operand2 < 0) { vm_fail(-4); return; }
+if((uintmax_t)operand2 > vm->env_top) { vm_fail(-4); return; }
+if((uintmax_t)operand2 > 8u) { vm_fail(-3); return; }
+if(vm->clo_top >= 64u || vm->pool_top + (uintmax_t)operand2 > 512u) { vm_fail(-3); return; }
+index = vm->clo_top++;
+vm->clo_code[index] = (uint64_t)operand0;
+vm->clo_arity[index] = (uint64_t)operand1;
+vm->clo_base[index] = vm->pool_top;
+vm->clo_nfree[index] = (uintmax_t)operand2;
+for(field = 0u; field < (uintmax_t)operand2; ++field)
+  vm->pool[vm->pool_top++] = vm->env[vm->env_top - (uintmax_t)operand2 + field];
+vm_push((cell)index);]] },
+    { name = "APP0", operands = { "label" }, flow = "call", stack_effect = "( closure -- )", semantics = [[
+cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "APP1", operands = { "label" }, flow = "call", stack_effect = "( closure a -- )", semantics = [[
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)a0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "APP2", operands = { "label" }, flow = "call", stack_effect = "( closure a b -- )", semantics = [[
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "APP3", operands = { "label" }, flow = "call", stack_effect = "( closure a b c -- )", semantics = [[
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP0", operands = { "label" }, flow = "call", stack_effect = "( closure -- )", semantics = [[
+cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 0u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 1u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)closure;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP1", operands = { "label" }, flow = "call", stack_effect = "( closure a -- )", semantics = [[
+cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 1u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 2u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP2", operands = { "label" }, flow = "call", stack_effect = "( closure a b -- )", semantics = [[
+cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 2u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 3u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RAP3", operands = { "label" }, flow = "call", stack_effect = "( closure a b c -- )", semantics = [[
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop(); cell closure = vm_pop();
+if(vm->vw_error) return;
+{
+  uintmax_t index = (uintmax_t)closure;
+  if(closure < 0 || index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->clo_arity[index] != 3u) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u || vm->clo_nfree[index] + 4u > 64u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = 0u;
+  {
+    uintmax_t field;
+    for(field = 0u; field < vm->clo_nfree[index]; ++field)
+      vm->env[vm->env_top++] = vm->pool[vm->clo_base[index] + field];
+  }
+  vm->env[vm->env_top++] = (int64_t)closure;
+  vm->env[vm->env_top++] = (int64_t)a0;
+  vm->env[vm->env_top++] = (int64_t)a1;
+  vm->env[vm->env_top++] = (int64_t)a2;
+  (void)vm_call((cell)vm->clo_code[index]);
+}]] },
+    { name = "RET", flow = "return", stack_effect = "( v -- v )", semantics = [[
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->env_mark_top) vm->env_top = (uintmax_t)vm->env_mark[--vm->env_mark_top];
+(void)vm_return();]] },
+    { name = "BRA", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "BRF", operands = { "label" }, flow = "branch", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!value) vm_jump(operand0);]] },
+    { name = "ADD", stack_effect = "( a b -- c )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa + pb));" },
+    { name = "SUB", stack_effect = "( a b -- c )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa - pb));" },
+    { name = "MUL", stack_effect = "( a b -- c )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push((cell)(pa * pb));" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
+vm_push((cell)(pa / pb));]] },
+    { name = "MOD", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(!pb || (pa == INTPTR_MIN && pb == (cell)-1)) { vm_fail(-10); return; }
+vm_push((cell)(pa % pb));]] },
+    { name = "NEG", stack_effect = "( a -- b )",
+      semantics = "cell pa = vm_pop(); vm_push((cell)(0 - pa));" },
+    { name = "EQ", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa == pb ? 1 : 0);" },
+    { name = "NE", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa != pb ? 1 : 0);" },
+    { name = "LT", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa < pb ? 1 : 0);" },
+    { name = "LE", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa <= pb ? 1 : 0);" },
+    { name = "GT", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa > pb ? 1 : 0);" },
+    { name = "GE", stack_effect = "( a b -- flag )",
+      semantics = "cell pb = vm_pop(); cell pa = vm_pop(); vm_push(pa >= pb ? 1 : 0);" },
+    { name = "PRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = (int64_t)vm_pop();" },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

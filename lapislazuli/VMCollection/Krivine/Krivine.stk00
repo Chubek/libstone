@@ -1,0 +1,199 @@
+stk-00 1
+vm "Krivine"
+configuration "switch" "intptr_t" 512 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "clo_code" "u64" 128
+field "clo_env" "u64" 128
+field "clo_top" "u64" 0
+field "env" "i64" 128
+field "env_mark" "u64" 128
+field "env_mark_top" "u64" 0
+field "env_top" "u64" 0
+field "flag" "i64" 0
+field "out" "i64" 0
+field "val" "i64" 0
+subsystem "frame" c{ 277
+/* Deliver the value in `val` to the caller, or stop at the outermost term. */
+static void Krivine_vw_deliver(Krivine_vm *vm) {
+  if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+  if(vm->vw_frame_count) (void)Krivine_ret(vm);
+  else Krivine_vw_halt(vm);
+}
+
+}c
+subsystem "token" c{ 659
+#define Krivine_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define Krivine_vw_tag_int ((uintptr_t)1u)
+#define Krivine_vw_tag_closure ((uintptr_t)2u)
+#define Krivine_vw_int(n) ((cell)(((uintptr_t)(intptr_t)(n) << 3) | Krivine_vw_tag_int))
+#define Krivine_vw_closure(i) ((cell)(((uintptr_t)(i) << 3) | Krivine_vw_tag_closure))
+#define Krivine_vw_is_int(x) (Krivine_vw_tag(x) == Krivine_vw_tag_int)
+#define Krivine_vw_is_closure(x) (Krivine_vw_tag(x) == Krivine_vw_tag_closure)
+#define Krivine_vw_to_int(x) ((cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define Krivine_vw_to_closure(x) ((uint64_t)((uintptr_t)(x) >> 3))
+static void Krivine_vw_deliver(Krivine_vm *vm);
+
+}c
+: "ACCESS" opcode 0 operands 1 "cell" effect "( -- x )" flow "next" source "=[C]" 0
+c{ 143
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);
+}c ;
+: "ADD" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 214
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) + Krivine_vw_to_int(pb)));
+}c ;
+: "BRANCH" opcode 2 operands 2 "label" "label" effect "( -- )" flow "branch" source "=[C]" 0
+c{ 40
+vm_jump(vm->flag ? operand0 : operand1);
+}c ;
+: "CONST" opcode 3 operands 1 "cell" effect "( -- n )" flow "next" source "=[C]" 0
+c{ 34
+vm_push(Krivine_vw_int(operand0));
+}c ;
+: "DIV" opcode 4 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 267
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+if(!Krivine_vw_to_int(pb)) { vm_fail(-10); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) / Krivine_vw_to_int(pb)));
+}c ;
+: "ENTER" opcode 5 operands 0 effect "( x -- )" flow "call" source "=[C]" 0
+c{ 488
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(Krivine_vw_is_closure(value)) {
+  uintmax_t index = Krivine_vw_to_closure(value);
+  if(index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = vm->clo_env[index];
+  (void)vm_call((cell)vm->clo_code[index]);
+} else if(Krivine_vw_is_int(value)) {
+  vm->val = (int64_t)value;
+  Krivine_vw_deliver(vm);
+} else {
+  vm_fail(-4);
+}
+}c ;
+: "EQ" opcode 6 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 223
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) == Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "GE" opcode 7 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 223
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) >= Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "GRAB" opcode 8 operands 0 effect "( arg -- )" flow "next" source "=[C]" 0
+c{ 205
+cell argument = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_closure(argument)) { vm_fail(-4); return; }
+if(vm->env_top >= 128u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = (int64_t)argument;
+}c ;
+: "GT" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 222
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) > Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "LE" opcode 10 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 223
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) <= Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "LT" opcode 11 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 222
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) < Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "MUL" opcode 12 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 214
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) * Krivine_vw_to_int(pb)));
+}c ;
+: "NEG" opcode 13 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 145
+cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(-Krivine_vw_to_int(pa)));
+}c ;
+: "NEQ" opcode 14 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 223
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) != Krivine_vw_to_int(pb) ? 1 : 0));
+}c ;
+: "POPVAL" opcode 15 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->val = vm_pop();
+}c ;
+: "PRINT" opcode 16 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 138
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(value)) { vm_fail(-4); return; }
+vm->out = Krivine_vw_to_int(value);
+}c ;
+: "PUSH" opcode 17 operands 1 "label" effect "( -- closure )" flow "next" source "=[C]" 0
+c{ 193
+if(vm->clo_top >= 128u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = vm->env_top;
+vm_push(Krivine_vw_closure(vm->clo_top));
+++vm->clo_top;
+}c ;
+: "PUSHVAL" opcode 18 operands 0 effect "( -- v )" flow "next" source "=[C]" 0
+c{ 23
+vm_push((cell)vm->val);
+}c ;
+: "RET" opcode 19 operands 0 effect "( -- )" flow "return" source "=[C]" 0
+c{ 72
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+Krivine_vw_deliver(vm);
+}c ;
+: "STOP" opcode 20 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "SUB" opcode 21 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 214
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) - Krivine_vw_to_int(pb)));
+}c ;
+: "TEST" opcode 22 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 125
+cell value = vm_pop();
+if(vm->vw_error) return;
+vm->flag = Krivine_vw_is_int(value) ? (Krivine_vw_to_int(value) ? 1 : 0) : 1;
+}c ;
+end

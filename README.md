@@ -1,5 +1,9 @@
 # Building libstone
 
+See the [Libstone manual](manual/README.md) for the component guide, build and
+configuration reference, first programs, embedding, extension points, and
+troubleshooting.
+
 The Stone components now build from this separated `libstone` checkout. CMake
 never downloads dependencies; populate `libstone/third_party/` or pass explicit
 `LIBSTONE_*_SOURCE_DIR` cache variables for vendored dependencies.

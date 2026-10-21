@@ -1,0 +1,200 @@
+-- Krivine machine.
+--
+-- References: Jean-Louis Krivine, "A call-by-name lambda-calculus machine",
+-- Higher-Order and Symbolic Computation 20(3), 2007; Remi Douence and Pascal
+-- Fradet, "The next 700 Krivine machines", HOSC 20(3), 2007.
+--
+-- The three registers of the classic machine, plus the two the K3 extension of
+-- Douence and Fradet adds:
+--
+--   code   the term being evaluated   -- the tape (vw_pc)
+--   env    a stack of arguments       -- `env`, `env_top`
+--   stack  the working stack          -- the generated value stack
+--   dump   saved return points        -- the frame component,
+--                                        `env_mark` holds the saved heights
+--   value  the value channel          -- `val`
+--
+-- Closures live in `clo_code` / `clo_env` and are referred to by index.  The
+-- value stack holds *tagged* cells, because a call-by-name machine must keep
+-- constants and code references apart on one stack:
+--
+--   tag 1   small integer; the payload is the cell shifted right by three bits
+--   tag 2   closure; the payload is an index into `clo_code` / `clo_env`
+--
+-- Three low bits are used because a closure index is itself an integer, so the
+-- tag cannot be recovered from the width alone.  `CONST` produces integers and
+-- `PUSH` produces closures; every consumer of a value checks the tag, so a
+-- mistyped operand fails with -4 instead of silently corrupting the machine.
+--
+-- Argument passing is call-by-name, and follows the machine exactly: a caller
+-- pushes one thunk per argument and then the closure to enter, and `ENTER`
+-- transfers control.  The callee `GRAB`s the thunks into its environment; a
+-- variable is forced by `ACCESS n` followed by `ENTER`, so evaluating the same
+-- variable twice re-evaluates its thunk.  The description stops at the K3
+-- machine -- constants, a test, and an explicit dump, but no `GRAB` that
+-- updates in place -- so it is call-by-name, not call-by-need.
+--
+-- Two deviations are stated rather than hidden:
+--
+--   * `ENTER` must accept either a closure (enter it) or a constant (that is
+--     the value of the term).  One instruction cannot carry both static stack
+--     effects, so the value travels in the `val` register and `PUSHVAL` /
+--     `POPVAL` move it to and from the stack.  This is the "state" the K3
+--     extension adds, and it is what makes the machine's compiled form have
+--     static effects at all.
+--   * `ACCESS n` counts arguments from the newest, so the first argument of a
+--     call is `ACCESS 0`.  Krivine's environment is a list; a stack is the same
+--     list read from the other end.
+local v = require("vmweave")
+return v.vm {
+  name = "Krivine",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 512 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  subsystems = {
+    -- Tagged cells.  Macros rather than functions so that none of them is an
+    -- unused static function under -Wall -Wextra.
+    token = [[
+#define Krivine_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define Krivine_vw_tag_int ((uintptr_t)1u)
+#define Krivine_vw_tag_closure ((uintptr_t)2u)
+#define Krivine_vw_int(n) ((cell)(((uintptr_t)(intptr_t)(n) << 3) | Krivine_vw_tag_int))
+#define Krivine_vw_closure(i) ((cell)(((uintptr_t)(i) << 3) | Krivine_vw_tag_closure))
+#define Krivine_vw_is_int(x) (Krivine_vw_tag(x) == Krivine_vw_tag_int)
+#define Krivine_vw_is_closure(x) (Krivine_vw_tag(x) == Krivine_vw_tag_closure)
+#define Krivine_vw_to_int(x) ((cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define Krivine_vw_to_closure(x) ((uint64_t)((uintptr_t)(x) >> 3))
+static void Krivine_vw_deliver(Krivine_vm *vm);
+]],
+    frame = [[
+/* Deliver the value in `val` to the caller, or stop at the outermost term. */
+static void Krivine_vw_deliver(Krivine_vm *vm) {
+  if(vm->env_mark_top) vm->env_top = vm->env_mark[--vm->env_mark_top];
+  if(vm->vw_frame_count) (void)Krivine_ret(vm);
+  else Krivine_vw_halt(vm);
+}
+]],
+  },
+  fields = {
+    { name = "val", type = "i64" },
+    { name = "env", type = "i64", count = 128 },
+    { name = "env_top", type = "u64" },
+    { name = "env_mark", type = "u64", count = 128 },
+    { name = "env_mark_top", type = "u64" },
+    { name = "clo_code", type = "u64", count = 128 },
+    { name = "clo_env", type = "u64", count = 128 },
+    { name = "clo_top", type = "u64" },
+    { name = "flag", type = "i64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "CONST", operands = { "cell" }, stack_effect = "( -- n )",
+      semantics = "vm_push(Krivine_vw_int(operand0));" },
+    { name = "PUSH", operands = { "label" }, stack_effect = "( -- closure )", semantics = [[
+if(vm->clo_top >= 128u) { vm_fail(-3); return; }
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+vm->clo_env[vm->clo_top] = vm->env_top;
+vm_push(Krivine_vw_closure(vm->clo_top));
+++vm->clo_top;]] },
+    { name = "ACCESS", operands = { "cell" }, stack_effect = "( -- x )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->env_top) { vm_fail(-4); return; }
+vm_push((cell)vm->env[vm->env_top - 1u - (uintmax_t)operand0]);]] },
+    { name = "PUSHVAL", stack_effect = "( -- v )", semantics = "vm_push((cell)vm->val);" },
+    { name = "POPVAL", stack_effect = "( v -- )", semantics = "vm->val = vm_pop();" },
+    { name = "GRAB", stack_effect = "( arg -- )", semantics = [[
+cell argument = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_closure(argument)) { vm_fail(-4); return; }
+if(vm->env_top >= 128u) { vm_fail(-3); return; }
+vm->env[vm->env_top++] = (int64_t)argument;]] },
+    { name = "ENTER", flow = "call", stack_effect = "( x -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(Krivine_vw_is_closure(value)) {
+  uintmax_t index = Krivine_vw_to_closure(value);
+  if(index >= vm->clo_top) { vm_fail(-4); return; }
+  if(vm->env_mark_top >= 128u) { vm_fail(-3); return; }
+  vm->env_mark[vm->env_mark_top++] = vm->env_top;
+  vm->env_top = vm->clo_env[index];
+  (void)vm_call((cell)vm->clo_code[index]);
+} else if(Krivine_vw_is_int(value)) {
+  vm->val = (int64_t)value;
+  Krivine_vw_deliver(vm);
+} else {
+  vm_fail(-4);
+}]] },
+    { name = "RET", flow = "return", stack_effect = "( -- )", semantics = [[
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+Krivine_vw_deliver(vm);]] },
+    { name = "TEST", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+vm->flag = Krivine_vw_is_int(value) ? (Krivine_vw_to_int(value) ? 1 : 0) : 1;]] },
+    { name = "BRANCH", operands = { "label", "label" }, flow = "branch", stack_effect = "( -- )",
+      semantics = "vm_jump(vm->flag ? operand0 : operand1);" },
+    { name = "ADD", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) + Krivine_vw_to_int(pb)));]] },
+    { name = "SUB", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) - Krivine_vw_to_int(pb)));]] },
+    { name = "MUL", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) * Krivine_vw_to_int(pb)));]] },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+if(!Krivine_vw_to_int(pb)) { vm_fail(-10); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) / Krivine_vw_to_int(pb)));]] },
+    { name = "NEG", stack_effect = "( a -- b )", semantics = [[
+cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(-Krivine_vw_to_int(pa)));]] },
+    { name = "EQ", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) == Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "NEQ", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) != Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "LT", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) < Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "LE", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) <= Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "GT", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) > Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "GE", stack_effect = "( a b -- flag )", semantics = [[
+cell pb = vm_pop(); cell pa = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(pa) || !Krivine_vw_is_int(pb)) { vm_fail(-4); return; }
+vm_push(Krivine_vw_int(Krivine_vw_to_int(pa) >= Krivine_vw_to_int(pb) ? 1 : 0));]] },
+    { name = "PRINT", stack_effect = "( v -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(!Krivine_vw_is_int(value)) { vm_fail(-4); return; }
+vm->out = Krivine_vw_to_int(value);]] },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

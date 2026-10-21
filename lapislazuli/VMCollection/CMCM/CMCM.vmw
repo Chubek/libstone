@@ -1,0 +1,193 @@
+-- CMCM: the Categorical Multi-Combinator Machine.
+--
+-- Reference: Simon Thompson and Rafael Lins, "The Categorical Multi-Combinator
+-- Machine: CMCM", The Computer Journal 35(2), 1992, 170-176.  The multi
+-- combinators themselves are from R. Lins's thesis and are built on Curien's
+-- categorical combinators: the terms are `P` (the multi-pair constructor), `L^n`
+-- (an abstraction of n+1 arguments), and `°` (composition and application),
+-- obeying the rewriting laws
+--
+--   (M*1) ° n (P x_m … x_1 x_0)          =>  x_n
+--   (M*2) ° (x_0 … x_n) y                =>  (° x_0 y) … (° x_n y)
+--   (M*3) L^n(y) x_0 … x_z               =>  ° y (P x_0 … x_n) x_{n+1} … x_z
+--   (M*4) ° c y                          =>  c     (c a constant or L^n(y))
+--
+-- The novelty the paper claims over CAM is that a whole block of beta
+-- reductions happens in one machine step, and that is why the machine keeps
+-- *two* stacks:
+--
+--   ground stack       -- base values, the generated value stack (vm_push)
+--   multi-pair stack   -- functional values, `mps`, tag 1 int / 2 pair / 3
+--                         closure, with `pool` holding the multi-pair fields
+--   continuations      -- the frame component, `mark` records mps heights
+--   code               -- the tape (vw_pc)
+--
+-- The paper compiles an expression to a flat instruction sequence in which a
+-- variable occurrence becomes a code item that is itself copied out of the
+-- multi-pair stack (`V^n_k x_0 … x_z => x_{n-k} x_{n+1} … x_z`).  That reading
+-- makes an instruction's effect depend on what it copies, which a statically
+-- checked dispatcher cannot express, so the deviation is stated rather than
+-- hidden:
+--
+--   * `VAR k` copies the multi-pair stack item at depth k onto the top of the
+--     multi-pair stack.  It is the same lookup `V^n_k` performs, written so the
+--     stack effect is static.
+--   * `LAM n' l'` is `L^n` for the explicit n' = n+1 of the paper.  It pops
+--     the block off the multi-pair stack, forms `(P x_0 … x_n)`, wraps it in a
+--     closure and enters the body label, leaving the `F` mark as the frame.
+--   * `MPAIR n'` is `P` for an explicit arity, and `APPLY` is `°` restricted to
+--     the case where its operands are already on the stacks.
+--   * `MKVAL` / `GVAL` move a value between the two stacks, which is the book
+--     keeping the paper describes informally when it explains why values live
+--     in two places.
+--
+-- A mistyped value or a multi-pair field beyond a pair's extent fails the
+-- machine with -4 instead of reading whatever the last word left behind.
+local v = require("vmweave")
+return v.vm {
+  name = "CMCM",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 256 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  subsystems = {
+    token = [[
+#define CMCM_vw_tag(x) ((uintptr_t)(x) & (uintptr_t)7u)
+#define CMCM_vw_int(n) ((CMCM_cell)(((uintptr_t)(intptr_t)(n) << 3) | (uintptr_t)1u))
+#define CMCM_vw_pairref(i) ((CMCM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)2u))
+#define CMCM_vw_closure(i) ((CMCM_cell)(((uintptr_t)(i) << 3) | (uintptr_t)3u))
+#define CMCM_vw_is_int(x) (CMCM_vw_tag(x) == (uintptr_t)1u)
+#define CMCM_vw_is_pair(x) (CMCM_vw_tag(x) == (uintptr_t)2u)
+#define CMCM_vw_is_closure(x) (CMCM_vw_tag(x) == (uintptr_t)3u)
+#define CMCM_vw_value(x) ((CMCM_cell)(intptr_t)((uintptr_t)(x) >> 3))
+#define CMCM_vw_index(x) ((uintmax_t)((uintptr_t)(x) >> 3))
+]],
+  },
+  fields = {
+    { name = "mps", type = "i64", count = 256 },
+    { name = "mps_top", type = "u64" },
+    { name = "pool", type = "i64", count = 512 },
+    { name = "pool_top", type = "u64" },
+    { name = "pair_off", type = "u64", count = 64 },
+    { name = "pair_len", type = "u64", count = 64 },
+    { name = "pair_top", type = "u64" },
+    { name = "clo_pair", type = "u64", count = 64 },
+    { name = "clo_code", type = "u64", count = 64 },
+    { name = "clo_top", type = "u64" },
+    { name = "mark", type = "u64", count = 128 },
+    { name = "mark_top", type = "u64" },
+    { name = "flag", type = "i64" },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "MKINT", operands = { "cell" }, stack_effect = "( -- n )",
+      semantics = "vm_push(operand0);" },
+    { name = "MKVAL", stack_effect = "( n -- )", semantics = [[
+cell value = vm_pop();
+if(vm->vw_error) return;
+if(vm->mps_top >= 256u) { vm_fail(-3); return; }
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_int(value);]] },
+    { name = "GVAL", stack_effect = "( -- n )", semantics = [[
+cell value;
+if(!vm->mps_top) { vm_fail(-2); return; }
+value = (cell)vm->mps[--vm->mps_top];
+if(!CMCM_vw_is_int(value)) { vm_fail(-4); return; }
+vm_push(CMCM_vw_value(value));]] },
+    { name = "VAR", operands = { "cell" }, stack_effect = "( -- v )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= vm->mps_top) { vm_fail(-4); return; }
+if(vm->mps_top >= 256u) { vm_fail(-3); return; }
+vm->mps[vm->mps_top] = vm->mps[vm->mps_top - 1u - (uintmax_t)operand0];
+++vm->mps_top;]] },
+    { name = "MPAIR", operands = { "cell" }, stack_effect = "( x -- pair )", semantics = [[
+uintmax_t count, field, base, index, offset;
+if(operand0 < 0 || (uintmax_t)operand0 > 8u) { vm_fail(-4); return; }
+count = (uintmax_t)operand0;
+if(!count) { vm_fail(-4); return; }
+if(vm->mps_top < count) { vm_fail(-2); return; }
+if(vm->pair_top >= 64u || vm->pool_top + count > 512u) { vm_fail(-3); return; }
+base = vm->mps_top - count;
+offset = vm->pool_top;
+for(field = 0u; field < count; ++field) vm->pool[vm->pool_top++] = vm->mps[base + field];
+index = vm->pair_top++;
+vm->pair_off[index] = offset;
+vm->pair_len[index] = count;
+vm->mps_top = base;
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_pairref(index);]] },
+    { name = "LAM", operands = { "label", "cell" }, flow = "call", stack_effect = "( -- )", semantics = [[
+uintmax_t count, field, base, index, offset;
+if(operand1 < 0 || (uintmax_t)operand1 > 8u) { vm_fail(-4); return; }
+count = (uintmax_t)operand1;
+if(vm->mps_top < count) { vm_fail(-2); return; }
+if(vm->pair_top >= 64u || vm->clo_top >= 64u || vm->pool_top + count > 512u) { vm_fail(-3); return; }
+if(vm->mark_top >= 128u) { vm_fail(-3); return; }
+base = vm->mps_top - count;
+offset = vm->pool_top;
+for(field = 0u; field < count; ++field) vm->pool[vm->pool_top++] = vm->mps[base + field];
+index = vm->pair_top++;
+vm->pair_off[index] = offset;
+vm->pair_len[index] = count;
+vm->mps_top = base;
+vm->clo_pair[vm->clo_top] = index;
+vm->clo_code[vm->clo_top] = (uint64_t)operand0;
+++vm->clo_top;
+vm->mark[vm->mark_top++] = vm->mps_top;
+(void)vm_call(operand0);]] },
+    { name = "APPLY", operands = { "label" }, flow = "call", stack_effect = "( args fn -- )", semantics = [[
+cell function = 0; cell args = 0; uintmax_t index, field, pair, count, offset, target;
+if(vm->mps_top >= 2u) {
+  function = (cell)vm->mps[vm->mps_top - 1u];
+  args = (cell)vm->mps[vm->mps_top - 2u];
+  vm->mps_top -= 2u;
+} else { vm_fail(-2); return; }
+if(!CMCM_vw_is_closure(function)) { vm_fail(-4); return; }
+if(!CMCM_vw_is_pair(args)) { vm_fail(-4); return; }
+index = CMCM_vw_index(function);
+if(index >= vm->clo_top) { vm_fail(-4); return; }
+pair = CMCM_vw_index(args);
+if(pair >= vm->pair_top) { vm_fail(-4); return; }
+count = vm->pair_len[pair];
+offset = vm->pair_off[pair];
+if(vm->mark_top >= 128u || vm->mps_top + count + 1u > 256u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->mps_top;
+for(field = 0u; field < count; ++field) vm->mps[vm->mps_top++] = (int64_t)vm->pool[offset + field];
+vm->mps[vm->mps_top++] = (int64_t)CMCM_vw_pairref(vm->clo_pair[index]);
+target = vm->clo_code[index];
+if(target >= vm->vw_code_size) { vm_fail(-4); return; }
+(void)vm_call((cell)target);]] },
+    { name = "RET", flow = "return", stack_effect = "( -- )", semantics = [[
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->mark_top) vm->mps_top = vm->mark[--vm->mark_top];
+(void)vm_return();]] },
+    { name = "JF", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "COND", operands = { "label", "label" }, flow = "branch", stack_effect = "( flag -- )", semantics = [[
+cell flag = vm_pop();
+if(vm->vw_error) return;
+vm_jump(flag ? operand0 : operand1);]] },
+    { name = "ADD", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a + b);" },
+    { name = "SUB", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a - b);" },
+    { name = "MUL", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a * b);" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push(a / b);]] },
+    { name = "NEG", stack_effect = "( a -- b )", semantics = "vm_push(-vm_pop());" },
+    { name = "EQ", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);" },
+    { name = "LT", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);" },
+    { name = "LE", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);" },
+    { name = "GT", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);" },
+    { name = "GE", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);" },
+    { name = "PRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = vm_pop();" },
+    { name = "STOP", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

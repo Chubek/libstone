@@ -36,6 +36,16 @@ int main(void) {
     CHECK(flintstone_run_i64(context, module, "f", &argument, 1, 10000, &answer) == FLINTSTONE_OK && answer == 120);
     CHECK(flintstone_resolve_imports(NULL, module, NULL) == FLINTSTONE_INVALID_ARGUMENT);
     flintstone_module_destroy(module);
+    module = flintstone_parse_text(context,
+        "module opt level core {func @f(%x:i32)->i32 {^e:%r:i32=arith.add(%x,0:i32);func.return(%r);}}");
+    CHECK(module != NULL);
+    CHECK(flintstone_optimize(context, module, BLACKSTONE_KERNEL_DIR, "add_zero") == FLINTSTONE_OK);
+    argument = 10;
+    CHECK(flintstone_run_i64(context, module, "f", &argument, 1, 1000, &answer) == FLINTSTONE_OK && answer == 10);
+    CHECK(flintstone_optimize(context, module, BLACKSTONE_KERNEL_DIR, "no_such_kernel") == FLINTSTONE_ERROR);
+    CHECK(flintstone_optimize(context, module, "/no/such/dir", "add_zero") == FLINTSTONE_ERROR);
+    CHECK(flintstone_optimize(NULL, module, BLACKSTONE_KERNEL_DIR, "add_zero") == FLINTSTONE_INVALID_ARGUMENT);
+    flintstone_module_destroy(module);
     module = flintstone_parse_text(context, "invalid");
     CHECK(!module && strlen(flintstone_last_error()) > 0);
     CHECK(flintstone_verify(NULL, NULL) == FLINTSTONE_INVALID_ARGUMENT);

@@ -1,0 +1,158 @@
+-- Forth.
+--
+-- Reference: Leo Brodie, "Starting FORTH" (Prentice-Hall, 1981) for the
+-- threaded-code model, and the ANS Forth programme (X3.215-1994) later
+-- standardised as ISO/IEC 15145:1997 for the word list.  Forth is the
+-- ancestor of every stack machine in this collection -- including STK-00,
+-- the interchange form the generator itself emits.
+--
+-- The machine state is the classic two-stack threaded-code model:
+--
+--   data stack    -- the generated value stack (vm_pop / vm_push)
+--   return stack  -- `rstack`, with `rsp` as its index
+--   instruction   -- the tape (vw_pc); CALL / EXIT use the frame component
+--   variable area -- `vars`, the array the `VARIABLE` words address
+--
+-- Deviations from the standard, stated rather than hidden:
+--
+--   * A word's stack effect is declared statically, so the generated
+--     dispatcher can check it before the body runs.  Standard Forth checks
+--     nothing, and an underflow silently reads whatever the previous word
+--     left behind.
+--   * `0BRANCH` is spelled `ZBRANCH` because a mnemonic must be a C
+--     identifier.  Likewise `.` is spelled `PRINT` and `BYE` is the halt.
+--   * `DO` / `LOOP` are the ANS counted loop: `limit start`, iterating while
+--     `index+1 <> limit`.  The (rarely used) wrap-around case of a zero-trip
+--     `DO` is not reproduced: this LOOP tests for equality after the
+--     increment, which is the ANS `LOOP` and not the `+LOOP` family.
+--   * Division is symmetric, matching C99 `/` and `%`, which is what the
+--     standard specifies for `/`, `MOD` and `/MOD` on the default word set.
+--     Division by zero fails the machine with -10 rather than faulting.
+local v = require("vmweave")
+return v.vm {
+  name = "FORTH",
+  execution = "switch",
+  stack = { cell = "intptr_t", capacity = 256 },
+  frame_capacity = 128,
+  components = { "token", "opcode", "insncode", "dispatch", "tape", "compile", "frame" },
+  fields = {
+    { name = "rstack", type = "i64", count = 128 },
+    { name = "rsp", type = "u64" },
+    { name = "vars", type = "i64", count = 64 },
+    { name = "out", type = "i64" },
+  },
+  instructions = {
+    { name = "LIT", operands = { "cell" }, stack_effect = "( -- n )",
+      semantics = "vm_push(operand0);" },
+    { name = "DUP", stack_effect = "( a -- a a )",
+      semantics = "cell a = vm_pop(); vm_push(a); vm_push(a);" },
+    { name = "DROP", stack_effect = "( a -- )",
+      semantics = "(void)vm_pop();" },
+    { name = "SWAP", stack_effect = "( a b -- b a )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(b); vm_push(a);" },
+    { name = "OVER", stack_effect = "( a b -- a b a )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+vm_push(a); vm_push(b); vm_push(a);]] },
+    { name = "ROT", stack_effect = "( a b c -- b c a )", semantics = [[
+cell c = vm_pop(); cell b = vm_pop(); cell a = vm_pop();
+vm_push(b); vm_push(c); vm_push(a);]] },
+    { name = "NIP", stack_effect = "( a b -- b )",
+      semantics = "cell b = vm_pop(); (void)vm_pop(); vm_push(b);" },
+    { name = "TUCK", stack_effect = "( a b -- b a b )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+vm_push(b); vm_push(a); vm_push(b);]] },
+    { name = "ADD", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));" },
+    { name = "SUB", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));" },
+    { name = "MUL", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));" },
+    { name = "DIV", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));]] },
+    { name = "MOD", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a % b));]] },
+    { name = "NEG", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push((cell)(0 - a));" },
+    { name = "AND", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a & b));" },
+    { name = "OR", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a | b));" },
+    { name = "XOR", stack_effect = "( a b -- c )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a ^ b));" },
+    { name = "INVERT", stack_effect = "( a -- b )",
+      semantics = "cell a = vm_pop(); vm_push((cell)(~(uintptr_t)a));" },
+    { name = "LSHIFT", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+vm_push((cell)((uintptr_t)a << ((uintptr_t)b & (uintptr_t)63)));]] },
+    { name = "RSHIFT", stack_effect = "( a b -- c )", semantics = [[
+cell b = vm_pop(); cell a = vm_pop();
+vm_push((cell)((uintptr_t)a >> ((uintptr_t)b & (uintptr_t)63)));]] },
+    { name = "EQ", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? (cell)-1 : (cell)0);" },
+    { name = "NE", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? (cell)-1 : (cell)0);" },
+    { name = "LT", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? (cell)-1 : (cell)0);" },
+    { name = "GT", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? (cell)-1 : (cell)0);" },
+    { name = "LE", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? (cell)-1 : (cell)0);" },
+    { name = "GE", stack_effect = "( a b -- flag )",
+      semantics = "cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? (cell)-1 : (cell)0);" },
+    { name = "ZEQ", stack_effect = "( a -- flag )",
+      semantics = "cell a = vm_pop(); vm_push(a == 0 ? (cell)-1 : (cell)0);" },
+    { name = "BRANCH", operands = { "label" }, flow = "jump", stack_effect = "( -- )",
+      semantics = "vm_jump(operand0);" },
+    { name = "ZBRANCH", operands = { "label" }, flow = "branch", stack_effect = "( flag -- )",
+      semantics = "cell flag = vm_pop(); if(!flag) vm_jump(operand0);" },
+    { name = "DO", stack_effect = "( limit start -- )", semantics = [[
+if(vm->rsp + 2u > 128u) { vm_fail(-3); return; }
+{
+  cell start = vm_pop(); cell limit = vm_pop();
+  vm->rstack[vm->rsp++] = (int64_t)limit;
+  vm->rstack[vm->rsp++] = (int64_t)start;
+}]] },
+    { name = "LOOP", operands = { "label" }, flow = "branch", stack_effect = "( -- )", semantics = [[
+cell index, limit;
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+index = (cell)vm->rstack[vm->rsp - 1u];
+limit = (cell)vm->rstack[vm->rsp - 2u];
+index = (cell)(index + 1);
+if(index == limit) vm->rsp -= 2u;
+else { vm->rstack[vm->rsp - 1u] = (int64_t)index; vm_jump(operand0); }]] },
+    { name = "I", stack_effect = "( -- n )", semantics = [[
+if(vm->rsp < 1u) { vm_fail(-2); return; }
+vm_push((cell)vm->rstack[vm->rsp - 1u]);]] },
+    { name = "UNLOOP", stack_effect = "( -- )", semantics = [[
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+vm->rsp -= 2u;]] },
+    { name = "LEAVE", operands = { "label" }, flow = "branch", stack_effect = "( -- )", semantics = [[
+if(vm->rsp < 2u) { vm_fail(-2); return; }
+vm->rsp -= 2u;
+vm_jump(operand0);]] },
+    { name = "CALL", operands = { "label" }, flow = "call", stack_effect = "( -- )",
+      semantics = "(void)vm_call(operand0);" },
+    { name = "EXIT", flow = "return", stack_effect = "( -- )", semantics = [[
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+(void)vm_return();]] },
+    { name = "VARADDR", operands = { "cell" }, stack_effect = "( -- addr )", semantics = [[
+if(operand0 < 0 || (uintmax_t)operand0 >= 64u) { vm_fail(-4); return; }
+vm_push(operand0);]] },
+    { name = "FETCH", stack_effect = "( addr -- v )", semantics = [[
+cell addr = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
+vm_push((cell)vm->vars[(uintmax_t)addr]);]] },
+    { name = "STORE", stack_effect = "( v addr -- )", semantics = [[
+cell addr = vm_pop(); cell value = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 64u) { vm_fail(-4); return; }
+vm->vars[(uintmax_t)addr] = (int64_t)value;]] },
+    { name = "PRINT", stack_effect = "( v -- )",
+      semantics = "vm->out = vm_pop();" },
+    { name = "BYE", flow = "halt", stack_effect = "( -- )",
+      semantics = "vm_halt();" },
+  },
+}

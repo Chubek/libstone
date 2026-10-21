@@ -19,7 +19,7 @@ void install_ptr_dialect(Registry& registry) {
     add.min_results = add.max_results = 1;
     add.effect = Effect::Pure;
     add.verify = [](const Operation& op, const OperationContext& context) {
-        if (!op.attributes.empty()) check(false, "attribute.unknown", "ptr.add accepts no attributes", op.location);
+        if (!op.attributes.empty()) fail("attribute.unknown", "ptr.add accepts no attributes", op.location);
         const auto base = context.type(op.operands.at(0));
         const auto offset = context.type(op.operands.at(1));
         check(base.kind == TypeKind::Pointer, "ptr.address", "ptr.add base must have pointer type", op.location);

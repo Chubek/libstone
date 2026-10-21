@@ -52,9 +52,9 @@ The suites cover:
 
 | Suite | Evidence |
 | --- | --- |
-| `flintstone.core` | High/core/VM conversion; parse/print round trips; type and dialect specialization; loops/phis/dominance; forward/mutual recursion; native VM callbacks; heap-cell memory; modular overflow; vector/tuple scalarization (including loop-carried aggregates); math extensions; trap execution; ptr/atomic verification and explicit VM rejection; standard-library import resolution with every negative contract; Blackstone/DCE; transactional failure and extension APIs. |
+| `flintstone.core` | High/core/VM conversion; parse/print round trips; type and dialect specialization; loops/phis/dominance; forward/mutual recursion; native VM callbacks; heap-cell memory; modular overflow; vector/tuple scalarization (including loop-carried aggregates and symbol fields); math extensions; trap execution and the reserved-intrinsic contract; ptr/atomic verification and explicit VM rejection; standard-library import resolution with every negative contract, including transitive dependency contracts; Blackstone/DCE; transactional failure and extension APIs. |
 | `flintstone.native` | Bank-backed instruction forms; model/resource import; scheduling and liveness; all four allocators (linear-scan, greedy, coloring, PBQP); aliases/ties/fixed registers; exact encoding; relocation rebasing; negative handoffs; shipped x86-64/AArch64/RISC-V tiny targets checked byte-exactly with host execution on AMD64; 27-architecture registry. |
-| `flintstone.c` | Separate C translation units, compatibility header, lifecycle, integer execution, diagnostics, invalid arguments and context-independent module ownership. |
+| `flintstone.c` | Separate C translation units, compatibility header, lifecycle, integer execution, Blackstone optimization through the C ABI, diagnostics, invalid arguments and context-independent module ownership. |
 | `flintstone.cli` | Real example execution, conversion, bytecode framing and error exit behavior. |
 | `flintstone.xbind` | Executed manifest validation and generated exact C signature assertions. |
 | `flintstone.lua` | Generated Lua glue and real DomLuaBind API compiled/executed with lifecycle and conversion calls. |

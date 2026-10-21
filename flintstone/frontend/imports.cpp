@@ -27,6 +27,48 @@ bool same_signature(const Function& a, const Function& b) {
     return true;
 }
 
+// Apply the same contracts at every edge of the import graph. Copying only
+// function bodies would lose dependency requirements and extern declarations.
+//
+// `host_is_final` distinguishes the real host module from an intermediate
+// library. A dependency's required features travel upward with its code: an
+// intermediate library accumulates them, and the real host must actually
+// declare them. Checking a dependency against an intermediate library instead
+// would reject a feature the host does provide.
+void merge_library(Module& host, const Module& lib, const std::string& name, bool host_is_final) {
+    detail::check(lib.target.name == host.target.name && lib.target.pointer_bits == host.target.pointer_bits &&
+                      lib.target.index_bits == host.target.index_bits && lib.target.endian == host.target.endian,
+                  "import.target", "imported library '" + name + "' target disagrees with host module");
+    for (const auto& feature : lib.target.features) {
+        if (host_is_final)
+            detail::check(host.target.features.count(feature), "import.feature",
+                          "imported library '" + name + "' requires missing target feature '" + feature + "'");
+        else host.target.features.insert(feature);
+    }
+    detail::check(static_cast<unsigned>(lib.level) >= static_cast<unsigned>(host.level), "import.level",
+                  "imported library '" + name + "' is at a higher IL level than host module");
+    for (const auto& [dialect, params] : lib.dialects) {
+        auto found = host.dialects.find(dialect);
+        if (found == host.dialects.end()) host.dialects.emplace(dialect, params);
+        else detail::check(found->second == params, "import.dialect",
+                           "imported library '" + name + "' dialect '" + dialect + "' parameters conflict with host module");
+    }
+    for (const auto& fn : lib.functions) {
+        bool merged = false;
+        for (auto& existing : host.functions) {
+            if (existing.name != fn.name) continue;
+            detail::check(same_signature(existing, fn), "import.signature",
+                          "imported symbol @" + fn.name + " signature conflicts with host declaration");
+            detail::check(existing.external || fn.external, "import.duplicate",
+                          "imported symbol @" + fn.name + " is already defined in host module");
+            if (existing.external && !fn.external) existing = fn;
+            merged = true;
+            break;
+        }
+        if (!merged) host.functions.push_back(fn);
+    }
+}
+
 std::string find_library_file(const std::string& name, const std::vector<std::string>& dirs) {
     const auto filename = name.size() > 6 && name.substr(name.size() - 6) == ".flint" ? name : name + ".flint";
     for (const auto& dir : dirs) {
@@ -55,29 +97,18 @@ Module load_library(const std::string& name, const std::vector<std::string>& dir
     while (file) {
         file.read(buffer, sizeof buffer);
         const auto count = static_cast<std::size_t>(file.gcount());
-        detail::check(count <= 16 * 1024 * 1024 - source.size(), "import.limit", "imported library byte limit exceeded");
+        detail::check(source.size() + count <= max_source_bytes, "import.limit", "imported library byte limit exceeded");
         source.append(buffer, count);
     }
     detail::check(!file.bad(), "import.io", "error reading imported library '" + path + "'");
-    auto imported = parse(source, path);
-    // Resolve transitive imports inside the library before specializing it.
+    // Specialize in this module's namespace before comparing signatures or
+    // importing types whose parameter names may mean something different here.
+    auto imported = detail::specialize(parse(source, path));
     std::vector<std::string> children = std::move(imported.imports);
     imported.imports.clear();
     for (const auto& child : children) {
         auto dep = load_library(child, dirs, registry, active, loaded, depth + 1);
-        for (const auto& fn : dep.functions) {
-            if (fn.external) continue;
-            bool exists = false;
-            for (auto& existing : imported.functions)
-                if (existing.name == fn.name) {
-                    detail::check(existing.external && same_signature(existing, fn), "import.conflict",
-                                  "conflicting symbol @" + fn.name + " in '" + name + "'");
-                    existing = fn;
-                    exists = true;
-                    break;
-                }
-            if (!exists) imported.functions.push_back(fn);
-        }
+        merge_library(imported, dep, child, false);
     }
     imported = instantiate(imported, registry);
     active.erase(name);
@@ -107,7 +138,7 @@ std::string default_stdlib_dir() {
 
 void resolve_imports(Module& module, const Registry& registry, const std::vector<std::string>& search_dirs) {
     if (module.imports.empty()) return;
-    auto candidate = module;
+    auto candidate = detail::specialize(module);
     std::vector<std::string> dirs = search_dirs;
     const auto fallback = default_stdlib_dir();
     if (!fallback.empty()) dirs.push_back(fallback);
@@ -117,34 +148,7 @@ void resolve_imports(Module& module, const Registry& registry, const std::vector
     std::map<std::string, Module> loaded;
     for (const auto& name : pending) {
         auto lib = load_library(name, dirs, registry, active, loaded, 0);
-        detail::check(lib.target.name == candidate.target.name && lib.target.pointer_bits == candidate.target.pointer_bits &&
-                          lib.target.index_bits == candidate.target.index_bits && lib.target.endian == candidate.target.endian,
-                      "import.target", "imported library '" + name + "' target disagrees with host module");
-        for (const auto& feature : lib.target.features)
-            detail::check(candidate.target.features.count(feature), "import.feature",
-                          "imported library '" + name + "' requires missing target feature '" + feature + "'");
-        detail::check(static_cast<unsigned>(lib.level) >= static_cast<unsigned>(candidate.level), "import.level",
-                      "imported library '" + name + "' is at a higher IL level than host module");
-        for (const auto& [dialect, params] : lib.dialects) {
-            auto host = candidate.dialects.find(dialect);
-            if (host == candidate.dialects.end()) candidate.dialects.emplace(dialect, params);
-            else detail::check(host->second == params, "import.dialect",
-                               "imported library '" + name + "' dialect '" + dialect + "' parameters conflict with host module");
-        }
-        for (const auto& fn : lib.functions) {
-            bool merged = false;
-            for (auto& existing : candidate.functions) {
-                if (existing.name != fn.name) continue;
-                detail::check(same_signature(existing, fn), "import.signature",
-                              "imported symbol @" + fn.name + " signature conflicts with host declaration");
-                detail::check(existing.external || fn.external, "import.duplicate",
-                              "imported symbol @" + fn.name + " is already defined in host module");
-                if (existing.external && !fn.external) existing = fn;
-                merged = true;
-                break;
-            }
-            if (!merged) candidate.functions.push_back(fn);
-        }
+        merge_library(candidate, lib, name, true);
     }
     require_valid(candidate, registry);
     candidate.revision = module.revision + 1;

@@ -1,0 +1,176 @@
+stk-00 1
+vm "PCode"
+configuration "switch" "intptr_t" 256 128 64 "custom" 0
+source "=[C]" 0
+component "token"
+component "opcode"
+component "insncode"
+component "dispatch"
+component "compile"
+component "tape"
+component "frame"
+field "lbase" "u64" 0
+field "locals" "i64" 512
+field "ltop" "u64" 0
+field "mark" "u64" 64
+field "mark_top" "u64" 0
+field "out" "i64" 0
+: "ABSI" opcode 0 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 54
+cell a = vm_pop(); vm_push(a < 0 ? (cell)(0 - a) : a);
+}c ;
+: "ADI" opcode 1 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a + b));
+}c ;
+: "CALL" opcode 2 operands 1 "label" effect "( -- )" flow "call" source "=[C]" 0
+c{ 175
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+(void)vm_call(operand0);
+}c ;
+: "CALL1" opcode 3 operands 1 "label" effect "( a -- )" flow "call" source "=[C]" 0
+c{ 237
+cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+(void)vm_call(operand0);
+}c ;
+: "CALL2" opcode 4 operands 1 "label" effect "( a b -- )" flow "call" source "=[C]" 0
+c{ 299
+cell a1 = vm_pop(); cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+vm->locals[vm->lbase + 1u] = (int64_t)a1;
+(void)vm_call(operand0);
+}c ;
+: "CALL3" opcode 5 operands 1 "label" effect "( a b c -- )" flow "call" source "=[C]" 0
+c{ 361
+cell a2 = vm_pop(); cell a1 = vm_pop(); cell a0 = vm_pop();
+if(vm->mark_top >= 64u || vm->ltop + 16u > 512u) { vm_fail(-3); return; }
+vm->mark[vm->mark_top++] = vm->lbase;
+vm->lbase = vm->ltop; vm->ltop += 16u;
+vm->locals[vm->lbase + 0u] = (int64_t)a0;
+vm->locals[vm->lbase + 1u] = (int64_t)a1;
+vm->locals[vm->lbase + 2u] = (int64_t)a2;
+(void)vm_call(operand0);
+}c ;
+: "DVI" opcode 6 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 126
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a / b));
+}c ;
+: "EQU" opcode 7 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a == b ? 1 : 0);
+}c ;
+: "FJP" opcode 8 operands 1 "label" effect "( b -- )" flow "branch" source "=[C]" 0
+c{ 50
+cell flag = vm_pop(); if(!flag) vm_jump(operand0);
+}c ;
+: "GEQ" opcode 9 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a >= b ? 1 : 0);
+}c ;
+: "GRT" opcode 10 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a > b ? 1 : 0);
+}c ;
+: "IND" opcode 11 operands 0 effect "( addr -- v )" flow "next" source "=[C]" 0
+c{ 130
+cell addr = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
+vm_push((cell)vm->locals[(uintmax_t)addr]);
+}c ;
+: "JMP" opcode 12 operands 1 "label" effect "( -- )" flow "jump" source "=[C]" 0
+c{ 18
+vm_jump(operand0);
+}c ;
+: "LDA" opcode 13 operands 1 "cell" effect "( -- addr )" flow "next" source "=[C]" 0
+c{ 121
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm_push((cell)(vm->lbase + (uintmax_t)operand0));
+}c ;
+: "LDC" opcode 14 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 18
+vm_push(operand0);
+}c ;
+: "LEQ" opcode 15 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a <= b ? 1 : 0);
+}c ;
+: "LOD" opcode 16 operands 1 "cell" effect "( -- v )" flow "next" source "=[C]" 0
+c{ 131
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm_push((cell)vm->locals[vm->lbase + (uintmax_t)operand0]);
+}c ;
+: "LSS" opcode 17 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a < b ? 1 : 0);
+}c ;
+: "MODI" opcode 18 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 126
+cell b = vm_pop(); cell a = vm_pop();
+if(!b || (a == INTPTR_MIN && b == -1)) { vm_fail(-10); return; }
+vm_push((cell)(a % b));
+}c ;
+: "MPI" opcode 19 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a * b));
+}c ;
+: "NEQ" opcode 20 operands 0 effect "( a b -- flag )" flow "next" source "=[C]" 0
+c{ 62
+cell b = vm_pop(); cell a = vm_pop(); vm_push(a != b ? 1 : 0);
+}c ;
+: "NGI" opcode 21 operands 0 effect "( a -- b )" flow "next" source "=[C]" 0
+c{ 42
+cell a = vm_pop(); vm_push((cell)(0 - a));
+}c ;
+: "RET" opcode 22 operands 0 effect "( -- )" flow "return" source "=[C]" 0
+c{ 148
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
+(void)vm_return();
+}c ;
+: "RETV" opcode 23 operands 0 effect "( v -- )" flow "return" source "=[C]" 0
+c{ 285
+cell result;
+if(!vm->vw_frame_count) { vm_fail(-2); return; }
+result = vm_pop();
+if(vm->vw_error) return;
+vm->vw_sp = vm->vw_frames[vm->vw_frame_count - 1u].stack_base;
+vm_push(result);
+if(vm->mark_top) { vm->ltop = vm->lbase; vm->lbase = vm->mark[--vm->mark_top]; }
+(void)vm_return();
+}c ;
+: "SBI" opcode 24 operands 0 effect "( a b -- c )" flow "next" source "=[C]" 0
+c{ 61
+cell b = vm_pop(); cell a = vm_pop(); vm_push((cell)(a - b));
+}c ;
+: "STI" opcode 25 operands 0 effect "( v addr -- )" flow "next" source "=[C]" 0
+c{ 155
+cell addr = vm_pop(); cell value = vm_pop();
+if(addr < 0 || (uintmax_t)addr >= 512u) { vm_fail(-4); return; }
+vm->locals[(uintmax_t)addr] = (int64_t)value;
+}c ;
+: "STO" opcode 26 operands 1 "cell" effect "( v -- )" flow "next" source "=[C]" 0
+c{ 156
+cell value = vm_pop();
+if(operand0 < 0 || (uintmax_t)operand0 >= 16u) { vm_fail(-4); return; }
+vm->locals[vm->lbase + (uintmax_t)operand0] = (int64_t)value;
+}c ;
+: "STP" opcode 27 operands 0 effect "( -- )" flow "halt" source "=[C]" 0
+c{ 10
+vm_halt();
+}c ;
+: "WRINT" opcode 28 operands 0 effect "( v -- )" flow "next" source "=[C]" 0
+c{ 19
+vm->out = vm_pop();
+}c ;
+end

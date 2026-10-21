@@ -5,6 +5,7 @@
 #include <libvm/StackVM.hpp>
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <thread>
@@ -80,6 +81,11 @@ void diagnostics() {
         {"module m level machine {func @f()->i32 {^e:func.return(1:i32);}}", "level.operation"},
         {"module m level core {func @f(%p:ptr<gpu>)->void {^e:mem.store(%p,1:i32);func.return();}}", "memory.address-space"},
         {"module m level core {func @f()->f32 {^e:func.return(1.0:f32);}}", "literal.float"},
+        // The reserved namespace holds the trap intrinsic and nothing else.
+        {"module m level core {func @f()->i32 {^e:%r:i32=func.call() attrs {callee=\"__flintstone_evil\";};func.return(%r);}}", "symbol.reserved"},
+        {"module m level core {func @f()->i32 {^e:%r:i32=func.call(1:i32) attrs {callee=\"__flintstone_trap\";};func.return(%r);}}", "call.arity"},
+        {"module m level core {func @f()->i32 {^e:%r:i64=func.call() attrs {callee=\"__flintstone_trap\";};func.return(%r);}}", "call.result"},
+        {"module m level core {func @__flintstone_trap()->i32 {^e:func.return(1:i32);}}", "symbol.reserved"},
     };
     for (auto [source, code] : cases) rejects([&] { require_valid(parse(source, "bad.flint"), r); }, code);
     auto bad_phi = example("sum.flint");
@@ -230,6 +236,33 @@ void aggregate_dialects() {
         manager.run(module, r);
         return module;
     };
+    // DCE must not erase an unused vector operation that can trap.
+    for (const char* operation : {"div", "mod"}) {
+        auto module = parse(std::string(R"(module v level high { func @f() -> i32 {
+          ^e: %a:vector<2,i32> = vector.splat(1:i32);
+              %b:vector<2,i32> = vector.splat(0:i32);
+              %unused:vector<2,i32> = vector.)") + operation + R"((%a, %b);
+              func.return(42:i32);
+        }})");
+        PassManager dce;
+        dce.add(dead_code_elimination());
+        CHECK(!dce.run(module, r)[0].changed);
+        auto lowered = scalarized(module);
+        rejects([&] { run(lowered, r, "f"); }, "zero");
+    }
+    {
+        auto module = parse(R"(module t level high { func @f() -> i32 {
+          ^e: %t:tuple<i32> = tuple.build(@answer:i32);
+              %r:i32 = tuple.extract(%t) attrs {index=0;};
+              func.return(%r);
+        }})");
+        require_valid(module, r);
+        auto lowered = scalarized(module);
+        CHECK(lowered.function("f").blocks[0].operations[0].name == "arith.copy");
+        firestone::vm::Environment environment;
+        environment.set_global("answer", std::int64_t(42));
+        CHECK(std::get<std::int64_t>(execute(lowered, r, "f", {}, 1000, &environment)) == 42);
+    }
     {
         auto module = parse(R"(module v level high { func @f(%x:i32) -> i32 {
           ^e:
@@ -332,6 +365,16 @@ void aggregate_dialects() {
         CHECK(done.function("f").blocks[1].operations[0].name == "func.call");
         auto idle = parse("module t level high { func @t() -> void { ^e: cf.trap(); } }");
         rejects([&] { run(idle, r, "t"); }, "vm.trap");
+        // The trap intrinsic itself is reachable from IL with the documented
+        // signature: no arguments, and the enclosing function's result type.
+        auto direct = parse(R"(module d level core { func @d() -> i32 {
+          ^e: %r:i32 = func.call() attrs {callee="__flintstone_trap";}; func.return(%r); } })");
+        require_valid(direct, r);
+        rejects([&] { run(direct, r, "d"); }, "vm.trap");
+        auto void_trap = parse(R"(module dv level core { func @v() -> void {
+          ^e: func.call() attrs {callee="__flintstone_trap";}; func.return(); } })");
+        require_valid(void_trap, r);
+        rejects([&] { run(void_trap, r, "v"); }, "vm.trap");
     }
     const std::pair<const char*, const char*> cases[] = {
         {"module m level core {func @f()->i32 {^e:%v:vector<4,i32>=vector.splat(1:i32);func.return(1:i32);}}", "level.operation"},
@@ -519,6 +562,95 @@ void stdlib_and_imports() {
         std::filesystem::remove_all(dir);
     }
 }
+void transitive_import_contracts() {
+    Registry r;
+    const auto dir = std::filesystem::temp_directory_path() /
+        ("flintstone-import-contracts-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    CHECK(std::filesystem::create_directory(dir));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{dir};
+    auto library = [&](const char* name, const std::string& source) {
+        std::ofstream file(dir / (std::string(name) + ".flint"));
+        file << source;
+        file.close();
+        CHECK(file.good());
+    };
+    library("parent", R"(module parent level core { import "child"; })");
+    const std::pair<const char*, const char*> invalid_children[] = {
+        {R"(module child level core { target "other" {} })", "import.target"},
+        {R"(module child level core { target "vm" {pointer_bits=32;} })", "import.target"},
+        {R"(module child level core { target "vm" {index_bits=32;} })", "import.target"},
+        {R"(module child level core { target "vm" {endian="big";} })", "import.target"},
+        {R"(module child level core { target "vm" {feature.required=true;} })", "import.feature"},
+        {R"(module child level high {})", "import.level"},
+    };
+    for (auto [source, diagnostic] : invalid_children) {
+        library("child", source);
+        auto module = parse(R"(module app level core { import "parent"; })");
+        module.revision = 9;
+        const auto before = print(module);
+        rejects([&] { resolve_imports(module, r, {dir.string()}); }, diagnostic);
+        CHECK(print(module) == before && module.revision == 9);
+    }
+    library("parent", R"(module parent level high {
+      import "child";
+      dialect math {factor=2;}
+    })");
+    library("child", R"(module child level high { dialect math {factor=7;} })");
+    auto conflict = parse(R"(module app level high { import "parent"; })");
+    const auto before = print(conflict);
+    rejects([&] { resolve_imports(conflict, r, {dir.string()}); }, "import.dialect");
+    CHECK(print(conflict) == before && conflict.revision == 0);
+
+    // Each module specializes its own aliases before comparing signatures.
+    // A dependency's dialect parameters and extern declarations must survive
+    // the intermediate library, not just its function definitions.
+    library("child", R"(module child level high {
+      types {T=i32;}
+      dialect math {factor=7;}
+      extern func @host() -> param<T>;
+      func @leaf(%x:param<T>) -> param<T> {
+        ^e: %r:i32=math.scale(%x); func.return(%r);
+      }
+      func @external() -> i32 {
+        ^e: %r:i32=func.call() attrs {callee="host";}; func.return(%r);
+      }
+    })");
+    library("parent", R"(module parent level high {
+      import "child";
+      types {T=i64; U=i32;}
+      extern func @leaf(%x:param<U>) -> param<U>;
+    })");
+    auto module = parse(R"(module app level high {
+      import "parent";
+      types {T=i32;}
+      extern func @leaf(%x:param<T>) -> param<T>;
+      func @host() -> i32 { ^e: func.return(42:i32); }
+    })");
+    resolve_imports(module, r, {dir.string()});
+    CHECK(module.imports.empty() && module.revision == 1);
+    CHECK(run(module, r, "leaf", {std::int64_t(6)}) == 42);
+    CHECK(run(module, r, "external") == 42);
+    CHECK(module.function("leaf").parameters[0].type == Type::integer(32));
+    CHECK(std::get<std::int64_t>(module.dialects.at("math").at("factor")) == 7);
+
+    // A dependency's required feature travels up to the host, which must
+    // declare it. An intermediate library need not declare it itself.
+    library("child", R"(module child level core { target "vm" { feature.gpu = true; } })");
+    library("parent", R"(module parent level core { import "child"; })");
+    auto featured = parse(R"(module app level core {
+      target "vm" { feature.gpu = true; }
+      import "parent";
+    })");
+    resolve_imports(featured, r, {dir.string()});
+    CHECK(featured.target.features.count("gpu") == 1);
+    auto missing = parse(R"(module app level core { import "parent"; })");
+    const auto missing_before = print(missing);
+    rejects([&] { resolve_imports(missing, r, {dir.string()}); }, "import.feature");
+    CHECK(print(missing) == missing_before && missing.revision == 0);
+}
 void extensions_and_transactions() {
     Registry r;
     DialectDefinition toy; toy.name = "toy";
@@ -600,6 +732,6 @@ void extensions_and_transactions() {
 }
 }
 int main() {
-    try { workflows(); diagnostics(); calls_and_memory(); modular_and_optimization(); aggregate_dialects(); stdlib_and_imports(); extensions_and_transactions(); std::cout << "Flintstone core contracts passed\n"; }
+    try { workflows(); diagnostics(); calls_and_memory(); modular_and_optimization(); aggregate_dialects(); stdlib_and_imports(); transitive_import_contracts(); extensions_and_transactions(); std::cout << "Flintstone core contracts passed\n"; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

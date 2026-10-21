@@ -255,7 +255,8 @@ NativeCompilation compile_native(const Module& source, const Registry& registry,
             detail::check(status.ok(), "native.encoding", status.message);
             auto base = result.artifact.bytes.size();
             detail::check(base % instruction_alignment == 0, "native.alignment", "target must supply explicit alignment padding");
-            detail::check(encoded.bytes.size() <= 64 * 1024 * 1024 - std::min<std::size_t>(base, 64 * 1024 * 1024), "native.limit", "native image size limit exceeded");
+            // base is bounded by the accumulated limit, so the subtraction is safe.
+            detail::check(encoded.bytes.size() <= max_native_bytes - base, "native.limit", "native image size limit exceeded");
             std::vector<std::pair<std::size_t, std::size_t>> claimed;
             for (const auto& relocation : encoded.relocs) {
                 auto found = std::find_if(bank.data().relocs.begin(), bank.data().relocs.end(), [&](const auto& r) { return r.id == relocation.type; });

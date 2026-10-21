@@ -78,12 +78,30 @@ build-time source directory is used as the fallback.
 | `import.dialect` | The library and host configure the same dialect differently. |
 | `import.level` | The library is at a higher IL level than the host module. |
 | `import.limit` | The library exceeds the import size budget. |
+| `import.io` | The library file could not be opened or read. |
 | `import.unresolved` | `verify()` ran before `resolve_imports()`. |
 
 Library names are validated before any filesystem access, so `..` and path
 separators cannot escape the search directories. A library is parsed, its
 transitive imports are resolved first, and it is then specialized and
 verified on its own before it is merged into the host.
+
+Each module is specialized in its own type namespace before signatures are
+compared. A library's `param<T>` therefore means what the library's own type
+bindings say, not what the host happens to bind `T` to; a host and a library
+that disagree about a concrete type are a genuine `import.signature` conflict.
+
+Every edge of the import graph is checked, not just the host's direct
+dependencies. A transitive dependency must agree with the host on target name,
+pointer width, index width and byte order, must not sit at a higher IL level
+than the host, and must not configure a shared dialect differently. A
+dependency's `extern` declarations are carried into the host, so a library
+that calls a host-supplied function still links.
+
+A target feature required by a dependency travels up to the host with that
+dependency's code. The host must declare it; an intermediate library need not
+declare it itself, because only the host's own target declaration decides
+which features are available.
 
 Resolution is transactional: a failed import leaves the host module
 unchanged. A successful resolution advances the module revision.

@@ -24,7 +24,7 @@ void install_tuple_dialect(Registry& registry) {
     // No ssa_opcode: aggregates are eliminated by tuple_sroa_pass. A direct
     // lowering would need an aggregate runtime value the VM does not have.
     build.verify = [](const Operation& op, const OperationContext& context) {
-        if (!op.attributes.empty()) check(false, "attribute.unknown", "tuple.build accepts no attributes", op.location);
+        if (!op.attributes.empty()) fail("attribute.unknown", "tuple.build accepts no attributes", op.location);
         const auto& result = op.results.at(0).type;
         check(result.kind == TypeKind::Tuple, "tuple.type", "tuple.build requires a tuple result type", op.location);
         check(result.elements.size() == op.operands.size() && !result.elements.empty(), "tuple.arity",
@@ -44,7 +44,7 @@ void install_tuple_dialect(Registry& registry) {
     extract.verify = [](const Operation& op, const OperationContext& context) {
         if (op.attributes.size() != 1 || !op.attributes.count("index") ||
             !std::holds_alternative<std::int64_t>(op.attributes.at("index")))
-            check(false, "tuple.index", "tuple.extract requires exactly one integer index attribute", op.location);
+            fail("tuple.index", "tuple.extract requires exactly one integer index attribute", op.location);
         const auto index = std::get<std::int64_t>(op.attributes.at("index"));
         const auto& source = context.type(op.operands.at(0));
         check(source.kind == TypeKind::Tuple && !source.elements.empty(), "tuple.type", "tuple.extract requires a tuple operand", op.location);

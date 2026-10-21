@@ -148,7 +148,7 @@ private:
                     else if (byte != '\\' && byte != '"') error(std::string("unsupported string escape '\\") + byte + "'");
                 }
                 token_.text += byte;
-                detail::check(token_.text.size() <= 1024 * 1024, "parse.limit", "string literal length limit exceeded", token_.location);
+                detail::check(token_.text.size() <= max_string_bytes, "parse.limit", "string literal length limit exceeded", token_.location);
             }
             if (position_ == source_.size()) error("unterminated string");
             consume(); return;

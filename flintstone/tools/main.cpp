@@ -1,6 +1,7 @@
 #include "Flintstone.hpp"
 #include "targets/SandstoneTargets.hpp"
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -27,6 +28,12 @@ template<class T> T number(const std::string& text) {
     T result{}; auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
     if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) throw std::invalid_argument("invalid number: " + text);
     return result;
+}
+// A non-finite literal is a usage error, not a value the VM would reject later.
+double real_number(const std::string& text) {
+    const auto value = number<double>(text);
+    if (!std::isfinite(value)) throw std::invalid_argument("floating argument must be finite: " + text);
+    return value;
 }
 }
 int main(int argc, char** argv) {
@@ -86,7 +93,7 @@ int main(int argc, char** argv) {
         char buffer[8192];
         while (stream) {
             stream.read(buffer, sizeof buffer); auto count = static_cast<std::size_t>(stream.gcount());
-            if (count > 16 * 1024 * 1024 - source.size()) throw std::runtime_error("source byte limit exceeded");
+            if (source.size() + count > flintstone::max_source_bytes) throw std::runtime_error("source byte limit exceeded");
             source.append(buffer, count);
         }
         if (stream.bad()) throw std::runtime_error("input read failed");
@@ -94,19 +101,10 @@ int main(int argc, char** argv) {
         flintstone::register_tiny_backends(registry);
         auto module = flintstone::parse(source, input == "-" ? "<stdin>" : input);
         if (!target_name.empty()) {
-            const std::pair<const char*, flintstone::TinyArch> targets[] = {
-                {"x86-64-tiny", flintstone::TinyArch::X86_64},
-                {"aarch64-tiny", flintstone::TinyArch::AArch64},
-                {"riscv64-tiny", flintstone::TinyArch::RiscV64},
-            };
-            bool found = false;
-            for (const auto& [name, arch] : targets)
-                if (target_name == name) {
-                    auto bank = flintstone::make_tiny_bank(arch);
-                    module.target = flintstone::sandstone_target(*bank, 0, 64);
-                    found = true;
-                }
-            if (!found) throw std::invalid_argument("unknown --target " + target_name);
+            flintstone::TinyArch arch;
+            if (!flintstone::find_tiny_arch(target_name, arch)) throw std::invalid_argument("unknown --target " + target_name);
+            auto bank = flintstone::make_tiny_bank(arch);
+            module.target = flintstone::sandstone_target(*bank, 0, 64);
         }
         flintstone::resolve_imports(module, registry, search_dirs);
         flintstone::require_valid(module, registry);
@@ -140,7 +138,7 @@ int main(int argc, char** argv) {
                     if (arguments[n] != "0" && arguments[n] != "1" && arguments[n] != "true" && arguments[n] != "false") throw std::invalid_argument("expected Boolean argument");
                     values.emplace_back(arguments[n] == "1" || arguments[n] == "true");
                 } else if (type.kind == flintstone::TypeKind::Integer) values.emplace_back(number<std::int64_t>(arguments[n]));
-                else if (type == flintstone::Type::floating()) values.emplace_back(number<double>(arguments[n]));
+                else if (type == flintstone::Type::floating()) values.emplace_back(real_number(arguments[n]));
                 else throw std::invalid_argument("CLI execution accepts only integers and f64 arguments");
             }
             auto result = flintstone::execute(module, registry, run, values, budget);

@@ -220,7 +220,13 @@ private:
     std::map<std::string, Backend> backends_;
 };
 
-struct ParseLimits { std::size_t bytes = 16 * 1024 * 1024, tokens = 1000000, type_depth = 64; };
+// Maximum accepted size of a parsed source, an imported library or a native
+// image, in bytes. A single source of truth keeps the budget in size_t
+// arithmetic instead of an int expression that widens on use.
+inline constexpr std::size_t max_source_bytes = 16 * 1024 * 1024;
+inline constexpr std::size_t max_string_bytes = 1024 * 1024;
+inline constexpr std::size_t max_native_bytes = 64 * 1024 * 1024;
+struct ParseLimits { std::size_t bytes = max_source_bytes, tokens = 1000000, type_depth = 64; };
 Module parse(std::string_view source, std::string filename = "<input>", const ParseLimits& = {});
 std::string print(const Module&);
 Diagnostics verify(const Module&, const Registry&);
@@ -228,6 +234,9 @@ void require_valid(const Module&, const Registry&);
 // Resolve `import "name";` declarations against search directories (defaulting
 // to the standard library directory). Rejects path traversal, cycles, target
 // or level mismatches, and duplicate definitions; replaces matching externs.
+// Each module is specialized in its own type namespace first, so a library's
+// `param<T>` means what the library's own bindings say, not the host's.
+// Transitive imports apply the same target/feature/level/dialect contracts.
 std::string default_stdlib_dir();
 void resolve_imports(Module&, const Registry&, const std::vector<std::string>& search_dirs = {});
 // Substitution is cycle/occurs checked. Index types become target-width integers.
