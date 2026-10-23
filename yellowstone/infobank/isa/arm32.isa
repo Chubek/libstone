@@ -1,0 +1,2623 @@
+arch arm32 { word_size = 32; addr_size = 32; endian = little; align = 4; }
+
+
+profile {
+  family = "ARM";
+  model = "ARMv7_A32";
+  version = "A32";
+  word_size = 32;
+  address_size = 32;
+  endianness = "little";
+  instruction_encoding = "fixed32";
+  execution_model = "scalar_or_superscalar_target_dependent";
+  register_model = "register";
+  extensions = ["A32", "VFP_target_dependent", "NEON_target_dependent"];
+  register_classes = ["GPR", "FPR"];
+  fixed_registers = ["pc"];
+  zero_register = "none";
+  operation_classes = ["arithmetic", "atomic", "branch", "compare", "load", "misc", "store", "system"];
+  instruction_count = 114;
+  encoding_widths = ["32"];
+  coverage = "source_inventory";
+  encoding_layout = { fixed_bits = "32"; condition = "31:28"; };
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    version = "2.22";
+    scope = "source_table_reference_variants";
+    sources = [{ path = "binutils/opcodes/arm-dis.c"; sha256 = "ba18a348dd834955c2eae00d47265a67e44d4f584781c6b4e8bae52944424914"; }, { path = "binutils/include/opcode/arm.h"; sha256 = "2af7d2966a29c2e47f3c0c07ddd79e5e817c16d4b2027243c433d1cf9003eb1d"; }];
+    matched_operations = 109;
+    variant_count = 119;
+    unmatched_operations = ["udf", "vldm_f64", "vstm_f64", "vpush_f64", "vpop_f64"];
+  };
+  # END BINUTILS METADATA
+}
+compiler {
+  instruction_selection {
+    strategy = "target_pattern_matching";
+    opcode_classes = ["arithmetic", "atomic", "branch", "compare", "load", "misc", "store", "system"];
+    register_classes = ["GPR", "FPR"];
+    immediate_folding = true;
+    addressing_mode_folding = true;
+    branch_form_selection = true;
+    pseudo_expansion = "target_dependent";
+    cost_model = "target_microarchitecture";
+  }
+  instruction_scheduling {
+    strategy = "dependency_aware_target_scheduler";
+    dependency_ordering = true;
+    memory_dependence_analysis = true;
+    control_dependence_analysis = true;
+    latency_model = "target_microarchitecture";
+    resource_model = "target_microarchitecture";
+    packetization = false;
+  }
+  register_allocation {
+    strategy = "target_register_allocation";
+    register_classes = ["GPR", "FPR"];
+    fixed_registers = ["pc"];
+    zero_register = "none";
+    caller_saved = "abi_dependent";
+    callee_saved = "abi_dependent";
+    spill_policy = "target_dependent";
+  }
+  optimization {
+    legality_model = "isa_and_memory_model";
+    transforms = ["constant_folding", "copy_propagation", "dead_code_elimination", "common_subexpression_elimination", "peephole_rewrite", "branch_simplification", "load_store_motion_target_dependent", "strength_reduction_target_dependent", "addressing_mode_folding", "branch_relaxation_target_dependent", "compare_branch_fusion_target_dependent", "conditional_select_formation"];
+    instruction_combining = true;
+    peephole_optimization = true;
+    constant_folding = true;
+    dead_code_elimination = true;
+    common_subexpression_elimination = true;
+    loop_optimization = "target_dependent";
+    vectorization = "target_dependent";
+    if_conversion = "target_dependent";
+    interprocedural_optimization = "abi_and_linkage_dependent";
+  }
+}
+regclass GPR {
+    r0(32)=0,
+    r1(32)=1,
+    r2(32)=2,
+    r3(32)=3,
+    r4(32)=4,
+    r5(32)=5,
+    r6(32)=6,
+    r7(32)=7,
+    r8(32)=8,
+    r9(32)=9,
+    r10(32)=10,
+    r11(32)=11,
+    r12(32)=12,
+    r13(32)=13,
+    r14(32)=14,
+    r15(32)=15,
+}
+
+regclass FPR {
+    s0(32)=0,
+    s1(32)=1,
+    s2(32)=2,
+    s3(32)=3,
+    s4(32)=4,
+    s5(32)=5,
+    s6(32)=6,
+    s7(32)=7,
+    s8(32)=8,
+    s9(32)=9,
+    s10(32)=10,
+    s11(32)=11,
+    s12(32)=12,
+    s13(32)=13,
+    s14(32)=14,
+    s15(32)=15,
+    s16(32)=16,
+    s17(32)=17,
+    s18(32)=18,
+    s19(32)=19,
+    s20(32)=20,
+    s21(32)=21,
+    s22(32)=22,
+    s23(32)=23,
+    s24(32)=24,
+    s25(32)=25,
+    s26(32)=26,
+    s27(32)=27,
+    s28(32)=28,
+    s29(32)=29,
+    s30(32)=30,
+    s31(32)=31,
+    d0(32)=32,
+    d1(32)=33,
+    d2(32)=34,
+    d3(32)=35,
+    d4(32)=36,
+    d5(32)=37,
+    d6(32)=38,
+    d7(32)=39,
+    d8(32)=40,
+    d9(32)=41,
+    d10(32)=42,
+    d11(32)=43,
+    d12(32)=44,
+    d13(32)=45,
+    d14(32)=46,
+    d15(32)=47,
+    q0(32)=48,
+    q1(32)=49,
+    q2(32)=50,
+    q3(32)=51,
+    q4(32)=52,
+    q5(32)=53,
+    q6(32)=54,
+    q7(32)=55,
+}
+
+alias sp = r13;
+alias lr = r14;
+alias pc = r15;
+
+encoding ADD { width = 32;
+  base = 0xe0800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op add { class = arithmetic; encoding = ADD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "add {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (add rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1099; table = "arm_opcodes"; assembler = "add%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUB { width = 32;
+  base = 0xe0400000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op sub { class = arithmetic; encoding = SUB;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sub {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (sub rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sub";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1091; table = "arm_opcodes"; assembler = "sub%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x400000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RSB { width = 32;
+  base = 0xe0600000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op rsb { class = arithmetic; encoding = RSB;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "rsb {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"rsb\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rsb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1095; table = "arm_opcodes"; assembler = "rsb%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x600000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AND { width = 32;
+  base = 0xe0000000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op and { class = arithmetic; encoding = AND;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "and {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (and rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "and";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1083; table = "arm_opcodes"; assembler = "and%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x0; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORR { width = 32;
+  base = 0xe1800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op orr { class = arithmetic; encoding = ORR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "orr {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (or rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "orr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1135; table = "arm_opcodes"; assembler = "orr%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding EOR { width = 32;
+  base = 0xe0200000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op eor { class = arithmetic; encoding = EOR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "eor {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"eor\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "eor";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1087; table = "arm_opcodes"; assembler = "eor%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x200000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BIC { width = 32;
+  base = 0xe1c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op bic { class = arithmetic; encoding = BIC;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "bic {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"bic\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bic";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1147; table = "arm_opcodes"; assembler = "bic%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1c00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MUL { width = 32;
+  base = 0xe0000090;
+  rd = 16:4;
+  rs1 = 0:4;
+  rs2 = 8:4;
+}
+
+op mul { class = arithmetic; encoding = MUL;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mul {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mul";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 842; table = "arm_opcodes"; assembler = "mul%20's%c\t%16-19R, %0-3R, %8-11R"; architecture = "ARM_EXT_V2"; match = 0x90; mask = 0xfe000f0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LSL { width = 32;
+  base = 0xe1a00000;
+  rd = 12:4;
+  rs1 = 0:4;
+  imm = 7:5;
+}
+
+op lsl { class = arithmetic; encoding = LSL;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "lsl {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"lsl\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "lsl";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1140; table = "arm_opcodes"; assembler = "lsl%20's%c\t%12-15R, %q"; architecture = "ARM_EXT_V1"; match = 0x1a00000; mask = 0xdef0060; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LSR { width = 32;
+  base = 0xe1a00020;
+  rd = 12:4;
+  rs1 = 0:4;
+  imm = 7:5;
+}
+
+op lsr { class = arithmetic; encoding = LSR;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "lsr {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"lsr\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "lsr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1141; table = "arm_opcodes"; assembler = "lsr%20's%c\t%12-15R, %q"; architecture = "ARM_EXT_V1"; match = 0x1a00020; mask = 0xdef0060; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ASR { width = 32;
+  base = 0xe1a00040;
+  rd = 12:4;
+  rs1 = 0:4;
+  imm = 7:5;
+}
+
+op asr { class = arithmetic; encoding = ASR;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "asr {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (ashr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "asr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1142; table = "arm_opcodes"; assembler = "asr%20's%c\t%12-15R, %q"; architecture = "ARM_EXT_V1"; match = 0x1a00040; mask = 0xdef0060; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADC { width = 32;
+  base = 0xe0a00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op adc { class = arithmetic; encoding = ADC;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "adc {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"adc\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "adc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1103; table = "arm_opcodes"; assembler = "adc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0xa00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBC { width = 32;
+  base = 0xe0c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op sbc { class = arithmetic; encoding = SBC;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sbc {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"sbc\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sbc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1107; table = "arm_opcodes"; assembler = "sbc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0xc00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORRS { width = 32;
+  base = 0xe1900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op orrs { class = misc; encoding = ORRS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "orrs {rd}, {rs1}, {rs2}";
+  semantics = "(effect (intrinsic \"orrs\" rd rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "orrs";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1135; table = "arm_opcodes"; assembler = "orr%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADD_SHIFT { width = 32;
+  base = 0xe0800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op add_shift { class = arithmetic; encoding = ADD_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "add {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (add rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1099; table = "arm_opcodes"; assembler = "add%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUB_SHIFT { width = 32;
+  base = 0xe0400000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op sub_shift { class = arithmetic; encoding = SUB_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "sub {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (sub rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sub";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1091; table = "arm_opcodes"; assembler = "sub%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x400000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RSB_SHIFT { width = 32;
+  base = 0xe0600000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op rsb_shift { class = arithmetic; encoding = RSB_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "rsb {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (intrinsic \"rsb_shift\" rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rsb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1095; table = "arm_opcodes"; assembler = "rsb%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x600000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AND_SHIFT { width = 32;
+  base = 0xe0000000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op and_shift { class = arithmetic; encoding = AND_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "and {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (and rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "and";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1083; table = "arm_opcodes"; assembler = "and%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x0; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORR_SHIFT { width = 32;
+  base = 0xe1800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op orr_shift { class = arithmetic; encoding = ORR_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "orr {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (or rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "orr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1135; table = "arm_opcodes"; assembler = "orr%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding EOR_SHIFT { width = 32;
+  base = 0xe0200000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op eor_shift { class = arithmetic; encoding = EOR_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "eor {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (intrinsic \"eor_shift\" rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "eor";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1087; table = "arm_opcodes"; assembler = "eor%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x200000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BIC_SHIFT { width = 32;
+  base = 0xe1c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op bic_shift { class = arithmetic; encoding = BIC_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "bic {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (intrinsic \"bic_shift\" rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bic";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1147; table = "arm_opcodes"; assembler = "bic%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1c00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADC_SHIFT { width = 32;
+  base = 0xe0a00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op adc_shift { class = arithmetic; encoding = ADC_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "adc {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (intrinsic \"adc_shift\" rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "adc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1103; table = "arm_opcodes"; assembler = "adc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0xa00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBC_SHIFT { width = 32;
+  base = 0xe0c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+  shift = 4:5;
+}
+
+op sbc_shift { class = arithmetic; encoding = SBC_SHIFT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, shift: imm;
+  syntax = "sbc {rd}, {rs1}, {rs2}, {shift}";
+  semantics = "(set rd (intrinsic \"sbc_shift\" rs1 rs2 shift))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sbc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1107; table = "arm_opcodes"; assembler = "sbc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0xc00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADDS { width = 32;
+  base = 0xe0900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op adds { class = arithmetic; encoding = ADDS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "adds {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (add rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "adds";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1099; table = "arm_opcodes"; assembler = "add%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x800000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUBS { width = 32;
+  base = 0xe0500000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op subs { class = arithmetic; encoding = SUBS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "subs {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (sub rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "subs";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1091; table = "arm_opcodes"; assembler = "sub%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x400000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDS { width = 32;
+  base = 0xe0100000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op ands { class = misc; encoding = ANDS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "ands {rd}, {rs1}, {rs2}";
+  semantics = "(effect (intrinsic \"ands\" rd rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ands";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1083; table = "arm_opcodes"; assembler = "and%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x0; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BICS { width = 32;
+  base = 0xe1d00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op bics { class = misc; encoding = BICS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "bics {rd}, {rs1}, {rs2}";
+  semantics = "(effect (intrinsic \"bics\" rd rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bics";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1147; table = "arm_opcodes"; assembler = "bic%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x1c00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MOV { width = 32;
+  base = 0xe1a00000;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op mov { class = misc; encoding = MOV;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "mov {rd}, {rs1}";
+  semantics = "(set rd (move rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mov";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1139; table = "arm_opcodes"; assembler = "mov%20's%c\t%12-15r, %0-3r"; architecture = "ARM_EXT_V1"; match = 0x1a00000; mask = 0xdef0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MVN { width = 32;
+  base = 0xe1e00000;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op mvn { class = misc; encoding = MVN;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "mvn {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"mvn\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mvn";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1151; table = "arm_opcodes"; assembler = "mvn%20's%c\t%12-15r, %o"; architecture = "ARM_EXT_V1"; match = 0x1e00000; mask = 0xfe00010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MLA { width = 32;
+  base = 0xe0200090;
+  rd = 16:4;
+  rs1 = 0:4;
+  rs2 = 8:4;
+  rs3 = 12:4;
+}
+
+op mla { class = arithmetic; encoding = MLA;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, rs3: GPR;
+  syntax = "mla {rd}, {rs1}, {rs2}, {rs3}";
+  semantics = "(set rd (intrinsic \"mla\" rs1 rs2 rs3))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mla";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 843; table = "arm_opcodes"; assembler = "mla%20's%c\t%16-19R, %0-3R, %8-11R, %12-15R"; architecture = "ARM_EXT_V2"; match = 0x200090; mask = 0xfe000f0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MLS { width = 32;
+  base = 0xe0600090;
+  rd = 16:4;
+  rs1 = 0:4;
+  rs2 = 8:4;
+  rs3 = 12:4;
+}
+
+op mls { class = arithmetic; encoding = MLS;
+  operands = rd: GPR, rs1: GPR, rs2: GPR, rs3: GPR;
+  syntax = "mls {rd}, {rs1}, {rs2}, {rs3}";
+  semantics = "(set rd (intrinsic \"mls\" rs1 rs2 rs3))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mls";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 869; table = "arm_opcodes"; assembler = "mls%c\t%16-19R, %0-3R, %8-11R, %12-15R"; architecture = "ARM_EXT_V6T2"; match = 0x600090; mask = 0xff000f0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADD_IMM { width = 32;
+  base = 0xe2800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op add_imm { class = arithmetic; encoding = ADD_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "add {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (add rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1098; table = "arm_opcodes"; assembler = "add%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x2800000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUB_IMM { width = 32;
+  base = 0xe2400000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op sub_imm { class = arithmetic; encoding = SUB_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sub {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (sub rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sub";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1090; table = "arm_opcodes"; assembler = "sub%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x2400000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RSB_IMM { width = 32;
+  base = 0xe2600000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op rsb_imm { class = arithmetic; encoding = RSB_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "rsb {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"rsb_imm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rsb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1094; table = "arm_opcodes"; assembler = "rsb%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x2600000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORR_IMM { width = 32;
+  base = 0xe3800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op orr_imm { class = arithmetic; encoding = ORR_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "orr {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (or rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "orr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1134; table = "arm_opcodes"; assembler = "orr%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3800000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BIC_IMM { width = 32;
+  base = 0xe3c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op bic_imm { class = arithmetic; encoding = BIC_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "bic {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"bic_imm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bic";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1146; table = "arm_opcodes"; assembler = "bic%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3c00000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADC_IMM { width = 32;
+  base = 0xe2a00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op adc_imm { class = arithmetic; encoding = ADC_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "adc {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"adc_imm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "adc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1102; table = "arm_opcodes"; assembler = "adc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x2a00000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBC_IMM { width = 32;
+  base = 0xe2c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op sbc_imm { class = arithmetic; encoding = SBC_IMM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sbc {rd}, {rs1}, #{imm}";
+  semantics = "(set rd (intrinsic \"sbc_imm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sbc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1106; table = "arm_opcodes"; assembler = "sbc%20's%c\t%12-15r, %16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x2c00000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMP { width = 32;
+  base = 0xe3500000;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op cmp { class = compare; encoding = CMP;
+  operands = rs1: GPR, imm: imm;
+  syntax = "cmp {rs1}, #{imm}";
+  semantics = "(effect (flags (compare rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "cmp";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1126; table = "arm_opcodes"; assembler = "cmp%p%c\t%16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3400000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMN { width = 32;
+  base = 0xe3700000;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op cmn { class = compare; encoding = CMN;
+  operands = rs1: GPR, imm: imm;
+  syntax = "cmn {rs1}, #{imm}";
+  semantics = "(effect (flags (compare rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "cmn";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1130; table = "arm_opcodes"; assembler = "cmn%p%c\t%16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3600000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding TST { width = 32;
+  base = 0xe3100000;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op tst { class = compare; encoding = TST;
+  operands = rs1: GPR, imm: imm;
+  syntax = "tst {rs1}, #{imm}";
+  semantics = "(effect (flags (compare rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "tst";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1118; table = "arm_opcodes"; assembler = "tst%p%c\t%16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3000000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding TEQ { width = 32;
+  base = 0xe3300000;
+  rs1 = 16:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op teq { class = compare; encoding = TEQ;
+  operands = rs1: GPR, imm: imm;
+  syntax = "teq {rs1}, #{imm}";
+  semantics = "(effect (flags (compare rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "teq";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1122; table = "arm_opcodes"; assembler = "teq%p%c\t%16-19r, %o"; architecture = "ARM_EXT_V1"; match = 0x3200000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MOV_IMM { width = 32;
+  base = 0xe3a00000;
+  rd = 12:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op mov_imm { class = misc; encoding = MOV_IMM;
+  operands = rd: GPR, imm: imm;
+  syntax = "mov {rd}, #{imm}";
+  semantics = "(set rd (move imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mov";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1138; table = "arm_opcodes"; assembler = "mov%20's%c\t%12-15r, %o"; architecture = "ARM_EXT_V1"; match = 0x3a00000; mask = 0xfef0000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1139; table = "arm_opcodes"; assembler = "mov%20's%c\t%12-15r, %0-3r"; architecture = "ARM_EXT_V1"; match = 0x1a00000; mask = 0xdef0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MVN_IMM { width = 32;
+  base = 0xe3e00000;
+  rd = 12:4;
+  imm = 0:8;
+  signed = 1;
+}
+
+op mvn_imm { class = misc; encoding = MVN_IMM;
+  operands = rd: GPR, imm: imm;
+  syntax = "mvn {rd}, #{imm}";
+  semantics = "(effect (intrinsic \"mvn_imm\" rd imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mvn";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1150; table = "arm_opcodes"; assembler = "mvn%20's%c\t%12-15r, %o"; architecture = "ARM_EXT_V1"; match = 0x3e00000; mask = 0xfe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MOVW { width = 32;
+  base = 0xe3000000;
+  rd = 12:4;
+  imm = 0:12;
+  rot = 16:4;
+}
+
+op movw { class = misc; encoding = MOVW;
+  operands = rd: GPR, imm: imm, rot: imm;
+  syntax = "movw {rd}, #{imm}:{rot}";
+  semantics = "(set rd (move imm rot))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "movw";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 875; table = "arm_opcodes"; assembler = "movw%c\t%12-15R, %V"; architecture = "ARM_EXT_V6T2"; match = 0x3000000; mask = 0xff00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MOVT { width = 32;
+  base = 0xe3400000;
+  rd = 12:4;
+  imm = 0:12;
+  rot = 16:4;
+}
+
+op movt { class = misc; encoding = MOVT;
+  operands = rd: GPR, imm: imm, rot: imm;
+  syntax = "movt {rd}, #{imm}:{rot}";
+  semantics = "(set rd (move imm rot))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "movt";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 876; table = "arm_opcodes"; assembler = "movt%c\t%12-15R, %V"; architecture = "ARM_EXT_V6T2"; match = 0x3400000; mask = 0xff00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLZ { width = 32;
+  base = 0xe16f0f10;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op clz { class = misc; encoding = CLZ;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "clz {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"clz\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "clz";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1030; table = "arm_opcodes"; assembler = "clz%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V5"; match = 0x16f0f10; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding REV { width = 32;
+  base = 0xe6bf0f30;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op rev { class = misc; encoding = REV;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "rev {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"rev\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rev";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 946; table = "arm_opcodes"; assembler = "rev%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6bf0f30; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding REV16 { width = 32;
+  base = 0xe6bf0fb0;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op rev16 { class = misc; encoding = REV16;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "rev16 {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"rev16\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rev16";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 947; table = "arm_opcodes"; assembler = "rev16%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6bf0fb0; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SXTB { width = 32;
+  base = 0xe6af0070;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op sxtb { class = misc; encoding = SXTB;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sxtb {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"sxtb\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sxtb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 958; table = "arm_opcodes"; assembler = "sxtb%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6af0070; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SXTH { width = 32;
+  base = 0xe6bf0070;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op sxth { class = misc; encoding = SXTH;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sxth {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"sxth\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "sxth";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 950; table = "arm_opcodes"; assembler = "sxth%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6bf0070; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding UXTB { width = 32;
+  base = 0xe6ef0070;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op uxtb { class = misc; encoding = UXTB;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "uxtb {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"uxtb\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "uxtb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 970; table = "arm_opcodes"; assembler = "uxtb%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6ef0070; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding UXTH { width = 32;
+  base = 0xe6ff0070;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op uxth { class = misc; encoding = UXTH;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "uxth {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"uxth\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "uxth";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 962; table = "arm_opcodes"; assembler = "uxth%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6"; match = 0x6ff0070; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RBIT { width = 32;
+  base = 0xe6ff0f30;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op rbit { class = misc; encoding = RBIT;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "rbit {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"rbit\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "rbit";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 877; table = "arm_opcodes"; assembler = "rbit%c\t%12-15R, %0-3R"; architecture = "ARM_EXT_V6T2"; match = 0x6ff0f30; mask = 0xfff0ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLREX { width = 32;
+  base = 0xf57ff01f;
+}
+
+op clrex { class = misc; encoding = CLREX;
+  operands = ;
+  syntax = "clrex";
+  semantics = "(effect (intrinsic \"clrex\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "clrex";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 884; table = "arm_opcodes"; assembler = "clrex"; architecture = "ARM_EXT_V6K"; match = 0xf57ff01f; mask = 0xffffffff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDR { width = 32;
+  base = 0xe5900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+  alignment = 4;
+}
+
+op ldr { class = load; encoding = LDR;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ldr {rd}, [{rs1}, #{offset}]";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1160; table = "arm_opcodes"; assembler = "ldr%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4100000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDR_REG { width = 32;
+  base = 0xe7900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op ldr_reg { class = load; encoding = LDR_REG;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "ldr {rd}, [{rs1}, {rs2}]";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1160; table = "arm_opcodes"; assembler = "ldr%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4100000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STR { width = 32;
+  base = 0xe5800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+  alignment = 4;
+}
+
+op str { class = store; encoding = STR;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "str {rd}, [{rs1}, #{offset}]";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "str";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1066; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xe500000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1070; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xc500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STR_REG { width = 32;
+  base = 0xe7800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op str_reg { class = store; encoding = STR_REG;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "str {rd}, [{rs1}, {rs2}]";
+  semantics = "(store (addr rs1 imm) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "str";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1068; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x6000000; mask = 0xe500ff0; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1070; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xc500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDRB { width = 32;
+  base = 0xe5d00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+  alignment = 1;
+}
+
+op ldrb { class = load; encoding = LDRB;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ldrb {rd}, [{rs1}, #{offset}]";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldrb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1157; table = "arm_opcodes"; assembler = "ldrb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4500000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDRB_REG { width = 32;
+  base = 0xe7d00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op ldrb_reg { class = load; encoding = LDRB_REG;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "ldrb {rd}, [{rs1}, {rs2}]";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldrb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1157; table = "arm_opcodes"; assembler = "ldrb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4500000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STRB { width = 32;
+  base = 0xe5c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+  alignment = 1;
+}
+
+op strb { class = store; encoding = STRB;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "strb {rd}, [{rs1}, #{offset}]";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "strb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1065; table = "arm_opcodes"; assembler = "strb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4400000; mask = 0xe500000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1069; table = "arm_opcodes"; assembler = "strb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4400000; mask = 0xc500010; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1072; table = "arm_opcodes"; assembler = "strb%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4400000; mask = 0xe500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STRB_REG { width = 32;
+  base = 0xe7c00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op strb_reg { class = store; encoding = STRB_REG;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "strb {rd}, [{rs1}, {rs2}]";
+  semantics = "(store (addr rs1 imm) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "strb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1067; table = "arm_opcodes"; assembler = "strb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x6400000; mask = 0xe500ff0; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1069; table = "arm_opcodes"; assembler = "strb%t%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x4400000; mask = 0xc500010; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1073; table = "arm_opcodes"; assembler = "strb%c\t%12-15R, %a"; architecture = "ARM_EXT_V1"; match = 0x6400000; mask = 0xe500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDR_UP { width = 32;
+  base = 0xe4900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op ldr_up { class = load; encoding = LDR_UP;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ldr {rd}, [{rs1}], #{offset}";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1160; table = "arm_opcodes"; assembler = "ldr%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4100000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDR_PRE { width = 32;
+  base = 0xe5b00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op ldr_pre { class = load; encoding = LDR_PRE;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ldr {rd}, [{rs1}, #{offset}]!";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1160; table = "arm_opcodes"; assembler = "ldr%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4100000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDR_POST { width = 32;
+  base = 0xe4900000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op ldr_post { class = load; encoding = LDR_POST;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ldr {rd}, [{rs1}], #{offset}";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1160; table = "arm_opcodes"; assembler = "ldr%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4100000; mask = 0xc500000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STR_UP { width = 32;
+  base = 0xe4800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op str_up { class = store; encoding = STR_UP;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "str {rd}, [{rs1}], #{offset}";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "str";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1066; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xe500000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1070; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xc500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STR_PRE { width = 32;
+  base = 0xe5a00000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op str_pre { class = store; encoding = STR_PRE;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "str {rd}, [{rs1}, #{offset}]!";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "str";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1066; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xe500000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1070; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xc500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STR_POST { width = 32;
+  base = 0xe4800000;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset = 0:12;
+  signed = 1;
+}
+
+op str_post { class = store; encoding = STR_POST;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "str {rd}, [{rs1}], #{offset}";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "str";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1066; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xe500000; encoding_bits = 32; },
+      { source = "binutils/opcodes/arm-dis.c"; line = 1070; table = "arm_opcodes"; assembler = "str%t%c\t%12-15r, %a"; architecture = "ARM_EXT_V1"; match = 0x4000000; mask = 0xc500010; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding B { width = 32;
+  base = 0xea000000;
+  offset[25:2] = 0:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op b { class = branch; encoding = B;
+  operands = offset: rel;
+  syntax = "b {offset}";
+  semantics = "(branch offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "b";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BL { width = 32;
+  base = 0xeb000000;
+  offset[25:2] = 0:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op bl { class = branch; encoding = BL;
+  operands = offset: rel;
+  syntax = "bl {offset}";
+  semantics = "(call offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bl";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BEQ { width = 32;
+  base = 0xa000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op beq { class = branch; encoding = BEQ;
+  operands = offset: rel;
+  syntax = "beq {offset}";
+  semantics = "(if (eq rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "beq";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BNE { width = 32;
+  base = 0x1a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bne { class = branch; encoding = BNE;
+  operands = offset: rel;
+  syntax = "bne {offset}";
+  semantics = "(if (ne rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bne";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BCS { width = 32;
+  base = 0x2a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bcs { class = branch; encoding = BCS;
+  operands = offset: rel;
+  syntax = "bcs {offset}";
+  semantics = "(effect (branch \"bcs\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bcs";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BCC { width = 32;
+  base = 0x3a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bcc { class = branch; encoding = BCC;
+  operands = offset: rel;
+  syntax = "bcc {offset}";
+  semantics = "(effect (branch \"bcc\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bcc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BMI { width = 32;
+  base = 0x4a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bmi { class = branch; encoding = BMI;
+  operands = offset: rel;
+  syntax = "bmi {offset}";
+  semantics = "(effect (branch \"bmi\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bmi";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BPL { width = 32;
+  base = 0x5a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bpl { class = branch; encoding = BPL;
+  operands = offset: rel;
+  syntax = "bpl {offset}";
+  semantics = "(effect (branch \"bpl\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bpl";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BVS { width = 32;
+  base = 0x6a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bvs { class = branch; encoding = BVS;
+  operands = offset: rel;
+  syntax = "bvs {offset}";
+  semantics = "(effect (branch \"bvs\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bvs";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BVC { width = 32;
+  base = 0x7a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bvc { class = branch; encoding = BVC;
+  operands = offset: rel;
+  syntax = "bvc {offset}";
+  semantics = "(effect (branch \"bvc\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bvc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BHI { width = 32;
+  base = 0x8a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bhi { class = branch; encoding = BHI;
+  operands = offset: rel;
+  syntax = "bhi {offset}";
+  semantics = "(effect (branch \"bhi\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bhi";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLS { width = 32;
+  base = 0x9a000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bls { class = branch; encoding = BLS;
+  operands = offset: rel;
+  syntax = "bls {offset}";
+  semantics = "(effect (branch \"bls\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bls";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BGE { width = 32;
+  base = 0xaa000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bge { class = branch; encoding = BGE;
+  operands = offset: rel;
+  syntax = "bge {offset}";
+  semantics = "(if (sge rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bge";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLT { width = 32;
+  base = 0xba000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op blt { class = branch; encoding = BLT;
+  operands = offset: rel;
+  syntax = "blt {offset}";
+  semantics = "(if (slt rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "blt";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BGT { width = 32;
+  base = 0xca000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op bgt { class = branch; encoding = BGT;
+  operands = offset: rel;
+  syntax = "bgt {offset}";
+  semantics = "(effect (branch \"bgt\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bgt";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLE { width = 32;
+  base = 0xda000000;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 4;
+}
+
+op ble { class = branch; encoding = BLE;
+  operands = offset: rel;
+  syntax = "ble {offset}";
+  semantics = "(effect (branch \"ble\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ble";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1168; table = "arm_opcodes"; assembler = "b%24'l%c\t%b"; architecture = "ARM_EXT_V1"; match = 0xa000000; mask = 0xe000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BX { width = 32;
+  base = 0xe12fff10;
+  rs1 = 0:4;
+}
+
+op bx { class = branch; encoding = BX;
+  operands = rs1: GPR;
+  syntax = "bx {rs1}";
+  semantics = "(effect (branch \"bx\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bx";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 841; table = "arm_opcodes"; assembler = "bx%c\t%0-3r"; architecture = "ARM_EXT_V4T | ARM_EXT_V5"; match = 0x12fff10; mask = 0xffffff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLX { width = 32;
+  base = 0xe12fff30;
+  rs1 = 0:4;
+}
+
+op blx { class = branch; encoding = BLX;
+  operands = rs1: GPR;
+  syntax = "blx {rs1}";
+  semantics = "(effect (branch \"blx\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "blx";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1029; table = "arm_opcodes"; assembler = "blx%c\t%0-3R"; architecture = "ARM_EXT_V5"; match = 0x12fff30; mask = 0xffffff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NOP { width = 32;
+  base = 0xe320f000;
+}
+
+op nop { class = misc; encoding = NOP;
+  operands = ;
+  syntax = "nop";
+  semantics = "(effect (intrinsic \"nop\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "nop";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 897; table = "arm_opcodes"; assembler = "nop%c\t{%0-7d}"; architecture = "ARM_EXT_V6K"; match = 0x320f000; mask = 0xfffff00; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding UDF { width = 32;
+  base = 0xe7f000f0;
+  imm = 0:4;
+  imm_hi = 8:8;
+}
+
+op udf { class = system; encoding = UDF;
+  operands = imm: imm, imm_hi: imm;
+  syntax = "udf #{imm_hi}#{imm}";
+  semantics = "(effect (system \"udf\" imm imm_hi))";
+}
+
+encoding SVC { width = 32;
+  base = 0xef000000;
+  imm = 0:8;
+}
+
+op svc { class = system; encoding = SVC;
+  operands = imm: imm;
+  syntax = "svc #{imm}";
+  semantics = "(effect (system \"svc\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "svc";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1169; table = "arm_opcodes"; assembler = "svc%c\t%0-23x"; architecture = "ARM_EXT_V1"; match = 0xf000000; mask = 0xf000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BKPT { width = 32;
+  base = 0xe1200070;
+  imm = 0:4;
+  imm2 = 8:4;
+}
+
+op bkpt { class = system; encoding = BKPT;
+  operands = imm: imm, imm2: imm;
+  syntax = "bkpt #{imm2}#{imm}";
+  semantics = "(effect (system \"bkpt\" imm imm2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "bkpt";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1027; table = "arm_opcodes"; assembler = "bkpt\t0x%16-19X%12-15X%8-11X%0-3X"; architecture = "ARM_EXT_V5"; match = 0xe1200070; mask = 0xfff000f0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MRS { width = 32;
+  base = 0xe10f0000;
+  rd = 12:4;
+}
+
+op mrs { class = system; encoding = MRS;
+  operands = rd: GPR;
+  syntax = "mrs {rd}, cpsr";
+  semantics = "(effect (system \"mrs\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "mrs";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1116; table = "arm_opcodes"; assembler = "mrs%c\t%12-15R, %R"; architecture = "ARM_EXT_V3"; match = 0x1000000; mask = 0xfb00cff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MSR { width = 32;
+  base = 0xe129f000;
+  rs1 = 0:4;
+}
+
+op msr { class = system; encoding = MSR;
+  operands = rs1: GPR;
+  syntax = "msr cpsr, {rs1}";
+  semantics = "(effect (system \"msr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "msr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 1115; table = "arm_opcodes"; assembler = "msr%c\t%C, %o"; architecture = "ARM_EXT_V3"; match = 0x120f000; mask = 0xdb0f000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SWP { width = 32;
+  base = 0xe1000090;
+  rd = 12:4;
+  rs1 = 0:4;
+  rs2 = 16:4;
+}
+
+op swp { class = atomic; encoding = SWP;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "swp {rd}, {rs1}, [{rs2}]";
+  semantics = "(set rd (atomic \"swp\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "swp";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 844; table = "arm_opcodes"; assembler = "swp%22'b%c\t%12-15RU, %0-3Ru, [%16-19RuU]"; architecture = "ARM_EXT_V2S"; match = 0x1000090; mask = 0xfb00ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SWPB { width = 32;
+  base = 0xe1400090;
+  rd = 12:4;
+  rs1 = 0:4;
+  rs2 = 16:4;
+}
+
+op swpb { class = atomic; encoding = SWPB;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "swpb {rd}, {rs1}, [{rs2}]";
+  semantics = "(set rd (atomic \"swpb\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "swpb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 844; table = "arm_opcodes"; assembler = "swp%22'b%c\t%12-15RU, %0-3Ru, [%16-19RuU]"; architecture = "ARM_EXT_V2S"; match = 0x1000090; mask = 0xfb00ff0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDREX { width = 32;
+  base = 0xe1900f9f;
+  rd = 12:4;
+  rs1 = 16:4;
+}
+
+op ldrex { class = atomic; encoding = LDREX;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ldrex {rd}, [{rs1}]";
+  semantics = "(set rd (atomic \"ldrex\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldrex";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 909; table = "arm_opcodes"; assembler = "ldrex%c\tr%12-15d, [%16-19R]"; architecture = "ARM_EXT_V6"; match = 0x1900f9f; mask = 0xff00fff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDREXB { width = 32;
+  base = 0xe1d00f9f;
+  rd = 12:4;
+  rs1 = 16:4;
+}
+
+op ldrexb { class = atomic; encoding = LDREXB;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ldrexb {rd}, [{rs1}]";
+  semantics = "(set rd (atomic \"ldrexb\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldrexb";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 885; table = "arm_opcodes"; assembler = "ldrexb%c\t%12-15R, [%16-19R]"; architecture = "ARM_EXT_V6K"; match = 0x1d00f9f; mask = 0xff00fff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDREXD { width = 32;
+  base = 0xe1b00f9f;
+  rd = 12:4;
+  rs1 = 16:4;
+}
+
+op ldrexd { class = atomic; encoding = LDREXD;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ldrexd {rd}, [{rs1}]";
+  semantics = "(set rd (atomic \"ldrexd\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "ldrexd";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 886; table = "arm_opcodes"; assembler = "ldrexd%c\t%12-15r, [%16-19R]"; architecture = "ARM_EXT_V6K"; match = 0x1b00f9f; mask = 0xff00fff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VADD_F64 { width = 32;
+  base = 0xee300b00;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op vadd_f64 { class = arithmetic; encoding = VADD_F64;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "vadd.f64 {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"vadd_f64\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vadd.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 386; table = "coprocessor_opcodes"; assembler = "vadd%c.f64\t%z1, %z2, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xe300b00; mask = 0xfb00f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VSUB_F64 { width = 32;
+  base = 0xee300b40;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op vsub_f64 { class = arithmetic; encoding = VSUB_F64;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "vsub.f64 {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"vsub_f64\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vsub.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 387; table = "coprocessor_opcodes"; assembler = "vsub%c.f64\t%z1, %z2, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xe300b40; mask = 0xfb00f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VMUL_F64 { width = 32;
+  base = 0xee200b00;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op vmul_f64 { class = arithmetic; encoding = VMUL_F64;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "vmul.f64 {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"vmul_f64\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vmul.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 382; table = "coprocessor_opcodes"; assembler = "vmul%c.f64\t%z1, %z2, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xe200b00; mask = 0xfb00f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VDIV_F64 { width = 32;
+  base = 0xee800b00;
+  rd = 12:4;
+  rs1 = 16:4;
+  rs2 = 0:4;
+}
+
+op vdiv_f64 { class = arithmetic; encoding = VDIV_F64;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "vdiv.f64 {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"vdiv_f64\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vdiv.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 389; table = "coprocessor_opcodes"; assembler = "vdiv%c.f64\t%z1, %z2, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xe800b00; mask = 0xfb00f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VABS_F64 { width = 32;
+  base = 0xeeb00bc0;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op vabs_f64 { class = misc; encoding = VABS_F64;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "vabs.f64 {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"vabs_f64\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vabs.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 349; table = "coprocessor_opcodes"; assembler = "vabs%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb00bc0; mask = 0xfbf0fd0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VNEG_F64 { width = 32;
+  base = 0xeeb10b40;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op vneg_f64 { class = misc; encoding = VNEG_F64;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "vneg.f64 {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"vneg_f64\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vneg.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 352; table = "coprocessor_opcodes"; assembler = "vneg%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb10b40; mask = 0xfbf0fd0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VSQRT_F64 { width = 32;
+  base = 0xeeb10bc0;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op vsqrt_f64 { class = misc; encoding = VSQRT_F64;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "vsqrt.f64 {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"vsqrt_f64\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vsqrt.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 353; table = "coprocessor_opcodes"; assembler = "vsqrt%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb10bc0; mask = 0xfbf0fd0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VMOV_F64 { width = 32;
+  base = 0xeeb00b40;
+  rd = 12:4;
+  rs1 = 0:4;
+}
+
+op vmov_f64 { class = misc; encoding = VMOV_F64;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "vmov.f64 {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"vmov_f64\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vmov.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 348; table = "coprocessor_opcodes"; assembler = "vmov%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb00b40; mask = 0xfbf0fd0; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VCMPE_F64 { width = 32;
+  base = 0xeeb40bc0;
+  rs1 = 12:4;
+  rs2 = 0:4;
+}
+
+op vcmpe_f64 { class = compare; encoding = VCMPE_F64;
+  operands = rs1: FPR, rs2: FPR;
+  syntax = "vcmpe.f64 {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vcmpe.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 359; table = "coprocessor_opcodes"; assembler = "vcmp%7'e%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb40b40; mask = 0xfbf0f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VCMP_F64 { width = 32;
+  base = 0xeeb40b40;
+  rs1 = 12:4;
+  rs2 = 0:4;
+}
+
+op vcmp_f64 { class = compare; encoding = VCMP_F64;
+  operands = rs1: FPR, rs2: FPR;
+  syntax = "vcmp.f64 {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vcmp.f64";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 359; table = "coprocessor_opcodes"; assembler = "vcmp%7'e%c.f64\t%z1, %z0"; architecture = "FPU_VFP_EXT_V1"; match = 0xeb40b40; mask = 0xfbf0f50; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VLDR_F64 { width = 32;
+  base = 0xed900b00;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 8;
+}
+
+op vldr_f64 { class = load; encoding = VLDR_F64;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "vldr {rd}, [{rs1}, #{offset}]";
+  semantics = "(set rd (load 64 (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vldr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 288; table = "coprocessor_opcodes"; assembler = "vldr%c\t%12-15,22D, %A"; architecture = "FPU_VFP_EXT_V1xD | FPU_NEON_EXT_V1"; match = 0xd100b00; mask = 0xf300f00; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VSTR_F64 { width = 32;
+  base = 0xed800b00;
+  rd = 12:4;
+  rs1 = 16:4;
+  offset[9:2] = 0:8;
+  signed = 1;
+  alignment = 8;
+}
+
+op vstr_f64 { class = store; encoding = VSTR_F64;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "vstr {rd}, [{rs1}, #{offset}]";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "a32_base_bits_and_mnemonic";
+    mnemonic = "vstr";
+    variants = [
+      { source = "binutils/opcodes/arm-dis.c"; line = 287; table = "coprocessor_opcodes"; assembler = "vstr%c\t%12-15,22D, %A"; architecture = "FPU_VFP_EXT_V1xD | FPU_NEON_EXT_V1"; match = 0xd000b00; mask = 0xf300f00; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding VLDM_F64 { width = 32;
+  base = 0xec900000;
+  rd = 16:4;
+  list = 0:16;
+}
+
+op vldm_f64 { class = load; encoding = VLDM_F64;
+  operands = rd: GPR, list: imm;
+  syntax = "vldm {rd}, {list}";
+  semantics = "(set rd (load 64 (addr list)))";
+}
+
+encoding VSTM_F64 { width = 32;
+  base = 0xec800000;
+  rd = 16:4;
+  list = 0:16;
+}
+
+op vstm_f64 { class = store; encoding = VSTM_F64;
+  operands = rd: GPR, list: imm;
+  syntax = "vstm {rd}, {list}";
+  semantics = "(store (memory-address list) rd)";
+}
+
+encoding VPUSH_F64 { width = 32;
+  base = 0xed2d0000;
+  list = 0:16;
+}
+
+op vpush_f64 { class = misc; encoding = VPUSH_F64;
+  operands = list: imm;
+  syntax = "vpush {list}";
+  semantics = "(effect (intrinsic \"vpush_f64\" list))";
+}
+
+encoding VPOP_F64 { width = 32;
+  base = 0xecbd0000;
+  list = 0:16;
+}
+
+op vpop_f64 { class = misc; encoding = VPOP_F64;
+  operands = list: imm;
+  syntax = "vpop {list}";
+  semantics = "(effect (intrinsic \"vpop_f64\" list))";
+}

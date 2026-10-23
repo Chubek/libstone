@@ -1,0 +1,2112 @@
+arch ppc64 { word_size = 32; addr_size = 64; endian = big; align = 4; }
+
+
+profile {
+  family = "Power";
+  model = "PowerPC64";
+  version = "ISA_2_0_plus";
+  word_size = 64;
+  address_size = 64;
+  endianness = "big";
+  instruction_encoding = "fixed32";
+  execution_model = "superscalar_target_dependent";
+  register_model = "register";
+  extensions = ["integer", "floating_point", "64bit"];
+  register_classes = ["GPR", "FPR"];
+  fixed_registers = [];
+  zero_register = "none";
+  operation_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+  instruction_count = 90;
+  encoding_widths = ["32"];
+  coverage = "source_inventory";
+  encoding_layout = { opcode = "31:26"; };
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    version = "2.22";
+    scope = "source_table_reference_variants";
+    sources = [{ path = "binutils/opcodes/ppc-opc.c"; sha256 = "8aabe4ab0b9e2dc1895c29eef93f6dff0c6c1cc8f22fb0cb2f93d4489806ed5f"; }, { path = "binutils/include/opcode/ppc.h"; sha256 = "5f179f36a1d7c752ebeb6c1ffd12096c14b1c4fd8e0b67fb7ebd715f2da0bce9"; }];
+    matched_operations = 89;
+    variant_count = 90;
+    unmatched_operations = ["andi"];
+  };
+  # END BINUTILS METADATA
+}
+compiler {
+  instruction_selection {
+    strategy = "target_pattern_matching";
+    opcode_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+    register_classes = ["GPR", "FPR"];
+    immediate_folding = true;
+    addressing_mode_folding = true;
+    branch_form_selection = true;
+    pseudo_expansion = "target_dependent";
+    cost_model = "target_microarchitecture";
+  }
+  instruction_scheduling {
+    strategy = "dependency_aware_target_scheduler";
+    dependency_ordering = true;
+    memory_dependence_analysis = true;
+    control_dependence_analysis = true;
+    latency_model = "target_microarchitecture";
+    resource_model = "target_microarchitecture";
+    packetization = false;
+  }
+  register_allocation {
+    strategy = "target_register_allocation";
+    register_classes = ["GPR", "FPR"];
+    fixed_registers = [];
+    zero_register = "none";
+    caller_saved = "abi_dependent";
+    callee_saved = "abi_dependent";
+    spill_policy = "target_dependent";
+  }
+  optimization {
+    legality_model = "isa_and_memory_model";
+    transforms = ["constant_folding", "copy_propagation", "dead_code_elimination", "common_subexpression_elimination", "peephole_rewrite", "branch_simplification", "load_store_motion_target_dependent", "strength_reduction_target_dependent", "addressing_mode_folding", "branch_relaxation_target_dependent"];
+    instruction_combining = true;
+    peephole_optimization = true;
+    constant_folding = true;
+    dead_code_elimination = true;
+    common_subexpression_elimination = true;
+    loop_optimization = "target_dependent";
+    vectorization = "target_dependent";
+    if_conversion = "target_dependent";
+    interprocedural_optimization = "abi_and_linkage_dependent";
+  }
+}
+regclass GPR {
+    r0(64)=0,
+    r1(64)=1,
+    r2(64)=2,
+    r3(64)=3,
+    r4(64)=4,
+    r5(64)=5,
+    r6(64)=6,
+    r7(64)=7,
+    r8(64)=8,
+    r9(64)=9,
+    r10(64)=10,
+    r11(64)=11,
+    r12(64)=12,
+    r13(64)=13,
+    r14(64)=14,
+    r15(64)=15,
+    r16(64)=16,
+    r17(64)=17,
+    r18(64)=18,
+    r19(64)=19,
+    r20(64)=20,
+    r21(64)=21,
+    r22(64)=22,
+    r23(64)=23,
+    r24(64)=24,
+    r25(64)=25,
+    r26(64)=26,
+    r27(64)=27,
+    r28(64)=28,
+    r29(64)=29,
+    r30(64)=30,
+    r31(64)=31,
+}
+
+regclass FPR {
+    f0(64)=0,
+    f1(64)=1,
+    f2(64)=2,
+    f3(64)=3,
+    f4(64)=4,
+    f5(64)=5,
+    f6(64)=6,
+    f7(64)=7,
+    f8(64)=8,
+    f9(64)=9,
+    f10(64)=10,
+    f11(64)=11,
+    f12(64)=12,
+    f13(64)=13,
+    f14(64)=14,
+    f15(64)=15,
+    f16(64)=16,
+    f17(64)=17,
+    f18(64)=18,
+    f19(64)=19,
+    f20(64)=20,
+    f21(64)=21,
+    f22(64)=22,
+    f23(64)=23,
+    f24(64)=24,
+    f25(64)=25,
+    f26(64)=26,
+    f27(64)=27,
+    f28(64)=28,
+    f29(64)=29,
+    f30(64)=30,
+    f31(64)=31,
+}
+
+encoding ADD { width = 32;
+  base = 0x7c000214;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op add { class = arithmetic; encoding = ADD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "add {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (add rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3864; table = "powerpc_opcodes"; mnemonic = "add"; match = 0x7c000214; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUBF { width = 32;
+  base = 0x7c000050;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op subf { class = arithmetic; encoding = SUBF;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "subf {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (sub rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "subf";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3616; table = "powerpc_opcodes"; mnemonic = "subf"; match = 0x7c000050; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULLW { width = 32;
+  base = 0x7c0001d6;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op mullw { class = arithmetic; encoding = MULLW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mullw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mullw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3832; table = "powerpc_opcodes"; mnemonic = "mullw"; match = 0x7c0001d6; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULHW { width = 32;
+  base = 0x7c000096;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op mulhw { class = arithmetic; encoding = MULHW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mulhw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mulhw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3664; table = "powerpc_opcodes"; mnemonic = "mulhw"; match = 0x7c000096; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULHWU { width = 32;
+  base = 0x7c000016;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op mulhwu { class = arithmetic; encoding = MULHWU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mulhwu {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mulhwu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3552; table = "powerpc_opcodes"; mnemonic = "mulhwu"; match = 0x7c000016; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIVW { width = 32;
+  base = 0x7c0003d6;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op divw { class = arithmetic; encoding = DIVW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "divw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (div rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "divw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4453; table = "powerpc_opcodes"; mnemonic = "divw"; match = 0x7c0003d6; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIVWU { width = 32;
+  base = 0x7c000396;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op divwu { class = arithmetic; encoding = DIVWU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "divwu {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (div rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "divwu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4267; table = "powerpc_opcodes"; mnemonic = "divwu"; match = 0x7c000396; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULHD { width = 32;
+  base = 0x7c000092;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op mulhd { class = arithmetic; encoding = MULHD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mulhd {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mulhd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3661; table = "powerpc_opcodes"; mnemonic = "mulhd"; match = 0x7c000092; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULHDU { width = 32;
+  base = 0x7c000012;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op mulhdu { class = arithmetic; encoding = MULHDU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mulhdu {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mulhdu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3544; table = "powerpc_opcodes"; mnemonic = "mulhdu"; match = 0x7c000012; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIVD { width = 32;
+  base = 0x7c0003d2;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op divd { class = arithmetic; encoding = DIVD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "divd {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (div rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "divd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4450; table = "powerpc_opcodes"; mnemonic = "divd"; match = 0x7c0003d2; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIVDU { width = 32;
+  base = 0x7c000392;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op divdu { class = arithmetic; encoding = DIVDU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "divdu {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (div rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "divdu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4264; table = "powerpc_opcodes"; mnemonic = "divdu"; match = 0x7c000392; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLD { width = 32;
+  base = 0x7c000036;
+  rd = 16:5;
+  rs1 = 21:5;
+  rs2 = 11:5;
+}
+
+op sld { class = arithmetic; encoding = SLD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sld {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"sld\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sld";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3585; table = "powerpc_opcodes"; mnemonic = "sld"; match = 0x7c000036; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRD { width = 32;
+  base = 0x7c000436;
+  rd = 16:5;
+  rs1 = 21:5;
+  rs2 = 11:5;
+}
+
+op srd { class = arithmetic; encoding = SRD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "srd {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"srd\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4507; table = "powerpc_opcodes"; mnemonic = "srd"; match = 0x7c000436; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRAD { width = 32;
+  base = 0x7c000634;
+  rd = 16:5;
+  rs1 = 21:5;
+  rs2 = 11:5;
+}
+
+op srad { class = arithmetic; encoding = SRAD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "srad {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (ashr rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srad";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4703; table = "powerpc_opcodes"; mnemonic = "srad"; match = 0x7c000634; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMPW { width = 32;
+  base = 0x7c000000;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op cmpw { class = compare; encoding = CMPW;
+  operands = rs1: GPR, rs2: GPR;
+  syntax = "cmpw cr0, {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cmpw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3496; table = "powerpc_opcodes"; mnemonic = "cmpw"; match = 0x7c000000; mask = 0xfc6007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["OBF", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMPLW { width = 32;
+  base = 0x7c000040;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op cmplw { class = compare; encoding = CMPLW;
+  operands = rs1: GPR, rs2: GPR;
+  syntax = "cmplw cr0, {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cmplw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3597; table = "powerpc_opcodes"; mnemonic = "cmplw"; match = 0x7c000040; mask = 0xfc6007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["OBF", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMPD { width = 32;
+  base = 0x7c200000;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op cmpd { class = compare; encoding = CMPD;
+  operands = rs1: GPR, rs2: GPR;
+  syntax = "cmpd cr0, {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cmpd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3497; table = "powerpc_opcodes"; mnemonic = "cmpd"; match = 0x7c200000; mask = 0xfc6007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["OBF", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CMPLD { width = 32;
+  base = 0x7c200040;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op cmpld { class = compare; encoding = CMPLD;
+  operands = rs1: GPR, rs2: GPR;
+  syntax = "cmpld cr0, {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cmpld";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3598; table = "powerpc_opcodes"; mnemonic = "cmpld"; match = 0x7c200040; mask = 0xfc6007ff; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["OBF", "RA", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AND { width = 32;
+  base = 0x7c000038;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op and { class = arithmetic; encoding = AND;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "and {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (and rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "and";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3588; table = "powerpc_opcodes"; mnemonic = "and"; match = 0x7c000038; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDC { width = 32;
+  base = 0x7c000078;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op andc { class = arithmetic; encoding = ANDC;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "andc {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (and rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "andc";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3635; table = "powerpc_opcodes"; mnemonic = "andc"; match = 0x7c000078; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OR { width = 32;
+  base = 0x7c000378;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op or { class = arithmetic; encoding = OR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "or {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (or rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "or";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4220; table = "powerpc_opcodes"; mnemonic = "or"; match = 0x7c000378; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORC { width = 32;
+  base = 0x7c000338;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op orc { class = arithmetic; encoding = ORC;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "orc {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (or rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "orc";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4199; table = "powerpc_opcodes"; mnemonic = "orc"; match = 0x7c000338; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XOR { width = 32;
+  base = 0x7c000278;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op xor { class = arithmetic; encoding = XOR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "xor {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (xor rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xor";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3902; table = "powerpc_opcodes"; mnemonic = "xor"; match = 0x7c000278; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NAND { width = 32;
+  base = 0x7c0003b8;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op nand { class = arithmetic; encoding = NAND;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "nand {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"nand\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nand";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4436; table = "powerpc_opcodes"; mnemonic = "nand"; match = 0x7c0003b8; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NOR { width = 32;
+  base = 0x7c0000f8;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op nor { class = arithmetic; encoding = NOR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "nor {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (nor rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nor";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3703; table = "powerpc_opcodes"; mnemonic = "nor"; match = 0x7c0000f8; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding EQV { width = 32;
+  base = 0x7c000238;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op eqv { class = arithmetic; encoding = EQV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "eqv {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"eqv\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "eqv";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3886; table = "powerpc_opcodes"; mnemonic = "eqv"; match = 0x7c000238; mask = 0xfc0007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLW { width = 32;
+  base = 0x7c000030;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op slw { class = arithmetic; encoding = SLW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "slw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"slw\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "slw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3575; table = "powerpc_opcodes"; mnemonic = "slw"; match = 0x7c000030; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRW { width = 32;
+  base = 0x7c000430;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op srw { class = arithmetic; encoding = SRW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "srw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"srw\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4499; table = "powerpc_opcodes"; mnemonic = "srw"; match = 0x7c000430; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRAW { width = 32;
+  base = 0x7c000630;
+  rs1 = 21:5;
+  rd = 16:5;
+  rs2 = 11:5;
+}
+
+op sraw { class = arithmetic; encoding = SRAW;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sraw {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (ashr rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sraw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4698; table = "powerpc_opcodes"; mnemonic = "sraw"; match = 0x7c000630; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADDI { width = 32;
+  base = 0x38000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op addi { class = arithmetic; encoding = ADDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "addi {rd}, {rs1}, {imm}";
+  semantics = "(set rd (add rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "addi";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2709; table = "powerpc_opcodes"; mnemonic = "addi"; match = 0x38000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA0", "SI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADDIS { width = 32;
+  base = 0x3c000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op addis { class = arithmetic; encoding = ADDIS;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "addis {rd}, {rs1}, {imm}";
+  semantics = "(set rd (add rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "addis";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2716; table = "powerpc_opcodes"; mnemonic = "addis"; match = 0x3c000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA0", "SISIGNOPT"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDI { width = 32;
+  base = 0x70000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op andi { class = arithmetic; encoding = ANDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "andi {rd}, {rs1}, {imm}";
+  semantics = "(set rd (and rs1 imm))";
+}
+
+encoding ORI { width = 32;
+  base = 0x60000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op ori { class = arithmetic; encoding = ORI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "ori {rd}, {rs1}, {imm}";
+  semantics = "(set rd (or rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ori";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3454; table = "powerpc_opcodes"; mnemonic = "ori"; match = 0x60000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XORI { width = 32;
+  base = 0x68000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op xori { class = arithmetic; encoding = XORI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "xori {rd}, {rs1}, {imm}";
+  semantics = "(set rd (xor rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xori";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3460; table = "powerpc_opcodes"; mnemonic = "xori"; match = 0x68000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADDIC { width = 32;
+  base = 0x30000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op addic { class = arithmetic; encoding = ADDIC;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "addic {rd}, {rs1}, {imm}";
+  semantics = "(set rd (add rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "addic";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2699; table = "powerpc_opcodes"; mnemonic = "addic"; match = 0x30000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "SI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUBFIC { width = 32;
+  base = 0x20000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op subfic { class = arithmetic; encoding = SUBFIC;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "subfic {rd}, {rs1}, {imm}";
+  semantics = "(set rd (sub rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "subfic";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2684; table = "powerpc_opcodes"; mnemonic = "subfic"; match = 0x20000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "RA", "SI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDIS { width = 32;
+  base = 0x74000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op andis { class = arithmetic; encoding = ANDIS;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "andis. {rd}, {rs1}, {imm}";
+  semantics = "(set rd (and rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "andis.";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3469; table = "powerpc_opcodes"; mnemonic = "andis."; match = 0x74000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDIDI { width = 32;
+  base = 0x70000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op andidi { class = arithmetic; encoding = ANDIDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "andi. {rd}, {rs1}, {imm}";
+  semantics = "(set rd (and rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "andi.";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3466; table = "powerpc_opcodes"; mnemonic = "andi."; match = 0x70000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORIDI { width = 32;
+  base = 0x60000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op oridi { class = arithmetic; encoding = ORIDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "ori {rd}, {rs1}, {imm}";
+  semantics = "(set rd (or rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ori";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3454; table = "powerpc_opcodes"; mnemonic = "ori"; match = 0x60000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XORIDI { width = 32;
+  base = 0x68000000;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op xoridi { class = arithmetic; encoding = XORIDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "xori {rd}, {rs1}, {imm}";
+  semantics = "(set rd (xor rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xori";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3460; table = "powerpc_opcodes"; mnemonic = "xori"; match = 0x68000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "UI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LI { width = 32;
+  base = 0x38000000;
+  rd = 21:5;
+  imm = 0:16;
+}
+
+op li { class = misc; encoding = LI;
+  operands = rd: GPR, imm: imm;
+  syntax = "li {rd}, {imm}";
+  semantics = "(set rd (move imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "li";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2707; table = "powerpc_opcodes"; mnemonic = "li"; match = 0x38000000; mask = 0xfc1f0000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "SI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LIS { width = 32;
+  base = 0x3c000000;
+  rd = 21:5;
+  imm = 0:16;
+}
+
+op lis { class = misc; encoding = LIS;
+  operands = rd: GPR, imm: imm;
+  syntax = "lis {rd}, {imm}";
+  semantics = "(set rd (move imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lis";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2714; table = "powerpc_opcodes"; mnemonic = "lis"; match = 0x3c000000; mask = 0xfc1f0000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "SISIGNOPT"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRAWI { width = 32;
+  base = 0x7c000670;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 11:5;
+}
+
+op srawi { class = arithmetic; encoding = SRAWI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "srawi {rd}, {rs1}, {imm}";
+  semantics = "(set rd (ashr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srawi";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4720; table = "powerpc_opcodes"; mnemonic = "srawi"; match = 0x7c000670; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "SH"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RLWINM { width = 32;
+  base = 0x5400003e;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 11:5;
+}
+
+op rlwinm { class = arithmetic; encoding = RLWINM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "rlwinm {rd}, {rs1}, {imm}, 0, 31";
+  semantics = "(set rd (intrinsic \"rlwinm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rlwinm";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3436; table = "powerpc_opcodes"; mnemonic = "rlwinm"; match = 0x54000000; mask = 0xfc000001; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "SH", "MBE", "ME"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RLWNM { width = 32;
+  base = 0x5c00003e;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 11:5;
+}
+
+op rlwnm { class = arithmetic; encoding = RLWNM;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "rlwnm {rd}, {rs1}, {imm}, 0, 31";
+  semantics = "(set rd (intrinsic \"rlwnm\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rlwnm";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3447; table = "powerpc_opcodes"; mnemonic = "rlwnm"; match = 0x5c000000; mask = 0xfc000001; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "RB", "MBE", "ME"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RLWIMI { width = 32;
+  base = 0x5000003f;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 11:5;
+}
+
+op rlwimi { class = arithmetic; encoding = RLWIMI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "rlwimi. {rd}, {rs1}, {imm}, 0, 31";
+  semantics = "(set rd (intrinsic \"rlwimi\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rlwimi.";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3431; table = "powerpc_opcodes"; mnemonic = "rlwimi."; match = 0x50000001; mask = 0xfc000001; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "SH", "MBE", "ME"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRADI { width = 32;
+  base = 0x7c000674;
+  rs1 = 21:5;
+  rd = 16:5;
+  imm = 11:5;
+}
+
+op sradi { class = arithmetic; encoding = SRADI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sradi {rd}, {rs1}, {imm}";
+  semantics = "(set rd (ashr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sradi";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4725; table = "powerpc_opcodes"; mnemonic = "sradi"; match = 0x7c000674; mask = 0xfc0007fd; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RA", "RS", "SH6"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FADD { width = 32;
+  base = 0xfc00002a;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fadd { class = arithmetic; encoding = FADD;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fadd {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fadd\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fadd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5244; table = "powerpc_opcodes"; mnemonic = "fadd"; match = 0xfc00002a; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FSUB { width = 32;
+  base = 0xfc000028;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fsub { class = arithmetic; encoding = FSUB;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fsub {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fsub\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fsub";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5239; table = "powerpc_opcodes"; mnemonic = "fsub"; match = 0xfc000028; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FDIV { width = 32;
+  base = 0xfc000024;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fdiv { class = arithmetic; encoding = FDIV;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fdiv {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fdiv\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fdiv";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5234; table = "powerpc_opcodes"; mnemonic = "fdiv"; match = 0xfc000024; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FMUL { width = 32;
+  base = 0xfc000032;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 6:5;
+}
+
+op fmul { class = arithmetic; encoding = FMUL;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fmul {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fmul\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fmul";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5260; table = "powerpc_opcodes"; mnemonic = "fmul"; match = 0xfc000032; mask = 0xfc00f83f; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRC"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FABS { width = 32;
+  base = 0xfc000210;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op fabs { class = misc; encoding = FABS;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "fabs {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"fabs\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fabs";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5353; table = "powerpc_opcodes"; mnemonic = "fabs"; match = 0xfc000210; mask = 0xfc1f07ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FNEG { width = 32;
+  base = 0xfc000050;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op fneg { class = misc; encoding = FNEG;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "fneg {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"fneg\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fneg";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5301; table = "powerpc_opcodes"; mnemonic = "fneg"; match = 0xfc000050; mask = 0xfc1f07ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FMR { width = 32;
+  base = 0xfc000090;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op fmr { class = misc; encoding = FMR;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "fmr {rd}, {rs1}";
+  semantics = "(effect (intrinsic \"fmr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fmr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5315; table = "powerpc_opcodes"; mnemonic = "fmr"; match = 0xfc000090; mask = 0xfc1f07ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FCMPO { width = 32;
+  base = 0xfc000040;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fcmpo { class = compare; encoding = FCMPO;
+  operands = rs1: FPR, rs2: FPR;
+  syntax = "fcmpo cr0, {rs1}, {rs2}";
+  semantics = "(effect (flags (compare rs1 rs2)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fcmpo";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5290; table = "powerpc_opcodes"; mnemonic = "fcmpo"; match = 0xfc000040; mask = 0xfc6007ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["BF", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FADDS { width = 32;
+  base = 0xec00002a;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fadds { class = arithmetic; encoding = FADDS;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fadds {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fadds\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fadds";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4959; table = "powerpc_opcodes"; mnemonic = "fadds"; match = 0xec00002a; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FSUBS { width = 32;
+  base = 0xec000028;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fsubs { class = arithmetic; encoding = FSUBS;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fsubs {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fsubs\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fsubs";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4956; table = "powerpc_opcodes"; mnemonic = "fsubs"; match = 0xec000028; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FDIVS { width = 32;
+  base = 0xec000024;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 11:5;
+}
+
+op fdivs { class = arithmetic; encoding = FDIVS;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fdivs {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fdivs\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fdivs";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4953; table = "powerpc_opcodes"; mnemonic = "fdivs"; match = 0xec000024; mask = 0xfc0007ff; encoding_bits = 32; flags = "PPC"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FMULS { width = 32;
+  base = 0xec000032;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 6:5;
+}
+
+op fmuls { class = arithmetic; encoding = FMULS;
+  operands = rd: FPR, rs1: FPR, rs2: FPR;
+  syntax = "fmuls {rd}, {rs1}, {rs2}";
+  semantics = "(set rd (intrinsic \"fmuls\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fmuls";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4970; table = "powerpc_opcodes"; mnemonic = "fmuls"; match = 0xec000032; mask = 0xfc00f83f; encoding_bits = 32; flags = "PPC"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRC"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FMADDS { width = 32;
+  base = 0xec00003a;
+  rd = 21:5;
+  rs1 = 16:5;
+  rs2 = 6:5;
+  rs3 = 11:5;
+}
+
+op fmadds { class = arithmetic; encoding = FMADDS;
+  operands = rd: FPR, rs1: FPR, rs2: FPR, rs3: FPR;
+  syntax = "fmadds {rd}, {rs1}, {rs2}, {rs3}";
+  semantics = "(set rd (fma rs1 rs2 rs3))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fmadds";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4981; table = "powerpc_opcodes"; mnemonic = "fmadds"; match = 0xec00003a; mask = 0xfc00003f; encoding_bits = 32; flags = "PPC"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRA", "FRC", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FRSP { width = 32;
+  base = 0xfc000018;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op frsp { class = arithmetic; encoding = FRSP;
+  operands = rd: FPR, rs1: FPR;
+  syntax = "frsp {rd}, {rs1}";
+  semantics = "(set rd (intrinsic \"frsp\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "frsp";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5221; table = "powerpc_opcodes"; mnemonic = "frsp"; match = 0xfc000018; mask = 0xfc1f07ff; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FCTIWZ { width = 32;
+  base = 0xfc00001e;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op fctiwz { class = arithmetic; encoding = FCTIWZ;
+  operands = rd: GPR, rs1: FPR;
+  syntax = "fctiwz {rd}, {rs1}";
+  semantics = "(set rd (intrinsic \"fctiwz\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fctiwz";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5229; table = "powerpc_opcodes"; mnemonic = "fctiwz"; match = 0xfc00001e; mask = 0xfc1f07ff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding FCTIWU { width = 32;
+  base = 0xfc00011c;
+  rd = 21:5;
+  rs1 = 11:5;
+}
+
+op fctiwu { class = arithmetic; encoding = FCTIWU;
+  operands = rd: GPR, rs1: FPR;
+  syntax = "fctiwu {rd}, {rs1}";
+  semantics = "(set rd (intrinsic \"fctiwu\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "fctiwu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5336; table = "powerpc_opcodes"; mnemonic = "fctiwu"; match = 0xfc00011c; mask = 0xfc1f07ff; encoding_bits = 32; flags = "POWER7"; deprecated = "PPCNONE"; operand_codes = ["FRT", "FRB"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding B { width = 32;
+  base = 0x48000000;
+  offset[25:2] = 2:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op b { class = branch; encoding = B;
+  operands = offset: rel;
+  syntax = "b {offset}";
+  semantics = "(branch offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "b";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2998; table = "powerpc_opcodes"; mnemonic = "b"; match = 0x48000000; mask = 0xfc000003; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["LI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BL { width = 32;
+  base = 0x48000001;
+  offset[25:2] = 2:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op bl { class = branch; encoding = BL;
+  operands = offset: rel;
+  syntax = "bl {offset}";
+  semantics = "(call offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bl";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 2999; table = "powerpc_opcodes"; mnemonic = "bl"; match = 0x48000001; mask = 0xfc000003; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["LI"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BA { width = 32;
+  base = 0x48000002;
+  offset[25:2] = 2:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op ba { class = branch; encoding = BA;
+  operands = offset: rel;
+  syntax = "ba {offset}";
+  semantics = "(effect (branch \"ba\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ba";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3000; table = "powerpc_opcodes"; mnemonic = "ba"; match = 0x48000002; mask = 0xfc000003; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["LIA"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLA { width = 32;
+  base = 0x48000003;
+  offset[25:2] = 2:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op bla { class = branch; encoding = BLA;
+  operands = offset: rel;
+  syntax = "bla {offset}";
+  semantics = "(effect (branch \"bla\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bla";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3001; table = "powerpc_opcodes"; mnemonic = "bla"; match = 0x48000003; mask = 0xfc000003; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["LIA"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BCTR { width = 32;
+  base = 0x4e800420;
+}
+
+op bctr { class = branch; encoding = BCTR;
+  operands = ;
+  syntax = "bctr";
+  semantics = "(effect (branch \"bctr\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bctr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3274; table = "powerpc_opcodes"; mnemonic = "bctr"; match = 0x4e800420; mask = 0xffffffff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LBZ { width = 32;
+  base = 0x88000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lbz { class = load; encoding = LBZ;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lbz {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lbz";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4887; table = "powerpc_opcodes"; mnemonic = "lbz"; match = 0x88000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LHZ { width = 32;
+  base = 0xa0000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lhz { class = load; encoding = LHZ;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lhz {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lhz";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4901; table = "powerpc_opcodes"; mnemonic = "lhz"; match = 0xa0000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LHA { width = 32;
+  base = 0xa8000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lha { class = load; encoding = LHA;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lha {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lha";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4905; table = "powerpc_opcodes"; mnemonic = "lha"; match = 0xa8000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LWZ { width = 32;
+  base = 0x80000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lwz { class = load; encoding = LWZ;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lwz {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lwz";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4881; table = "powerpc_opcodes"; mnemonic = "lwz"; match = 0x80000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STB { width = 32;
+  base = 0x98000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op stb { class = store; encoding = STB;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "stb {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stb";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4897; table = "powerpc_opcodes"; mnemonic = "stb"; match = 0x98000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RS", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STH { width = 32;
+  base = 0xb0000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sth { class = store; encoding = STH;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sth {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sth";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4909; table = "powerpc_opcodes"; mnemonic = "sth"; match = 0xb0000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RS", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STW { width = 32;
+  base = 0x90000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op stw { class = store; encoding = STW;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "stw {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stw";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4891; table = "powerpc_opcodes"; mnemonic = "stw"; match = 0x90000000; mask = 0xfc000000; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["RS", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LFS { width = 32;
+  base = 0xc0000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lfs { class = load; encoding = LFS;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "lfs {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lfs";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4919; table = "powerpc_opcodes"; mnemonic = "lfs"; match = 0xc0000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STFS { width = 32;
+  base = 0xd0000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op stfs { class = store; encoding = STFS;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "stfs {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stfs";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4927; table = "powerpc_opcodes"; mnemonic = "stfs"; match = 0xd0000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRS", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LD { width = 32;
+  base = 0xe8000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op ld { class = load; encoding = LD;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ld {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ld";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4943; table = "powerpc_opcodes"; mnemonic = "ld"; match = 0xe8000000; mask = 0xfc000003; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RT", "DS", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STD { width = 32;
+  base = 0xf8000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op std { class = store; encoding = STD;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "std {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "std";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 5206; table = "powerpc_opcodes"; mnemonic = "std"; match = 0xf8000000; mask = 0xfc000003; encoding_bits = 32; flags = "PPC64"; deprecated = "PPCNONE"; operand_codes = ["RS", "DS", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LFD { width = 32;
+  base = 0xc8000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lfd { class = load; encoding = LFD;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "lfd {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lfd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4923; table = "powerpc_opcodes"; mnemonic = "lfd"; match = 0xc8000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LFDU { width = 32;
+  base = 0xcc000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lfdu { class = load; encoding = LFDU;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "lfdu {rd}, {offset}({rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lfdu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4925; table = "powerpc_opcodes"; mnemonic = "lfdu"; match = 0xcc000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRT", "D", "RAS"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STFD { width = 32;
+  base = 0xd8000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op stfd { class = store; encoding = STFD;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "stfd {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stfd";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4931; table = "powerpc_opcodes"; mnemonic = "stfd"; match = 0xd8000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRS", "D", "RA0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STFDU { width = 32;
+  base = 0xdc000000;
+  rd = 21:5;
+  rs1 = 16:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op stfdu { class = store; encoding = STFDU;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "stfdu {rd}, {offset}({rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stfdu";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4933; table = "powerpc_opcodes"; mnemonic = "stfdu"; match = 0xdc000000; mask = 0xfc000000; encoding_bits = 32; flags = "COM"; deprecated = "PPCEFS"; operand_codes = ["FRS", "D", "RAS"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NOP { width = 32;
+  base = 0x60000000;
+}
+
+op nop { class = misc; encoding = NOP;
+  operands = ;
+  syntax = "nop";
+  semantics = "(effect (intrinsic \"nop\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nop";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3453; table = "powerpc_opcodes"; mnemonic = "nop"; match = 0x60000000; mask = 0xffffffff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SYNC { width = 32;
+  base = 0x7c0004ac;
+  imm = 21:5;
+}
+
+op sync { class = misc; encoding = SYNC;
+  operands = imm: imm;
+  syntax = "sync {imm}";
+  semantics = "(effect (intrinsic \"sync\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sync";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4542; table = "powerpc_opcodes"; mnemonic = "sync"; match = 0x7c0004ac; mask = 0xff9fffff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "BOOKE|PPC476"; operand_codes = ["LS"]; },
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4544; table = "powerpc_opcodes"; mnemonic = "sync"; match = 0x7c0004ac; mask = 0xffffffff; encoding_bits = 32; flags = "BOOKE|PPC476"; deprecated = "PPCNONE"; operand_codes = ["0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ISYNC { width = 32;
+  base = 0x4c00012c;
+}
+
+op isync { class = misc; encoding = ISYNC;
+  operands = ;
+  syntax = "isync";
+  semantics = "(effect (intrinsic \"isync\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "isync";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3245; table = "powerpc_opcodes"; mnemonic = "isync"; match = 0x4c00012c; mask = 0xffffffff; encoding_bits = 32; flags = "PPCCOM"; deprecated = "PPCNONE"; operand_codes = ["0"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MTCTR { width = 32;
+  base = 0x7c0903a6;
+  rs1 = 21:5;
+}
+
+op mtctr { class = misc; encoding = MTCTR;
+  operands = rs1: GPR;
+  syntax = "mtctr {rs1}";
+  semantics = "(effect (intrinsic \"mtctr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mtctr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4275; table = "powerpc_opcodes"; mnemonic = "mtctr"; match = 0x7c0903a6; mask = 0xfc1fffff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RS"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MFLR { width = 32;
+  base = 0x7c0802a6;
+  rd = 21:5;
+}
+
+op mflr { class = misc; encoding = MFLR;
+  operands = rd: GPR;
+  syntax = "mflr {rd}";
+  semantics = "(effect (intrinsic \"mflr\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mflr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3958; table = "powerpc_opcodes"; mnemonic = "mflr"; match = 0x7c0802a6; mask = 0xfc1fffff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RT"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MTLR { width = 32;
+  base = 0x7c0803a6;
+  rs1 = 21:5;
+}
+
+op mtlr { class = misc; encoding = MTLR;
+  operands = rs1: GPR;
+  syntax = "mtlr {rs1}";
+  semantics = "(effect (intrinsic \"mtlr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mtlr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 4274; table = "powerpc_opcodes"; mnemonic = "mtlr"; match = 0x7c0803a6; mask = 0xfc1fffff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RS"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MFCTR { width = 32;
+  base = 0x7c0902a6;
+  rd = 21:5;
+}
+
+op mfctr { class = misc; encoding = MFCTR;
+  operands = rd: GPR;
+  syntax = "mfctr {rd}";
+  semantics = "(effect (intrinsic \"mfctr\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mfctr";
+    variants = [
+      { source = "binutils/opcodes/ppc-opc.c"; line = 3959; table = "powerpc_opcodes"; mnemonic = "mfctr"; match = 0x7c0902a6; mask = 0xfc1fffff; encoding_bits = 32; flags = "COM"; deprecated = "PPCNONE"; operand_codes = ["RT"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}

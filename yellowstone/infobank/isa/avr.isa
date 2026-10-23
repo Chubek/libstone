@@ -1,0 +1,1574 @@
+arch avr { word_size = 8; addr_size = 16; endian = little; align = 2; }
+
+
+profile {
+  family = "AVR";
+  model = "AVR_Classic";
+  version = "AVR8";
+  word_size = 8;
+  address_size = 16;
+  endianness = "little";
+  instruction_encoding = "fixed16_and_32";
+  execution_model = "scalar";
+  register_model = "register";
+  extensions = ["AVR8"];
+  register_classes = ["GPR"];
+  fixed_registers = [];
+  zero_register = "none";
+  operation_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+  instruction_count = 68;
+  encoding_widths = ["16"];
+  coverage = "source_inventory";
+  encoding_layout = { base_word = "16"; extended_instructions = "32"; endian = "little"; };
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    version = "2.22";
+    scope = "source_table_reference_variants";
+    sources = [{ path = "binutils/opcodes/avr-dis.c"; sha256 = "e775080b6d430c1174e88a8e74409c9a84e03f4aeb8e1e3dc40d5cba076a8a38"; }, { path = "binutils/include/opcode/avr.h"; sha256 = "0a6f054d15008fbdc07835f56fa062679b9a21f6d1d2b3fbbe0bdfa773c7ca08"; }];
+    matched_operations = 68;
+    variant_count = 70;
+    unmatched_operations = [];
+  };
+  # END BINUTILS METADATA
+}
+compiler {
+  instruction_selection {
+    strategy = "target_pattern_matching";
+    opcode_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+    register_classes = ["GPR"];
+    immediate_folding = true;
+    addressing_mode_folding = true;
+    branch_form_selection = true;
+    pseudo_expansion = "target_dependent";
+    cost_model = "target_microarchitecture";
+  }
+  instruction_scheduling {
+    strategy = "dependency_aware_target_scheduler";
+    dependency_ordering = true;
+    memory_dependence_analysis = true;
+    control_dependence_analysis = true;
+    latency_model = "target_microarchitecture";
+    resource_model = "target_microarchitecture";
+    packetization = false;
+  }
+  register_allocation {
+    strategy = "target_register_allocation";
+    register_classes = ["GPR"];
+    fixed_registers = [];
+    zero_register = "none";
+    caller_saved = "abi_dependent";
+    callee_saved = "abi_dependent";
+    spill_policy = "target_dependent";
+  }
+  optimization {
+    legality_model = "isa_and_memory_model";
+    transforms = ["constant_folding", "copy_propagation", "dead_code_elimination", "common_subexpression_elimination", "peephole_rewrite", "branch_simplification", "load_store_motion_target_dependent", "strength_reduction_target_dependent", "addressing_mode_folding", "branch_relaxation_target_dependent"];
+    instruction_combining = true;
+    peephole_optimization = true;
+    constant_folding = true;
+    dead_code_elimination = true;
+    common_subexpression_elimination = true;
+    loop_optimization = "target_dependent";
+    vectorization = "target_dependent";
+    if_conversion = "target_dependent";
+    interprocedural_optimization = "abi_and_linkage_dependent";
+  }
+}
+regclass GPR {
+    r0(8)=0,
+    r1(8)=1,
+    r2(8)=2,
+    r3(8)=3,
+    r4(8)=4,
+    r5(8)=5,
+    r6(8)=6,
+    r7(8)=7,
+    r8(8)=8,
+    r9(8)=9,
+    r10(8)=10,
+    r11(8)=11,
+    r12(8)=12,
+    r13(8)=13,
+    r14(8)=14,
+    r15(8)=15,
+    r16(8)=16,
+    r17(8)=17,
+    r18(8)=18,
+    r19(8)=19,
+    r20(8)=20,
+    r21(8)=21,
+    r22(8)=22,
+    r23(8)=23,
+    r24(8)=24,
+    r25(8)=25,
+    r26(8)=26,
+    r27(8)=27,
+    r28(8)=28,
+    r29(8)=29,
+    r30(8)=30,
+    r31(8)=31,
+}
+
+alias xl = r26;
+alias xh = r27;
+alias yl = r28;
+alias yh = r29;
+alias zl = r30;
+alias zh = r31;
+alias sp = r5;
+
+encoding ADD { width = 16;
+  base = 0xc00;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op add { class = arithmetic; encoding = ADD;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "add {rd}, {rs1}";
+  semantics = "(set rd (add rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 180; table = "avr_opcodes"; mnemonic = "add"; operand_codes = "r,r"; bit_pattern = "000011rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0xc00; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADC { width = 16;
+  base = 0x1c00;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op adc { class = arithmetic; encoding = ADC;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "adc {rd}, {rs1}";
+  semantics = "(set rd (adc rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "adc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 179; table = "avr_opcodes"; mnemonic = "adc"; operand_codes = "r,r"; bit_pattern = "000111rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x1c00; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUB { width = 16;
+  base = 0x1800;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op sub { class = arithmetic; encoding = SUB;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sub {rd}, {rs1}";
+  semantics = "(set rd (sub rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sub";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 190; table = "avr_opcodes"; mnemonic = "sub"; operand_codes = "r,r"; bit_pattern = "000110rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x1800; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBC { width = 16;
+  base = 0x800;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op sbc { class = arithmetic; encoding = SBC;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sbc {rd}, {rs1}";
+  semantics = "(set rd (intrinsic \"sbc\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sbc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 189; table = "avr_opcodes"; mnemonic = "sbc"; operand_codes = "r,r"; bit_pattern = "000010rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x800; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AND { width = 16;
+  base = 0x2000;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op and { class = arithmetic; encoding = AND;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "and {rd}, {rs1}";
+  semantics = "(set rd (and rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "and";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 181; table = "avr_opcodes"; mnemonic = "and"; operand_codes = "r,r"; bit_pattern = "001000rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x2000; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OR { width = 16;
+  base = 0x2800;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op or { class = arithmetic; encoding = OR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "or {rd}, {rs1}";
+  semantics = "(set rd (or rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "or";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 188; table = "avr_opcodes"; mnemonic = "or"; operand_codes = "r,r"; bit_pattern = "001010rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x2800; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding EOR { width = 16;
+  base = 0x2400;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op eor { class = arithmetic; encoding = EOR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "eor {rd}, {rs1}";
+  semantics = "(set rd (intrinsic \"eor\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "eor";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 185; table = "avr_opcodes"; mnemonic = "eor"; operand_codes = "r,r"; bit_pattern = "001001rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x2400; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CP { width = 16;
+  base = 0x1400;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op cp { class = compare; encoding = CP;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "cp {rd}, {rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cp";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 182; table = "avr_opcodes"; mnemonic = "cp"; operand_codes = "r,r"; bit_pattern = "000101rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x1400; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CPC { width = 16;
+  base = 0x400;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op cpc { class = compare; encoding = CPC;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "cpc {rd}, {rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cpc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 183; table = "avr_opcodes"; mnemonic = "cpc"; operand_codes = "r,r"; bit_pattern = "000001rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x400; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CPSE { width = 16;
+  base = 0x1000;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op cpse { class = compare; encoding = CPSE;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "cpse {rd}, {rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cpse";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 184; table = "avr_opcodes"; mnemonic = "cpse"; operand_codes = "r,r"; bit_pattern = "000100rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x1000; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MUL { width = 16;
+  base = 0x9c00;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op mul { class = arithmetic; encoding = MUL;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "mul {rd}, {rs1}";
+  semantics = "(set rd (mul rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mul";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 187; table = "avr_opcodes"; mnemonic = "mul"; operand_codes = "r,r"; bit_pattern = "100111rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x9c00; mask = 0xfc00; architecture = "AVR_ISA_MUL"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MOV { width = 16;
+  base = 0x2c00;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+  rs1[3:0] = 0:4;
+  rs1[4:4] = 9:1;
+}
+
+op mov { class = misc; encoding = MOV;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "mov {rd}, {rs1}";
+  semantics = "(set rd (move rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mov";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 186; table = "avr_opcodes"; mnemonic = "mov"; operand_codes = "r,r"; bit_pattern = "001011rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x2c00; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LSL { width = 16;
+  base = 0xc01;
+  rd = 4:5;
+}
+
+op lsl { class = arithmetic; encoding = LSL;
+  operands = rd: GPR;
+  syntax = "lsl {rd}";
+  semantics = "(set rd (intrinsic \"lsl\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lsl";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 194; table = "avr_opcodes"; mnemonic = "lsl"; operand_codes = "r=r"; bit_pattern = "000011rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0xc00; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LSR { width = 16;
+  base = 0x9406;
+  rd = 4:5;
+}
+
+op lsr { class = arithmetic; encoding = LSR;
+  operands = rd: GPR;
+  syntax = "lsr {rd}";
+  semantics = "(set rd (intrinsic \"lsr\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lsr";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 261; table = "avr_opcodes"; mnemonic = "lsr"; operand_codes = "r"; bit_pattern = "1001010rrrrr0110"; encoding_bits = 16; match_bits = 16; match = 0x9406; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ASR { width = 16;
+  base = 0x9405;
+  rd = 4:5;
+}
+
+op asr { class = arithmetic; encoding = ASR;
+  operands = rd: GPR;
+  syntax = "asr {rd}";
+  semantics = "(set rd (ashr ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "asr";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 257; table = "avr_opcodes"; mnemonic = "asr"; operand_codes = "r"; bit_pattern = "1001010rrrrr0101"; encoding_bits = 16; match_bits = 16; match = 0x9405; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ROL { width = 16;
+  base = 0x1c01;
+  rd = 4:5;
+}
+
+op rol { class = arithmetic; encoding = ROL;
+  operands = rd: GPR;
+  syntax = "rol {rd}";
+  semantics = "(set rd (intrinsic \"rol\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rol";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 195; table = "avr_opcodes"; mnemonic = "rol"; operand_codes = "r=r"; bit_pattern = "000111rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x1c00; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ROR { width = 16;
+  base = 0x9407;
+  rd = 4:5;
+}
+
+op ror { class = arithmetic; encoding = ROR;
+  operands = rd: GPR;
+  syntax = "ror {rd}";
+  semantics = "(set rd (intrinsic \"ror\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ror";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 265; table = "avr_opcodes"; mnemonic = "ror"; operand_codes = "r"; bit_pattern = "1001010rrrrr0111"; encoding_bits = 16; match_bits = 16; match = 0x9407; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding COM { width = 16;
+  base = 0x9400;
+  rd = 4:5;
+}
+
+op com { class = arithmetic; encoding = COM;
+  operands = rd: GPR;
+  syntax = "com {rd}";
+  semantics = "(set rd (intrinsic \"com\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "com";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 258; table = "avr_opcodes"; mnemonic = "com"; operand_codes = "r"; bit_pattern = "1001010rrrrr0000"; encoding_bits = 16; match_bits = 16; match = 0x9400; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NEG { width = 16;
+  base = 0x9401;
+  rd = 4:5;
+}
+
+op neg { class = arithmetic; encoding = NEG;
+  operands = rd: GPR;
+  syntax = "neg {rd}";
+  semantics = "(set rd (neg ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "neg";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 262; table = "avr_opcodes"; mnemonic = "neg"; operand_codes = "r"; bit_pattern = "1001010rrrrr0001"; encoding_bits = 16; match_bits = 16; match = 0x9401; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding INC { width = 16;
+  base = 0x9403;
+  rd = 4:5;
+}
+
+op inc { class = arithmetic; encoding = INC;
+  operands = rd: GPR;
+  syntax = "inc {rd}";
+  semantics = "(set rd (intrinsic \"inc\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "inc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 260; table = "avr_opcodes"; mnemonic = "inc"; operand_codes = "r"; bit_pattern = "1001010rrrrr0011"; encoding_bits = 16; match_bits = 16; match = 0x9403; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DEC { width = 16;
+  base = 0x940a;
+  rd = 4:5;
+}
+
+op dec { class = arithmetic; encoding = DEC;
+  operands = rd: GPR;
+  syntax = "dec {rd}";
+  semantics = "(set rd (intrinsic \"dec\" ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dec";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 259; table = "avr_opcodes"; mnemonic = "dec"; operand_codes = "r"; bit_pattern = "1001010rrrrr1010"; encoding_bits = 16; match_bits = 16; match = 0x940a; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding TST { width = 16;
+  base = 0x2001;
+  rd = 4:5;
+}
+
+op tst { class = compare; encoding = TST;
+  operands = rd: GPR;
+  syntax = "tst {rd}";
+  semantics = "(set rd (compare ))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "tst";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 196; table = "avr_opcodes"; mnemonic = "tst"; operand_codes = "r=r"; bit_pattern = "001000rdddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x2000; mask = 0xfc00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SWAP { width = 16;
+  base = 0x9402;
+  rd = 4:5;
+}
+
+op swap { class = misc; encoding = SWAP;
+  operands = rd: GPR;
+  syntax = "swap {rd}";
+  semantics = "(effect (intrinsic \"swap\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "swap";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 266; table = "avr_opcodes"; mnemonic = "swap"; operand_codes = "r"; bit_pattern = "1001010rrrrr0010"; encoding_bits = 16; match_bits = 16; match = 0x9402; mask = 0xfe0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding PUSH { width = 16;
+  base = 0x920f;
+  rd = 4:5;
+}
+
+op push { class = misc; encoding = PUSH;
+  operands = rd: GPR;
+  syntax = "push {rd}";
+  semantics = "(effect (intrinsic \"push\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "push";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 264; table = "avr_opcodes"; mnemonic = "push"; operand_codes = "r"; bit_pattern = "1001001rrrrr1111"; encoding_bits = 16; match_bits = 16; match = 0x920f; mask = 0xfe0f; architecture = "AVR_ISA_2xxx"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding POP { width = 16;
+  base = 0x900f;
+  rd = 4:5;
+}
+
+op pop { class = misc; encoding = POP;
+  operands = rd: GPR;
+  syntax = "pop {rd}";
+  semantics = "(effect (intrinsic \"pop\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "pop";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 263; table = "avr_opcodes"; mnemonic = "pop"; operand_codes = "r"; bit_pattern = "1001000rrrrr1111"; encoding_bits = 16; match_bits = 16; match = 0x900f; mask = 0xfe0f; architecture = "AVR_ISA_2xxx"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SER { width = 16;
+  base = 0xee0f;
+  rd = 4:5;
+}
+
+op ser { class = misc; encoding = SER;
+  operands = rd: GPR;
+  syntax = "ser {rd}";
+  semantics = "(effect (intrinsic \"ser\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ser";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 203; table = "avr_opcodes"; mnemonic = "ser"; operand_codes = "d"; bit_pattern = "11101111dddd1111"; encoding_bits = 16; match_bits = 16; match = 0xef0f; mask = 0xff0f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CBR { width = 16;
+  base = 0x7e0f;
+  rd = 4:5;
+}
+
+op cbr { class = misc; encoding = CBR;
+  operands = rd: GPR;
+  syntax = "cbr {rd}, 0";
+  semantics = "(effect (intrinsic \"cbr\" rd))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cbr";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 200; table = "avr_opcodes"; mnemonic = "cbr"; operand_codes = "d,n"; bit_pattern = "0111KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0x7000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDI { width = 16;
+  base = 0xe000;
+  rd[3:0] = 4:4;
+  k[7:4] = 8:4;
+  k[3:0] = 0:4;
+}
+
+op ldi { class = arithmetic; encoding = LDI;
+  operands = rd: GPR, k: imm;
+  syntax = "ldi {rd}, {k}";
+  semantics = "(set rd (intrinsic \"ldi\" k))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ldi";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 202; table = "avr_opcodes"; mnemonic = "ldi"; operand_codes = "d,M"; bit_pattern = "1110KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0xe000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUBI { width = 16;
+  base = 0x5000;
+  rd[3:0] = 4:4;
+  k[7:4] = 8:4;
+  k[3:0] = 0:4;
+}
+
+op subi { class = arithmetic; encoding = SUBI;
+  operands = rd: GPR, k: imm;
+  syntax = "subi {rd}, {k}";
+  semantics = "(set rd (sub rd k))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "subi";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 210; table = "avr_opcodes"; mnemonic = "subi"; operand_codes = "d,M"; bit_pattern = "0101KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0x5000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBCI { width = 16;
+  base = 0x4000;
+  rd[3:0] = 4:4;
+  k[7:4] = 8:4;
+  k[3:0] = 0:4;
+}
+
+op sbci { class = arithmetic; encoding = SBCI;
+  operands = rd: GPR, k: imm;
+  syntax = "sbci {rd}, {k}";
+  semantics = "(set rd (intrinsic \"sbci\" k))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sbci";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 209; table = "avr_opcodes"; mnemonic = "sbci"; operand_codes = "d,M"; bit_pattern = "0100KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0x4000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDI { width = 16;
+  base = 0x7000;
+  rd[3:0] = 4:4;
+  k[7:4] = 8:4;
+  k[3:0] = 0:4;
+}
+
+op andi { class = arithmetic; encoding = ANDI;
+  operands = rd: GPR, k: imm;
+  syntax = "andi {rd}, {k}";
+  semantics = "(set rd (and rd k))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "andi";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 198; table = "avr_opcodes"; mnemonic = "andi"; operand_codes = "d,M"; bit_pattern = "0111KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0x7000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORI { width = 16;
+  base = 0x6000;
+  rd[3:0] = 4:4;
+  k[7:4] = 8:4;
+  k[3:0] = 0:4;
+}
+
+op ori { class = arithmetic; encoding = ORI;
+  operands = rd: GPR, k: imm;
+  syntax = "ori {rd}, {k}";
+  semantics = "(set rd (or rd k))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ori";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 205; table = "avr_opcodes"; mnemonic = "ori"; operand_codes = "d,M"; bit_pattern = "0110KKKKddddKKKK"; encoding_bits = 16; match_bits = 16; match = 0x6000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBRC { width = 16;
+  base = 0xfc00;
+  rd = 4:5;
+  b = 0:3;
+}
+
+op sbrc { class = compare; encoding = SBRC;
+  operands = rd: GPR, b: imm;
+  syntax = "sbrc {rd}, {b}";
+  semantics = "(set rd (compare b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sbrc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 212; table = "avr_opcodes"; mnemonic = "sbrc"; operand_codes = "r,s"; bit_pattern = "1111110rrrrr0sss"; encoding_bits = 16; match_bits = 16; match = 0xfc00; mask = 0xfe08; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SBRS { width = 16;
+  base = 0xfe00;
+  rd = 4:5;
+  b = 0:3;
+}
+
+op sbrs { class = compare; encoding = SBRS;
+  operands = rd: GPR, b: imm;
+  syntax = "sbrs {rd}, {b}";
+  semantics = "(set rd (compare b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sbrs";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 213; table = "avr_opcodes"; mnemonic = "sbrs"; operand_codes = "r,s"; bit_pattern = "1111111rrrrr0sss"; encoding_bits = 16; match_bits = 16; match = 0xfe00; mask = 0xfe08; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BST { width = 16;
+  base = 0xfa00;
+  rd = 4:5;
+  b = 0:3;
+}
+
+op bst { class = misc; encoding = BST;
+  operands = rd: GPR, b: imm;
+  syntax = "bst {rd}, {b}";
+  semantics = "(effect (intrinsic \"bst\" rd b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bst";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 215; table = "avr_opcodes"; mnemonic = "bst"; operand_codes = "r,s"; bit_pattern = "1111101ddddd0sss"; encoding_bits = 16; match_bits = 16; match = 0xfa00; mask = 0xfe08; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLD { width = 16;
+  base = 0xf800;
+  rd = 4:5;
+  b = 0:3;
+}
+
+op bld { class = misc; encoding = BLD;
+  operands = rd: GPR, b: imm;
+  syntax = "bld {rd}, {b}";
+  semantics = "(effect (intrinsic \"bld\" rd b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bld";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 214; table = "avr_opcodes"; mnemonic = "bld"; operand_codes = "r,s"; bit_pattern = "1111100ddddd0sss"; encoding_bits = 16; match_bits = 16; match = 0xf800; mask = 0xfe08; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BSET { width = 16;
+  base = 0x9408;
+  b = 4:3;
+}
+
+op bset { class = misc; encoding = BSET;
+  operands = b: imm;
+  syntax = "bset {b}";
+  semantics = "(effect (intrinsic \"bset\" b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bset";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 160; table = "avr_opcodes"; mnemonic = "bset"; operand_codes = "S"; bit_pattern = "100101000SSS1000"; encoding_bits = 16; match_bits = 16; match = 0x9408; mask = 0xff8f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BCLR { width = 16;
+  base = 0x9488;
+  b = 4:3;
+}
+
+op bclr { class = misc; encoding = BCLR;
+  operands = b: imm;
+  syntax = "bclr {b}";
+  semantics = "(effect (intrinsic \"bclr\" b))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bclr";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 159; table = "avr_opcodes"; mnemonic = "bclr"; operand_codes = "S"; bit_pattern = "100101001SSS1000"; encoding_bits = 16; match_bits = 16; match = 0x9488; mask = 0xff8f; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULS { width = 16;
+  base = 0x200;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op muls { class = arithmetic; encoding = MULS;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "muls {rd}, {rs1}";
+  semantics = "(set rd (mul rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "muls";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 270; table = "avr_opcodes"; mnemonic = "muls"; operand_codes = "d,d"; bit_pattern = "00000010ddddrrrr"; encoding_bits = 16; match_bits = 16; match = 0x200; mask = 0xff00; architecture = "AVR_ISA_MUL"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MULSU { width = 16;
+  base = 0x300;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op mulsu { class = arithmetic; encoding = MULSU;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "mulsu {rd}, {rs1}";
+  semantics = "(set rd (mul rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mulsu";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 271; table = "avr_opcodes"; mnemonic = "mulsu"; operand_codes = "a,a"; bit_pattern = "000000110ddd0rrr"; encoding_bits = 16; match_bits = 16; match = 0x300; mask = 0xff88; architecture = "AVR_ISA_MUL"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LD { width = 16;
+  base = 0x900c;
+  rd = 4:5;
+}
+
+op ld { class = load; encoding = LD;
+  operands = rd: GPR;
+  syntax = "ld {rd}, X";
+  semantics = "(set rd (load target mem))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ld";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 282; table = "avr_opcodes"; mnemonic = "ld"; operand_codes = "r,e"; bit_pattern = "100!000dddddee-+"; encoding_bits = 16; match_bits = 16; match = 0x8000; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LD_POST { width = 16;
+  base = 0x900d;
+  rd = 4:5;
+}
+
+op ld_post { class = load; encoding = LD_POST;
+  operands = rd: GPR;
+  syntax = "ld {rd}, X+";
+  semantics = "(set rd (load target mem))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ld";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 282; table = "avr_opcodes"; mnemonic = "ld"; operand_codes = "r,e"; bit_pattern = "100!000dddddee-+"; encoding_bits = 16; match_bits = 16; match = 0x8000; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LD_PRE { width = 16;
+  base = 0x900e;
+  rd = 4:5;
+}
+
+op ld_pre { class = load; encoding = LD_PRE;
+  operands = rd: GPR;
+  syntax = "ld {rd}, -X";
+  semantics = "(set rd (load target mem))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ld";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 282; table = "avr_opcodes"; mnemonic = "ld"; operand_codes = "r,e"; bit_pattern = "100!000dddddee-+"; encoding_bits = 16; match_bits = 16; match = 0x8000; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ST { width = 16;
+  base = 0x920c;
+  rd = 4:5;
+}
+
+op st { class = store; encoding = ST;
+  operands = rd: GPR;
+  syntax = "st X, {rd}";
+  semantics = "(store (memory-address ) rd)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "st";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 284; table = "avr_opcodes"; mnemonic = "st"; operand_codes = "e,r"; bit_pattern = "100!001rrrrree-+"; encoding_bits = 16; match_bits = 16; match = 0x8200; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ST_POST { width = 16;
+  base = 0x920d;
+  rd = 4:5;
+}
+
+op st_post { class = store; encoding = ST_POST;
+  operands = rd: GPR;
+  syntax = "st X+, {rd}";
+  semantics = "(store (memory-address ) rd)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "st";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 284; table = "avr_opcodes"; mnemonic = "st"; operand_codes = "e,r"; bit_pattern = "100!001rrrrree-+"; encoding_bits = 16; match_bits = 16; match = 0x8200; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ST_PRE { width = 16;
+  base = 0x920e;
+  rd = 4:5;
+}
+
+op st_pre { class = store; encoding = ST_PRE;
+  operands = rd: GPR;
+  syntax = "st -X, {rd}";
+  semantics = "(store (memory-address ) rd)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "st";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 284; table = "avr_opcodes"; mnemonic = "st"; operand_codes = "e,r"; bit_pattern = "100!001rrrrree-+"; encoding_bits = 16; match_bits = 16; match = 0x8200; mask = 0xee00; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDD { width = 16;
+  base = 0x8008;
+  rd = 4:5;
+  q[2:0] = 0:3;
+  q[5:3] = 10:3;
+}
+
+op ldd { class = load; encoding = LDD;
+  operands = rd: GPR, q: imm;
+  syntax = "ldd {rd}, Y+{q}";
+  semantics = "(set rd (load target (addr q)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ldd";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 281; table = "avr_opcodes"; mnemonic = "ldd"; operand_codes = "r,b"; bit_pattern = "10o0oo0dddddbooo"; encoding_bits = 16; match_bits = 16; match = 0x8000; mask = 0xd200; architecture = "AVR_ISA_2xxx"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STD { width = 16;
+  base = 0x8208;
+  rd = 4:5;
+  q[2:0] = 0:3;
+  q[5:3] = 10:3;
+}
+
+op std { class = store; encoding = STD;
+  operands = rd: GPR, q: imm;
+  syntax = "std Y+{q}, {rd}";
+  semantics = "(store (memory-address q) rd)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "std";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 283; table = "avr_opcodes"; mnemonic = "std"; operand_codes = "b,r"; bit_pattern = "10o0oo1rrrrrbooo"; encoding_bits = 16; match_bits = 16; match = 0x8200; mask = 0xd200; architecture = "AVR_ISA_2xxx"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LPM { width = 16;
+  base = 0x9004;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+}
+
+op lpm { class = load; encoding = LPM;
+  operands = rd: GPR;
+  syntax = "lpm {rd}, Z";
+  semantics = "(set rd (load target mem))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lpm";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 165; table = "avr_opcodes"; mnemonic = "lpm"; operand_codes = "?"; bit_pattern = "1001010111001000"; encoding_bits = 16; match_bits = 16; match = 0x95c8; mask = 0xffff; architecture = "AVR_ISA_TINY1"; },
+      { source = "binutils/include/opcode/avr.h"; line = 166; table = "avr_opcodes"; mnemonic = "lpm"; operand_codes = "r,z"; bit_pattern = "1001000ddddd010+"; encoding_bits = 16; match_bits = 16; match = 0x9004; mask = 0xfe0e; architecture = "AVR_ISA_LPMX"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LPM_POST { width = 16;
+  base = 0x9005;
+  rd[3:0] = 4:4;
+  rd[4:4] = 8:1;
+}
+
+op lpm_post { class = load; encoding = LPM_POST;
+  operands = rd: GPR;
+  syntax = "lpm {rd}, Z+";
+  semantics = "(set rd (load target mem))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lpm";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 165; table = "avr_opcodes"; mnemonic = "lpm"; operand_codes = "?"; bit_pattern = "1001010111001000"; encoding_bits = 16; match_bits = 16; match = 0x95c8; mask = 0xffff; architecture = "AVR_ISA_TINY1"; },
+      { source = "binutils/include/opcode/avr.h"; line = 166; table = "avr_opcodes"; mnemonic = "lpm"; operand_codes = "r,z"; bit_pattern = "1001000ddddd010+"; encoding_bits = 16; match_bits = 16; match = 0x9004; mask = 0xfe0e; architecture = "AVR_ISA_LPMX"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RJMP { width = 16;
+  base = 0xc000;
+  offset[12:1] = 0:12;
+  signed = 1;
+  alignment = 2;
+}
+
+op rjmp { class = branch; encoding = RJMP;
+  operands = offset: rel;
+  syntax = "rjmp {offset}";
+  semantics = "(effect (branch \"rjmp\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rjmp";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 252; table = "avr_opcodes"; mnemonic = "rjmp"; operand_codes = "L"; bit_pattern = "1100LLLLLLLLLLLL"; encoding_bits = 16; match_bits = 16; match = 0xc000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RCALL { width = 16;
+  base = 0xd000;
+  offset[12:1] = 0:12;
+  signed = 1;
+  alignment = 2;
+}
+
+op rcall { class = branch; encoding = RCALL;
+  operands = offset: rel;
+  syntax = "rcall {offset}";
+  semantics = "(effect (branch \"rcall\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rcall";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 251; table = "avr_opcodes"; mnemonic = "rcall"; operand_codes = "L"; bit_pattern = "1101LLLLLLLLLLLL"; encoding_bits = 16; match_bits = 16; match = 0xd000; mask = 0xf000; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BREQ { width = 16;
+  base = 0xf001;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op breq { class = branch; encoding = BREQ;
+  operands = offset: rel;
+  syntax = "breq {offset}";
+  semantics = "(effect (branch \"breq\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "breq";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 230; table = "avr_opcodes"; mnemonic = "breq"; operand_codes = "l"; bit_pattern = "111100lllllll001"; encoding_bits = 16; match_bits = 16; match = 0xf001; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRNE { width = 16;
+  base = 0xf401;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brne { class = branch; encoding = BRNE;
+  operands = offset: rel;
+  syntax = "brne {offset}";
+  semantics = "(effect (branch \"brne\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brne";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 239; table = "avr_opcodes"; mnemonic = "brne"; operand_codes = "l"; bit_pattern = "111101lllllll001"; encoding_bits = 16; match_bits = 16; match = 0xf401; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRCS { width = 16;
+  base = 0xf000;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brcs { class = branch; encoding = BRCS;
+  operands = offset: rel;
+  syntax = "brcs {offset}";
+  semantics = "(effect (branch \"brcs\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brcs";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 229; table = "avr_opcodes"; mnemonic = "brcs"; operand_codes = "l"; bit_pattern = "111100lllllll000"; encoding_bits = 16; match_bits = 16; match = 0xf000; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRCC { width = 16;
+  base = 0xf400;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brcc { class = branch; encoding = BRCC;
+  operands = offset: rel;
+  syntax = "brcc {offset}";
+  semantics = "(effect (branch \"brcc\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brcc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 228; table = "avr_opcodes"; mnemonic = "brcc"; operand_codes = "l"; bit_pattern = "111101lllllll000"; encoding_bits = 16; match_bits = 16; match = 0xf400; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRSH { width = 16;
+  base = 0xf400;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brsh { class = branch; encoding = BRSH;
+  operands = offset: rel;
+  syntax = "brsh {offset}";
+  semantics = "(effect (branch \"brsh\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brsh";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 241; table = "avr_opcodes"; mnemonic = "brsh"; operand_codes = "l"; bit_pattern = "111101lllllll000"; encoding_bits = 16; match_bits = 16; match = 0xf400; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRLO { width = 16;
+  base = 0xf000;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brlo { class = branch; encoding = BRLO;
+  operands = offset: rel;
+  syntax = "brlo {offset}";
+  semantics = "(effect (branch \"brlo\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brlo";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 236; table = "avr_opcodes"; mnemonic = "brlo"; operand_codes = "l"; bit_pattern = "111100lllllll000"; encoding_bits = 16; match_bits = 16; match = 0xf000; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRMI { width = 16;
+  base = 0xf002;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brmi { class = branch; encoding = BRMI;
+  operands = offset: rel;
+  syntax = "brmi {offset}";
+  semantics = "(effect (branch \"brmi\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brmi";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 238; table = "avr_opcodes"; mnemonic = "brmi"; operand_codes = "l"; bit_pattern = "111100lllllll010"; encoding_bits = 16; match_bits = 16; match = 0xf002; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRPL { width = 16;
+  base = 0xf402;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brpl { class = branch; encoding = BRPL;
+  operands = offset: rel;
+  syntax = "brpl {offset}";
+  semantics = "(effect (branch \"brpl\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brpl";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 240; table = "avr_opcodes"; mnemonic = "brpl"; operand_codes = "l"; bit_pattern = "111101lllllll010"; encoding_bits = 16; match_bits = 16; match = 0xf402; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRGE { width = 16;
+  base = 0xf404;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brge { class = branch; encoding = BRGE;
+  operands = offset: rel;
+  syntax = "brge {offset}";
+  semantics = "(effect (branch \"brge\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brge";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 231; table = "avr_opcodes"; mnemonic = "brge"; operand_codes = "l"; bit_pattern = "111101lllllll100"; encoding_bits = 16; match_bits = 16; match = 0xf404; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRLT { width = 16;
+  base = 0xf004;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brlt { class = branch; encoding = BRLT;
+  operands = offset: rel;
+  syntax = "brlt {offset}";
+  semantics = "(effect (branch \"brlt\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brlt";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 237; table = "avr_opcodes"; mnemonic = "brlt"; operand_codes = "l"; bit_pattern = "111100lllllll100"; encoding_bits = 16; match_bits = 16; match = 0xf004; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRHS { width = 16;
+  base = 0xf005;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brhs { class = branch; encoding = BRHS;
+  operands = offset: rel;
+  syntax = "brhs {offset}";
+  semantics = "(effect (branch \"brhs\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brhs";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 233; table = "avr_opcodes"; mnemonic = "brhs"; operand_codes = "l"; bit_pattern = "111100lllllll101"; encoding_bits = 16; match_bits = 16; match = 0xf005; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRHC { width = 16;
+  base = 0xf405;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brhc { class = branch; encoding = BRHC;
+  operands = offset: rel;
+  syntax = "brhc {offset}";
+  semantics = "(effect (branch \"brhc\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brhc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 232; table = "avr_opcodes"; mnemonic = "brhc"; operand_codes = "l"; bit_pattern = "111101lllllll101"; encoding_bits = 16; match_bits = 16; match = 0xf405; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRTS { width = 16;
+  base = 0xf006;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brts { class = branch; encoding = BRTS;
+  operands = offset: rel;
+  syntax = "brts {offset}";
+  semantics = "(effect (branch \"brts\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brts";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 243; table = "avr_opcodes"; mnemonic = "brts"; operand_codes = "l"; bit_pattern = "111100lllllll110"; encoding_bits = 16; match_bits = 16; match = 0xf006; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRTC { width = 16;
+  base = 0xf406;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brtc { class = branch; encoding = BRTC;
+  operands = offset: rel;
+  syntax = "brtc {offset}";
+  semantics = "(effect (branch \"brtc\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brtc";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 242; table = "avr_opcodes"; mnemonic = "brtc"; operand_codes = "l"; bit_pattern = "111101lllllll110"; encoding_bits = 16; match_bits = 16; match = 0xf406; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRIE { width = 16;
+  base = 0xf007;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brie { class = branch; encoding = BRIE;
+  operands = offset: rel;
+  syntax = "brie {offset}";
+  semantics = "(effect (branch \"brie\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brie";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 235; table = "avr_opcodes"; mnemonic = "brie"; operand_codes = "l"; bit_pattern = "111100lllllll111"; encoding_bits = 16; match_bits = 16; match = 0xf007; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BRID { width = 16;
+  base = 0xf407;
+  offset[7:1] = 3:7;
+  signed = 1;
+  alignment = 2;
+}
+
+op brid { class = branch; encoding = BRID;
+  operands = offset: rel;
+  syntax = "brid {offset}";
+  semantics = "(effect (branch \"brid\" offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "brid";
+    variants = [
+      { source = "binutils/include/opcode/avr.h"; line = 234; table = "avr_opcodes"; mnemonic = "brid"; operand_codes = "l"; bit_pattern = "111101lllllll111"; encoding_bits = 16; match_bits = 16; match = 0xf407; mask = 0xfc07; architecture = "AVR_ISA_1200"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}

@@ -1,0 +1,100 @@
+local xbind = require("lxbind")
+
+-- Yellowstone: qBFD-backed binary tooling plus the small C APIs.
+-- Headers are relative to yellowstone/. The C++ header-only readers in
+-- qbfd/ (qBFD.hpp, qELF.hpp, ...) have no stable C ABI yet, so this spec
+-- binds the two stable C surfaces: binscript/binscript.h (BS_VM) and
+-- ld/ld.h (qobjld one-shot linker). Out-pointers (char ** errmsg, BS_Error
+-- diagnostics) are spelled exactly as in the headers. Signature verification
+-- covers them, but Lua generation rejects out-string APIs instead of pretending
+-- to marshal them. The other eight target emitters are not implemented.
+return xbind.library {
+  name = "yellowstone",
+  version = "0.1.0",
+  features = { "c-signatures", "explicit-ownership", "out-string-required" },
+  headers = { "binscript/binscript.h", "ld/ld.h" },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "yellowstone" }),
+    xbind.target("Go", { package = "yellowstone" }),
+    xbind.target("Java", { package = "stone.yellowstone", class = "Yellowstone" }),
+    xbind.target("Lua", { module = "yellowstone" }),
+    xbind.target("NodeJS", { addon = "yellowstone" }),
+    xbind.target("OCaml", { library = "yellowstone" }),
+    xbind.target("Python", { module = "yellowstone" }),
+    xbind.target("Ruby", { extension = "yellowstone" }),
+    xbind.target("Rust", { crate = "yellowstone_sys" }),
+  },
+  typedefs = {
+    xbind.typedef("BS_VM *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("BS_Error *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("qld_options_t *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("const qld_options_t *", "opaque", { ownership = "opaque" }),
+    xbind.typedef("char **", "opaque", { ownership = "out_string" }),
+    xbind.typedef("char *", "opaque", { ownership = "borrowed" }),
+    xbind.typedef("const char *", "string", { ownership = "borrowed" }),
+    xbind.typedef("uint8_t *", "opaque", { ownership = "borrowed" }),
+  },
+  functions = {
+    xbind.func("qld_version", {
+      returns = "const char *",
+      params = {},
+    }),
+    xbind.func("qld_status_string", {
+      returns = "const char *",
+      params = {
+        xbind.param("status", "int"),
+      },
+    }),
+    xbind.func("qld_options_init", {
+      returns = "void",
+      params = {
+        xbind.param("opts", "qld_options_t *"),
+      },
+    }),
+    xbind.func("qld_link", {
+      returns = "int",
+      params = {
+        xbind.param("opts", "const qld_options_t *"),
+        xbind.param("errmsg", "char **", { nullable = true }),
+      },
+    }),
+    xbind.func("qld_check_script", {
+      returns = "int",
+      params = {
+        xbind.param("text", "const char *"),
+        xbind.param("errmsg", "char **", { nullable = true }),
+      },
+    }),
+    xbind.func("qld_free_string", {
+      returns = "void",
+      params = {
+        xbind.param("s", "char *", { nullable = true }),
+      },
+    }),
+    xbind.func("bs_vm_free", {
+      returns = "void",
+      params = {
+        xbind.param("vm", "BS_VM *", { nullable = true }),
+      },
+    }),
+    xbind.func("bs_vm_run", {
+      returns = "int",
+      params = {
+        xbind.param("vm", "BS_VM *"),
+        xbind.param("script", "const char *"),
+        xbind.param("output", "char **", { nullable = true }),
+        xbind.param("error", "BS_Error *", { nullable = true }),
+      },
+    }),
+    xbind.func("bs_vm_compile_to_c", {
+      returns = "const char *",
+      params = {
+        xbind.param("vm", "BS_VM *"),
+        xbind.param("script", "const char *"),
+        xbind.param("unit", "const char *"),
+        xbind.param("error", "BS_Error *", { nullable = true }),
+      },
+    }),
+  },
+}

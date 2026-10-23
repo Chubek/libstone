@@ -1,0 +1,1669 @@
+arch s390x { word_size = 64; addr_size = 64; endian = big; align = 2; }
+
+
+profile {
+  family = "IBM_Z";
+  model = "z_Architecture";
+  version = "zArch";
+  word_size = 64;
+  address_size = 64;
+  endianness = "big";
+  instruction_encoding = "16_32_48";
+  execution_model = "superscalar_ooo_target_dependent";
+  register_model = "register";
+  extensions = ["base_zarch"];
+  register_classes = ["GPR"];
+  fixed_registers = [];
+  zero_register = "none";
+  operation_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+  instruction_count = 70;
+  encoding_widths = ["16", "32", "48"];
+  coverage = "source_inventory";
+  encoding_layout = { lengths = "16,32,48"; endian = "big"; };
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    version = "2.22";
+    scope = "source_table_reference_variants";
+    sources = [{ path = "binutils/opcodes/s390-opc.txt"; sha256 = "48cde1650e9e66ea7995274b3f985a3059336e10a98952f587fcd922f58f3a04"; }, { path = "binutils/opcodes/s390-opc.c"; sha256 = "eedeed9c5c7719bc3ec8d0d7a6a7e36b9f76d4d7a16fbe54c7a051e61e82da2e"; }, { path = "binutils/opcodes/s390-mkopc.c"; sha256 = "e6f16afcb91ae4ae7125abe4231a0f5526ffb6f9265f0ba01703af6ad0d81a74"; }, { path = "binutils/include/opcode/s390.h"; sha256 = "4bc6f79c59a0f6505aeda1fcb058f554dd5a997519ffff4b6bd9d2b5ab75a986"; }];
+    matched_operations = 70;
+    variant_count = 80;
+    unmatched_operations = [];
+  };
+  # END BINUTILS METADATA
+}
+compiler {
+  instruction_selection {
+    strategy = "target_pattern_matching";
+    opcode_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+    register_classes = ["GPR"];
+    immediate_folding = true;
+    addressing_mode_folding = true;
+    branch_form_selection = true;
+    pseudo_expansion = "target_dependent";
+    cost_model = "target_microarchitecture";
+  }
+  instruction_scheduling {
+    strategy = "dependency_aware_target_scheduler";
+    dependency_ordering = true;
+    memory_dependence_analysis = true;
+    control_dependence_analysis = true;
+    latency_model = "target_microarchitecture";
+    resource_model = "target_microarchitecture";
+    packetization = false;
+  }
+  register_allocation {
+    strategy = "target_register_allocation";
+    register_classes = ["GPR"];
+    fixed_registers = [];
+    zero_register = "none";
+    caller_saved = "abi_dependent";
+    callee_saved = "abi_dependent";
+    spill_policy = "target_dependent";
+  }
+  optimization {
+    legality_model = "isa_and_memory_model";
+    transforms = ["constant_folding", "copy_propagation", "dead_code_elimination", "common_subexpression_elimination", "peephole_rewrite", "branch_simplification", "load_store_motion_target_dependent", "strength_reduction_target_dependent", "addressing_mode_folding", "branch_relaxation_target_dependent"];
+    instruction_combining = true;
+    peephole_optimization = true;
+    constant_folding = true;
+    dead_code_elimination = true;
+    common_subexpression_elimination = true;
+    loop_optimization = "target_dependent";
+    vectorization = "target_dependent";
+    if_conversion = "target_dependent";
+    interprocedural_optimization = "abi_and_linkage_dependent";
+  }
+}
+regclass GPR {
+    r0(64)=0,
+    r1(64)=1,
+    r2(64)=2,
+    r3(64)=3,
+    r4(64)=4,
+    r5(64)=5,
+    r6(64)=6,
+    r7(64)=7,
+    r8(64)=8,
+    r9(64)=9,
+    r10(64)=10,
+    r11(64)=11,
+    r12(64)=12,
+    r13(64)=13,
+    r14(64)=14,
+    r15(64)=15,
+}
+
+encoding LPR { width = 16;
+  base = 0x1000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lpr { class = misc; encoding = LPR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lpr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lpr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lpr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 106; table = "s390_opcodes"; mnemonic = "lpr"; opcode_template = "10"; format = "RR_RR"; description = "load positive"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1000; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LNR { width = 16;
+  base = 0x1100;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lnr { class = misc; encoding = LNR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lnr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lnr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lnr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 103; table = "s390_opcodes"; mnemonic = "lnr"; opcode_template = "11"; format = "RR_RR"; description = "load negative"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1100; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LR { width = 16;
+  base = 0x1800;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lr { class = misc; encoding = LR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 108; table = "s390_opcodes"; mnemonic = "lr"; opcode_template = "18"; format = "RR_RR"; description = "load"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1800; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LCR { width = 16;
+  base = 0x1300;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lcr { class = misc; encoding = LCR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lcr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lcr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lcr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 93; table = "s390_opcodes"; mnemonic = "lcr"; opcode_template = "13"; format = "RR_RR"; description = "load complement"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1300; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NR { width = 16;
+  base = 0x1400;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op nr { class = arithmetic; encoding = NR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "nr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"nr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 151; table = "s390_opcodes"; mnemonic = "nr"; opcode_template = "14"; format = "RR_RR"; description = "AND"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1400; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLR { width = 16;
+  base = 0x1500;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op clr { class = compare; encoding = CLR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "clr %{rd}, %{rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 47; table = "s390_opcodes"; mnemonic = "clr"; opcode_template = "15"; format = "RR_RR"; description = "compare logical"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1500; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OR { width = 16;
+  base = 0x1600;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op or { class = arithmetic; encoding = OR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "or %{rd}, %{rs1}";
+  semantics = "(set rd (or rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "or";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 155; table = "s390_opcodes"; mnemonic = "or"; opcode_template = "16"; format = "RR_RR"; description = "OR"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1600; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XR { width = 16;
+  base = 0x1700;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op xr { class = arithmetic; encoding = XR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "xr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"xr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 246; table = "s390_opcodes"; mnemonic = "xr"; opcode_template = "17"; format = "RR_RR"; description = "exclusive OR"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1700; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CR { width = 16;
+  base = 0x1900;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op cr { class = compare; encoding = CR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "cr %{rd}, %{rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 51; table = "s390_opcodes"; mnemonic = "cr"; opcode_template = "19"; format = "RR_RR"; description = "compare"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1900; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AR { width = 16;
+  base = 0x1a00;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op ar { class = arithmetic; encoding = AR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ar %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"ar\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ar";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 14; table = "s390_opcodes"; mnemonic = "ar"; opcode_template = "1a"; format = "RR_RR"; description = "add"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1a00; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SR { width = 16;
+  base = 0x1b00;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op sr { class = arithmetic; encoding = SR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"sr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 193; table = "s390_opcodes"; mnemonic = "sr"; opcode_template = "1b"; format = "RR_RR"; description = "subtract"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1b00; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ALR { width = 16;
+  base = 0x1e00;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op alr { class = arithmetic; encoding = ALR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "alr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"alr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "alr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 12; table = "s390_opcodes"; mnemonic = "alr"; opcode_template = "1e"; format = "RR_RR"; description = "add logical"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1e00; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLR { width = 16;
+  base = 0x1f00;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op slr { class = arithmetic; encoding = SLR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "slr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"slr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "slr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 185; table = "s390_opcodes"; mnemonic = "slr"; opcode_template = "1f"; format = "RR_RR"; description = "subtract logical"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x1f00; mask = 0xff00; operand_codes = ["R_8", "R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LGR { width = 32;
+  base = 0xb9040000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lgr { class = misc; encoding = LGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lgr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lgr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 404; table = "s390_opcodes"; mnemonic = "lgr"; opcode_template = "b904"; format = "RRE_RR"; description = "load 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9040000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LCGR { width = 32;
+  base = 0xb9030000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lcgr { class = misc; encoding = LCGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lcgr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lcgr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lcgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 397; table = "s390_opcodes"; mnemonic = "lcgr"; opcode_template = "b903"; format = "RRE_RR"; description = "load complement 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9030000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LGHR { width = 32;
+  base = 0xb9070000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lghr { class = misc; encoding = LGHR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lghr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lghr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lghr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 740; table = "s390_opcodes"; mnemonic = "lghr"; opcode_template = "b907"; format = "RRE_RR"; description = "load halfword 64"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9070000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LGFR { width = 32;
+  base = 0xb9140000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lgfr { class = misc; encoding = LGFR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lgfr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lgfr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lgfr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 405; table = "s390_opcodes"; mnemonic = "lgfr"; opcode_template = "b914"; format = "RRE_RR"; description = "load 64<32"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9140000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LHR { width = 32;
+  base = 0xb9270000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lhr { class = misc; encoding = LHR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lhr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lhr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lhr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 739; table = "s390_opcodes"; mnemonic = "lhr"; opcode_template = "b927"; format = "RRE_RR"; description = "load halfword 32"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9270000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NGR { width = 32;
+  base = 0xb9800000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op ngr { class = arithmetic; encoding = NGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ngr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"ngr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ngr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 399; table = "s390_opcodes"; mnemonic = "ngr"; opcode_template = "b980"; format = "RRE_RR"; description = "and 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9800000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OGR { width = 32;
+  base = 0xb9810000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op ogr { class = arithmetic; encoding = OGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ogr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"ogr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ogr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 402; table = "s390_opcodes"; mnemonic = "ogr"; opcode_template = "b981"; format = "RRE_RR"; description = "or 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9810000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XGR { width = 32;
+  base = 0xb9820000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op xgr { class = arithmetic; encoding = XGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "xgr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"xgr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 403; table = "s390_opcodes"; mnemonic = "xgr"; opcode_template = "b982"; format = "RRE_RR"; description = "exclusive or 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9820000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CGR { width = 32;
+  base = 0xb9200000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op cgr { class = compare; encoding = CGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "cgr %{rd}, %{rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 406; table = "s390_opcodes"; mnemonic = "cgr"; opcode_template = "b920"; format = "RRE_RR"; description = "compare 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9200000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLGR { width = 32;
+  base = 0xb9210000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op clgr { class = compare; encoding = CLGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "clgr %{rd}, %{rs1}";
+  semantics = "(set rd (compare rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 400; table = "s390_opcodes"; mnemonic = "clgr"; opcode_template = "b921"; format = "RRE_RR"; description = "compare logical 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9210000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AGR { width = 32;
+  base = 0xb9080000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op agr { class = arithmetic; encoding = AGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "agr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"agr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "agr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 408; table = "s390_opcodes"; mnemonic = "agr"; opcode_template = "b908"; format = "RRE_RR"; description = "add 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9080000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SGR { width = 32;
+  base = 0xb9090000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op sgr { class = arithmetic; encoding = SGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "sgr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"sgr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 410; table = "s390_opcodes"; mnemonic = "sgr"; opcode_template = "b909"; format = "RRE_RR"; description = "subtract 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9090000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ALGR { width = 32;
+  base = 0xb90a0000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op algr { class = arithmetic; encoding = ALGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "algr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"algr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "algr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 412; table = "s390_opcodes"; mnemonic = "algr"; opcode_template = "b90a"; format = "RRE_RR"; description = "add logical 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb90a0000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLGR { width = 32;
+  base = 0xb90b0000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op slgr { class = arithmetic; encoding = SLGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "slgr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"slgr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "slgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 414; table = "s390_opcodes"; mnemonic = "slgr"; opcode_template = "b90b"; format = "RRE_RR"; description = "subtract logical 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb90b0000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MSGR { width = 32;
+  base = 0xb90c0000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op msgr { class = arithmetic; encoding = MSGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "msgr %{rd}, %{rs1}";
+  semantics = "(set rd (intrinsic \"msgr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "msgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 477; table = "s390_opcodes"; mnemonic = "msgr"; opcode_template = "b90c"; format = "RRE_RR"; description = "multiply single 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb90c0000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LNGR { width = 32;
+  base = 0xb9010000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lngr { class = misc; encoding = LNGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lngr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lngr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lngr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 393; table = "s390_opcodes"; mnemonic = "lngr"; opcode_template = "b901"; format = "RRE_RR"; description = "load negative 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9010000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LPGR { width = 32;
+  base = 0xb9000000;
+  rd = 4:4;
+  rs1 = 0:4;
+}
+
+op lpgr { class = misc; encoding = LPGR;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "lpgr %{rd}, %{rs1}";
+  semantics = "(effect (intrinsic \"lpgr\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lpgr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 391; table = "s390_opcodes"; mnemonic = "lpgr"; opcode_template = "b900"; format = "RRE_RR"; description = "load positive 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xb9000000; mask = 0xffffff00; operand_codes = ["R_24", "R_28"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LG { width = 48;
+  base = 0xe30000000004;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op lg { class = load; encoding = LG;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "lg %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"lg\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 425; table = "s390_opcodes"; mnemonic = "lg"; opcode_template = "e30000000004"; format = "RXE_RRRD"; description = "load 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000004; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 634; table = "s390_opcodes"; mnemonic = "lg"; opcode_template = "e30000000004"; format = "RXY_RRRD"; description = "\t load 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000004; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LLGC { width = 48;
+  base = 0xe30000000090;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op llgc { class = load; encoding = LLGC;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "llgc %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"llgc\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "llgc";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 550; table = "s390_opcodes"; mnemonic = "llgc"; opcode_template = "e30000000090"; format = "RXE_RRRD"; description = "load logical character"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000090; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 674; table = "s390_opcodes"; mnemonic = "llgc"; opcode_template = "e30000000090"; format = "RXY_RRRD"; description = "load logical character"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000090; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LLGH { width = 48;
+  base = 0xe30000000091;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op llgh { class = load; encoding = LLGH;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "llgh %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"llgh\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "llgh";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 551; table = "s390_opcodes"; mnemonic = "llgh"; opcode_template = "e30000000091"; format = "RXE_RRRD"; description = "load logical halfword"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000091; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 675; table = "s390_opcodes"; mnemonic = "llgh"; opcode_template = "e30000000091"; format = "RXY_RRRD"; description = "load logical halfword"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000091; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LLGF { width = 48;
+  base = 0xe30000000016;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op llgf { class = load; encoding = LLGF;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "llgf %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"llgf\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "llgf";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 532; table = "s390_opcodes"; mnemonic = "llgf"; opcode_template = "e30000000016"; format = "RXE_RRRD"; description = "load logical 64<32"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000016; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 645; table = "s390_opcodes"; mnemonic = "llgf"; opcode_template = "e30000000016"; format = "RXY_RRRD"; description = "load logical 64<32"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000016; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STG { width = 48;
+  base = 0xe30000000024;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op stg { class = store; encoding = STG;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "stg %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(store (memory-address rt rb offset) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 419; table = "s390_opcodes"; mnemonic = "stg"; opcode_template = "e30000000024"; format = "RXE_RRRD"; description = "store 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000024; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 657; table = "s390_opcodes"; mnemonic = "stg"; opcode_template = "e30000000024"; format = "RXY_RRRD"; description = "store with long offset 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000024; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AG { width = 48;
+  base = 0xe30000000008;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op ag { class = arithmetic; encoding = AG;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "ag %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (intrinsic \"ag\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ag";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 430; table = "s390_opcodes"; mnemonic = "ag"; opcode_template = "e30000000008"; format = "RXE_RRRD"; description = "add 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000008; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 635; table = "s390_opcodes"; mnemonic = "ag"; opcode_template = "e30000000008"; format = "RXY_RRRD"; description = "add with long offset 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000008; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CG { width = 48;
+  base = 0xe30000000020;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op cg { class = compare; encoding = CG;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "cg %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (flags (compare rt rs2 rb offset)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 428; table = "s390_opcodes"; mnemonic = "cg"; opcode_template = "e30000000020"; format = "RXE_RRRD"; description = "compare 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000020; mask = 0xff000000ffff; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 655; table = "s390_opcodes"; mnemonic = "cg"; opcode_template = "e30000000020"; format = "RXY_RRRD"; description = "compare with long offset 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000020; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LAY { width = 48;
+  base = 0xe30000000071;
+  rt = 36:4;
+  rs2 = 32:4;
+  rb = 28:4;
+  offset[11:8] = 24:4;
+  offset[3:0] = 16:4;
+  offset[7:4] = 20:4;
+  signed = 1;
+}
+
+op lay { class = load; encoding = LAY;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "lay %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"lay\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lay";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 609; table = "s390_opcodes"; mnemonic = "lay"; opcode_template = "e30000000071"; format = "RXY_RRRD"; description = "load address with long offset"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xe30000000071; mask = 0xff00000000ff; operand_codes = ["R_8", "D20_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding L { width = 32;
+  base = 0x58000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op l { class = load; encoding = L;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "l %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"l\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "l";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 86; table = "s390_opcodes"; mnemonic = "l"; opcode_template = "58"; format = "RX_RRRD"; description = "load"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x58000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LH { width = 32;
+  base = 0x48000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op lh { class = load; encoding = LH;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "lh %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (load \"lh\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lh";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 99; table = "s390_opcodes"; mnemonic = "lh"; opcode_template = "48"; format = "RX_RRRD"; description = "load halfword"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x48000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STH { width = 32;
+  base = 0x40000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op sth { class = store; encoding = STH;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "sth %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(store (memory-address rt rb offset) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sth";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 216; table = "s390_opcodes"; mnemonic = "sth"; opcode_template = "40"; format = "RX_RRRD"; description = "store halfword"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x40000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STC { width = 32;
+  base = 0x42000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op stc { class = store; encoding = STC;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "stc %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(store (memory-address rt rb offset) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stc";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 207; table = "s390_opcodes"; mnemonic = "stc"; opcode_template = "42"; format = "RX_RRRD"; description = "store character"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x42000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ST { width = 32;
+  base = 0x50000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op st { class = store; encoding = ST;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "st %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(store (memory-address rt rb offset) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "st";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 204; table = "s390_opcodes"; mnemonic = "st"; opcode_template = "50"; format = "RX_RRRD"; description = "store"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x50000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding A { width = 32;
+  base = 0x5a000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op a { class = arithmetic; encoding = A;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "a %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (intrinsic \"a\" rt rs2 rb offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "a";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 5; table = "s390_opcodes"; mnemonic = "a"; opcode_template = "5a"; format = "RX_RRRD"; description = "add"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x5a000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding C { width = 32;
+  base = 0x59000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op c { class = compare; encoding = C;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "c %{rt}, {offset}(%{rs2}, %{rb})";
+  semantics = "(effect (flags (compare rt rs2 rb offset)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "c";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 34; table = "s390_opcodes"; mnemonic = "c"; opcode_template = "59"; format = "RX_RRRD"; description = "compare"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x59000000; mask = 0xff000000; operand_codes = ["R_8", "D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding STM { width = 32;
+  base = 0x90000000;
+  rt = 20:4;
+  rs2 = 16:4;
+  rb = 12:4;
+  offset[11:8] = 8:4;
+  offset[7:0] = 0:8;
+  signed = 1;
+}
+
+op stm { class = store; encoding = STM;
+  operands = rt: GPR, rs2: GPR, rb: GPR, offset: imm;
+  syntax = "stm %{rt}, %{rs2}, {offset}(%{rb})";
+  semantics = "(store (memory-address rt rb offset) rs2)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "stm";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 218; table = "s390_opcodes"; mnemonic = "stm"; opcode_template = "90"; format = "RS_RRRD"; description = "store multiple"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x90000000; mask = 0xff000000; operand_codes = ["R_8", "R_12", "D_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding RISBG { width = 48;
+  base = 0xec0000000005;
+  rd = 36:4;
+  rs1 = 32:4;
+  startlen = 16:16;
+  mask = 4:4;
+}
+
+op risbg { class = misc; encoding = RISBG;
+  operands = rd: GPR, rs1: GPR, startlen: imm, mask: imm;
+  syntax = "risbg %{rd}, %{rs1}, {startlen}, {mask}";
+  semantics = "(effect (intrinsic \"risbg\" rd rs1 startlen mask))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "risbg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 953; table = "s390_opcodes"; mnemonic = "risbg"; opcode_template = "ec0000000055"; format = "RIE_RRUUU"; description = "rotate then insert selected bits"; minimum_cpu = "z10"; modes = ["zarch"]; encoding_bits = 48; match = 0xec0000000055; mask = 0xff00000000ff; operand_codes = ["R_8", "R_12", "U8_16", "U8_24", "U8_32"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLL { width = 32;
+  base = 0x89000000;
+  rd = 20:4;
+  amount = 0:14;
+  signed = 1;
+}
+
+op sll { class = arithmetic; encoding = SLL;
+  operands = rd: GPR, amount: imm;
+  syntax = "sll %{rd}, {amount}";
+  semantics = "(set rd (shl rd amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sll";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 184; table = "s390_opcodes"; mnemonic = "sll"; opcode_template = "89"; format = "RS_R0RD"; description = "shift left single logical"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x89000000; mask = 0xff0f0000; operand_codes = ["R_8", "D_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRL { width = 32;
+  base = 0x88000000;
+  rd = 20:4;
+  amount = 0:14;
+  signed = 1;
+}
+
+op srl { class = arithmetic; encoding = SRL;
+  operands = rd: GPR, amount: imm;
+  syntax = "srl %{rd}, {amount}";
+  semantics = "(set rd (shr rd amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srl";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 197; table = "s390_opcodes"; mnemonic = "srl"; opcode_template = "88"; format = "RS_R0RD"; description = "shift right single logical"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x88000000; mask = 0xff0f0000; operand_codes = ["R_8", "D_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRA { width = 32;
+  base = 0x8a000000;
+  rd = 20:4;
+  amount = 0:14;
+  signed = 1;
+}
+
+op sra { class = arithmetic; encoding = SRA;
+  operands = rd: GPR, amount: imm;
+  syntax = "sra %{rd}, {amount}";
+  semantics = "(set rd (ashr rd amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sra";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 194; table = "s390_opcodes"; mnemonic = "sra"; opcode_template = "8a"; format = "RS_R0RD"; description = "shift right single"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x8a000000; mask = 0xff0f0000; operand_codes = ["R_8", "D_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLLG { width = 48;
+  base = 0xeb000000000d;
+  rd = 36:4;
+  rs1 = 32:4;
+  amount = 16:8;
+  signed = 1;
+}
+
+op sllg { class = arithmetic; encoding = SLLG;
+  operands = rd: GPR, rs1: GPR, amount: imm;
+  syntax = "sllg %{rd}, %{rs1}, {amount}";
+  semantics = "(set rd (shl rs1 amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sllg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 445; table = "s390_opcodes"; mnemonic = "sllg"; opcode_template = "eb000000000d"; format = "RSE_RRRD"; description = "shift left single logical 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000d; mask = 0xff000000ffff; operand_codes = ["R_8", "R_12", "D_20", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 684; table = "s390_opcodes"; mnemonic = "sllg"; opcode_template = "eb000000000d"; format = "RSY_RRRD"; description = "shift left single logical 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000d; mask = 0xff00000000ff; operand_codes = ["R_8", "R_12", "D20_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRLG { width = 48;
+  base = 0xeb000000000c;
+  rd = 36:4;
+  rs1 = 32:4;
+  amount = 16:8;
+  signed = 1;
+}
+
+op srlg { class = arithmetic; encoding = SRLG;
+  operands = rd: GPR, rs1: GPR, amount: imm;
+  syntax = "srlg %{rd}, %{rs1}, {amount}";
+  semantics = "(set rd (shr rs1 amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srlg";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 444; table = "s390_opcodes"; mnemonic = "srlg"; opcode_template = "eb000000000c"; format = "RSE_RRRD"; description = "shift right single logical 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000c; mask = 0xff000000ffff; operand_codes = ["R_8", "R_12", "D_20", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 683; table = "s390_opcodes"; mnemonic = "srlg"; opcode_template = "eb000000000c"; format = "RSY_RRRD"; description = "shift right single logical 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000c; mask = 0xff00000000ff; operand_codes = ["R_8", "R_12", "D20_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRAG { width = 48;
+  base = 0xeb000000000a;
+  rd = 36:4;
+  rs1 = 32:4;
+  amount = 16:8;
+  signed = 1;
+}
+
+op srag { class = arithmetic; encoding = SRAG;
+  operands = rd: GPR, rs1: GPR, amount: imm;
+  syntax = "srag %{rd}, %{rs1}, {amount}";
+  semantics = "(set rd (ashr rs1 amount))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srag";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 446; table = "s390_opcodes"; mnemonic = "srag"; opcode_template = "eb000000000a"; format = "RSE_RRRD"; description = "shift right single 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000a; mask = 0xff000000ffff; operand_codes = ["R_8", "R_12", "D_20", "B_16"]; },
+      { source = "binutils/opcodes/s390-opc.txt"; line = 681; table = "s390_opcodes"; mnemonic = "srag"; opcode_template = "eb000000000a"; format = "RSY_RRRD"; description = "shift right single 64"; minimum_cpu = "z990"; modes = ["zarch"]; encoding_bits = 48; match = 0xeb000000000a; mask = 0xff00000000ff; operand_codes = ["R_8", "R_12", "D20_20", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LHI { width = 32;
+  base = 0xa7080000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op lhi { class = load; encoding = LHI;
+  operands = rd: GPR, imm: imm;
+  syntax = "lhi %{rd}, {imm}";
+  semantics = "(set rd (load target (addr imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lhi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 257; table = "s390_opcodes"; mnemonic = "lhi"; opcode_template = "a708"; format = "RI_RI"; description = "load halfword immediate"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0xa7080000; mask = 0xff0f0000; operand_codes = ["R_8", "I16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LGHI { width = 32;
+  base = 0xa7090000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op lghi { class = load; encoding = LGHI;
+  operands = rd: GPR, imm: imm;
+  syntax = "lghi %{rd}, {imm}";
+  semantics = "(set rd (load target (addr imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lghi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 470; table = "s390_opcodes"; mnemonic = "lghi"; opcode_template = "a709"; format = "RI_RI"; description = "load halfword immediate 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xa7090000; mask = 0xff0f0000; operand_codes = ["R_8", "I16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AGHI { width = 32;
+  base = 0xa70b0000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op aghi { class = arithmetic; encoding = AGHI;
+  operands = rd: GPR, imm: imm;
+  syntax = "aghi %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"aghi\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "aghi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 471; table = "s390_opcodes"; mnemonic = "aghi"; opcode_template = "a70b"; format = "RI_RI"; description = "add halfword immediate 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xa70b0000; mask = 0xff0f0000; operand_codes = ["R_8", "I16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CHI { width = 32;
+  base = 0xa70e0000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op chi { class = compare; encoding = CHI;
+  operands = rd: GPR, imm: imm;
+  syntax = "chi %{rd}, {imm}";
+  semantics = "(set rd (compare imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "chi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 255; table = "s390_opcodes"; mnemonic = "chi"; opcode_template = "a70e"; format = "RI_RI"; description = "compare halfword immediate"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0xa70e0000; mask = 0xff0f0000; operand_codes = ["R_8", "I16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CGHI { width = 32;
+  base = 0xa70f0000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op cghi { class = compare; encoding = CGHI;
+  operands = rd: GPR, imm: imm;
+  syntax = "cghi %{rd}, {imm}";
+  semantics = "(set rd (compare imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "cghi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 473; table = "s390_opcodes"; mnemonic = "cghi"; opcode_template = "a70f"; format = "RI_RI"; description = "compare halfword immediate 64"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xa70f0000; mask = 0xff0f0000; operand_codes = ["R_8", "I16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NILL { width = 32;
+  base = 0xa5070000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op nill { class = arithmetic; encoding = NILL;
+  operands = rd: GPR, imm: imm;
+  syntax = "nill %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"nill\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nill";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 502; table = "s390_opcodes"; mnemonic = "nill"; opcode_template = "a507"; format = "RI_RU"; description = "and immediate low low"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xa5070000; mask = 0xff0f0000; operand_codes = ["R_8", "U16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OILL { width = 32;
+  base = 0xa50b0000;
+  rd = 20:4;
+  imm = 0:16;
+  signed = 1;
+}
+
+op oill { class = arithmetic; encoding = OILL;
+  operands = rd: GPR, imm: imm;
+  syntax = "oill %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"oill\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "oill";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 506; table = "s390_opcodes"; mnemonic = "oill"; opcode_template = "a50b"; format = "RI_RU"; description = "or immediate low low"; minimum_cpu = "z900"; modes = ["zarch"]; encoding_bits = 32; match = 0xa50b0000; mask = 0xff0f0000; operand_codes = ["R_8", "U16_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLFI { width = 48;
+  base = 0xc20f00000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op clfi { class = compare; encoding = CLFI;
+  operands = rd: GPR, imm: imm;
+  syntax = "clfi %{rd}, {imm}";
+  semantics = "(set rd (compare imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clfi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 727; table = "s390_opcodes"; mnemonic = "clfi"; opcode_template = "c20f"; format = "RIL_RU"; description = "compare logical immediate 32"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc20f00000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLGFI { width = 48;
+  base = 0xc20e00000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op clgfi { class = compare; encoding = CLGFI;
+  operands = rd: GPR, imm: imm;
+  syntax = "clgfi %{rd}, {imm}";
+  semantics = "(set rd (compare imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clgfi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 728; table = "s390_opcodes"; mnemonic = "clgfi"; opcode_template = "c20e"; format = "RIL_RU"; description = "compare logical immediate 64<32"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc20e00000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AGFI { width = 48;
+  base = 0xc20800000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op agfi { class = arithmetic; encoding = AGFI;
+  operands = rd: GPR, imm: imm;
+  syntax = "agfi %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"agfi\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "agfi";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 720; table = "s390_opcodes"; mnemonic = "agfi"; opcode_template = "c208"; format = "RIL_RI"; description = "add immediate 64<32"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc20800000000; mask = 0xff0f00000000; operand_codes = ["R_8", "I32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XILF { width = 48;
+  base = 0xc00700000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op xilf { class = arithmetic; encoding = XILF;
+  operands = rd: GPR, imm: imm;
+  syntax = "xilf %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"xilf\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xilf";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 730; table = "s390_opcodes"; mnemonic = "xilf"; opcode_template = "c007"; format = "RIL_RU"; description = "exclusive or immediate low"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc00700000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OILF { width = 48;
+  base = 0xc00d00000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op oilf { class = arithmetic; encoding = OILF;
+  operands = rd: GPR, imm: imm;
+  syntax = "oilf %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"oilf\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "oilf";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 751; table = "s390_opcodes"; mnemonic = "oilf"; opcode_template = "c00d"; format = "RIL_RU"; description = "or immediate low"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc00d00000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding IILF { width = 48;
+  base = 0xc00900000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op iilf { class = arithmetic; encoding = IILF;
+  operands = rd: GPR, imm: imm;
+  syntax = "iilf %{rd}, {imm}";
+  semantics = "(set rd (intrinsic \"iilf\" imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "iilf";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 732; table = "s390_opcodes"; mnemonic = "iilf"; opcode_template = "c009"; format = "RIL_RU"; description = "insert immediate low"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc00900000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LLIHF { width = 48;
+  base = 0xc00e00000000;
+  rd = 36:4;
+  imm = 0:32;
+  signed = 1;
+}
+
+op llihf { class = load; encoding = LLIHF;
+  operands = rd: GPR, imm: imm;
+  syntax = "llihf %{rd}, {imm}";
+  semantics = "(set rd (load target (addr imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "llihf";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 748; table = "s390_opcodes"; mnemonic = "llihf"; opcode_template = "c00e"; format = "RIL_RU"; description = "load logical immediate high"; minimum_cpu = "z9-109"; modes = ["zarch"]; encoding_bits = 48; match = 0xc00e00000000; mask = 0xff0f00000000; operand_codes = ["R_8", "U32_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding B { width = 32;
+  base = 0x47f00000;
+  offset = 0:16;
+  signed = 1;
+}
+
+op b { class = branch; encoding = B;
+  operands = offset: rel;
+  syntax = "b {offset}";
+  semantics = "(branch offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "b";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 271; table = "s390_opcodes"; mnemonic = "b"; opcode_template = "47f0"; format = "RX_0RRD"; description = "unconditional branch"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 32; match = 0x47f00000; mask = 0xfff00000; operand_codes = ["D_20", "X_12", "B_16"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BR { width = 16;
+  base = 0x7f0;
+  rs1 = 0:4;
+}
+
+op br { class = branch; encoding = BR;
+  operands = rs1: GPR;
+  syntax = "br %{rs1}";
+  semantics = "(branch rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "br";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 268; table = "s390_opcodes"; mnemonic = "br"; opcode_template = "07f0"; format = "RR_0R"; description = "unconditional branch"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x7f0; mask = 0xfff0; operand_codes = ["R_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NOPR { width = 16;
+  base = 0x700;
+  rs1 = 0:4;
+}
+
+op nopr { class = misc; encoding = NOPR;
+  operands = rs1: GPR;
+  syntax = "nopr %{rs1}";
+  semantics = "(effect (intrinsic \"nopr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nopr";
+    variants = [
+      { source = "binutils/opcodes/s390-opc.txt"; line = 266; table = "s390_opcodes"; mnemonic = "nopr"; opcode_template = "0700"; format = "RR_0R_OPT"; description = "no operation"; minimum_cpu = "g5"; modes = ["esa", "zarch"]; encoding_bits = 16; match = 0x700; mask = 0xfff0; operand_codes = ["RO_12"]; }
+    ];
+  };
+  # END BINUTILS METADATA
+}

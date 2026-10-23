@@ -1,0 +1,2664 @@
+# BFD.yaml — what GNU BFD (binutils/bfd) taught us about object-file formats.
+#
+# Purpose
+#   Source-reading notes for qBFD maintainers, based on selected C sources
+#   under `binutils/bfd` and their format headers. Comparisons describe the
+#   current qBFD code; they do not establish its implementation history.
+#
+#   It is a *description*, not a configuration file. Nothing reads it at build
+#   time; it exists so that a future change to qBFD can be checked against the
+#   reference implementation instead of against memory.
+#
+# Source of truth
+#   Tree:     binutils/            (git d727c90, "binutils 2.22 import")
+#   Version:  BFD_VERSION_DATE 20111121, bfd/version.h:1
+#   Vintage:  2011-era. This matters: several formats and machines that exist
+#             today were NOT in this tree. See `divergences.bfd_2_22_absences`.
+#   Citation convention
+#             BFD citations are relative to binutils/; qBFD citations with
+#             q*.hpp paths are relative to yellowstone/qbfd/. Lines refer to the tree as
+#             imported; treat them as pointers, not as an API contract.
+#
+# How to read this file
+#   architecture.*   The generic BFD layer: the object model, the target
+#                    vector, and how format detection is dispatched.
+#   formats.*        Per-format findings: detection, layout, tables, flags.
+#   canonical_model  The format-independent vocabulary that qBFD exposes and
+#                    how each backend maps onto it.
+#   divergences      Observed differences and resolved qBFD questions.
+#   qbfd_mapping     Which qBFD header implements which finding.
+
+meta:
+  document: BFD
+  purpose: "Knowledge capture from binutils/bfd for the qBFD readers and ArchBFD application layer"
+  audience: "maintainers of yellowstone/qbfd"
+  status: current
+  created: "2026-10-22"
+  language: "en"
+  dependency_policy: "BFD is reference material only; this document introduces no BFD imports or link dependency."
+
+source:
+  tree: binutils/
+  commit: d727c90
+  version: "binutils 2.22"
+  version_date: 20111121
+  version_header: bfd/version.h:1
+  c_file_count: 335
+  header_count: 63
+  inventory_scope: "Top-level bfd/*.c and bfd/*.h; these counts are inventory, not files read in full."
+  note: >-
+    bfd/bfd.h is generated at build time from bfd/bfd-in2.h. Citations to
+    "bfd-in2.h" are citations to the tracked source of the public API.
+  primary_files:
+    core:
+      - bfd/bfd.c              # generic library, error handling, scan_vma, demangle
+      - bfd/libbfd.c           # shared stubs: bfd_true/false/nullvoidptr/bfd_0
+      - bfd/format.c           # bfd_check_format_matches: the format dispatcher
+      - bfd/bfd-in2.h          # bfd, bfd_section, bfd_symbol, bfd_target, SEC_*, bfd_error
+      - bfd/hash.c             # chained string-key hash tables
+      - bfd/cache.c            # LRU cache of open file streams
+      - bfd/opncls.c           # handle lifecycle, custom streams, arena allocation
+      - bfd/bfdio.c            # I/O dispatch, archive-relative offsets, memory I/O
+      - bfd/section.c          # section identity, contents, output state
+      - bfd/syms.c             # canonical symbols, minisymbols, nm classification
+      - bfd/reloc.c            # relocation descriptors and generic application
+      - bfd/targets.c          # target-name lookup and default selection
+      - bfd/archures.c         # machine compatibility and addressable units
+    elf:
+      - bfd/elf.c              # ELF backend proper
+      - bfd/elfcode.h          # ELF backend template, compiled for 32 and 64 bit
+      - bfd/elf-bfd.h          # elf_backend_data, elf_size_info
+      - bfd/elfxx-target.h     # per-target ELF vector
+      - bfd/elflink.c          # selected ELF relocation-reading paths
+    coff:
+      - bfd/coffgen.c          # generic COFF backend
+      - bfd/coffcode.h         # COFF backend template
+      - bfd/libcoff.h          # COFF structures
+      - bfd/coffswap.h         # byte-swap routines
+    pe:
+      - bfd/peXXigen.c         # PE backend
+      - bfd/peicode.h          # PE backend template
+    macho:
+      - bfd/mach-o.c           # Mach-O backend
+    archive:
+      - bfd/archive.c          # ar backend
+      - bfd/archive64.c        # /SYM64/ armap
+
+# ---------------------------------------------------------------------------
+# 1. The generic layer
+# ---------------------------------------------------------------------------
+architecture:
+  model:
+    summary: >-
+      BFD is a single generic object model plus a vector of per-format
+      callbacks. A `bfd` is the handle; `asection`, `asymbol` and `arelent`
+      describe sections, symbols and relocations. Input tables can be read
+      lazily by backend callbacks. qBFD exposes analogous concepts through
+      `ObjectFile`, `Section`, `Symbol` and `Relocation`.
+    bfd:
+      source: bfd/bfd-in2.h:5233-5498
+      key_fields:
+        - {name: id, purpose: "unique identifier"}
+        - {name: filename, purpose: "name the application opened"}
+        - {name: xvec, purpose: "pointer to the target jump table"}
+        - {name: iovec, purpose: "IO vector giving access to the backing file"}
+        - {name: format, purpose: "bfd_object / bfd_archive / bfd_core / bfd_unknown"}
+        - {name: direction, purpose: "no_direction / read / write / both"}
+        - {name: flags, purpose: "format-specific flags (HAS_RELOC, EXEC_P, DYNAMIC, ...)"}
+        - {name: tdata, purpose: "backend-private per-file data (void* / union)"}
+        - {name: sections, purpose: "linked list of bfd_section"}
+        - {name: outsymbols, purpose: "array of asymbol pointers for output; also used to cache linker input symbols"}
+        - {name: symcount / dynsymcount, purpose: "ordinary and dynamic symbol counts"}
+    bfd_section:
+      source: bfd/bfd-in2.h:1155-1536
+      key_fields:
+        - {name: name, purpose: "section name"}
+        - {name: flags, purpose: "SEC_* bitmask (see canonical_model.section_flags)"}
+        - {name: size / rawsize, purpose: "section size in octets and optional original input size"}
+        - {name: filepos, purpose: "offset in the file"}
+        - {name: vma, purpose: "virtual address"}
+        - {name: lma, purpose: "load address"}
+        - {name: alignment_power, purpose: "log2 of the required alignment"}
+        - {name: entsize, purpose: "size of one entry, for tables and merge sections"}
+        - {name: reloc / reloc_count, purpose: "relocations attached to this section"}
+        - {name: target_index, purpose: "backend section number; distinct from the canonical index"}
+        - {name: output_section / output_offset, purpose: "placement of this input section in linker output"}
+        - {name: used_by_bfd, purpose: "backend-private section data"}
+      lesson: >-
+        Canonical fields do not preserve every native header field. For example,
+        _bfd_elf_make_section_from_shdr stores the native header in backend
+        section data (bfd/elf.c:831-837). qBFD likewise keeps native metadata
+        and format-specific layouts alongside its common Section model.
+    bfd_symbol:
+      source: bfd/bfd-in2.h:5038-5178
+      key_fields:
+        - {name: name, purpose: "symbol name"}
+        - {name: value, purpose: "address, or section-relative offset"}
+        - {name: flags, purpose: "BSF_* bitmask"}
+        - {name: section, purpose: "defining section, or bfd_und_section_ptr"}
+        - {name: the_bfd, purpose: "owning BFD, including for symbols attached to global pseudo-sections"}
+        - {name: udata, purpose: "backend-special pointer or integer data"}
+    arelent:
+      source: bfd/bfd-in2.h:2247-2262
+      note: "arelent holds address, sym_ptr_ptr (asymbol **), addend and a reloc_howto_type pointer."
+    reloc_howto_type:
+      source: bfd/bfd-in2.h:2283-2366
+      purpose: >-
+        BFD's per-relocation-type descriptor. This is the single most
+        important structure for understanding how BFD models relocations.
+      fields:
+        - {name: type, purpose: "format-native relocation number"}
+        - {name: rightshift, purpose: "shift applied to the computed value"}
+        - {name: size, purpose: "encoded storage width; use bfd_get_reloc_size, not a log2 formula (bfd/reloc.c:432-445)"}
+        - {name: bitsize, purpose: "width of the field in bits"}
+        - {name: pc_relative, purpose: "value is relative to the place"}
+        - {name: bitpos, purpose: "position of the field within the word"}
+        - {name: complain_on_overflow, purpose: "overflow policy"}
+        - {name: special_function, purpose: "per-type relocation callback"}
+        - {name: name, purpose: "human-readable name, e.g. \"R_X86_64_PC32\""}
+        - {name: partial_inplace, purpose: "whether partial linking updates the section field in place; often associated with an implicit addend, but has backend exceptions"}
+        - {name: src_mask, purpose: "mask selecting the source field"}
+        - {name: dst_mask, purpose: "mask selecting the destination field"}
+        - {name: pcrel_offset, purpose: "extra adjustment for PC-relative relocs"}
+      macro: "HOWTO(C,R,S,B,P,BI,O,SF,NAME,INPLACE,MASKSRC,MASKDST,PC) bfd/bfd-in2.h:2368"
+      lesson: >-
+        The `name` field of the howto table IS the relocation naming mechanism
+        in this BFD vintage. Reverse lookups are dispatched through
+        reloc_name_lookup; numeric BFD relocation codes use reloc_type_lookup.
+        qBFD's `Relocation::typeName` plays the role of `howto->name`.
+
+  target_vector:
+    struct: bfd/bfd-in2.h:5784-6150
+    description: >-
+      A `bfd_target` is a static, per-format-and-machine description of every
+      callback BFD can invoke. A target is selected per file.
+    scalar_fields:
+      - {name: name, purpose: "human name, e.g. \"elf64-x86-64\""}
+      - {name: flavour, purpose: "broad family, such as bfd_target_elf_flavour or bfd_target_coff_flavour; PE uses the COFF flavour"}
+      - {name: byteorder, purpose: "order of bytes in the data area"}
+      - {name: header_byteorder, purpose: "order of bytes in the header area"}
+      - {name: object_flags, purpose: "mask of the bfd-level flags this target may set"}
+      - {name: section_flags, purpose: "mask of the SEC_* flags this target may set"}
+      - {name: symbol_leading_char, purpose: "'_' on some targets"}
+      - {name: ar_pad_char, purpose: "pad character in an archive header"}
+      - {name: ar_max_namelen, purpose: "max chars in an archive member name"}
+      - {name: match_priority, purpose: "lower wins when several targets match"}
+    byte_order_slots:
+      data: "bfd_getx64/16/32, bfd_putx64/16/32, plus signed variants"
+      header: "bfd_h_getx64/16/32, bfd_h_putx64/16/32, plus signed variants"
+      lesson: >-
+        BFD keeps TWO byte orders: one for file data and one for headers.
+        A reader should distinguish target header/data order from the order
+        of nested structures. Archive indices, for example, have their own
+        byte-order rules even when the member objects are little-endian.
+    jump_table_groups:
+      - {name: GENERIC, slots: [close_and_cleanup, bfd_free_cached_info, new_section_hook, get_section_contents, get_section_contents_in_window]}
+      - {name: COPY, slots: [bfd_copy_private_bfd_data, bfd_merge_private_bfd_data, _bfd_generic_init_private_section_data, bfd_copy_private_section_data, bfd_copy_private_symbol_data, bfd_copy_private_header_data, bfd_set_private_flags, bfd_print_private_bfd_data]}
+      - {name: CORE, slots: [core_file_failing_command, core_file_failing_signal, core_file_matches_executable_p, core_file_pid]}
+      - {name: ARCHIVE, slots: [slurp_armap, slurp_extended_name_table, construct_extended_name_table, truncate_arname, write_armap, read_ar_hdr, write_ar_hdr, openr_next_archived_file, get_elt_at_index, generic_stat_arch_elt, update_armap_timestamp]}
+      - {name: SYMBOLS, slots: [get_symtab_upper_bound, canonicalize_symtab, make_empty_symbol, print_symbol, get_symbol_info, bfd_is_local_label_name, bfd_is_target_special_symbol, get_lineno, find_nearest_line, _bfd_generic_find_line, find_inliner_info, bfd_make_debug_symbol, read_minisymbols, minisymbol_to_symbol]}
+      - {name: RELOCS, slots: [get_reloc_upper_bound, canonicalize_reloc, bfd_reloc_type_lookup, bfd_reloc_name_lookup]}
+      - {name: WRITE, slots: [set_arch_mach, set_section_contents]}
+      - {name: LINK, slots: [sizeof_headers, bfd_get_relocated_section_contents, bfd_relax_section, bfd_link_hash_table_create, bfd_link_hash_table_free, bfd_link_add_symbols, bfd_link_just_syms, bfd_copy_link_hash_symbol_type, bfd_final_link, bfd_link_split_section, bfd_gc_sections, bfd_lookup_section_flags, bfd_merge_sections, bfd_is_group_section, bfd_discard_group, section_already_linked, bfd_define_common_symbol]}
+      - {name: DYNAMIC, slots: [get_dynamic_symtab_upper_bound, canonicalize_dynamic_symtab, get_synthetic_symtab, get_dynamic_reloc_upper_bound, canonicalize_dynamic_reloc]}
+    slot_naming: "Names are the suffixes used by BFD_JUMP_TABLE_* macros; the two _bfd_generic_* entries are fixed rather than NAME-prefixed."
+    per_format_vectors:
+      check_format: "const bfd_target *(*_bfd_check_format[bfd_type_end])(bfd *);  bfd/bfd-in2.h:5849"
+      set_format: "bfd_boolean (*_bfd_set_format[bfd_type_end])(bfd *);  bfd/bfd-in2.h:5852"
+      write_contents: "bfd_boolean (*_bfd_write_contents[bfd_type_end])(bfd *);  bfd/bfd-in2.h:5855"
+      lesson: >-
+        The three per-format vectors are indexed by `bfd_format`, so one
+        target can serve several formats (a PE target serves bfd_object and
+        bfd_archive). qBFD instead has one `ObjectFile` subclass per format
+        and a separate `Archive` type.
+
+  format_dispatch:
+    entry_points:
+      - {name: bfd_check_format, source: "bfd/format.c:92-96"}
+      - {name: bfd_check_format_matches, source: "bfd/format.c:118-357"}
+      - {name: bfd_set_format, source: "bfd/format.c:373-396"}
+    algorithm:
+      - "An explicit target is tried first. If it fails, this version usually falls through to other targets; explicitly checking binary as an archive is the exception (bfd/format.c:167-191)."
+      - "Search registered targets, skipping binary, an already-tested explicit target, and candidates with worse match_priority than the best match (bfd/format.c:193-256)."
+      - "Each candidate is asked to rewind to offset 0 and identify itself (bfd/format.c:206-207, 215)."
+      - "A backend that does not set an error is assumed to have said wrong_format (bfd/format.c:213)."
+      - "A match is recorded; the lowest match_priority wins (bfd/format.c:234-239)."
+      - "After priority and association resolution, one candidate succeeds; zero yields file_not_recognized and unresolved multiplicity yields file_ambiguously_recognized. Other backend errors can terminate the search early (bfd/format.c:254-356)."
+      - "Partial matches (archive with no index, objects of the wrong type, or a backend-reported ambiguity) are used only if no full match exists (bfd/format.c:241-279)."
+    ambiguity_resolution:
+      default_target_wins: "If the default target matched, it is accepted immediately, even if others also match (bfd/format.c:224-228)."
+      associated_vector: "bfd_associated_vector can disambiguate a multiple match (bfd/format.c:281-299)."
+      binary_target_is_excluded: "The `binary` target never participates in automatic detection (bfd/format.c:199-202)."
+    error_codes:
+      source: bfd/bfd-in2.h:5500-5524
+      values:
+        no_error: 0
+        system_call: 1
+        invalid_target: 2
+        wrong_format: 3
+        wrong_object_format: 4
+        invalid_operation: 5
+        no_memory: 6
+        no_symbols: 7
+        no_armap: 8
+        no_more_archived_files: 9
+        malformed_archive: 10
+        file_not_recognized: 11
+        file_ambiguously_recognized: 12
+        no_contents: 13
+        nonrepresentable_section: 14
+        no_debug_section: 15
+        bad_value: 16
+        file_truncated: 17
+        file_too_big: 18
+        on_input: 19
+        invalid_error_code: 20
+    lesson_for_qbfd: >-
+      Distinguish a rejected candidate from malformed input, I/O failure and
+      unresolved ambiguity. qBFD's Error::Code provides UnknownFormat,
+      Ambiguous, Malformed, Unsupported and OutOfRange alongside None,
+      FileNotFound and IoError (qBFDCore.hpp:29-38).
+
+  error_handling:
+    model: "A global bfd_error_type, plus input-BFD and underlying-error context for bfd_error_on_input (bfd/bfd.c:392-394,453-477)."
+    functions:
+      - {name: bfd_get_error, source: "bfd/bfd.c:432"}
+      - {name: bfd_set_error, source: "bfd/bfd.c:452"}
+      - {name: bfd_errmsg, source: "bfd/bfd.c:483"}
+      - {name: bfd_perror, source: "bfd/bfd.c:526"}
+      - {name: _bfd_default_error_handler, source: "bfd/bfd.c:581"}
+    lesson: >-
+      A global error slot can be overwritten by later calls. qBFD's
+      Expected<T> carries the error with the result. That difference alone
+      does not establish thread safety for either library's other state.
+
+  symbol_hash_table:
+    source: bfd/hash.c
+    functions:
+      - {name: bfd_hash_table_init, source: "bfd/hash.c:411"}
+      - {name: bfd_hash_table_init_n, source: "bfd/hash.c:369"}
+      - {name: bfd_hash_lookup, source: "bfd/hash.c:457-497"}
+      - {name: bfd_hash_insert, source: "bfd/hash.c:502-562"}
+      - {name: bfd_hash_traverse, source: "bfd/hash.c:644-661"}
+    properties:
+      - "Separate chaining: buckets point to linked bfd_hash_entry lists. Lookup uses bfd_hash_hash and strcmp, not caller-supplied hash/equality callbacks (bfd/hash.c:430-475)."
+      - "The caller supplies an entry-construction callback, newfunc, which supports larger backend-specific entries (bfd/hash.c:369-405,509-516)."
+      - "create controls insertion on a miss; copy controls whether a newly inserted name is copied into the table's objalloc arena (bfd/hash.c:478-496)."
+      - "Insertion tries to grow above 75 percent occupancy, using a larger prime bucket count. If growth is impossible, the inserted entry remains and the table freezes growth (bfd/hash.c:519-559)."
+      - "Traversal freezes growth while visiting chains; returning FALSE from the visitor stops traversal (bfd/hash.c:644-661)."
+    lesson: >-
+      These are general string-key tables, also used for section names.
+      A canonical symbol array and a linker name-resolution hash are
+      different data structures with different ownership and lookup needs.
+
+  lifecycle:
+    allocation:
+      source: bfd/opncls.c:59-159
+      functions: [_bfd_new_bfd, _bfd_new_bfd_contained_in, _bfd_delete_bfd, _bfd_free_cached_info]
+      findings:
+        - "A new handle starts with bfd_unknown, no_direction, default architecture information and an empty section-name hash with 251 buckets."
+        - "Each handle has an objalloc arena. The section-name hash also owns an arena; deletion releases both."
+        - "A contained archive handle inherits xvec, iovec and target_defaulted, points my_archive at the container and starts in read_direction."
+        - "_bfd_free_cached_info clears sections, outsymbols, tdata and usrdata after releasing arena storage; previously borrowed metadata becomes invalid."
+    opening:
+      sources: ["bfd/opncls.c:196-277", "bfd/opncls.c:293-340", "bfd/opncls.c:357-384"]
+      functions: [bfd_fopen, bfd_openr, bfd_fdopenr, bfd_openstreamr]
+      findings:
+        - "Opening selects an initial target and I/O source; format recognition is a later bfd_check_format operation."
+        - "bfd_fopen stores the filename pointer rather than copying the string. Its lifetime must cover later uses, including cache reopening."
+        - "A file opened by pathname is cacheable. A supplied descriptor is non-cacheable by default because reopening might lose its special flags."
+        - "bfd_fdopenr and bfd_openstreamr transfer eventual close responsibility for the descriptor or stream to the BFD."
+    custom_streams:
+      source: bfd/opncls.c:391-585
+      function: bfd_openr_iovec
+      findings:
+        - "A read-only adapter uses application open, pread, close and stat callbacks. The pread callback receives an explicit offset."
+        - "The adapter maintains a logical cursor; reads advance it by the number of bytes actually returned. Short EOF reads are allowed."
+        - "Its write operation returns -1 and its mmap operation returns (void *) -1. The close callback is optional."
+    closing:
+      source: bfd/opncls.c:693-759
+      findings:
+        - "bfd_close first dispatches write_contents for writable handles, then closes nested thin archives, runs backend cleanup, closes I/O and deletes the handle."
+        - "A failed write_contents or close_and_cleanup callback returns early; the function has not yet reached handle deletion."
+        - "bfd_close_all_done skips pending output and backend write finalization, closes through the file cache, and deletes the handle. It is not equivalent to flushing output."
+    arena_allocation:
+      source: bfd/opncls.c:909-1027
+      functions: [bfd_alloc, bfd_alloc2, bfd_zalloc, bfd_zalloc2, bfd_release]
+      findings:
+        - "bfd_alloc attaches storage to the handle; bfd_zalloc additionally zeroes it."
+        - "The two-argument element allocators check multiplication overflow before allocating nmemb * size."
+        - "bfd_release rolls back the arena at a block, also releasing more recently allocated blocks; it is not an independent free of just that block."
+    memory_output:
+      source: bfd/opncls.c:776-894
+      sequence: [bfd_create, bfd_make_writable, bfd_make_readable]
+      findings:
+        - "bfd_create selects object format without opening a file. bfd_make_writable installs BFD_IN_MEMORY and the memory I/O vector."
+        - "bfd_make_readable finalizes output into that buffer, resets parsing state, switches direction and invokes object recognition again."
+        - "This implementation ignores the return from the final bfd_check_format call and returns TRUE; that return alone does not certify successful re-parsing."
+    implementation_lessons:
+      status: "Design guidance inferred from these source paths."
+      items:
+        - "Separate byte-storage ownership, parsed-metadata lifetime and finalization status in a new implementation."
+        - "Keep opening and recognition distinct so a failed parser can discard its own state without destroying shared input bytes."
+
+  io_and_file_cache:
+    dispatch:
+      source: bfd/bfdio.c:136-174
+      iovec_operations: [bread, bwrite, btell, bseek, bclose, bflush, bstat, bmmap]
+      finding: "I/O strategy is separate from object-format strategy; a backend reads through the handle's iovec."
+    reads_and_positions:
+      source: bfd/bfdio.c:179-345
+      findings:
+        - "bfd_bread clips archive-member reads to arelt_data.parsed_size and updates where by the bytes actually read."
+        - "bfd_seek accepts SEEK_SET and SEEK_CUR, not SEEK_END. An archive-member SEEK_SET adds origin before delegating to the I/O vector."
+        - "bfd_tell subtracts origin for contained handles, exposing member-relative positions."
+        - "Archive members share a stream position, so the ordinary same-position seek shortcut is disabled for archive access."
+        - "On seek failure, EINVAL maps to file_truncated; other failures map to system_call, preserving errno."
+        - "bfd_bwrite reports a short write as system_call."
+    file_size:
+      source: bfd/bfdio.c:378-423
+      finding: >-
+        bfd_get_size returns the backing stream's stat size. Its documented
+        purpose is a plausibility bound for reads, not an exact logical size
+        for every object, especially archive members.
+    cache:
+      source: bfd/cache.c:25-229
+      max_open_threshold: 10
+      findings:
+        - "This is an LRU cache of FILE streams, not a cache of section bytes."
+        - "Eviction scans for the least-recently-used cacheable handle, saves its position, closes its stream and retains its parsed handle."
+        - "A later lookup reopens the pathname and normally restores the saved position. Archive-member lookups use the parent handle."
+        - "The threshold is not an absolute descriptor cap: close_one succeeds without eviction when no cacheable stream is available."
+    memory_io:
+      source: bfd/bfdio.c:458-505
+      findings:
+        - "Memory reads clip to the buffer and set file_truncated on short reads."
+        - "Memory writes grow storage, rounding allocation to 128-byte boundaries."
+    implementation_lessons:
+      status: "Design guidance inferred from these source paths."
+      items:
+        - "Use member-relative offsets and an explicit member length rather than relying on the containing archive's file size."
+        - "Validate offset <= size and length <= size - offset before access; avoid overflow-prone offset + length comparisons."
+        - "Treat a short read separately from successful decoding of a complete record."
+
+  section_operations:
+    identity_and_names:
+      sources: ["bfd/section.c:780-925", "bfd/section.c:1000-1195"]
+      findings:
+        - "Section initialization assigns an index from section_count, records owner, invokes the target's new_section_hook and appends to the list."
+        - "The generic new-section hook creates a zero-valued BSF_SECTION_SYM symbol tied to the section."
+        - "Names are not unique identities. bfd_make_section_anyway_with_flags explicitly permits duplicate names and chains them in the section hash."
+        - "bfd_make_section_old_way returns an existing section for a duplicate; bfd_make_section_with_flags instead returns NULL without setting an error for an existing name."
+        - "bfd_get_section_by_name returns one match. bfd_get_section_by_name_if can traverse same-name entries; bfd_map_over_sections visits the full list."
+        - "Constructors retain the name pointer; they do not request a name copy from the hash table."
+    pseudo_sections:
+      source: bfd/section.c:1010-1042
+      names: ["*ABS*", "*COM*", "*UND*", "*IND*"]
+      finding: "Absolute, common, undefined and indirect symbols use distinguished section objects rather than ordinary input-section indices."
+    contents:
+      source: bfd/section.c:1456-1511
+      findings:
+        - "Constructor sections return zero-filled requested contents immediately."
+        - "For other sections, bounds use rawsize when reading and rawsize is nonzero; otherwise they use size. A zero-length request succeeds after the bounds check."
+        - "A section without SEC_HAS_CONTENTS returns zero-filled bytes, not an empty read."
+        - "SEC_IN_MEMORY reads copy from section.contents. A missing contents pointer clears that flag and reports invalid_operation."
+        - "Remaining reads dispatch to the backend get_section_contents callback."
+      qbfd_comparison:
+        source: qCOFF.hpp:352-362
+        finding: "COFFFile::sectionContents returns an empty span for BSS. This raw-file view differs from BFD's synthesized zero-filled contents."
+    output_state:
+      source: bfd/section.c:1345-1431
+      findings:
+        - "Setting size is rejected after output_has_begun; the section constructors enforce the same phase boundary."
+        - "Writing requires SEC_HAS_CONTENTS, a valid range and a writable handle. A successful backend write sets output_has_begun."
+        - "A rewriter should settle section layout before writing payloads, preserving the relationship between section geometry and later tables."
+    flag_setter:
+      source: bfd/section.c:1219-1225
+      finding: "Despite the surrounding API description, this setter simply assigns the flags and returns TRUE; it performs no target-mask validation."
+
+  canonical_symbols:
+    read_protocol:
+      sources: ["bfd/syms.c:28-94", "bfd/syms.c:346-355", "bfd/syms.c:421-431"]
+      findings:
+        - "The upper-bound query reports bytes needed for an asymbol pointer vector, including its terminating NULL; it does not return a symbol count."
+        - "The caller allocates that vector, then canonicalize_symtab populates pointers and returns the count excluding the terminator."
+        - "The canonical symbols belong to BFD-managed storage; freeing the caller's vector does not free those symbols. Closing the owning handle invalidates them."
+        - "Canonicalization can trigger deferred native-table reading. Backends may retain extra native information not represented by asymbol."
+    output_protocol:
+      source: bfd/syms.c:450-461
+      finding: "bfd_set_symtab attaches the supplied pointer vector and count to an output object. It does not deep-copy the symbols or their names."
+    minisymbols:
+      source: bfd/syms.c:791-847
+      findings:
+        - "The generic implementation chooses static or dynamic canonicalization using the dynamic argument."
+        - "Its minisymbol record is just an asymbol pointer, with size sizeof(asymbol *). A backend can supply a more compact representation."
+        - "The generic conversion returns the existing pointed-to symbol and ignores the caller's scratch symbol."
+    nm_classification:
+      source: bfd/syms.c:661-766
+      cases:
+        common: "C"
+        undefined: "U"
+        undefined_weak_object: "v"
+        undefined_weak_other: "w"
+        defined_weak_object: "V"
+        defined_weak_other: "W"
+        indirect_section: "I"
+        gnu_indirect_function: "i"
+        gnu_unique: "u"
+      findings:
+        - "For ordinary defined symbols, section-name and section-flag classification determines a letter; BSF_GLOBAL uppercases it."
+        - "bfd_is_undefined_symclass recognizes U, w and v. bfd_symbol_info reports zero for those and symbol.value + section.vma for the other classes."
+        - "GNU IFUNC and indirect/alias symbols are different concepts: BSF_GNU_INDIRECT_FUNCTION is distinct from BSF_INDIRECT."
+
+  relocation_engine:
+    canonicalization:
+      source: bfd/bfd.c:824-895
+      findings:
+        - "get_reloc_upper_bound and canonicalize_reloc require bfd_object and otherwise return -1 with invalid_operation."
+        - "The upper bound is storage in bytes; canonicalization writes an arelent pointer vector and returns a relocation count. It also takes the symbol-pointer table."
+        - "bfd_set_reloc merely attaches an output relocation pointer vector and count to the section. It neither decodes nor applies entries."
+    descriptor_width:
+      source: bfd/reloc.c:299-302,432-445
+      size_code_to_bytes: {0: 1, 1: 2, 2: 4, 3: 0, 4: 8, 8: 16, -2: 4}
+      findings:
+        - "howto.size is a code, not log2(bytes); bitsize is a separate significant-field/overflow width."
+        - "Knowing a storage width is not enough to apply a relocation. Shifts, masks, sign rules and target callbacks are also part of its meaning."
+    generic_application:
+      source: bfd/reloc.c:574-695
+      function: bfd_perform_relocation
+      findings:
+        - "sym_ptr_ptr references an asymbol pointer. The byte-buffer offset is address multiplied by bfd_octets_per_byte."
+        - "For final relocation, an undefined non-weak symbol sets bfd_reloc_undefined; an undefined weak symbol is permitted."
+        - "The special_function runs before generic processing. Any result other than bfd_reloc_continue returns immediately."
+        - "The generic value starts from the symbol (zero for common), output placement and addend. PC-relative processing subtracts the input output-section base and, when pcrel_offset is set, the relocation address."
+        - "For relocatable output with partial_inplace false, BFD updates the relocation addend and address and returns without modifying section bytes."
+    field_application:
+      source: bfd/reloc.c:1377-1544
+      function: _bfd_relocate_contents
+      findings:
+        - "Read the storage unit using target byte order; a negative size code negates the supplied relocation value."
+        - "Check the selected signed, unsigned or bitfield overflow policy; shift the relocation and merge only the destination-mask bits, incorporating any source-mask addend."
+        - "Bits outside dst_mask are preserved. The function writes back the result even when it returns bfd_reloc_overflow."
+        - "This helper handles 1, 2, 4 and, with BFD64, 8-byte units. A width recognized by bfd_get_reloc_size does not guarantee this helper supports it."
+    rel_addends:
+      source: bfd/reloc.c:330-354
+      finding: >-
+        partial_inplace describes partial-link behavior as well as addend
+        location. The comments explicitly warn that not every REL relocation
+        sets it TRUE. src_mask normally extracts an in-place addend for REL;
+        RELA normally uses a zero src_mask. Backend exceptions must be read
+        rather than inferred solely from the file class or architecture.
+    implementation_lessons:
+      status: "Design guidance inferred from these source paths."
+      items:
+        - "Keep relocation metadata separate from the set of encodings an implementation can safely apply."
+        - "Check the entire field range, not just its starting address, before reading or writing."
+        - "If an API promises no mutation on error, compute and validate first; do not copy BFD's write-on-overflow behavior accidentally."
+
+  target_and_architecture:
+    target_selection:
+      source: bfd/targets.c:1388-1499
+      findings:
+        - "An explicit target name takes precedence over GNUTARGET. With neither, or with the name default, use the configured default vector or the first registered vector and set target_defaulted."
+        - "Name lookup first tries exact target names, then configuration-triplet wildcard matches; a miss sets invalid_target."
+        - "Selecting a target vector is separate from recognizing object, archive or core contents."
+    compatibility:
+      source: bfd/archures.c:762-786,940-956
+      findings:
+        - "Known architectures delegate compatibility to the architecture-specific callback."
+        - "An unknown architecture is accepted only with accept_unknowns or for an explicitly selected binary target."
+        - "The default callback rejects different architecture families or bits_per_word, then returns the descriptor with the larger machine number. Targets may override it."
+    address_units:
+      source: bfd/archures.c:1258-1300
+      finding: >-
+        A target byte is a minimum addressable unit and need not be eight
+        bits. The octets-per-byte result is bits_per_byte / 8 when the
+        architecture is known, otherwise 1. Distinguish file octets from
+        target addresses when extending a reader to DSP-style targets.
+
+# ---------------------------------------------------------------------------
+# 2. ELF
+# ---------------------------------------------------------------------------
+formats:
+  elf:
+    files: ["bfd/elf.c", "bfd/elfcode.h", "bfd/elf-bfd.h", "bfd/elfxx-target.h"]
+    note: "elfcode.h is the template; it is compiled twice, once per class (elf32.c, elf64.c)."
+
+    detection:
+      entry_point: "bfd_elfNN_object_p, generated from elf_object_p in bfd/elfcode.h:488-864"
+      magic:
+        bytes: [0x7f, 0x45, 0x4c, 0x46]
+        spellings: "7F 'E' 'L' 'F'"
+        source: "bfd/elfcode.h:471-478; include/elf/common.h:37-47"
+      checks_in_order:
+        - {step: 1, check: "Read a whole Elf_External_Ehdr; a short read is wrong_format unless the read itself failed", source: "bfd/elfcode.h:507"}
+        - {step: 2, check: "e_ident[EI_MAG0..3] == 7F 'E' 'L' 'F'", source: "bfd/elfcode.h:521"}
+        - {step: 3, check: "e_ident[EI_VERSION] == EV_CURRENT (1)", source: "bfd/elfcode.h:522"}
+        - {step: 4, check: "e_ident[EI_CLASS] == ELFCLASS32 (1) or ELFCLASS64 (2)", source: "bfd/elfcode.h:523"}
+        - {step: 5, check: "e_ident[EI_DATA] is ELFDATA2LSB (1) or ELFDATA2MSB (2), and matches the target's byte order", source: "bfd/elfcode.h:527-540"}
+        - {step: 6, check: "e_type != ET_CORE", source: "bfd/elfcode.h:562"}
+        - {step: 7, check: "e_shoff != 0 when e_type == ET_REL", source: "bfd/elfcode.h:563"}
+        - {step: 8, check: "e_shentsize == sizeof(ElfNN_External_Shdr) unless e_shnum == 0", source: "bfd/elfcode.h:573-574"}
+        - {step: 9, check: "e_shoff == 0 implies e_shnum == 0", source: "bfd/elfcode.h:577-578"}
+        - {step: 10, check: "target arch_size matches", source: "bfd/elfcode.h:580-582"}
+        - {step: 11, check: "e_machine matches the target, or one of two alternates, or the target is EM_NONE", source: "bfd/elfcode.h:586-592"}
+        - {step: 12, check: "e_ident[EI_OSABI] matches the target's OSABI, unless the target's OSABI is ELFOSABI_NONE", source: "bfd/elfcode.h:609-612"}
+        - {step: 13, check: "e_shnum / e_shstrndx / e_phnum extended-numbering fields", source: "bfd/elfcode.h:633-655"}
+        - {step: 14, check: "sh_link and sh_info are in range for the section they index", source: "bfd/elfcode.h:714-741"}
+        - {step: 15, check: "e_shstrndx is a valid section index", source: "bfd/elfcode.h:756-771"}
+      not_checked:
+        - "The generic elf_object_p path does not validate e_ident[EI_ABIVERSION] (index 8); target-specific hooks require separate review."
+        - "That generic path checks EI_VERSION but does not independently validate the 32-bit e_version field at offset 0x14."
+      failure_modes:
+        wrong_format: "bfd_error_wrong_format (bfd/elfcode.h:848-863, got_wrong_format_error)"
+        no_match: "return NULL, restoring any preserved state"
+
+    e_ident:
+      size: 16
+      source: include/elf/internal.h:66
+      bytes:
+        - {index: 0, name: EI_MAG0, value: 0x7f}
+        - {index: 1, name: EI_MAG1, value: "0x45 'E'"}
+        - {index: 2, name: EI_MAG2, value: "0x4c 'L'"}
+        - {index: 3, name: EI_MAG3, value: "0x46 'F'"}
+        - {index: 4, name: EI_CLASS, values: {ELFCLASSNONE: 0, ELFCLASS32: 1, ELFCLASS64: 2}}
+        - {index: 5, name: EI_DATA, values: {ELFDATANONE: 0, ELFDATA2LSB: 1, ELFDATA2MSB: 2}}
+        - {index: 6, name: EI_VERSION, values: {EV_NONE: 0, EV_CURRENT: 1}}
+        - {index: 7, name: EI_OSABI, values: {ELFOSABI_NONE: 0, ELFOSABI_HPUX: 1, ELFOSABI_NETBSD: 2, ELFOSABI_GNU: 3, ELFOSABI_SOLARIS: 6, ELFOSABI_AIX: 7, ELFOSABI_IRIX: 8, ELFOSABI_FREEBSD: 9, ELFOSABI_TRU64: 10, ELFOSABI_MODESTO: 11, ELFOSABI_OPENBSD: 12, ELFOSABI_OPENVMS: 13, ELFOSABI_NSK: 14, ELFOSABI_AROS: 15, ELFOSABI_FENIXOS: 16, ELFOSABI_ARM: 97, ELFOSABI_STANDALONE: 255}}
+        - {index: 8, name: EI_ABIVERSION, note: "not checked by BFD"}
+        - {index: 9, name: EI_PAD, note: "padding to index 15"}
+
+    headers:
+      note: >-
+        BFD never uses the naturally-aligned host structs. It uses
+        byte-array `Elf*_External_*` structs that are exactly the on-disk
+        layout (include/elf/external.h). The sizes below are those packed
+        layouts, NOT the host <elf.h> sizes.
+      ehdr:
+        structs:
+          - {struct: Elf32_External_Ehdr, size: 52, source: "include/elf/external.h:53-68"}
+          - {struct: Elf64_External_Ehdr, size: 64, source: "include/elf/external.h:70-85"}
+        fields:
+          - {field: e_ident, type: "u8[16]", off32: 0, off64: 0}
+          - {field: e_type, type: u16, off32: 16, off64: 16}
+          - {field: e_machine, type: u16, off32: 18, off64: 18}
+          - {field: e_version, type: u32, off32: 20, off64: 20}
+          - {field: e_entry, type: "u32/u64 addr", off32: 24, off64: 24}
+          - {field: e_phoff, type: "u32/u64 off", off32: 28, off64: 32}
+          - {field: e_shoff, type: "u32/u64 off", off32: 32, off64: 40}
+          - {field: e_flags, type: u32, off32: 36, off64: 48}
+          - {field: e_ehsize, type: u16, off32: 40, off64: 52, note: "52 for ELF32, 64 for ELF64"}
+          - {field: e_phentsize, type: u16, off32: 42, off64: 54}
+          - {field: e_phnum, type: u16, off32: 44, off64: 56}
+          - {field: e_shentsize, type: u16, off32: 46, off64: 58}
+          - {field: e_shnum, type: u16, off32: 48, off64: 60}
+          - {field: e_shstrndx, type: u16, off32: 50, off64: 62}
+      shdr:
+        structs:
+          - {struct: Elf32_External_Shdr, size: 40, source: "include/elf/external.h:113-124"}
+          - {struct: Elf64_External_Shdr, size: 64, source: "include/elf/external.h:126-137"}
+        fields:
+          - {field: sh_name, type: u32, off32: 0, off64: 0}
+          - {field: sh_type, type: u32, off32: 4, off64: 4}
+          - {field: sh_flags, type: "u32/u64", off32: 8, off64: 8}
+          - {field: sh_addr, type: "u32/u64", off32: 12, off64: 16}
+          - {field: sh_offset, type: "u32/u64", off32: 16, off64: 24}
+          - {field: sh_size, type: "u32/u64", off32: 20, off64: 32}
+          - {field: sh_link, type: u32, off32: 24, off64: 40, note: "u32 in BOTH variants"}
+          - {field: sh_info, type: u32, off32: 28, off64: 44, note: "u32 in BOTH variants"}
+          - {field: sh_addralign, type: "u32/u64", off32: 32, off64: 48}
+          - {field: sh_entsize, type: "u32/u64", off32: 36, off64: 56}
+      phdr:
+        structs:
+          - {struct: Elf32_External_Phdr, size: 32, source: "include/elf/external.h:89-98"}
+          - {struct: Elf64_External_Phdr, size: 56, source: "include/elf/external.h:100-109"}
+        gotcha: >-
+          In ELF64 the field order differs from ELF32: p_flags is the SECOND
+          field (offset 4), immediately after p_type. In ELF32 p_flags sits
+          between p_memsz and p_align (offset 24). BFD's internal
+          Elf_Internal_Phdr normalises the order; the external structs do not.
+        fields:
+          - {field: p_type, type: u32, off32: 0, off64: 0}
+          - {field: p_flags, type: u32, off32: 24, off64: 4}
+          - {field: p_offset, type: "u32/u64", off32: 4, off64: 8}
+          - {field: p_vaddr, type: "u32/u64", off32: 8, off64: 16}
+          - {field: p_paddr, type: "u32/u64", off32: 12, off64: 24}
+          - {field: p_filesz, type: "u32/u64", off32: 16, off64: 32}
+          - {field: p_memsz, type: "u32/u64", off32: 20, off64: 40}
+          - {field: p_align, type: "u32/u64", off32: 28, off64: 48}
+      sym:
+        structs:
+          - {struct: Elf32_External_Sym, size: 16, source: "include/elf/external.h:141-148"}
+          - {struct: Elf64_External_Sym, size: 24, source: "include/elf/external.h:150-157"}
+        gotcha: >-
+          ELF64 reorders the symbol fields: st_name, st_info, st_other,
+          st_shndx, st_value, st_size. st_value and st_size are LAST in
+          ELF64, not second and third as in ELF32.
+        fields:
+          - {field: st_name, type: u32, off32: 0, off64: 0}
+          - {field: st_value, type: "u32/u64", off32: 4, off64: 8}
+          - {field: st_size, type: "u32/u64", off32: 8, off64: 16}
+          - {field: st_info, type: u8, off32: 12, off64: 4}
+          - {field: st_other, type: u8, off32: 13, off64: 5}
+          - {field: st_shndx, type: u16, off32: 14, off64: 6}
+      rel:
+        structs:
+          - {struct: Elf32_External_Rel, size: 8, source: "include/elf/external.h:173-176"}
+          - {struct: Elf64_External_Rel, size: 16, source: "include/elf/external.h:184-187"}
+        fields:
+          - {field: r_offset, type: "u32/u64", off32: 0, off64: 0}
+          - {field: r_info, type: "u32/u64", off32: 4, off64: 8}
+      rela:
+        structs:
+          - {struct: Elf32_External_Rela, size: 12, source: "include/elf/external.h:178-182"}
+          - {struct: Elf64_External_Rela, size: 24, source: "include/elf/external.h:189-193"}
+        fields:
+          - {field: r_offset, type: "u32/u64", off32: 0, off64: 0}
+          - {field: r_info, type: "u32/u64", off32: 4, off64: 8}
+          - {field: r_addend, type: "s32/s64", off32: 8, off64: 16, note: "SIGNED in both variants"}
+      dyn:
+        structs:
+          - {struct: Elf32_External_Dyn, size: 8, source: "include/elf/external.h:197-203"}
+          - {struct: Elf64_External_Dyn, size: 16, source: "include/elf/external.h:205-211"}
+        fields:
+          - {field: d_tag, type: "s32/s64", off32: 0, off64: 0}
+          - {field: d_un.d_val / d_un.d_ptr, type: "u32/u64", off32: 4, off64: 8}
+    extended_numbering:
+      rules:
+        - {field: e_shnum, sentinel: "SHN_UNDEF (0)", real_value_in: "section header 0, sh_size", source: "bfd/elfcode.h:633-639"}
+        - {field: e_shstrndx, sentinel: "0xffff", real_value_in: "section header 0, sh_link", source: "bfd/elfcode.h:642-647"}
+        - {field: e_phnum, sentinel: "PN_XNUM (0xffff)", real_value_in: "section header 0, sh_info", source: "bfd/elfcode.h:650-655"}
+        - {field: st_shndx, sentinel: "SHN_XINDEX (0xffff)", real_value_in: "the parallel SHT_SYMTAB_SHNDX table", source: "bfd/elfcode.h:193-200"}
+      write_back:
+        - "e_shnum is written as 0; the real count goes to shdr[0].sh_size (bfd/elfcode.h:1032-1033)."
+        - "e_shstrndx is written as 0xffff; the real index goes to shdr[0].sh_link (bfd/elfcode.h:1034-1035)."
+        - "e_phnum is clamped to PN_XNUM; the real count goes to shdr[0].sh_info (bfd/elfcode.h:1030-1031)."
+
+    section_types:
+      source: include/elf/common.h:443-487
+      values:
+        SHT_NULL: 0
+        SHT_PROGBITS: 1
+        SHT_SYMTAB: 2
+        SHT_STRTAB: 3
+        SHT_RELA: 4
+        SHT_HASH: 5
+        SHT_DYNAMIC: 6
+        SHT_NOTE: 7
+        SHT_NOBITS: 8
+        SHT_REL: 9
+        SHT_SHLIB: 10
+        SHT_DYNSYM: 11
+        SHT_INIT_ARRAY: 14
+        SHT_FINI_ARRAY: 15
+        SHT_PREINIT_ARRAY: 16
+        SHT_GROUP: 17
+        SHT_SYMTAB_SHNDX: 18
+        SHT_GNU_ATTRIBUTES: "0x6ffffff5"
+        SHT_GNU_HASH: "0x6ffffff6"
+        SHT_GNU_LIBLIST: "0x6ffffff7"
+        SHT_GNU_verdef: "0x6ffffffd"
+        SHT_GNU_verneed: "0x6ffffffe"
+        SHT_GNU_versym: "0x6fffffff"
+        SHT_LOOS: "0x60000000"
+        SHT_HIOS: "0x6fffffff"
+        SHT_LOPROC: "0x70000000"
+        SHT_HIPROC: "0x7fffffff"
+        SHT_LOUSER: "0x80000000"
+        SHT_HIUSER: "0xffffffff"
+      gaps:
+        - "12 and 13 are unused."
+        - "SHT_RELR (19) does not exist in this vintage."
+      bfd_name_table:
+        note: "BFD ships a short name array covering only types 0-11."
+        source: bfd/elf.c:1084-1088
+
+    section_flags:
+      source: include/elf/common.h:489-513
+      values:
+        SHF_WRITE: 0x00000001
+        SHF_ALLOC: 0x00000002
+        SHF_EXECINSTR: 0x00000004
+        SHF_MERGE: 0x00000010
+        SHF_STRINGS: 0x00000020
+        SHF_INFO_LINK: 0x00000040
+        SHF_LINK_ORDER: 0x00000080
+        SHF_OS_NONCONFORMING: 0x00000100
+        SHF_GROUP: 0x00000200
+        SHF_TLS: 0x00000400
+        SHF_EXCLUDE: 0x80000000
+      absent: "SHF_COMPRESSED does not exist in this tree; BFD 2.22 uses the .zdebug naming convention (bfd/elf.c:1010-1079)."
+
+    special_indices:
+      external:
+        source: include/elf/external.h:41-49
+        values:
+          SHN_LORESERVE: "0xff00"
+          SHN_ABS: "0xfff1"
+          SHN_COMMON: "0xfff2"
+          SHN_XINDEX: "0xffff"
+          SHN_HIRESERVE: "0xffff"
+        note: "SHN_UNDEF (0) is not in external.h; it is defined in include/elf/internal.h:52."
+      internal:
+        source: include/elf/internal.h:52-62
+        note: "BFD converts the reserved range to negative unsigned values so comparisons work."
+        values:
+          SHN_UNDEF: 0
+          SHN_LORESERVE: "-0x100"
+          SHN_ABS: "-0x0f"
+          SHN_COMMON: "-0x0e"
+          SHN_XINDEX: "-0x01"
+          SHN_BAD: "-0x101"
+      lesson: >-
+        A reimplementation should keep the on-disk values and compare
+        against them directly. qBFD's `Symbol::section` is empty for
+        undefined and absolute symbols (qBFDCore.hpp:171), which reproduces
+        the intent without the negative-value trick.
+
+    segment_types:
+      source: include/elf/common.h:405-513
+      values:
+        PT_NULL: 0
+        PT_LOAD: 1
+        PT_DYNAMIC: 2
+        PT_INTERP: 3
+        PT_NOTE: 4
+        PT_SHLIB: 5
+        PT_PHDR: 6
+        PT_TLS: 7
+        PT_GNU_EH_FRAME: "0x6474e550"
+        PT_GNU_STACK: "0x6474e551"
+        PT_GNU_RELRO: "0x6474e552"
+      segment_flags:
+        PF_X: 1
+        PF_W: 2
+        PF_R: 4
+
+    symbols:
+      st_info_decomposition:
+        source: include/elf/common.h:615-617
+        macros:
+          ELF_ST_BIND: "(val) >> 4"
+          ELF_ST_TYPE: "val & 0xf"
+        source_st_other: "ELF_ST_VISIBILITY(v) = v & 0x3  (include/elf/common.h:631)"
+      bindings:
+        source: include/elf/common.h:641-648
+        values: {STB_LOCAL: 0, STB_GLOBAL: 1, STB_WEAK: 2, STB_LOOS: 10, STB_GNU_UNIQUE: 10, STB_HIOS: 12, STB_LOPROC: 13, STB_HIPROC: 15}
+      types:
+        source: include/elf/common.h:650-663
+        values:
+          STT_NOTYPE: 0
+          STT_OBJECT: 1
+          STT_FUNC: 2
+          STT_SECTION: 3
+          STT_FILE: 4
+          STT_COMMON: 5
+          STT_TLS: 6
+          STT_RELC: 8
+          STT_SRELC: 9
+          STT_GNU_IFUNC: 10
+      visibility:
+        source: include/elf/common.h:668-671
+        values: {STV_DEFAULT: 0, STV_INTERNAL: 1, STV_HIDDEN: 2, STV_PROTECTED: 3}
+      symtab_contract:
+        - "Index 0 of a symbol table is the undefined symbol and is not a real entry."
+        - "sh_info of an SHT_SYMTAB is the index of the first global symbol; all locals precede it (bfd/elf.c:1648-1649)."
+        - "The string table index 0 is the empty string, and the table's byte 0 must be a NUL."
+
+    relocations:
+      r_info_split:
+        source: include/elf/common.h:675-681
+        elf32: {sym: "(i) >> 8", type: "(i) & 0xff", note: "8-bit type field"}
+        elf64: {sym: "(i) >> 32", type: "(i) & 0xffffffff", note: "32-bit type field"}
+      rel_versus_rela:
+        rule: >-
+          SHT_REL and SHT_RELA identify the on-disk record kind. In
+          elf_link_read_relocs_from_section, the already-selected section's
+          sh_entsize chooses swap_reloc_in or swap_reloca_in and must equal
+          the backend's sizeof_rel or sizeof_rela (bfd/elflink.c:2128-2136).
+        read_behaviour:
+          - "REL: r_addend is set to 0 on read (bfd/elfcode.h:398-407)."
+          - "RELA: r_addend is read as a signed value (bfd/elfcode.h:409-418)."
+        contract: >-
+          The ELF backend linker caches swapped records as Elf_Internal_Rela,
+          with zero r_addend for REL (bfd/elf-bfd.h:1380-1383). This is distinct
+          from the public, format-neutral arelent representation.
+        per_section_flag: "use_rela_p on asection (bfd/bfd-in2.h:1393-1394)."
+      implicit_addend:
+        summary: >-
+          REL has no separate r_addend field; an implicit addend is encoded
+          in the relocated contents. Its decoding depends on the target's
+          masks, shifts, sign rules and special callbacks, not just the
+          generic width or partial_inplace flag (bfd/reloc.c:330-354).
+        convention:
+          partial_inplace_TRUE: "Partial linking can update the section contents in place."
+          partial_inplace_FALSE: "Partial linking can update the relocation instead; not every REL relocation sets this flag TRUE."
+          src_mask: "Normally equals dst_mask for an in-place REL addend and is zero for RELA; read target-specific exceptions."
+        concrete_examples:
+          - {file: "bfd/elf32-i386.c", lines: "3088-3155", note: "reads the addend out of the section data for STT_SECTION symbols against SEC_MERGE sections, sign-extending for PC-relative forms"}
+          - {file: "bfd/elf32-arm.c", lines: "7913-7927", note: "explicit use_rel branch: masks the section data with src_mask and sign-extends"}
+      qbfd_equivalent: >-
+        qBFD exposes Relocation::hasAddend (qBFDCore.hpp:193). Its current
+        ELF code sets it for RELA or after a bitSize-driven read of section
+        bytes (qELF.hpp:480-491). The latter branch is not restricted to
+        x86/x64. It is a contiguous integer read, not a general decoder for
+        split instruction fields; a known type name alone does not prove
+        that its implicit addend has been decoded correctly.
+
+    naming_mechanism:
+      summary: >-
+        In this vintage the relocation name is `reloc_howto_type.name` from
+        the per-target howto table. The reverse lookup, name to type, is a
+        linear strcasecmp over that table.
+      per_target_tables:
+        - {arch: i386, table: elf_howto_table, source: "bfd/elf32-i386.c:56-185"}
+        - {arch: x86-64, table: x86_64_elf_howto_table, source: "bfd/elf64-x86-64.c:56-247"}
+        - {arch: arm, table: "elf32_arm_howto_table_1/2/3", source: "bfd/elf32-arm.c:73-1766"}
+        - {arch: ppc, table: ppc_elf_howto_raw, source: "bfd/elf32-ppc.c:151-179"}
+      reverse_lookup:
+        - {name: elf_i386_reloc_name_lookup, source: "bfd/elf32-i386.c:346-358"}
+        - {name: elf_x86_64_reloc_name_lookup, source: "bfd/elf64-x86-64.c:294-315"}
+        - {name: bfd_reloc_name_lookup, source: "bfd/reloc.c:5995-5999"}
+      type_to_howto:
+        slots: [elf_info_to_howto, elf_info_to_howto_rel]
+        source: "bfd/elf-bfd.h:723-729"
+        dispatch: "bfd/elfcode.h:1446-1451"
+
+    relocation_number_tables:
+      note: "The numeric enums live in include/elf/<arch>.h, not in bfd/."
+      x86_64:
+        source: include/elf/x86-64.h:27-78
+        values:
+          R_X86_64_NONE: 0
+          R_X86_64_64: 1
+          R_X86_64_PC32: 2
+          R_X86_64_GOT32: 3
+          R_X86_64_PLT32: 4
+          R_X86_64_COPY: 5
+          R_X86_64_GLOB_DAT: 6
+          R_X86_64_JUMP_SLOT: 7
+          R_X86_64_RELATIVE: 8
+          R_X86_64_GOTPCREL: 9
+          R_X86_64_32: 10
+          R_X86_64_32S: 11
+          R_X86_64_16: 12
+          R_X86_64_PC16: 13
+          R_X86_64_8: 14
+          R_X86_64_PC8: 15
+          R_X86_64_DTPMOD64: 16
+          R_X86_64_DTPOFF64: 17
+          R_X86_64_TPOFF64: 18
+          R_X86_64_TLSGD: 19
+          R_X86_64_TLSLD: 20
+          R_X86_64_DTPOFF32: 21
+          R_X86_64_GOTTPOFF: 22
+          R_X86_64_TPOFF32: 23
+          R_X86_64_PC64: 24
+          R_X86_64_GOTOFF64: 25
+          R_X86_64_GOTPC32: 26
+          R_X86_64_GOT64: 27
+          R_X86_64_GOTPCREL64: 28
+          R_X86_64_GOTPC64: 29
+          R_X86_64_GOTPLT64: 30
+          R_X86_64_PLTOFF64: 31
+          R_X86_64_GOTPC32_TLSDESC: 34
+          R_X86_64_TLSDESC_CALL: 35
+          R_X86_64_TLSDESC: 36
+          R_X86_64_IRELATIVE: 37
+          R_X86_64_RELATIVE64: 38
+          R_X86_64_GNU_VTINHERIT: 250
+          R_X86_64_GNU_VTENTRY: 251
+      i386:
+        source: include/elf/i386.h:26-77
+        values:
+          R_386_NONE: 0
+          R_386_32: 1
+          R_386_PC32: 2
+          R_386_GOT32: 3
+          R_386_PLT32: 4
+          R_386_COPY: 5
+          R_386_GLOB_DAT: 6
+          R_386_JUMP_SLOT: 7
+          R_386_RELATIVE: 8
+          R_386_GOTOFF: 9
+          R_386_GOTPC: 10
+          R_386_32PLT: 11
+          R_386_TLS_TPOFF: 14
+          R_386_TLS_IE: 15
+          R_386_TLS_GOTIE: 16
+          R_386_TLS_LE: 17
+          R_386_TLS_GD: 18
+          R_386_TLS_LDM: 19
+          R_386_16: 20
+          R_386_PC16: 21
+          R_386_8: 22
+          R_386_PC8: 23
+          R_386_TLS_GD_32: 24
+          R_386_TLS_GD_PUSH: 25
+          R_386_TLS_GD_CALL: 26
+          R_386_TLS_GD_POP: 27
+          R_386_TLS_LDM_32: 28
+          R_386_TLS_LDM_PUSH: 29
+          R_386_TLS_LDM_CALL: 30
+          R_386_TLS_LDM_POP: 31
+          R_386_TLS_LDO_32: 32
+          R_386_TLS_IE_32: 33
+          R_386_TLS_LE_32: 34
+          R_386_TLS_DTPMOD32: 35
+          R_386_TLS_DTPOFF32: 36
+          R_386_TLS_TPOFF32: 37
+          R_386_TLS_GOTDESC: 39
+          R_386_TLS_DESC_CALL: 40
+          R_386_TLS_DESC: 41
+          R_386_IRELATIVE: 42
+          R_386_USED_BY_INTEL_200: 200
+          R_386_GNU_VTINHERIT: 250
+          R_386_GNU_VTENTRY: 251
+      arm:
+        source: include/elf/arm.h:111-253
+        values:
+          R_ARM_NONE: 0
+          R_ARM_PC24: 1
+          R_ARM_ABS32: 2
+          R_ARM_REL32: 3
+          R_ARM_LDR_PC_G0: 4
+          R_ARM_ABS16: 5
+          R_ARM_ABS12: 6
+          R_ARM_THM_ABS5: 7
+          R_ARM_ABS8: 8
+          R_ARM_SBREL32: 9
+          R_ARM_THM_CALL: 10
+          R_ARM_THM_PC8: 11
+          R_ARM_BREL_ADJ: 12
+          R_ARM_TLS_DESC: 13
+          R_ARM_THM_SWI8: 14
+          R_ARM_XPC25: 15
+          R_ARM_THM_XPC22: 16
+          R_ARM_TLS_DTPMOD32: 17
+          R_ARM_TLS_DTPOFF32: 18
+          R_ARM_TLS_TPOFF32: 19
+          R_ARM_COPY: 20
+          R_ARM_GLOB_DAT: 21
+          R_ARM_JUMP_SLOT: 22
+          R_ARM_RELATIVE: 23
+          R_ARM_GOTOFF32: 24
+          R_ARM_BASE_PREL: 25
+          R_ARM_GOT_BREL: 26
+          R_ARM_PLT32: 27
+          R_ARM_CALL: 28
+          R_ARM_JUMP24: 29
+          R_ARM_THM_JUMP24: 30
+          R_ARM_BASE_ABS: 31
+          R_ARM_TARGET1: 38
+          R_ARM_TARGET2: 41
+          R_ARM_PREL31: 42
+          R_ARM_MOVW_ABS_NC: 43
+          R_ARM_MOVT_ABS: 44
+          R_ARM_MOVW_PREL_NC: 45
+          R_ARM_MOVT_PREL: 46
+          R_ARM_THM_MOVW_ABS_NC: 47
+          R_ARM_THM_MOVT_ABS: 48
+          R_ARM_THM_MOVW_PREL_NC: 49
+          R_ARM_THM_MOVT_PREL: 50
+          R_ARM_THM_JUMP19: 51
+          R_ARM_THM_JUMP6: 52
+          R_ARM_ABS32_NOI: 55
+          R_ARM_REL32_NOI: 56
+          R_ARM_THM_TLS_DESCSEQ: 129
+          R_ARM_IRELATIVE: 160
+          R_ARM_RXPC25: 249
+          R_ARM_RSBREL32: 250
+          R_ARM_THM_RPC22: 251
+          R_ARM_RREL32: 252
+          R_ARM_RABS32: 253
+          R_ARM_RPC24: 254
+          R_ARM_RBASE: 255
+        aliases:
+          R_ARM_GOTOFF: "R_ARM_GOTOFF32 (24)"
+          R_ARM_THM_PC22: "R_ARM_THM_CALL (10)"
+          R_ARM_THM_PC11: "R_ARM_THM_JUMP11 (102)"
+          R_ARM_THM_PC9: "R_ARM_THM_JUMP8 (103)"
+          R_ARM_GOTPC: "R_ARM_BASE_PREL (25)"
+          R_ARM_GOT32: "R_ARM_GOT_BREL (26)"
+          R_ARM_ROSEGREL32: "R_ARM_SBREL31 (39)"
+          R_ARM_AMP_VCALL9: "R_ARM_BREL_ADJ (12)"
+      ppc:
+        source: include/elf/ppc.h:36-151
+        values:
+          R_PPC_NONE: 0
+          R_PPC_ADDR32: 1
+          R_PPC_ADDR24: 2
+          R_PPC_ADDR16: 3
+          R_PPC_ADDR16_LO: 4
+          R_PPC_ADDR16_HI: 5
+          R_PPC_ADDR16_HA: 6
+          R_PPC_ADDR14: 7
+          R_PPC_ADDR14_BRTAKEN: 8
+          R_PPC_ADDR14_BRNTAKEN: 9
+          R_PPC_REL24: 10
+          R_PPC_REL14: 11
+          R_PPC_REL14_BRTAKEN: 12
+          R_PPC_REL14_BRNTAKEN: 13
+          R_PPC_GOT16: 14
+          R_PPC_GOT16_LO: 15
+          R_PPC_GOT16_HI: 16
+          R_PPC_GOT16_HA: 17
+          R_PPC_PLTREL24: 18
+          R_PPC_COPY: 19
+          R_PPC_GLOB_DAT: 20
+          R_PPC_JMP_SLOT: 21
+          R_PPC_RELATIVE: 22
+          R_PPC_LOCAL24PC: 23
+          R_PPC_UADDR32: 24
+          R_PPC_UADDR16: 25
+          R_PPC_REL32: 26
+          R_PPC_PLT32: 27
+          R_PPC_PLTREL32: 28
+          R_PPC_PLT16_LO: 29
+          R_PPC_PLT16_HI: 30
+          R_PPC_PLT16_HA: 31
+          R_PPC_SDAREL16: 32
+          R_PPC_SECTOFF: 33
+          R_PPC_SECTOFF_LO: 34
+          R_PPC_SECTOFF_HI: 35
+          R_PPC_SECTOFF_HA: 36
+          R_PPC_ADDR30: 37
+          R_PPC_TLS: 67
+          R_PPC_DTPMOD32: 68
+          R_PPC_TPREL16: 69
+          R_PPC_TPREL16_LO: 70
+          R_PPC_TPREL16_HI: 71
+          R_PPC_TPREL16_HA: 72
+          R_PPC_TPREL32: 73
+          R_PPC_DTPREL16: 74
+          R_PPC_DTPREL16_LO: 75
+          R_PPC_DTPREL16_HI: 76
+          R_PPC_DTPREL16_HA: 77
+          R_PPC_DTPREL32: 78
+          R_PPC_GOT_TLSGD16: 79
+          R_PPC_GOT_TLSGD16_LO: 80
+          R_PPC_GOT_TLSGD16_HI: 81
+          R_PPC_GOT_TLSGD16_HA: 82
+          R_PPC_GOT_TLSLD16: 83
+          R_PPC_GOT_TLSLD16_LO: 84
+          R_PPC_GOT_TLSLD16_HI: 85
+          R_PPC_GOT_TLSLD16_HA: 86
+          R_PPC_GOT_TPREL16: 87
+          R_PPC_GOT_TPREL16_LO: 88
+          R_PPC_GOT_TPREL16_HI: 89
+          R_PPC_GOT_TPREL16_HA: 90
+          R_PPC_GOT_DTPREL16: 91
+          R_PPC_GOT_DTPREL16_LO: 92
+          R_PPC_GOT_DTPREL16_HI: 93
+          R_PPC_GOT_DTPREL16_HA: 94
+          R_PPC_TLSGD: 95
+          R_PPC_TLSLD: 96
+          R_PPC_EMB_NADDR32: 101
+          R_PPC_EMB_SDA21: 109
+          R_PPC_IRELATIVE: 248
+          R_PPC_REL16: 249
+          R_PPC_REL16_LO: 250
+          R_PPC_REL16_HI: 251
+          R_PPC_REL16_HA: 252
+          R_PPC_GNU_VTINHERIT: 253
+          R_PPC_GNU_VTENTRY: 254
+          R_PPC_TOC16: 255
+        tls_range: "R_PPC_TLS <= R <= R_PPC_GOT_DTPREL16_HA  (include/elf/ppc.h:153-154)"
+      ppc64:
+        source: include/elf/ppc64.h:27-162
+        notable:
+          R_PPC64_NONE: 0
+          R_PPC64_ADDR32: 1
+          R_PPC64_ADDR64: 38
+          R_PPC64_REL32: 26
+          R_PPC64_REL64: 44
+          R_PPC64_COPY: 19
+          R_PPC64_GLOB_DAT: 20
+          R_PPC64_JMP_SLOT: 21
+          R_PPC64_RELATIVE: 22
+          R_PPC64_TOC16: 47
+          R_PPC64_TOC: 51
+          R_PPC64_IRELATIVE: 248
+          R_PPC64_GNU_VTINHERIT: 253
+          R_PPC64_GNU_VTENTRY: 254
+      absent_machines:
+        aarch64: "include/elf/aarch64.h and bfd/elfxx-aarch64.c do not exist in this tree. EM_AARCH64 is not in include/elf/common.h."
+        riscv: "include/elf/riscv.h and bfd/elfxx-riscv.c do not exist in this tree. EM_RISCV is not in include/elf/common.h."
+
+    section_flag_mapping:
+      source: bfd/elf.c:847-877
+      rules:
+        - "SEC_HAS_CONTENTS unless sh_type == SHT_NOBITS"
+        - "SEC_GROUP | SEC_EXCLUDE when sh_type == SHT_GROUP"
+        - "SHF_ALLOC -> SEC_ALLOC, and SEC_LOAD as well unless SHT_NOBITS"
+        - "no SHF_WRITE -> SEC_READONLY"
+        - "SHF_EXECINSTR -> SEC_CODE; otherwise, if SEC_LOAD, SEC_DATA"
+        - "SHF_MERGE -> SEC_MERGE and entsize = sh_entsize; SHF_STRINGS adds SEC_STRINGS"
+        - "SHF_TLS -> SEC_THREAD_LOCAL"
+        - "SHF_EXCLUDE -> SEC_EXCLUDE"
+        - "SHF_GROUP triggers setup_group()"
+      debug_sections:
+        note: >-
+          This path uses names to recognize debug data only when SEC_ALLOC
+          is already clear. It sets SEC_DEBUGGING and does not itself clear
+          an allocated section's SEC_ALLOC bit, despite the nearby comment.
+        source: bfd/elf.c:879-924
+        name_prefixes: [".debug", ".stab", ".line", ".gnu.linkonce.wi.", ".zdebug"]
+      lesson: >-
+        qBFD's `sec::Flags` (qBFDCore.hpp:105-121) is a coarser set. Its
+        `Debug` bit corresponds to BFD's name-based debug detection; its
+        `Note` bit has no direct BFD counterpart because BFD models notes
+        as ordinary sections.
+
+    groups:
+      validity_macro: "IS_VALID_GROUP_SECTION_HEADER  (bfd/elf.c:548-552)"
+      rules:
+        - "sh_type == SHT_GROUP"
+        - "sh_size >= 2 * GRP_ENTRY_SIZE"
+        - "sh_entsize == GRP_ENTRY_SIZE (4)"
+        - "sh_size % GRP_ENTRY_SIZE == 0"
+        - "The first 4-byte word is the flags word; GRP_COMDAT (1) marks a COMDAT group (bfd/elf.c:1924-1926)."
+
+    alignment:
+      file_align:
+        elf32: {FILE_ALIGN: 4, LOG_FILE_ALIGN: 2}
+        elf64: {FILE_ALIGN: 8, LOG_FILE_ALIGN: 3}
+        source: bfd/elfcode.h:130-145
+      sh_addralign_to_bfd: "bfd_set_section_alignment(abfd, s, bfd_log2(sh_addralign))  (bfd/elf.c:843-844)"
+      bfd_to_sh_addralign: "sh_addralign = 1 << alignment_power  (bfd/elf.c:2609)"
+      bfd_log2: "Ceiling log2: 1025 -> 11, 0 -> 0  (bfd/libbfd.c:977-989)"
+      file_position: "BFD_ALIGN(offset, sh_addralign), then offset += sh_size unless SHT_NOBITS  (bfd/elf.c:3392-3404)"
+      bfd_align_macro: "Overflow-safe: bfd/libbfd.h:39-42"
+
+    string_tables:
+      rules:
+        - "Index 0 must be a NUL byte and maps to the empty string."
+        - "On write, the leading NUL is emitted first and the empty string is never refcounted (bfd/elf-strtab.c:142-181, 234-261)."
+        - "On read, an out-of-range offset is an error, not a clamp (bfd/elf.c:311-343)."
+        - "BFD allocates one extra byte and writes a terminating NUL past the end of the table, to survive an unterminated table (bfd/elf.c:305)."
+      well_known_names: [".shstrtab", ".symtab", ".strtab"]
+      source: bfd/elf.c:5146-5151
+
+    checksum:
+      function: elf_checksum_contents
+      source: bfd/elfcode.h:1060-1105
+      covers: "the ELF header with e_phoff and e_shoff zeroed, the program headers, and each section header with sh_offset zeroed followed by the section contents"
+
+    section_numbering:
+      rule: "SHT_GROUP sections are numbered first, then normal sections, then their .rel/.rela companions."
+      source: bfd/elf.c:2914-3005
+
+# ---------------------------------------------------------------------------
+# 3. COFF
+# ---------------------------------------------------------------------------
+  coff:
+    files: ["bfd/coffgen.c", "bfd/coffcode.h", "bfd/libcoff.h", "bfd/coffswap.h"]
+    note: "coffcode.h is the template; the per-machine files include it with their own macros."
+
+    detection:
+      entry_point: coff_object_p
+      source: bfd/coffgen.c:241-305
+      steps:
+        - "Read bfd_coff_filhsz bytes (the file header)."
+        - "Swap it in with coff_swap_filehdr_in (bfd/coffswap.h:253-276)."
+        - "Call the backend's bad_format_hook, which is where the magic is tested (bfd/coffcode.h:1614-1636)."
+        - "Reject if f_opthdr > the target's aoutsz."
+        - "Read and swap the optional header if f_opthdr != 0."
+        - "Delegate to coff_real_object_p (bfd/coffgen.c:155-236)."
+      magic_is_a_machine_number: >-
+        COFF has no byte signature. The first field of the file header is a
+        machine number, and the "is this my format" test is a switch over
+        that number.
+      magic_values:
+        I386MAGIC: {value: 0x14c, source: "include/coff/i386.h:38", also_known_as: IMAGE_FILE_MACHINE_I386}
+        I386PTXMAGIC: {value: 0x154, source: "include/coff/i386.h:39"}
+        I386AIXMAGIC: {value: 0x175, source: "include/coff/i386.h:40"}
+        LYNXCOFFMAGIC: {value: 0x10d, source: "include/coff/i386.h:44"}
+        AMD64MAGIC: {value: 0x8664, source: "include/coff/x86_64.h:30", also_known_as: IMAGE_FILE_MACHINE_AMD64}
+      badmag_macro:
+        source: "include/coff/i386.h:46-49"
+        text: >-
+          #define I386BADMAG(x) ((x).f_magic != I386MAGIC && (x).f_magic != I386AIXMAGIC && (x).f_magic != I386PTXMAGIC && (x).f_magic != LYNXCOFFMAGIC)
+
+    file_header:
+      size: 20
+      macro: FILHSZ
+      source: include/coff/external.h:26-38
+      fields:
+        - {field: f_magic, type: u16, offset: 0, note: "machine number, not a signature"}
+        - {field: f_nscns, type: u16, offset: 2}
+        - {field: f_timdat, type: u32, offset: 4}
+        - {field: f_symptr, type: u32, offset: 8}
+        - {field: f_nsyms, type: u32, offset: 12}
+        - {field: f_opthdr, type: u16, offset: 16}
+        - {field: f_flags, type: u16, offset: 18}
+      flags:
+        source: include/coff/internal.h:100-110
+        values:
+          F_RELFLG: 0x0001
+          F_EXEC: 0x0002
+          F_LNNO: 0x0004
+          F_LSYMS: 0x0008
+          F_AR16WR: 0x0080
+          F_AR32WR: 0x0100
+          F_AR32W: 0x0200
+          F_DYNLOAD: 0x1000
+          F_SHROBJ: 0x2000
+          F_DLL: 0x2000
+          F_GO32STUB: 0x4000
+        note: "F_SHROBJ and F_DLL are the same bit."
+
+    symbol_table:
+      entry_size: 18
+      macro: SYMESZ
+      source: include/coff/external.h:150-171
+      fields:
+        - {field: "e_name[8]", type: "char[8]", offset: 0, note: "inline name, or zeroes+offset"}
+        - {field: e_value, type: u32, offset: 8}
+        - {field: e_scnum, type: u16, offset: 12}
+        - {field: e_type, type: u16, offset: 14}
+        - {field: e_sclass, type: u8, offset: 16}
+        - {field: e_numaux, type: u8, offset: 17}
+      name_rule:
+        source: bfd/coffswap.h:312-324
+        text: >-
+          If e_name[0] == 0 the name is long: zeroes = 0 and offset = the
+          32-bit little-endian value at e_name[4]. Otherwise the 8 bytes are
+          the name, copied verbatim.
+      auxiliary_record:
+        size: 18
+        macro: AUXESZ
+        source: include/coff/external.h:193-263
+        variants:
+          - {name: x_sym, layout: "x_tagndx:4, x_misc:4, x_fcnary:8, x_tvndx:2"}
+          - {name: x_file, layout: "x_fname[14], or zeroes+offset"}
+          - {name: x_scn, layout: "x_scnlen:4, x_nreloc:2, x_nlinno:2, [x_checksum:4, x_associated:2, x_comdat:1]"}
+          - {name: x_tv, layout: "x_tvfill:4, x_tvlen:2, x_tvran[2][2]:4"}
+        pe_extension: "The COMDAT fields are only read for i386 and x86_64 (INCLUDE_COMDAT_FIELDS_IN_AUXENT, include/coff/i386.h:21)."
+
+    section_header:
+      size: 40
+      macro: SCNHSZ
+      source: include/coff/external.h:78-93
+      fields:
+        - {field: s_name, type: "char[8]", offset: 0, note: "inline name, or /<decimal strtab offset>"}
+        - {field: s_paddr, type: u32, offset: 8, note: "PhysicalAddress; in PE this is VirtualSize"}
+        - {field: s_vaddr, type: u32, offset: 12, note: "VirtualAddress (an RVA in PE)"}
+        - {field: s_size, type: u32, offset: 16, note: "SizeOfRawData"}
+        - {field: s_scnptr, type: u32, offset: 20, note: "PointerToRawData"}
+        - {field: s_relptr, type: u32, offset: 24}
+        - {field: s_lnnoptr, type: u32, offset: 28}
+        - {field: s_nreloc, type: u16, offset: 32}
+        - {field: s_nlnno, type: u16, offset: 34}
+        - {field: s_flags, type: u32, offset: 36, note: "Characteristics"}
+      pe_overrides:
+        source: bfd/peicode.h:195-247
+        rules:
+          - "s_nlnno is reconstructed as s_nlnno + (s_nreloc << 16) and s_nreloc is forced to 0 (the MS line-number overflow hack)."
+          - "s_vaddr is made absolute by adding the image base."
+          - "s_size is replaced by s_paddr (virtual size) for uninitialized data, or when the raw size exceeds the virtual size."
+
+    relocation:
+      size: 10
+      macro: RELSZ
+      source: include/coff/i386.h:65-73
+      fields:
+        - {field: r_vaddr, type: u32, offset: 0, note: "VirtualAddress"}
+        - {field: r_symndx, type: u32, offset: 4, note: "SymbolTableIndex"}
+        - {field: r_type, type: u16, offset: 8}
+      per_machine_size: "RELSZ is 10 for i386/x86-64/arm/ia64, 12 for i960, 14 for m68k/mcore/apollo, 16 for alpha/h8300/h8500."
+
+    long_names:
+      convention:
+        text: >-
+          A section name longer than 8 bytes is stored in the string table;
+          the s_name field holds '/' followed by the ASCII decimal offset of
+          the name, relative to the start of the string table's size field.
+        source: bfd/coffcode.h:111-171
+      read_algorithm:
+        source: bfd/coffgen.c:62-99
+        steps:
+          - "Only if the target supports long section names (COFF_LONG_SECTION_NAMES)."
+          - "s_name[0] must be '/'."
+          - "The 7 bytes after the slash are parsed with strtol; the whole field must be digits."
+          - "The offset is added to the base of the string table."
+          - "The base returned by _bfd_coff_read_string_table points at the 4-byte size field, so offset 4 is the first name byte."
+        known_defect: "BFD does not bounds-check the offset: there is an explicit FIXME about running past the end (bfd/coffgen.c:89-91)."
+      write_algorithm:
+        source: bfd/coffcode.h:3687-3726
+        rules:
+          - "Names longer than 8 bytes go to the string table; s_name gets /<offset>."
+          - "The first long name is written at offset 4, because string_size starts at STRING_SIZE_SIZE (4)."
+          - "A string table larger than 10000000 bytes is an error: /nnnnnnn cannot address further."
+      string_table_layout:
+        source: bfd/coffgen.c:1536-1597
+        rules:
+          - "The string table immediately follows the symbol table."
+          - "Layout: a 4-byte total size, then the NUL-terminated strings."
+          - "The total size includes the 4 size bytes themselves."
+          - "A size below 4 is an error."
+          - "A truncated file forces the size to 4, i.e. no strings."
+        order_when_writing: "All long section names first, then the long symbol names (bfd/coffgen.c:1226-1291)."
+      symbol_long_names: "The same table serves symbol names; see coff_fix_symbol_name (bfd/coffgen.c:787-896)."
+
+    section_flags:
+      pe_characteristics:
+        source: include/coff/pe.h:53-112
+        values:
+          IMAGE_SCN_TYPE_NO_PAD: 0x00000008
+          IMAGE_SCN_CNT_CODE: 0x00000020
+          IMAGE_SCN_CNT_INITIALIZED_DATA: 0x00000040
+          IMAGE_SCN_CNT_UNINITIALIZED_DATA: 0x00000080
+          IMAGE_SCN_LNK_OTHER: 0x00000100
+          IMAGE_SCN_LNK_INFO: 0x00000200
+          IMAGE_SCN_LNK_REMOVE: 0x00000800
+          IMAGE_SCN_LNK_COMDAT: 0x00001000
+          IMAGE_SCN_MEM_FARDATA: 0x00008000
+          IMAGE_SCN_MEM_PURGEABLE: 0x00020000
+          IMAGE_SCN_MEM_16BIT: 0x00020000
+          IMAGE_SCN_MEM_LOCKED: 0x00040000
+          IMAGE_SCN_MEM_PRELOAD: 0x00080000
+          IMAGE_SCN_ALIGN_POWER_BIT_POS: 20
+          IMAGE_SCN_ALIGN_POWER_BIT_MASK: 0x00f00000
+          IMAGE_SCN_LNK_NRELOC_OVFL: 0x01000000
+          IMAGE_SCN_MEM_DISCARDABLE: 0x02000000
+          IMAGE_SCN_MEM_NOT_CACHED: 0x04000000
+          IMAGE_SCN_MEM_NOT_PAGED: 0x08000000
+          IMAGE_SCN_MEM_SHARED: 0x10000000
+          IMAGE_SCN_MEM_EXECUTE: 0x20000000
+          IMAGE_SCN_MEM_READ: 0x40000000
+          IMAGE_SCN_MEM_WRITE: 0x80000000
+        notes:
+          - "IMAGE_SCN_GPREL does not exist under that name here; bit 0x8000 is IMAGE_SCN_MEM_FARDATA. The numeric value is the same as modern IMAGE_SCN_GPREL."
+          - "COMDAT selection is not a section flag; it is carried in the auxiliary record (x_comdat, x_associated, x_checksum)."
+        comdat_selection:
+          source: include/coff/pe.h:114-120
+          values:
+            IMAGE_COMDAT_SELECT_NODUPLICATES: 1
+            IMAGE_COMDAT_SELECT_ANY: 2
+            IMAGE_COMDAT_SELECT_SAME_SIZE: 3
+            IMAGE_COMDAT_SELECT_EXACT_MATCH: 4
+            IMAGE_COMDAT_SELECT_ASSOCIATIVE: 5
+        alignment_encoding:
+          source: include/coff/pe.h:82-103
+          formula: "IMAGE_SCN_ALIGN_POWER_CONST(val) = ((val)+1) << 20; IMAGE_SCN_ALIGN_POWER_NUM(val) = ((val) >> 20) - 1"
+      classic_styp:
+        source: include/coff/internal.h:385-408
+        values:
+          STYP_REG: 0x0000
+          STYP_DSECT: 0x0001
+          STYP_NOLOAD: 0x0002
+          STYP_GROUP: 0x0004
+          STYP_PAD: 0x0008
+          STYP_COPY: 0x0010
+          STYP_TEXT: 0x0020
+          STYP_DATA: 0x0040
+          STYP_BSS: 0x0080
+          S_NEWFCN: 0x0100
+          STYP_INFO: 0x0200
+          STYP_OVER: 0x0400
+          STYP_LIB: 0x0800
+          STYP_MERGE: 0x2000
+          STYP_REVERSE_PAD: 0x4000
+          STYP_LIT: 0x8020
+      bfd_mapping:
+        pe_direction:
+          function: styp_to_sec_flags
+          source: bfd/coffcode.h:1141-1303
+          rules:
+            - "default: SEC_READONLY"
+            - "MEM_READ absent -> SEC_COFF_NOREAD"
+            - "MEM_EXECUTE -> SEC_CODE"
+            - "MEM_WRITE -> clear SEC_READONLY"
+            - "CNT_CODE -> SEC_CODE | SEC_ALLOC | SEC_LOAD"
+            - "CNT_INITIALIZED_DATA -> SEC_DATA | SEC_ALLOC | SEC_LOAD, or SEC_DEBUGGING for a debug section"
+            - "CNT_UNINITIALIZED_DATA -> SEC_ALLOC"
+            - "MEM_DISCARDABLE -> SEC_DEBUGGING | SEC_READONLY, but only for a recognised debug section"
+            - "MEM_SHARED -> SEC_COFF_SHARED"
+            - "LNK_REMOVE -> SEC_EXCLUDE, unless the section is debug"
+            - "LNK_COMDAT -> handle_COMDAT()"
+            - "LNK_OTHER, MEM_NOT_CACHED, MEM_NOT_PAGED -> unhandled; BFD emits an 'ignored' warning"
+        reverse_direction:
+          function: sec_to_styp_flags
+          source: bfd/coffcode.h:648-714
+        overlap_warning: "The source comments note that STYP_* and IMAGE_SCN_* overlap but IMAGE_SCN_* is the larger set (bfd/coffcode.h:662-668)."
+
+    comdat:
+      function: handle_COMDAT
+      source: bfd/coffcode.h:872-1129
+      rules:
+        - "The COMDAT name comes from the second qualifying symbol in the section, in MSVC mode."
+        - "In gas mode, the name is the text after '$' in the section name."
+        - "The selection byte maps to SEC_LINK_DUPLICATES_* flags (bfd/coffcode.h:1026-1070)."
+
+    symbols:
+      storage_classes:
+        source: include/coff/internal.h:256-355
+        values:
+          C_EFCN: 255
+          C_NULL: 0
+          C_AUTO: 1
+          C_EXT: 2
+          C_STAT: 3
+          C_REG: 4
+          C_EXTDEF: 5
+          C_LABEL: 6
+          C_ULABEL: 7
+          C_MOS: 8
+          C_ARG: 9
+          C_STRTAG: 10
+          C_MOU: 11
+          C_UNTAG: 12
+          C_TPDEF: 13
+          C_USTATIC: 14
+          C_ENTAG: 15
+          C_MOE: 16
+          C_REGPARM: 17
+          C_FIELD: 18
+          C_AUTOARG: 19
+          C_LASTENT: 20
+          C_BLOCK: 100
+          C_FCN: 101
+          C_EOS: 102
+          C_FILE: 103
+          C_LINE: 104
+          C_ALIAS: 105
+          C_HIDDEN: 106
+          C_WEAKEXT: 127
+        pe_overrides:
+          C_SECTION: {value: 104, note: "overlaps C_LINE"}
+          C_NT_WEAK: {value: 105, note: "overlaps C_ALIAS"}
+      base_types:
+        source: include/coff/internal.h:469-485
+        values:
+          T_NULL: 0
+          T_VOID: 1
+          T_CHAR: 2
+          T_SHORT: 3
+          T_INT: 4
+          T_LONG: 5
+          T_FLOAT: 6
+          T_DOUBLE: 7
+          T_STRUCT: 8
+          T_UNION: 9
+          T_ENUM: 10
+          T_MOE: 11
+          T_UCHAR: 12
+          T_USHORT: 13
+          T_UINT: 14
+          T_ULONG: 15
+          T_LNGDBL: 16
+      derived_types:
+        source: include/coff/internal.h:487-506
+        values: {DT_NON: 0, DT_PTR: 1, DT_FCN: 2, DT_ARY: 3}
+        bit_layout: "N_BTMASK 0xf, N_TMASK 0x30, N_BTSHFT 4, N_TSHIFT 2"
+        accessors: "BTYPE, DTYPE, ISPTR, ISFCN, ISARY, ISTAG, DECREF"
+      classification:
+        function: coff_classify_symbol
+        source: bfd/coffcode.h:5003-5092
+        outcomes: {COFF_SYMBOL_GLOBAL: global, COFF_SYMBOL_COMMON: common, COFF_SYMBOL_UNDEFINED: undefined, COFF_SYMBOL_LOCAL: local, COFF_SYMBOL_PE_SECTION: pe section symbol}
+        rules:
+          - "C_EXT / C_WEAKEXT / C_NT_WEAK with n_scnum == 0 and n_value == 0 -> UNDEFINED"
+          - "same with n_value != 0 -> COMMON"
+          - "same with n_scnum != 0 -> GLOBAL"
+          - "C_STAT with n_scnum == 0 -> LOCAL"
+          - "C_SECTION -> PE_SECTION"
+          - "anything else -> LOCAL, with a warning if n_scnum == 0"
+      bfd_flags:
+        function: coff_slurp_symbol_table
+        source: bfd/coffcode.h:4637-4997
+        rules:
+          - "C_EXT and friends -> BSF_EXPORT | BSF_GLOBAL, plus BSF_NOT_AT_END | BSF_FUNCTION when ISFCN(n_type)"
+          - "C_NT_WEAK and C_WEAKEXT additionally get BSF_WEAK"
+          - "C_STAT and friends -> BSF_LOCAL, or BSF_DEBUGGING when n_scnum == N_DEBUG"
+          - "C_FILE, C_STRTAG -> BSF_DEBUGGING"
+          - "C_MOS, C_EOS, C_REGPARM, C_ARG, C_TPDEF and the tag classes -> BSF_DEBUGGING"
+          - "C_BLOCK, C_FCN, C_EFCN -> BSF_DEBUGGING in PE, BSF_LOCAL in plain COFF"
+          - "Unrecognised storage class -> an error message and BSF_DEBUGGING"
+      value_semantics:
+        pe: "symbol.value = n_value (already section-relative)"
+        non_pe: "symbol.value = n_value - section->vma"
+        source: bfd/coffcode.h:4716-4722
+
+    relocations:
+      x86_64:
+        source: include/coff/internal.h:664-679
+        values:
+          R_AMD64_ABS: 0
+          R_AMD64_DIR64: 1
+          R_AMD64_DIR32: 2
+          R_AMD64_IMAGEBASE: 3
+          R_AMD64_PCRLONG: 4
+          R_AMD64_PCRLONG_1: 5
+          R_AMD64_PCRLONG_2: 6
+          R_AMD64_PCRLONG_3: 7
+          R_AMD64_PCRLONG_4: 8
+          R_AMD64_PCRLONG_5: 9
+          R_AMD64_SECTION: 10
+          R_AMD64_SECREL: 11
+          R_AMD64_SECREL7: 12
+          R_AMD64_TOKEN: 13
+          R_AMD64_PCRQUAD: 14
+        howto_names:
+          source: bfd/coff-x86_64.c:205-450
+          values:
+            1: R_X86_64_64
+            2: R_X86_64_32
+            3: rva32
+            4: R_X86_64_PC32
+            5: DISP32+1
+            6: DISP32+2
+            7: DISP32+3
+            8: DISP32+4
+            9: DISP32+5
+            11: secrel32
+            14: R_X86_64_PC64
+            15: R_X86_64_8
+            16: R_X86_64_16
+            17: R_X86_64_32S
+            18: R_X86_64_PC8
+            19: R_X86_64_PC16
+            20: R_X86_64_PC32
+      i386:
+        source: include/coff/internal.h:683-709
+        values:
+          R_DIR16: 1
+          R_REL24: 5
+          R_DIR32: 6
+          R_IMAGEBASE: 7
+          R_SECREL32: 11
+          R_RELBYTE: 15
+          R_RELWORD: 16
+          R_RELLONG: 17
+          R_PCRBYTE: 18
+          R_PCRWORD: 19
+          R_PCRLONG: 20
+          R_PCR24: 21
+          R_IPRSHORT: 24
+          R_IPRLONG: 26
+          R_GETSEG: 29
+          R_GETPA: 30
+          R_TAGWORD: 31
+          R_PARTLS16: 32
+          R_PARTMS8: 33
+          R_PCR16L: 128
+          R_PCR26L: 129
+          R_VRT16: 130
+          R_HVRT16: 131
+          R_LVRT16: 132
+          R_VRT32: 133
+        howto_names:
+          source: bfd/coff-i386.c:207-350
+          values: {6: dir32, 7: rva32, 11: secrel32, 15: "8", 16: "16", 17: "32", 18: DISP8, 19: DISP16, 20: DISP32}
+        discrepancy: >-
+          GNU's COFF i386 numbering is its own scheme and does NOT match
+          Microsoft's IMAGE_REL_I386_* values. For example GNU R_SECREL32 is
+          11 where MS IMAGE_REL_I386_SECREL is 9.
+      instruction_field_relocations:
+        rule: >-
+          R_AMD64_PCRLONG_1 .. R_AMD64_PCRLONG_5 are folded into
+          R_AMD64_PCRLONG with an addend correction of -N, because the 32-bit
+          displacement field sits N bytes past the end of the instruction.
+        source: bfd/coff-x86_64.c:557-565
+      reloc_count_overflow:
+        mechanism: IMAGE_SCN_LNK_NRELOC_OVFL
+        read:
+          source: bfd/coffcode.h:1887-1909
+          rule: >-
+            The FIRST relocation record's VirtualAddress field holds the real
+            count minus 1. That record is consumed and skipped, and
+            s_nreloc is set from it.
+        write:
+          source: bfd/coffcode.h:2658-2672
+          rule: "A synthetic first reloc with r_vaddr = reloc_count + 1 is written, and s_nreloc is set to 0xffff."
+        lesson: >-
+          qBFD must handle this when reading a PE object with more than
+          0xffff relocations in one section, or it will misparse the
+          relocation table.
+
+# ---------------------------------------------------------------------------
+# 4. PE
+# ---------------------------------------------------------------------------
+  pe:
+    files: ["bfd/peXXigen.c", "bfd/peicode.h", "include/coff/pe.h"]
+    note: "PE is COFF plus a DOS stub, an optional header, data directories and richer section flags."
+
+    detection:
+      entry_point: pe_bfd_object_p
+      source: bfd/peicode.h:1244-1316
+      steps:
+        - "Read 4 bytes; if they are 0xffff0000 the file is a Microsoft Import Library and is handled by pe_ILF_object_p (bfd/peicode.h:1070-1242)."
+        - "Read the 128-byte DOS header; e_magic must be DOSMAGIC (0x5a4d)."
+        - "Seek to e_lfanew; read the 24-byte PE header; nt_signature must be 0x00004550."
+        - "Seek to e_lfanew - sizeof(dos_hdr) so that the COFF file-header read lands correctly."
+        - "Delegate to coff_object_p."
+      import_library:
+        note: "The ILF reader decodes the PE machine type and maps it to the matching COFF magic."
+        source: bfd/peicode.h:1100-1173
+        machines:
+          IMAGE_FILE_MACHINE_UNKNOWN: 0
+          IMAGE_FILE_MACHINE_I386: 0x14c
+          IMAGE_FILE_MACHINE_AMD64: 0x8664
+          IMAGE_FILE_MACHINE_ARM: 0x1c0
+          IMAGE_FILE_MACHINE_THUMB: 0x1c2
+          IMAGE_FILE_MACHINE_POWERPC: 0x1f0
+          IMAGE_FILE_MACHINE_MIPS16: 0x266
+          IMAGE_FILE_MACHINE_MIPSFPU: 0x366
+          IMAGE_FILE_MACHINE_MIPSFPU16: 0x466
+          IMAGE_FILE_MACHINE_R3000: 0x162
+          IMAGE_FILE_MACHINE_R4000: 0x166
+          IMAGE_FILE_MACHINE_R10000: 0x168
+          IMAGE_FILE_MACHINE_SH3: 0x1a2
+          IMAGE_FILE_MACHINE_SH4: 0x1a6
+          IMAGE_FILE_MACHINE_ALPHA: 0x184
+          IMAGE_FILE_MACHINE_ALPHA64: 0x284
+          IMAGE_FILE_MACHINE_IA64: 0x200
+          IMAGE_FILE_MACHINE_M68K: 0x268
+        rejection: "PowerPC is explicitly rejected: 'We no longer support PowerPC' (bfd/peicode.h:1162-1163)."
+
+    dos_header:
+      size: 128
+      source: include/coff/pe.h:177-200
+      fields:
+        - {field: e_magic, offset: 0, size: 2, value: 0x5a4d}
+        - {field: e_cblp, offset: 2, size: 2}
+        - {field: e_cp, offset: 4, size: 2}
+        - {field: e_crlc, offset: 6, size: 2}
+        - {field: e_cparhdr, offset: 8, size: 2}
+        - {field: e_minalloc, offset: 10, size: 2}
+        - {field: e_maxalloc, offset: 12, size: 2}
+        - {field: e_ss, offset: 14, size: 2}
+        - {field: e_sp, offset: 16, size: 2}
+        - {field: e_csum, offset: 18, size: 2}
+        - {field: e_ip, offset: 20, size: 2}
+        - {field: e_cs, offset: 22, size: 2}
+        - {field: e_lfarlc, offset: 24, size: 2}
+        - {field: e_ovno, offset: 26, size: 2}
+        - {field: "e_res[4][2]", offset: 28, size: 8}
+        - {field: e_oemid, offset: 36, size: 2}
+        - {field: e_oeminfo, offset: 38, size: 2}
+        - {field: "e_res2[10][2]", offset: 40, size: 20}
+        - {field: e_lfanew, offset: 60, size: 4, note: "file offset of the PE header"}
+        - {field: "dos_message[16][4]", offset: 64, size: 64}
+      writer_defaults:
+        source: bfd/peXXigen.c:736-843
+        values: {e_magic: 0x5a4d, e_cblp: 0x90, e_cp: 0x3, e_cparhdr: 0x4, e_maxalloc: 0xffff, e_sp: 0xb8, e_lfarlc: 0x40, e_lfanew: 0x80}
+
+    pe_header:
+      signature: {value: 0x00004550, spelling: "PE\\0\\0", source: "include/coff/pe.h:170"}
+      file_header:
+        size: 24
+        source: include/coff/pe.h:202-214
+        fields:
+          - {field: nt_signature, offset: 0, size: 4}
+          - {field: f_magic, offset: 4, size: 2, note: "Machine; not a signature"}
+          - {field: f_nscns, offset: 6, size: 2}
+          - {field: f_timdat, offset: 8, size: 4}
+          - {field: f_symptr, offset: 12, size: 4}
+          - {field: f_nsyms, offset: 16, size: 4}
+          - {field: f_opthdr, offset: 20, size: 2}
+          - {field: f_flags, offset: 22, size: 2}
+      combined_pe_file_header:
+        size: 152
+        macro: FILHSZ
+        source: include/coff/pe.h:216-262
+        note: "The 128-byte DOS header followed by the 24-byte PE header. COFF's 20-byte file-header read is applied at e_lfanew - 128."
+
+    optional_header:
+      pe32:
+        macro: AOUTSZ
+        size: 224
+        source: include/coff/pe.h:268-299
+        fields:
+          - {field: Magic, offset: 0, size: 2, value: 0x10b}
+          - {field: MajorLinkerVersion, offset: 2, size: 1}
+          - {field: MinorLinkerVersion, offset: 3, size: 1}
+          - {field: SizeOfCode, offset: 4, size: 4}
+          - {field: SizeOfInitializedData, offset: 8, size: 4}
+          - {field: SizeOfUninitializedData, offset: 12, size: 4}
+          - {field: AddressOfEntryPoint, offset: 16, size: 4}
+          - {field: BaseOfCode, offset: 20, size: 4}
+          - {field: BaseOfData, offset: 24, size: 4, note: "PE32 only"}
+          - {field: ImageBase, offset: 28, size: 4}
+          - {field: SectionAlignment, offset: 32, size: 4}
+          - {field: FileAlignment, offset: 36, size: 4}
+          - {field: MajorOperatingSystemVersion, offset: 40, size: 2}
+          - {field: MinorOperatingSystemVersion, offset: 42, size: 2}
+          - {field: MajorImageVersion, offset: 44, size: 2}
+          - {field: MinorImageVersion, offset: 46, size: 2}
+          - {field: MajorSubsystemVersion, offset: 48, size: 2}
+          - {field: MinorSubsystemVersion, offset: 50, size: 2}
+          - {field: Reserved1, offset: 52, size: 4}
+          - {field: SizeOfImage, offset: 56, size: 4}
+          - {field: SizeOfHeaders, offset: 60, size: 4}
+          - {field: CheckSum, offset: 64, size: 4}
+          - {field: Subsystem, offset: 68, size: 2}
+          - {field: DllCharacteristics, offset: 70, size: 2}
+          - {field: SizeOfStackReserve, offset: 72, size: 4}
+          - {field: SizeOfStackCommit, offset: 76, size: 4}
+          - {field: SizeOfHeapReserve, offset: 80, size: 4}
+          - {field: SizeOfHeapCommit, offset: 84, size: 4}
+          - {field: LoaderFlags, offset: 88, size: 4}
+          - {field: NumberOfRvaAndSizes, offset: 92, size: 4}
+          - {field: "DataDirectory[16]", offset: 96, size: 128}
+      pe32plus:
+        macro: PEPAOUTSZ
+        size: 240
+        source: include/coff/pe.h:304-341
+        magic: 0x20b
+        differences:
+          - "No BaseOfData."
+          - "ImageBase is 8 bytes."
+          - "SizeOfStackReserve, SizeOfStackCommit, SizeOfHeapReserve and SizeOfHeapCommit are 8 bytes each."
+          - "Everything after BaseOfCode shifts by 4 bytes."
+        accessors: "libpei.h:209-302 selects the 32- or 64-bit accessors per target."
+
+    data_directories:
+      count: 16
+      macro: IMAGE_NUMBEROF_DIRECTORY_ENTRIES
+      entry_size: 8
+      entry_layout: "VirtualAddress:4, Size:4"
+      source: include/coff/internal.h:113-134
+      indices:
+        0: {macro: PE_EXPORT_TABLE, name: Export}
+        1: {macro: PE_IMPORT_TABLE, name: Import}
+        2: {macro: PE_RESOURCE_TABLE, name: Resource}
+        3: {macro: PE_EXCEPTION_TABLE, name: "Exception (.pdata)"}
+        4: {macro: PE_CERTIFICATE_TABLE, name: "Security/Certificate"}
+        5: {macro: PE_BASE_RELOCATION_TABLE, name: "Base Relocation"}
+        6: {macro: PE_DEBUG_DATA, name: Debug}
+        7: {macro: PE_ARCHITECTURE, name: Architecture}
+        8: {macro: PE_GLOBAL_PTR, name: "Global Ptr"}
+        9: {macro: PE_TLS_TABLE, name: TLS}
+        10: {macro: PE_LOAD_CONFIG_TABLE, name: "Load Config"}
+        11: {macro: PE_BOUND_IMPORT_TABLE, name: "Bound Import"}
+        12: {macro: PE_IMPORT_ADDRESS_TABLE, name: IAT}
+        13: {macro: PE_DELAY_IMPORT_DESCRIPTOR, name: "Delay Import"}
+        14: {macro: PE_CLR_RUNTIME_HEADER, name: "CLR Runtime Header"}
+        15: {name: Reserved}
+    defaults:
+      source: include/coff/internal.h:137-149
+      values:
+        NT_EXE_IMAGE_BASE: 0x400000
+        NT_DLL_IMAGE_BASE: 0x10000000
+        BEOS_EXE_IMAGE_BASE: 0x80000000
+        BEOS_DLL_IMAGE_BASE: 0x10000000
+        PE_DEF_SECTION_ALIGNMENT: 0x1000
+        PE_DEF_FILE_ALIGNMENT: 0x200
+
+    import_directory:
+      entry_size: 20
+      source: bfd/peXXigen.c:1055-1357
+      fields:
+        - {field: OriginalFirstThunk, offset: 0, size: 4, note: "Import Lookup Table RVA"}
+        - {field: TimeDateStamp, offset: 4, size: 4}
+        - {field: ForwarderChain, offset: 8, size: 4}
+        - {field: Name, offset: 12, size: 4, note: "RVA of the DLL name"}
+        - {field: FirstThunk, offset: 16, size: 4, note: "IAT RVA"}
+      termination: "An all-zero descriptor ends the list (bfd/peXXigen.c:1211-1212)."
+      lookup_table:
+        pe32: "4 bytes per entry (bfd/peXXigen.c:1313-1345)"
+        pe32plus: "8 bytes per entry (bfd/peXXigen.c:1281-1311)"
+        by_ordinal: "Bit 31 of the entry set means import by ordinal; otherwise the RVA points to a 2-byte hint followed by the NUL-terminated name."
+
+    export_directory:
+      entry_size: 40
+      source: bfd/peXXigen.c:1359-1576
+      fields:
+        - {field: ExportFlags, offset: 0, size: 4}
+        - {field: TimeDateStamp, offset: 4, size: 4}
+        - {field: MajorVersion, offset: 8, size: 2}
+        - {field: MinorVersion, offset: 10, size: 2}
+        - {field: Name, offset: 12, size: 4, note: "RVA of the DLL name"}
+        - {field: Base, offset: 16, size: 4, note: "ordinal base"}
+        - {field: NumberOfFunctions, offset: 20, size: 4}
+        - {field: NumberOfNames, offset: 24, size: 4}
+        - {field: AddressOfFunctions, offset: 28, size: 4, note: "Export Address Table RVA"}
+        - {field: AddressOfNames, offset: 32, size: 4, note: "Name Pointer Table RVA"}
+        - {field: AddressOfNameOrdinals, offset: 36, size: 4, note: "Ordinal Table RVA"}
+      table_entry_sizes: {EAT: 4, NPT: 4, OT: 2}
+
+    base_relocations:
+      note: "The .reloc section holds a sequence of blocks: a page RVA, a block size, then (block_size-8)/2 WORD entries."
+      entry: "WORD: type in the high 4 bits, offset in the low 12 bits."
+
+    comdat_and_weak_externals:
+      weak_external: "A weak external is a C_NT_WEAK symbol with one auxiliary record naming the fallback symbol (bfd/cofflink.c:2997-3031)."
+
+    pe_extras:
+      pdata: "pe_print_pdata (bfd/peXXigen.c:1591) and pex64_bfd_print_pdata (bfd/pei-x86_64.c:422) print the exception directory."
+      nearest_line: "coff_find_nearest_line (bfd/coffgen.c:2088) is the generic entry point; there is no pe_XXi386_find_nearest_line in this tree."
+
+# ---------------------------------------------------------------------------
+# 5. Mach-O
+# ---------------------------------------------------------------------------
+  macho:
+    files: ["bfd/mach-o.c", "include/mach-o/loader.h", "include/mach-o/external.h", "include/mach-o/reloc.h"]
+    note: >-
+      None of the on-disk Mach-O constants live in bfd/mach-o.h; they are in
+      include/mach-o/. bfd/mach-o.h holds only BFD-internal structures.
+    constant_naming:
+      note: >-
+        In this BFD vintage every Mach-O constant carries a BFD_MACH_O_
+        prefix in the source (BFD_MACH_O_LC_SEGMENT, BFD_MACH_O_S_REGULAR,
+        BFD_MACH_O_N_STAB, BFD_MACH_O_GENERIC_RELOC_VANILLA,
+        BFD_MACH_O_X86_64_RELOC_UNSIGNED). The unprefixed spellings used
+        below are the canonical Apple names, which is what a reimplementation
+        should use. The numeric values are identical.
+      prefix: BFD_MACH_O_
+      examples:
+        - {canonical: LC_SEGMENT, bfd: BFD_MACH_O_LC_SEGMENT}
+        - {canonical: S_REGULAR, bfd: BFD_MACH_O_S_REGULAR}
+        - {canonical: N_STAB, bfd: BFD_MACH_O_N_STAB}
+        - {canonical: GENERIC_RELOC_VANILLA, bfd: BFD_MACH_O_GENERIC_RELOC_VANILLA}
+        - {canonical: X86_64_RELOC_UNSIGNED, bfd: BFD_MACH_O_X86_64_RELOC_UNSIGNED}
+
+    detection:
+      source: bfd/mach-o.c:1513-1545
+      magics:
+        MH_MAGIC: {value: 0xfeedface, class: 32, source: "include/mach-o/loader.h:28"}
+        MH_CIGAM: {value: 0xcefaedfe, class: 32, source: "include/mach-o/loader.h:30", note: "defined but never referenced"}
+        MH_MAGIC_64: {value: 0xfeedfacf, class: 64, source: "include/mach-o/loader.h:29"}
+        MH_CIGAM_64: {value: 0xcffaedfe, class: 64, source: "include/mach-o/loader.h:32", note: "defined but never referenced"}
+      method: >-
+        Detection tries both byte orders of the SAME constant, rather than
+        comparing against the CIGAM variants.
+      note: "MH_CIGAM and MH_CIGAM_64 are defined but unused; the endian trial covers them."
+
+    header:
+      sizes: {32: 28, 64: 32}
+      source: include/mach-o/external.h:25-38
+      fields:
+        - {field: magic, offset: 0, size: 4}
+        - {field: cputype, offset: 4, size: 4}
+        - {field: cpusubtype, offset: 8, size: 4}
+        - {field: filetype, offset: 12, size: 4}
+        - {field: ncmds, offset: 16, size: 4}
+        - {field: sizeofcmds, offset: 20, size: 4}
+        - {field: flags, offset: 24, size: 4}
+        - {field: reserved, offset: 28, size: 4, note: "64-bit only"}
+      all_fields_are_32_bit: true
+
+    load_commands:
+      req_dyld: {value: 0x80000000, source: "include/mach-o/loader.h:110"}
+      source: include/mach-o/loader.h:112-158
+      values:
+        LC_SEGMENT: 0x1
+        LC_SYMTAB: 0x2
+        LC_SYMSEG: 0x3
+        LC_THREAD: 0x4
+        LC_UNIXTHREAD: 0x5
+        LC_LOADFVMLIB: 0x6
+        LC_IDFVMLIB: 0x7
+        LC_IDENT: 0x8
+        LC_FVMFILE: 0x9
+        LC_PREPAGE: 0xa
+        LC_DYSYMTAB: 0xb
+        LC_LOAD_DYLIB: 0xc
+        LC_ID_DYLIB: 0xd
+        LC_LOAD_DYLINKER: 0xe
+        LC_ID_DYLINKER: 0xf
+        LC_PREBOUND_DYLIB: 0x10
+        LC_ROUTINES: 0x11
+        LC_SUB_FRAMEWORK: 0x12
+        LC_SUB_UMBRELLA: 0x13
+        LC_SUB_CLIENT: 0x14
+        LC_SUB_LIBRARY: 0x15
+        LC_TWOLEVEL_HINTS: 0x16
+        LC_PREBIND_CKSUM: 0x17
+        LC_LOAD_WEAK_DYLIB: 0x18
+        LC_SEGMENT_64: 0x19
+        LC_ROUTINES_64: 0x1a
+        LC_UUID: 0x1b
+        LC_RPATH: 0x1c
+        LC_CODE_SIGNATURE: 0x1d
+        LC_SEGMENT_SPLIT_INFO: 0x1e
+        LC_REEXPORT_DYLIB: 0x1f
+        LC_LAZY_LOAD_DYLIB: 0x20
+        LC_ENCRYPTION_INFO: 0x21
+        LC_DYLD_INFO: 0x22
+        LC_LOAD_UPWARD_DYLIB: 0x23
+        LC_VERSION_MIN_MACOSX: 0x24
+        LC_VERSION_MIN_IPHONEOS: 0x25
+        LC_FUNCTION_STARTS: 0x26
+        LC_DYLD_ENVIRONMENT: 0x27
+      req_dyld_handling:
+        source: bfd/mach-o.c:2649-2652
+        rule: >-
+          The high bit is masked off to obtain the command type, and recorded
+          separately as type_required. BFD records the bit but does not
+          enforce the "required" semantics.
+      unknown_commands:
+        source: bfd/mach-o.c:2733-2736
+        rule: >-
+          An unknown command type produces an "unable to read unknown load
+          command" message and the scan CONTINUES. The command is skipped,
+          not fatal.
+        lesson: >-
+          This is the behaviour qBFD documents: "Unknown load commands are
+          skipped after checking their envelope."
+      absent_commands:
+        note: "These do not exist in this tree at all."
+        commands: [LC_MAIN, LC_DATA_IN_CODE, LC_SOURCE_VERSION, LC_DYLIB_CODE_SIGN_DRS, LC_ENCRYPTION_INFO_64, LC_LINKER_OPTION, LC_LINKER_OPTIMIZATION_HINT, LC_DYLD_EXPORTS_TRIE, LC_DYLD_CHAINED_FIXUPS, LC_FILESET_ENTRY]
+
+    segments:
+      segment_command_32:
+        size: 56
+        source: include/mach-o/external.h:84-96
+        fields:
+          - {field: cmd, offset: 0, size: 4}
+          - {field: cmdsize, offset: 4, size: 4}
+          - {field: "segname[16]", offset: 8, size: 16}
+          - {field: vmaddr, offset: 24, size: 4}
+          - {field: vmsize, offset: 28, size: 4}
+          - {field: fileoff, offset: 32, size: 4}
+          - {field: filesize, offset: 36, size: 4}
+          - {field: maxprot, offset: 40, size: 4}
+          - {field: initprot, offset: 44, size: 4}
+          - {field: nsects, offset: 48, size: 4}
+          - {field: flags, offset: 52, size: 4}
+      segment_command_64:
+        size: 72
+        source: include/mach-o/external.h:98-110
+        fields:
+          - {field: cmd, offset: 0, size: 4}
+          - {field: cmdsize, offset: 4, size: 4}
+          - {field: "segname[16]", offset: 8, size: 16}
+          - {field: vmaddr, offset: 24, size: 8}
+          - {field: vmsize, offset: 32, size: 8}
+          - {field: fileoff, offset: 40, size: 8}
+          - {field: filesize, offset: 48, size: 8}
+          - {field: maxprot, offset: 56, size: 4}
+          - {field: initprot, offset: 60, size: 4}
+          - {field: nsects, offset: 64, size: 4}
+          - {field: flags, offset: 68, size: 4}
+      vm_protection:
+        source: bfd/mach-o.h:89-92
+        values: {PROT_READ: 0x01, PROT_WRITE: 0x02, PROT_EXECUTE: 0x04}
+      segment_flags:
+        note: "SG_HIGHVM, SG_FVMLIB, SG_NORELOC, SG_PROTECTED_VERSION_1 and SG_READ_ONLY do not exist in this tree. The flags field is read raw and BFD always writes 0."
+
+    sections:
+      section_32:
+        size: 68
+        source: include/mach-o/external.h:42-56
+        fields:
+          - {field: "sectname[16]", offset: 0, size: 16}
+          - {field: "segname[16]", offset: 16, size: 16}
+          - {field: addr, offset: 32, size: 4}
+          - {field: size, offset: 36, size: 4}
+          - {field: offset, offset: 40, size: 4}
+          - {field: align, offset: 44, size: 4, note: "log2"}
+          - {field: reloff, offset: 48, size: 4}
+          - {field: nreloc, offset: 52, size: 4}
+          - {field: flags, offset: 56, size: 4}
+          - {field: reserved1, offset: 60, size: 4}
+          - {field: reserved2, offset: 64, size: 4}
+      section_64:
+        size: 80
+        source: include/mach-o/external.h:60-75
+        fields:
+          - {field: "sectname[16]", offset: 0, size: 16}
+          - {field: "segname[16]", offset: 16, size: 16}
+          - {field: addr, offset: 32, size: 8}
+          - {field: size, offset: 40, size: 8}
+          - {field: offset, offset: 48, size: 4}
+          - {field: align, offset: 52, size: 4}
+          - {field: reloff, offset: 56, size: 4}
+          - {field: nreloc, offset: 60, size: 4}
+          - {field: flags, offset: 64, size: 4}
+          - {field: reserved1, offset: 68, size: 4, note: "index into the indirect symbol table"}
+          - {field: reserved2, offset: 72, size: 4, note: "stub size for S_SYMBOL_STUBS"}
+          - {field: reserved3, offset: 76, size: 4}
+      section_types:
+        source: include/mach-o/loader.h:163-230
+        mask: "S_SECTION_TYPE_MASK 0x000000ff (include/mach-o/loader.h:237)"
+        values:
+          S_REGULAR: 0x0
+          S_ZEROFILL: 0x1
+          S_CSTRING_LITERALS: 0x2
+          S_4BYTE_LITERALS: 0x3
+          S_8BYTE_LITERALS: 0x4
+          S_LITERAL_POINTERS: 0x5
+          S_NON_LAZY_SYMBOL_POINTERS: 0x6
+          S_LAZY_SYMBOL_POINTERS: 0x7
+          S_SYMBOL_STUBS: 0x8
+          S_MOD_INIT_FUNC_POINTERS: 0x9
+          S_MOD_FINI_FUNC_POINTERS: 0xa
+          S_COALESCED: 0xb
+          S_GB_ZEROFILL: 0xc
+          S_INTERPOSING: 0xd
+          S_16BYTE_LITERALS: 0xe
+          S_DTRACE_DOF: 0xf
+          S_LAZY_DYLIB_SYMBOL_POINTERS: 0x10
+        absent: "S_THREAD_LOCAL_* (0x11-0x15) and S_ATTRIBUTES (0xff) do not exist in this tree."
+      section_attributes:
+        source: include/mach-o/loader.h:237-280
+        mask: "S_SECTION_ATTRIBUTES_MASK 0xffffff00"
+        values:
+          S_ATTR_LOC_RELOC: 0x00000100
+          S_ATTR_EXT_RELOC: 0x00000200
+          S_ATTR_SOME_INSTRUCTIONS: 0x00000400
+          S_ATTR_DEBUG: 0x02000000
+          S_SELF_MODIFYING_CODE: 0x04000000
+          S_ATTR_LIVE_SUPPORT: 0x08000000
+          S_ATTR_NO_DEAD_STRIP: 0x10000000
+          S_ATTR_STRIP_STATIC_SYMS: 0x20000000
+          S_ATTR_NO_TOC: 0x40000000
+          S_ATTR_PURE_INSTRUCTIONS: 0x80000000
+
+    symbols:
+      nlist:
+        size32: 12
+        size64: 16
+        source: include/mach-o/external.h:127-145
+        fields:
+          - {field: n_strx, offset: 0, size: 4}
+          - {field: n_type, offset: 4, size: 1}
+          - {field: n_sect, offset: 5, size: 1}
+          - {field: n_desc, offset: 6, size: 2}
+          - {field: n_value, offset: 8, size: "4/8"}
+      n_type_bits:
+        source: include/mach-o/loader.h:285-295
+        values:
+          N_STAB: 0xe0
+          N_PEXT: 0x10
+          N_TYPE: 0x0e
+          N_EXT: 0x01
+      n_type_values:
+        N_UNDF: 0x00
+        N_ABS: 0x02
+        N_INDR: 0x0a
+        N_PBUD: 0x0c
+        N_SECT: 0x0e
+        NO_SECT: 0
+      n_desc_bits:
+        source: include/mach-o/loader.h:298-310
+        values:
+          REFERENCE_MASK: 0x0f
+          REFERENCED_DYNAMICALLY: 0x10
+          N_DESC_DISCARDED: 0x20
+          N_NO_DEAD_STRIP: 0x20
+          N_WEAK_REF: 0x40
+          N_WEAK_DEF: 0x80
+      interpretation:
+        source: bfd/mach-o.c:1822-1912
+        rules:
+          - "Any N_STAB bit set -> BSF_DEBUGGING, and the symbol is treated as undefined."
+          - "N_PEXT or N_EXT -> BSF_GLOBAL, otherwise BSF_LOCAL."
+          - "N_UNDF with N_EXT and a nonzero value -> a COMMON symbol."
+          - "N_INDR -> forced to undefined, with an error message."
+          - "N_SECT with n_sect == 0 -> undefined, and explicitly NOT an error."
+      dysymtab:
+        size: 72
+        source: include/mach-o/external.h:167-187
+        fields:
+          - {field: ilocalsym, offset: 0}
+          - {field: nlocalsym, offset: 4}
+          - {field: iextdefsym, offset: 8}
+          - {field: nextdefsym, offset: 12}
+          - {field: iundefsym, offset: 16}
+          - {field: nundefsym, offset: 20}
+          - {field: tocoff, offset: 24}
+          - {field: ntoc, offset: 28}
+          - {field: modtaboff, offset: 32}
+          - {field: nmodtab, offset: 36}
+          - {field: extrefsymoff, offset: 40}
+          - {field: nextrefsyms, offset: 44}
+          - {field: indirectsymoff, offset: 48}
+          - {field: nindirectsyms, offset: 52}
+          - {field: extreloff, offset: 56}
+          - {field: nextrel, offset: 60}
+          - {field: locreloff, offset: 64}
+          - {field: nlocrel, offset: 68}
+
+    relocations:
+      record_size: 8
+      note: "There is no 64-bit relocation_info; Mach-O uses the same 8-byte record in 64-bit files."
+      source: include/mach-o/external.h:112-117
+      non_scattered_bits:
+        source: include/mach-o/reloc.h:26-43
+        values:
+          R_PCREL: 0x01000000
+          R_EXTERN: 0x08000000
+          r_length_bits: "25-26"
+          r_type_bits: "28-31"
+          r_symbolnum_mask: 0x00ffffff
+        r_length_encoding: {0: 1, 1: 2, 2: 4, 3: 8, note: "bytes"}
+      scattered_bits:
+        values:
+          SR_SCATTERED: 0x80000000
+          SR_PCREL: 0x40000000
+          r_length_bits: "28-29"
+          r_type_bits: "24-27"
+          address_mask: 0x00ffffff
+      scattered_handling:
+        source: bfd/mach-o.c:704-727
+        rules:
+          - "The scattered address is section-relative."
+          - "BFD finds the containing section by searching the section table, and the addend becomes the intra-section offset."
+          - "On write, the scattered fields go into r_address and the value into r_symbolnum: the field order is reversed (bfd/mach-o.c:924-936)."
+      non_scattered_handling:
+        source: bfd/mach-o.c:728-756
+        rules:
+          - "With R_EXTERN set, r_symbolnum & 0xffffff is a symbol table index."
+          - "Otherwise it is a 1-based section index, and the addend is -section->addr."
+      generic_types:
+        source: include/mach-o/reloc.h:45-51
+        values:
+          GENERIC_RELOC_VANILLA: 0
+          GENERIC_RELOC_PAIR: 1
+          GENERIC_RELOC_SECTDIFF: 2
+          GENERIC_RELOC_PB_LA_PTR: 3
+          GENERIC_RELOC_LOCAL_SECTDIFF: 4
+          GENERIC_RELOC_TLV: 5
+      x86_64_types:
+        source: include/mach-o/x86-64.h:26-35
+        values:
+          X86_64_RELOC_UNSIGNED: 0
+          X86_64_RELOC_SIGNED: 1
+          X86_64_RELOC_BRANCH: 2
+          X86_64_RELOC_GOT_LOAD: 3
+          X86_64_RELOC_GOT: 4
+          X86_64_RELOC_SUBTRACTOR: 5
+          X86_64_RELOC_SIGNED_1: 6
+          X86_64_RELOC_SIGNED_2: 7
+          X86_64_RELOC_SIGNED_4: 8
+          X86_64_RELOC_TLV: 9
+        scattered: "The x86-64 backend rejects scattered relocations outright (bfd/mach-o-x86-64.c:125-127)."
+      arm64: "Absent from this tree entirely: no CPU_TYPE_ARM64, no arm64 relocation types."
+
+    fat_files:
+      entry_point: bfd_mach_o_archive_p
+      source: bfd/mach-o.c:3109-3159
+      header:
+        size: 8
+        source: include/mach-o/external.h:258-262
+        fields:
+          - {field: magic, offset: 0, size: 4, note: "always big-endian"}
+          - {field: nfat_arch, offset: 4, size: 4}
+      arch_entry:
+        size: 20
+        source: include/mach-o/external.h:263-271
+        fields:
+          - {field: cputype, offset: 0, size: 4}
+          - {field: cpusubtype, offset: 4, size: 4}
+          - {field: offset, offset: 8, size: 4}
+          - {field: size, offset: 12, size: 4}
+          - {field: align, offset: 16, size: 4, note: "documented as 'Power of 2'"}
+      magics:
+        accepted: {value: 0xcafebabe, note: "the only one BFD accepts, hard-coded at bfd/mach-o.c:3126"}
+        absent: [FAT_CIGAM, FAT_MAGIC_64, FAT_CIGAM_64, fat_arch_64]
+      nfat_arch_limit:
+        value: 30
+        source: bfd/mach-o.c:3128-3132
+        reason: "Avoid matching Java bytecode files, which have the same magic; in the Java class format this field holds the JVM version, which starts at 43.0."
+      presentation: >-
+        A fat file is presented to BFD as an ARCHIVE: the fat target sets
+        TARGET_ARCHIVE and fills the bfd_archive slot of bfd_check_format
+        with bfd_mach_o_archive_p (bfd/mach-o.c:4240-4246).
+      members:
+        source: bfd/mach-o.c:3161-3229
+        rules:
+          - "Members are enumerated by walking the archentries table."
+          - "Each member becomes a contained BFD whose origin is the entry's offset."
+          - "The member filename is synthesised as <archive-path>:<arch-name>."
+      align_field: "Read and stored, but never used. Member positions come solely from the explicit offset field."
+      lesson: >-
+        Slice enumeration and slice selection are separate operations.
+        qBFD requires explicit selection with macho::openSlice
+        (qMachO.hpp:156-160). Using explicit member offsets in BFD does not
+        by itself imply that a universal file's layout is untrustworthy.
+
+    export_trie_and_chained_fixups:
+      status: "Not supported in this BFD vintage."
+      detail: >-
+        LC_DYLD_EXPORTS_TRIE and LC_DYLD_CHAINED_FIXUPS do not exist as
+        constants in the tree, so such a file hits the default branch of
+        bfd_mach_o_read_command: it prints "unable to read unknown load
+        command" and the scan continues. Nothing is decoded.
+      nearest_thing: >-
+        LC_DYLD_INFO (0x22) is parsed and stores five (offset, size) pairs
+        (rebase, bind, weak_bind, lazy_bind, export), but the export trie
+        itself is never decoded (bfd/mach-o.c:2507-2528).
+
+# ---------------------------------------------------------------------------
+# 6. ar archives
+# ---------------------------------------------------------------------------
+  archive:
+    files: ["bfd/archive.c", "bfd/archive64.c", "include/aout/ar.h"]
+    note: "ar has no single standard; BFD implements three flavours plus two index layouts."
+
+    magics:
+      source: include/aout/ar.h:30-34
+      values:
+        ARMAG: {value: "!<arch>\\n", note: "SVR4/GNU and BSD"}
+        ARMAGB: {value: "!<bout>\\n", note: "b.out archives, NOT thin"}
+        ARMAGT: {value: "!<thin>\\n", note: "thin archives"}
+      sarmag: 8
+      arfmag: {value: "`\\n", size: 2}
+    detection:
+      source: bfd/archive.c:746-827
+      steps:
+        - "Read 8 bytes of magic; set the thin flag if it is ARMAGT."
+        - "Accept ARMAG, ARMAGB or ARMAGT; otherwise the file is not an archive."
+        - "Set first_file_filepos = SARMAG (8)."
+        - "Slurp the armap and the extended name table."
+        - "If the target was defaulted, open the first member and verify it is an object of the same target."
+
+    member_header:
+      size: 60
+      source: include/aout/ar.h:44-53
+      fields:
+        - {field: "ar_name[16]", offset: 0, size: 16}
+        - {field: "ar_date[12]", offset: 16, size: 12}
+        - {field: "ar_uid[6]", offset: 28, size: 6}
+        - {field: "ar_gid[6]", offset: 34, size: 6}
+        - {field: "ar_mode[8]", offset: 40, size: 8}
+        - {field: "ar_size[10]", offset: 48, size: 10}
+        - {field: "ar_fmag[2]", offset: 58, size: 2, value: "`\\n"}
+    name_forms:
+      - {form: "short", rule: "The name is NUL-, '/'- or ' '-terminated within the 16-byte field; if none of those is present, the whole field is the name.", source: "bfd/archive.c:493-518"}
+      - {form: "extended name table", rule: "The name field is '/<decimal offset>' into the // long-name table.", source: "bfd/archive.c:370-403"}
+      - {form: "BSD-4.4 extended name", rule: "The name field is '#1/<len>'; the name follows the header and the payload size is reduced by len.", source: "bfd/archive.c:471-492"}
+    padding:
+      rule: "The next member header is rounded up to an even file offset; a BSD embedded name can make the object payload itself start at an odd offset."
+      read: "filestart += filestart % 2  (bfd/archive.c:740)"
+      write: "A single '\\n' pad byte is written after an odd-sized member (bfd/archive.c:2182-2186)."
+      note: "A member can have an odd size and an odd origin; the comment at bfd/archive.c:737-739 calls this out."
+
+    index_formats:
+      dispatcher: bfd_slurp_armap
+      source: bfd/archive.c:1049-1101
+      dispatch_table:
+        - {name_field: "'__.SYMDEF       ' or '__.SYMDEF/      '", handler: do_slurp_bsd_armap, source: "bfd/archive.c:1063-1065"}
+        - {name_field: "'/               '", handler: do_slurp_coff_armap, source: "bfd/archive.c:1066-1067"}
+        - {name_field: "'/SYM64/         '", handler: bfd_elf64_archive_slurp_armap, source: "bfd/archive.c:1068-1078"}
+        - {name_field: "'#1/20           ' with an extended name of __.SYMDEF SORTED or __.SYMDEF", handler: do_slurp_bsd_armap, source: "bfd/archive.c:1079-1097"}
+        - {name_field: anything else, handler: "no index: bfd_has_map = FALSE", source: "bfd/archive.c:1099-1100"}
+      bsd_symdef:
+        source: bfd/archive.c:849-915
+        byte_order: "Target byte order via H_GET_32 / H_PUT_32, NOT fixed big-endian."
+        layout:
+          - "A 32-bit count of the INDEX TABLE SIZE in bytes, not a symbol count."
+          - "symdef_count = that value / 8  (BSD_SYMDEF_SIZE, bfd/archive.c:835)."
+          - "symdef_count entries of 8 bytes: a 4-byte string-table offset and a 4-byte file offset."
+          - "A 4-byte string-table size."
+          - "The NUL-separated string table."
+        sanity_check: "If symdef_count * 8 > parsed_size - 4 the archive is rejected with 'Probably we're using the wrong byte ordering.' (bfd/archive.c:881-887)."
+      coff_armap:
+        source: bfd/archive.c:920-1044
+        byte_order: "Always big-endian: 'It seems that all numeric information in a coff archive is always in big endian format, nomatter the host or target.' (bfd/archive.c:948-951)"
+        layout:
+          - "A big-endian 32-bit symbol count."
+          - "nsymz big-endian 32-bit file offsets."
+          - "The NUL-separated string table."
+        extras: "Detects the PE 'second archive header' (bfd/archive.c:1019-1035)."
+      sym64:
+        source: bfd/archive64.c:41-138
+        byte_order: "Big-endian."
+        layout:
+          - "An 8-byte big-endian symbol count."
+          - "nsymz 8-byte big-endian file offsets."
+          - "The NUL-separated string table; stringsize = parsed_size - 8*nsymz - 8."
+        padding: "Padded to an 8-byte boundary (bfd/archive64.c:161, 229-236)."
+    extended_name_table:
+      source: bfd/archive.c:1222-1301
+      recognition: "The first member's name field is 'ARFILENAMES/    ' or '//              '."
+      rules:
+        - "Names are newline-terminated; a backslash is converted to a slash."
+        - "first_file_filepos is advanced past the table and padded to even."
+    thin_archives:
+      rule: "Ordinary thin members record an external payload size without embedding those bytes. Special members such as indices and the long-name table remain embedded."
+      consequence: >-
+        The member payload lives in a separate file. A reader can enumerate
+        the members but cannot materialise their contents from the archive
+        alone.
+      qbfd_equivalent: "qArchive's readMember materialises thin members; memberData cannot (see qbfd/README.md:60)."
+    bsd_symdef_recognised: >-
+      BFD recognises and decodes __.SYMDEF, including the extended-name
+      __.SYMDEF SORTED form handled by bfd_slurp_armap. qBFD recognises BSD
+      index members but leaves symbolIndex() empty (qArchive.hpp:385-399).
+      The target-endian layout is described above; it is not undecodable.
+
+    target_hooks:
+      slots: "The 11 BFD_JUMP_TABLE_ARCHIVE slots (bfd/bfd-in2.h:5932-5943)."
+      predefined_sets:
+        source: bfd/libbfd-in.h:273-355
+        sets:
+          - {name: _bfd_noarchive, note: "all stubs; used by the Mach-O object targets"}
+          - {name: _bfd_archive_bsd, note: "BSD armap and name truncation"}
+          - {name: _bfd_archive_coff, note: "COFF armap"}
+          - {name: _bfd_archive_bsd44, note: "BSD-4.4 long names"}
+      note: >-
+        libbfd-in.h defines bfd_slurp_bsd_armap and bfd_slurp_coff_armap as
+        aliases of the single bfd_slurp_armap dispatcher, which then chooses
+        the flavour from the member's name field (bfd/libbfd-in.h:144-145).
+
+# ---------------------------------------------------------------------------
+# 7. The canonical model qBFD exposes
+# ---------------------------------------------------------------------------
+canonical_model:
+  note: >-
+    qBFD does not expose BFD's structures. It defines a small format-neutral
+    vocabulary and maps every backend onto it. This section records how the
+    BFD concepts correspond to that vocabulary, and where the mapping is lossy.
+
+  section_flags:
+    qbfd_definition: "qBFDCore.hpp:105-121"
+    bfd_definition: "bfd/bfd-in2.h:1178-1357"
+    bfd_values:
+      SEC_NO_FLAGS: 0x000
+      SEC_ALLOC: 0x001
+      SEC_LOAD: 0x002
+      SEC_RELOC: 0x004
+      SEC_READONLY: 0x008
+      SEC_CODE: 0x010
+      SEC_DATA: 0x020
+      SEC_ROM: 0x040
+      SEC_CONSTRUCTOR: 0x080
+      SEC_HAS_CONTENTS: 0x100
+      SEC_NEVER_LOAD: 0x200
+      SEC_THREAD_LOCAL: 0x400
+      SEC_HAS_GOT_REF: 0x800
+      SEC_IS_COMMON: 0x1000
+      SEC_DEBUGGING: 0x2000
+      SEC_IN_MEMORY: 0x4000
+      SEC_EXCLUDE: 0x8000
+      SEC_SORT_ENTRIES: 0x10000
+      SEC_LINK_ONCE: 0x20000
+      SEC_LINK_DUPLICATES_DISCARD: 0x0
+      SEC_LINK_DUPLICATES_ONE_ONLY: 0x40000
+      SEC_LINK_DUPLICATES_SAME_SIZE: 0x80000
+      SEC_LINK_DUPLICATES_SAME_CONTENTS: 0xc0000
+      SEC_LINKER_CREATED: 0x100000
+      SEC_KEEP: 0x200000
+      SEC_SMALL_DATA: 0x400000
+      SEC_MERGE: 0x800000
+      SEC_STRINGS: 0x1000000
+      SEC_GROUP: 0x2000000
+      SEC_COFF_SHARED_LIBRARY: 0x4000000
+      SEC_COFF_SHARED: 0x8000000
+      SEC_COFF_NOREAD: 0x40000000
+    qbfd_values:
+      None: 0
+      Alloc: "1 << 0"
+      Load: "1 << 1"
+      Code: "1 << 2"
+      Data: "1 << 3"
+      ReadOnly: "1 << 4"
+      Writable: "1 << 5"
+      Exec: "1 << 6"
+      Bss: "1 << 7"
+      Debug: "1 << 8"
+      Reloc: "1 << 9"
+      Strings: "1 << 10"
+      Note: "1 << 11"
+      Tls: "1 << 12"
+      Discard: "1 << 13"
+    mapping_scope: "Conceptual correspondences, not numeric conversions or identical classification rules. The qBFD backends map native flags directly."
+    mapping:
+      Alloc: SEC_ALLOC
+      Load: "Roughly SEC_LOAD; qBFD commonly uses this for file-backed bytes, whereas BFD distinguishes SEC_LOAD from SEC_HAS_CONTENTS."
+      Code: SEC_CODE
+      Data: SEC_DATA
+      ReadOnly: SEC_READONLY
+      Writable: "Native write permission, such as SHF_WRITE or IMAGE_SCN_MEM_WRITE; absence of SEC_READONLY is not a universal permission test."
+      Exec: "Native instruction/execution classification; qBFD distinguishes this bit from Code."
+      Bss: "Native zero-fill classification, such as SHT_NOBITS; fileSize == 0 alone also describes empty non-BSS sections."
+      Debug: SEC_DEBUGGING
+      Reloc: SEC_RELOC
+      Strings: SEC_STRINGS
+      Tls: SEC_THREAD_LOCAL
+      Discard: "COFF/PE mapping includes IMAGE_SCN_LNK_REMOVE, IMAGE_SCN_MEM_DISCARDABLE and COMDAT; this does not mean every such section is unconditionally discarded."
+      Note: "No direct SEC_NOTE bit; qBFD sets Note for ELF SHT_NOTE and COFF IMAGE_SCN_LNK_INFO."
+    lossy:
+      - "SEC_HAS_CONTENTS has no separate qBFD bit; fileOffset/fileSize describe the file-backed range, including zero-length ranges."
+      - "SEC_MERGE, SEC_GROUP, SEC_LINK_ONCE and SEC_LINK_DUPLICATES_* have no one-to-one common flags. Native metadata and format-specific accessors preserve some of that information; COFFFile::comdat exposes COMDAT selection."
+
+  symbol_flags:
+    bfd_definition: "bfd/bfd-in2.h:5061-5161"
+    notable:
+      BSF_NO_FLAGS: 0x00
+      BSF_LOCAL: 0x01
+      BSF_GLOBAL: 0x02
+      BSF_EXPORT: 0x02
+      BSF_DEBUGGING: 0x04
+      BSF_FUNCTION: 0x08
+      BSF_KEEP: 0x20
+      BSF_KEEP_G: 0x40
+      BSF_WEAK: 0x80
+      BSF_SECTION_SYM: 0x100
+      BSF_OLD_COMMON: 0x200
+      BSF_NOT_AT_END: 0x400
+      BSF_CONSTRUCTOR: 0x800
+      BSF_WARNING: 0x1000
+      BSF_INDIRECT: 0x2000
+      BSF_FILE: 0x4000
+      BSF_DYNAMIC: 0x8000
+      BSF_OBJECT: 0x10000
+      BSF_DEBUGGING_RELOC: 0x20000
+      BSF_THREAD_LOCAL: 0x40000
+      BSF_RELC: 0x80000
+      BSF_SRELC: 0x100000
+      BSF_SYNTHETIC: 0x200000
+      BSF_GNU_INDIRECT_FUNCTION: 0x400000
+      BSF_GNU_UNIQUE: 0x800000
+    notes:
+      - "BSF_EXPORT is an alias of BSF_GLOBAL; the source comment says 'No real difference.'"
+      - "BSF_KEEP (1 << 5) and BSF_KEEP_G (1 << 6) are in the source but rarely used."
+    qbfd_equivalent:
+      binding: "SymbolBinding {Local, Global, Weak, Unique}  (qBFDCore.hpp:141)"
+      kind: "SymbolKind {None, Object, Function, Section, File, Common, Tls, Indirect}  (qBFDCore.hpp:142-151)"
+      flags: "sym::Flags {Undefined, Absolute, Hidden, Exported, Imported, Synthetic, Debug}  (qBFDCore.hpp:154-163)"
+    mapping:
+      BSF_LOCAL: SymbolBinding::Local
+      BSF_GLOBAL: SymbolBinding::Global
+      BSF_WEAK: SymbolBinding::Weak
+      BSF_FUNCTION: SymbolKind::Function
+      BSF_SECTION_SYM: SymbolKind::Section
+      BSF_FILE: SymbolKind::File
+      BSF_INDIRECT: "Alias/indirect-symbol concept; distinct from GNU IFUNC."
+      BSF_GNU_INDIRECT_FUNCTION: "SymbolKind::Indirect for ELF STT_GNU_IFUNC (qELF.hpp:345-347)."
+      BSF_GNU_UNIQUE: SymbolBinding::Unique
+      BSF_SYNTHETIC: "Related to sym::Synthetic; producer-specific meaning must still be checked."
+      BSF_THREAD_LOCAL: SymbolKind::Tls
+      STB_GNU_UNIQUE: SymbolBinding::Unique
+      STV_HIDDEN: sym::Hidden
+      undefined: "an empty Symbol::section plus sym::Undefined"
+    semantic_caveats: >-
+      BFD has GNU_UNIQUE and SYNTHETIC flags in this snapshot. BSF_EXPORT is
+      only an alias of BSF_GLOBAL, not a separate loader-export marker.
+      qBFD's Imported/Exported flags are populated by format-specific paths,
+      such as PE import/export directories, and are not a mechanical
+      translation of BSF_EXPORT or of an undefined symbol.
+
+  relocation_model:
+    qbfd_definition: "qBFDCore.hpp:181-194"
+    bfd_equivalent: "arelent (bfd/bfd-in2.h:2247-2262) plus reloc_howto_type (bfd/bfd-in2.h:2283-2366)"
+    mapping:
+      offset: arelent.address
+      symbol: "arelent.sym_ptr_ptr (asymbol **), resolved to an index"
+      addend: arelent.addend
+      nativeType: howto.type
+      typeName: howto.name
+      bitSize: "Comparable to howto.bitsize, but qBFD tables can describe storage width; it cannot be derived universally from howto.size."
+      pcRelative: howto.pc_relative
+    differences:
+      - "BFD's howto carries rightshift, bitpos, src_mask, dst_mask and pcrel_offset. These also matter when decoding an implicit addend. qBFD's common Relocation record omits them and relies on format/architecture-specific logic."
+      - "qBFD adds hasAddend, because a reader can meet a REL relocation whose implicit addend it does not decode."
+      - "qBFD adds dynamicSymbol, because an ELF relocation's symbol index may refer to the dynamic symbol table."
+      - "qBFD explicitly records targetSection and scattered. BFD can express a section target through a section symbol; its Mach-O canonicalizer resolves scattered r_value into a section symbol plus addend (bfd/mach-o.c:690-730)."
+
+  file_types:
+    mapping:
+      ET_REL: FileType::Relocatable
+      ET_EXEC: FileType::Executable
+      ET_DYN: FileType::SharedObject
+      ET_CORE: FileType::Core
+      MH_OBJECT: FileType::Relocatable
+      MH_EXECUTE: FileType::Executable
+      MH_DYLIB: FileType::SharedObject
+      PE image: "FileType::Executable, or SharedObject for a DLL"
+
+# ---------------------------------------------------------------------------
+# 8. Where qBFD goes beyond, or differs from, BFD
+# ---------------------------------------------------------------------------
+divergences:
+  bfd_2_22_absences:
+    note: >-
+      These features were not found in the relevant local headers/backends.
+      qBFD support is described from its own source, independently of this
+      older snapshot. Architecture recognition and relocation naming do not
+      imply support for applying every relocation.
+    items:
+      - {thing: "AArch64 ELF support", bfd: "no include/elf/aarch64.h, no bfd/elfxx-aarch64.c, no EM_AARCH64", qbfd: "handles R_AARCH64_* and EM_AARCH64"}
+      - {thing: "RISC-V ELF support", bfd: "no include/elf/riscv.h, no bfd/elfxx-riscv.c, no EM_RISCV", qbfd: "handles R_RISCV_* and EM_RISCV"}
+      - {thing: "SHF_COMPRESSED", bfd: "absent; BFD 2.22 uses the .zdebug naming convention", qbfd: "returns compressed section bytes as stored, and does not decompress"}
+      - {thing: "COFF bigobj", bfd: "no ANON_OBJECT_HEADER_BIGOBJ and no 56-byte bigobj header found", qbfd: "decodes the 56-byte bigobj header, 20-byte symbol records and 32-bit section numbers", source: "qCOFF.hpp:429-478,595-596,631-635"}
+      - {thing: "IMAGE_FILE_MACHINE_ARM64", bfd: "absent", qbfd: "maps 0xAA64 to AArch64 and registers a PE ARM64 target", source: "qPE.hpp:25,77-110,838-847"}
+      - {thing: "LC_MAIN", bfd: "absent", qbfd: "decodes LC_MAIN entry points"}
+      - {thing: "LC_DYLD_EXPORTS_TRIE and LC_DYLD_CHAINED_FIXUPS", bfd: "absent; unknown commands produce a diagnostic and are skipped", qbfd: "no dedicated decoding branch; passes over unhandled command payloads after generic size checks", source: "qMachO.hpp:182-228"}
+      - {thing: "FAT_MAGIC_64 / FAT_CIGAM / fat_arch_64", bfd: "absent; only 0xcafebabe with 20-byte fat_arch", qbfd: "handles 32- and 64-bit universal slice tables"}
+      - {thing: "S_THREAD_LOCAL_* section types", bfd: "absent from the local Mach-O section-type enum", qbfd: "types 0x11-0x15 set Tls; type 0x12 also has zero-fill semantics", source: "qMachO.hpp:286-307"}
+      - {thing: "ELF SHT_RELR", bfd: "absent", qbfd: "parseRelocations is called only for REL and RELA sections; no RELR expansion", source: "qELF.hpp:260-262"}
+
+  observed_api_differences:
+    - {item: "One object-level Endian value", observation: "BFD has separate header/data byte-order vectors. Nested archive structures still need their own ordering rules.", source: "qBFDCore.hpp:236; qArchive.hpp:404-405"}
+    - {item: "Smaller error taxonomy", observation: "qBFD returns Expected<T>; BFD uses a global error code. This alone makes no thread-safety guarantee.", source: "qBFDCore.hpp:27-67; bfd/bfd.c:392-394"}
+    - {item: "Canonical vectors", observation: "qBFD exposes vectors of symbols and relocation values. BFD canonicalization exposes pointer arrays; name hashes are separate structures.", source: "qBFDCore.hpp:244-252; bfd/syms.c:346-355"}
+    - {item: "Reader interface plus separate rewriting paths", observation: "ObjectFile is an inspection interface; qStrip rewrites object tables and qArchive also implements archive writing."}
+    - {item: "Narrower format set", observation: "qBFD covers ELF, PE, COFF, Mach-O and ar; the BFD snapshot contains additional format families."}
+
+  additional_metadata_and_limits:
+    - {item: "Explicit universal-slice selection", observation: "macho::openSlice selects one object; the ordinary Mach-O open path rejects a fat container.", source: "qMachO.hpp:156-160"}
+    - {item: "BSD index decoding omitted", observation: "Members remain accessible but parseIndex returns without decoding a BSD symbol index.", source: "qArchive.hpp:385-399"}
+    - {item: "Windows archive index decoding omitted", observation: "Two leading '/' members select Windows flavor and parseIndex returns without an index. BFD decodes the first '/' as a big-endian armap and skips the second; the first is not an unrelated import lookup table.", source: "qArchive.hpp:308-316,392-399; bfd/archive.c:948-1035"}
+    - {item: "hasAddend and dynamicSymbol", observation: "These distinguish available addends and static/dynamic symbol-index domains.", source: "qBFDCore.hpp:181-194"}
+    - {item: "Format-specific layout accessors", observation: "All four object backends expose Layout. ELF and PE expose rawSections(); COFF exposes section/relocation field offsets. These are not identical APIs.", source: "qELF.hpp:98-116; qPE.hpp:235-260; qCOFF.hpp:283-315; qMachO.hpp:107-116"}
+
+  resolved_questions:
+    coff_relocation_count_overflow:
+      bfd_source: bfd/coffcode.h:1887-1909
+      qbfd_source: qCOFF.hpp:368-419
+      answer: >-
+        COFFFile::relocations handles IMAGE_SCN_LNK_NRELOC_OVFL when the
+        header count is 0xffff. It reads the first record's VirtualAddress,
+        rejects a zero count, subtracts the placeholder, advances by ten
+        bytes and bounds-checks the remaining records.
+      rewriting_limit: >-
+        qStrip.hpp:723-735 reads that placeholder but rejects a real count
+        above 0xffff. Reader support therefore does not imply unrestricted
+        strip/renumber support.
+      source_review_followup: >-
+        The overflow write at qStrip.hpp:753-754 uses placeholder + 4,
+        whereas both readers use placeholder + 0 for the count. This is
+        an observed source discrepancy; the source-note checks do not
+        exercise this overflow-rewriting path at runtime.
+    short_import_library_member:
+      bfd_source: bfd/peicode.h:1070-1242
+      qbfd_sources: ["qCOFF.hpp:429-445", "qPE.hpp:377-411", "qArchive.hpp:308-316,392-399"]
+      answer: >-
+        No short-import-object decoder was found in these qBFD paths. COFF
+        recognizes the 0000/ffff prefix only with a valid bigobj header,
+        version and class ID; otherwise it expects a known machine at
+        offset zero. PE expects MZ and PE signatures. Recognizing a Windows
+        archive container or decoding a PE image's imports does not decode
+        an ILF member's symbol/DLL strings.
+    pe_line_number_overflow:
+      bfd_source: bfd/peicode.h:211-221
+      qbfd_sources: ["qPE.hpp:187-195", "qPE.hpp:328-345", "qPE.hpp:470-497"]
+      answer: >-
+        BFD's COFF_IMAGE_WITH_PE path combines the line-number count with
+        s_nreloc << 16 and clears the relocation count. qBFD does not expose
+        those line-number fields: it reads offset 32 as a relocation count
+        and uses it for relocation bounds and iteration. The same legacy
+        line-number-overflow interpretation is not implemented there.
+
+# ---------------------------------------------------------------------------
+# 9. Where this lands in qBFD
+# ---------------------------------------------------------------------------
+qbfd_mapping:
+  qBFDCore.hpp:
+    - "Format, Arch, Endian, FileType enums (lines 70-99): the canonical identity vocabulary."
+    - "sec::Flags (105-121): the canonical section flags."
+    - "Section (124-136): the canonical section, including nativeFlags and nativeType."
+    - "SymbolBinding, SymbolKind, sym::Flags (141-164): the canonical symbol model."
+    - "Symbol (166-176): the canonical symbol."
+    - "Relocation (181-194): the canonical relocation, with hasAddend and dynamicSymbol."
+    - "seg::Flags and Segment (199-219): the canonical segment, used for ELF program headers and Mach-O LC_SEGMENT."
+    - "ObjectFile (226+): the format-independent interface."
+    - "ArchiveFlavor, Archive, ArchiveOptions (396+): the ar model."
+    - "Target and Registry (467+): the backend registry, the analogue of BFD's bfd_target vector."
+    - "Error::Code (29-38): the error taxonomy, the analogue of bfd_error_type."
+  qELF.hpp:
+    - "The ELF reader. Relocation naming for x86-64, i386, AArch64, RISC-V, ARM and PowerPC."
+  qCOFF.hpp:
+    - "The COFF reader, including bigobj and relocation-count overflow decoding."
+  qPE.hpp:
+    - "The PE reader, including the DOS stub, optional header and data directories."
+  qMachO.hpp:
+    - "The Mach-O reader, including the universal slice table."
+  qArchive.hpp:
+    - "The ar reader and writer, covering the SVR4/GNU, BSD and thin flavours."
+  qStrip.hpp:
+    - "The rewriter. Uses the Layout and rawSections() accessors that BFD's private section data would have provided."
+  qBFD.hpp:
+    - "The umbrella header: open, openAs, detectFormat and the open pipelines."
+
+# ---------------------------------------------------------------------------
+# 10. ArchBFD application layer
+# ---------------------------------------------------------------------------
+application_layer:
+  name: ArchBFD
+  guide: ArchBFD.md
+  implementation: "Independent application API over the local qBFD readers; no GNU BFD headers or libbfd linkage."
+  files:
+    BFDBinABI.h: "Versioned C ABI with opaque object/archive handles, fixed numeric constants, metadata records and caller-owned errors."
+    BFDBinABI.c: "C11 endian integer reads/writes with checked bounds and no mutation on a rejected write."
+    BFDBinBridge.cpp: "Reader integration, owned input buffers, cached relocation/dependency views and exception translation."
+    BFDBinAPI.hpp: "C++20 move-only RAII handles and metadata collection helpers."
+    ArchBFD.h: "C application umbrella."
+    ArchBFD.hpp: "C++ application umbrella."
+    ArchBFDApp.hpp: "Archive-aware synchronous visitor for inspection applications."
+  source_lessons_applied:
+    - "Opaque handles separate parsed-object lifetime from caller-owned input bytes; memory opens copy their input."
+    - "Canonical metadata uses explicit missing-index sentinels, relocation symbol-table domains and owning-section indices."
+    - "Input bounds use subtraction checks instead of overflow-prone offset-plus-length comparisons."
+    - "Native application ABI records are not cast onto packed on-disk headers."
+    - "Per-call errors and stable borrowed views make ownership explicit; they are not a blanket concurrency guarantee."
+    - "The application interface preserves reader capabilities and limitations rather than claiming BFD-compatible behavior."
+  validation_scope: "Cross-language ABI tests cover ownership, invalid arguments, output-on-error behavior, bounds, archive lifetime, byte order and explicit universal slices."
+
+# ---------------------------------------------------------------------------
+# 11. Method
+# ---------------------------------------------------------------------------
+method:
+  how_this_was_produced:
+    - "Inventoried the top-level bfd C sources and headers, then read selected functions and definitions. The inventory counts are not a claim of complete reading."
+    - "Traced generic lifecycle, I/O, section, symbol, hash, target-selection and relocation behavior through the functions cited under architecture."
+    - "Read selected ELF, COFF/PE, Mach-O and archive paths; consulted external-layout and constant definitions under include/ and bfd/."
+    - "Compared selected claims with the current qBFD headers. Observed implementation behavior is separate from inferred design guidance and does not establish historical intent."
+  coverage:
+    reviewed_paths: "See source.primary_files and the function-level citations. Coverage is selective, including within each listed file."
+    not_exhaustively_reviewed:
+      - "All 335 C translation units or every function in the core files."
+      - "Every CPU relocation backend and ABI-specific encoding."
+      - "Full linker, DWARF/debug, core-file, plugin and less-common object-format implementations."
+      - "Exhaustive runtime behavior of qBFD readers or writers. ArchBFD boundary tests are separate from this selective source review."
+    absence_claims: "Scoped to the local snapshot and relevant searches, not to all GNU BFD versions. Not reviewed is not the same as absent."
+  confidence:
+    direct_evidence: "Definitions, field layouts and local branches identified by citations; validation covers selected tables, not every statement."
+    interpretation: "Lessons and conceptual API correspondences are analysis of those paths, not additional guarantees made by BFD."
+    modern_features: "qBFD observations about features absent from the snapshot are grounded in qBFD code; this document is not a complete modern ABI specification."
+  validation:
+    - "Repeatable source checks are in tests/validate_bfd_notes.py (requires PyYAML and the local binutils snapshot)."
+    - "Parsed the complete YAML with duplicate-key rejection."
+    - "Compared all 14 documented ELF32/ELF64 external record sizes and their field offsets with include/elf/external.h: 104 assertions."
+    - "Compared all nine target jump-table groups with the BFD_JUMP_TABLE_* macros and the relocation-width map with bfd_get_reloc_size."
+    - "Checked the documented SEC_* and BSF_* numeric values against bfd-in2.h definitions."
+    - "Checked cited BFD paths and initial line ranges; generated-file and explicitly absent-file references are exceptions. These checks establish location validity, not every behavioral claim."
+  caveats:
+    - "Line numbers refer to the imported tree and will drift if binutils/ is updated."
+    - "This is a 2011-era snapshot. Consult newer sources independently for later architectures, APIs and format extensions."
+    - "Backend callbacks can override generic behavior. A generic helper's behavior must not be assumed for every target."

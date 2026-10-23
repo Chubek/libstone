@@ -1,0 +1,2138 @@
+arch mips64 { word_size = 32; addr_size = 64; endian = big; align = 4; }
+
+
+profile {
+  family = "MIPS";
+  model = "MIPS64";
+  version = "Release_2_plus";
+  word_size = 64;
+  address_size = 64;
+  endianness = "big";
+  instruction_encoding = "fixed32";
+  execution_model = "scalar_target_dependent";
+  register_model = "register";
+  extensions = ["MIPS64", "MIPS64R2"];
+  register_classes = ["GPR", "FPR"];
+  fixed_registers = ["zero"];
+  zero_register = "zero";
+  operation_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+  instruction_count = 84;
+  encoding_widths = ["32"];
+  coverage = "source_inventory";
+  encoding_layout = { opcode = "31:26"; register_fields = "rd:15:11,rs:25:21,rt:20:16"; };
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    version = "2.22";
+    scope = "source_table_reference_variants";
+    sources = [{ path = "binutils/opcodes/mips-opc.c"; sha256 = "558bf873a017760841c95d1a09432fd0ffe8f99829592ad836324251b08a9701"; }, { path = "binutils/include/opcode/mips.h"; sha256 = "bae9f27ba8a30c7fcae0b6a476bbb158c8151d49e819c015dac4e1509feae5eb"; }];
+    matched_operations = 84;
+    variant_count = 199;
+    unmatched_operations = [];
+  };
+  # END BINUTILS METADATA
+}
+compiler {
+  instruction_selection {
+    strategy = "target_pattern_matching";
+    opcode_classes = ["arithmetic", "branch", "compare", "load", "misc", "store"];
+    register_classes = ["GPR", "FPR"];
+    immediate_folding = true;
+    addressing_mode_folding = true;
+    branch_form_selection = true;
+    pseudo_expansion = "target_dependent";
+    cost_model = "target_microarchitecture";
+  }
+  instruction_scheduling {
+    strategy = "dependency_aware_target_scheduler";
+    dependency_ordering = true;
+    memory_dependence_analysis = true;
+    control_dependence_analysis = true;
+    latency_model = "target_microarchitecture";
+    resource_model = "target_microarchitecture";
+    packetization = false;
+  }
+  register_allocation {
+    strategy = "target_register_allocation";
+    register_classes = ["GPR", "FPR"];
+    fixed_registers = ["zero"];
+    zero_register = "zero";
+    caller_saved = "abi_dependent";
+    callee_saved = "abi_dependent";
+    spill_policy = "target_dependent";
+  }
+  optimization {
+    legality_model = "isa_and_memory_model";
+    transforms = ["constant_folding", "copy_propagation", "dead_code_elimination", "common_subexpression_elimination", "peephole_rewrite", "branch_simplification", "load_store_motion_target_dependent", "strength_reduction_target_dependent", "addressing_mode_folding", "branch_relaxation_target_dependent"];
+    instruction_combining = true;
+    peephole_optimization = true;
+    constant_folding = true;
+    dead_code_elimination = true;
+    common_subexpression_elimination = true;
+    loop_optimization = "target_dependent";
+    vectorization = "target_dependent";
+    if_conversion = "target_dependent";
+    interprocedural_optimization = "abi_and_linkage_dependent";
+  }
+}
+regclass GPR {
+    zero(64)=0,
+    at(64)=1,
+    v0(64)=2,
+    v1(64)=3,
+    a0(64)=4,
+    a1(64)=5,
+    a2(64)=6,
+    a3(64)=7,
+    a4(64)=8,
+    a5(64)=9,
+    a6(64)=10,
+    a7(64)=11,
+    t0(64)=12,
+    t1(64)=13,
+    t2(64)=14,
+    t3(64)=15,
+    s0(64)=16,
+    s1(64)=17,
+    s2(64)=18,
+    s3(64)=19,
+    s4(64)=20,
+    s5(64)=21,
+    s6(64)=22,
+    s7(64)=23,
+    t8(64)=24,
+    t9(64)=25,
+    k0(64)=26,
+    k1(64)=27,
+    gp(64)=28,
+    sp(64)=29,
+    fp(64)=30,
+    ra(64)=31,
+}
+
+regclass FPR {
+    f0(64)=0,
+    f1(64)=1,
+    f2(64)=2,
+    f3(64)=3,
+    f4(64)=4,
+    f5(64)=5,
+    f6(64)=6,
+    f7(64)=7,
+    f8(64)=8,
+    f9(64)=9,
+    f10(64)=10,
+    f11(64)=11,
+    f12(64)=12,
+    f13(64)=13,
+    f14(64)=14,
+    f15(64)=15,
+    f16(64)=16,
+    f17(64)=17,
+    f18(64)=18,
+    f19(64)=19,
+    f20(64)=20,
+    f21(64)=21,
+    f22(64)=22,
+    f23(64)=23,
+    f24(64)=24,
+    f25(64)=25,
+    f26(64)=26,
+    f27(64)=27,
+    f28(64)=28,
+    f29(64)=29,
+    f30(64)=30,
+    f31(64)=31,
+}
+
+alias s8 = fp;
+
+encoding ADDU { width = 32;
+  base = 0x21;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op addu { class = arithmetic; encoding = ADDU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "addu ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (add rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "addu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 301; table = "mips_builtin_opcodes"; mnemonic = "addu"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x21; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 302; table = "mips_builtin_opcodes"; mnemonic = "addu"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_ADDU_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 303; table = "mips_builtin_opcodes"; mnemonic = "addu"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45800000; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 304; table = "mips_builtin_opcodes"; mnemonic = "addu"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b00000c; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADD { width = 32;
+  base = 0x20;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op add { class = arithmetic; encoding = ADD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "add ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (add rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "add";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 281; table = "mips_builtin_opcodes"; mnemonic = "add"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x20; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 282; table = "mips_builtin_opcodes"; mnemonic = "add"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_ADD_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 283; table = "mips_builtin_opcodes"; mnemonic = "add"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45c00000; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 284; table = "mips_builtin_opcodes"; mnemonic = "add"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b40000c; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SUB { width = 32;
+  base = 0x22;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op sub { class = arithmetic; encoding = SUB;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sub ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (sub rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sub";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1366; table = "mips_builtin_opcodes"; mnemonic = "sub"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x22; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1367; table = "mips_builtin_opcodes"; mnemonic = "sub"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SUB_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1368; table = "mips_builtin_opcodes"; mnemonic = "sub"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45c00001; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1369; table = "mips_builtin_opcodes"; mnemonic = "sub"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_S"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b40000d; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding AND { width = 32;
+  base = 0x24;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op and { class = arithmetic; encoding = AND;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "and ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (and rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "and";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 311; table = "mips_builtin_opcodes"; mnemonic = "and"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x24; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 312; table = "mips_builtin_opcodes"; mnemonic = "and"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_AND_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 313; table = "mips_builtin_opcodes"; mnemonic = "and"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x47c00002; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 314; table = "mips_builtin_opcodes"; mnemonic = "and"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4bc00002; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding OR { width = 32;
+  base = 0x25;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op or { class = arithmetic; encoding = OR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "or ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (or rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "or";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1159; table = "mips_builtin_opcodes"; mnemonic = "or"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x25; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1160; table = "mips_builtin_opcodes"; mnemonic = "or"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_OR_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1161; table = "mips_builtin_opcodes"; mnemonic = "or"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45a00000; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1162; table = "mips_builtin_opcodes"; mnemonic = "or"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b20000c; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XOR { width = 32;
+  base = 0x26;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op xor { class = arithmetic; encoding = XOR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "xor ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (xor rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xor";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1501; table = "mips_builtin_opcodes"; mnemonic = "xor"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x26; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1502; table = "mips_builtin_opcodes"; mnemonic = "xor"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_XOR_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1503; table = "mips_builtin_opcodes"; mnemonic = "xor"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x47800002; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1504; table = "mips_builtin_opcodes"; mnemonic = "xor"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b800002; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding NOR { width = 32;
+  base = 0x27;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op nor { class = arithmetic; encoding = NOR;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "nor ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (nor rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "nor";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1149; table = "mips_builtin_opcodes"; mnemonic = "nor"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x27; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1150; table = "mips_builtin_opcodes"; mnemonic = "nor"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_NOR_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1151; table = "mips_builtin_opcodes"; mnemonic = "nor"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x47a00002; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1152; table = "mips_builtin_opcodes"; mnemonic = "nor"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4ba00002; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLT { width = 32;
+  base = 0x2a;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op slt { class = compare; encoding = SLT;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "slt ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (slt rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "slt";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1332; table = "mips_builtin_opcodes"; mnemonic = "slt"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x2a; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1333; table = "mips_builtin_opcodes"; mnemonic = "slt"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SLT_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1334; table = "mips_builtin_opcodes"; mnemonic = "slt"; operand_codes = "S,T"; pinfo = "RD_S|RD_T|WR_CC|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x46a0003c; mask = 0xffe007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1335; table = "mips_builtin_opcodes"; mnemonic = "slt"; operand_codes = "S,T"; pinfo = "RD_S|RD_T|WR_CC|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4ba0000d; mask = 0xffe007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLTU { width = 32;
+  base = 0x2b;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op sltu { class = compare; encoding = SLTU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sltu ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (ult rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sltu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1338; table = "mips_builtin_opcodes"; mnemonic = "sltu"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x2b; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1339; table = "mips_builtin_opcodes"; mnemonic = "sltu"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SLTU_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1340; table = "mips_builtin_opcodes"; mnemonic = "sltu"; operand_codes = "S,T"; pinfo = "RD_S|RD_T|WR_CC|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x4680003c; mask = 0xffe007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1341; table = "mips_builtin_opcodes"; mnemonic = "sltu"; operand_codes = "S,T"; pinfo = "RD_S|RD_T|WR_CC|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b80000d; mask = 0xffe007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding MUL { width = 32;
+  base = 0x70000002;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op mul { class = arithmetic; encoding = MUL;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "mul ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (mul rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "mul";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1081; table = "mips_builtin_opcodes"; mnemonic = "mul"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I32|P3|N55"; kind = "instruction"; match = 0x70000002; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1082; table = "mips_builtin_opcodes"; mnemonic = "mul"; operand_codes = "d,s,t"; pinfo = "RD_s|RD_t|WR_HILO|WR_d"; pinfo2 = "0"; membership = "N54"; kind = "instruction"; match = 0x58; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1083; table = "mips_builtin_opcodes"; mnemonic = "mul"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_MUL"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1084; table = "mips_builtin_opcodes"; mnemonic = "mul"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_MUL_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DADD { width = 32;
+  base = 0x2c;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op dadd { class = arithmetic; encoding = DADD;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dadd ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dadd\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dadd";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 630; table = "mips_builtin_opcodes"; mnemonic = "dadd"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x2c; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 631; table = "mips_builtin_opcodes"; mnemonic = "dadd"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DADD_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 632; table = "mips_builtin_opcodes"; mnemonic = "dadd"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45e00000; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 633; table = "mips_builtin_opcodes"; mnemonic = "dadd"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b60000c; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DADDU { width = 32;
+  base = 0x2d;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op daddu { class = arithmetic; encoding = DADDU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "daddu ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"daddu\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "daddu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 636; table = "mips_builtin_opcodes"; mnemonic = "daddu"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x2d; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 637; table = "mips_builtin_opcodes"; mnemonic = "daddu"; operand_codes = "t,r,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DADDU_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSUB { width = 32;
+  base = 0x2e;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op dsub { class = arithmetic; encoding = DSUB;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dsub ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dsub\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsub";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 765; table = "mips_builtin_opcodes"; mnemonic = "dsub"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x2e; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 766; table = "mips_builtin_opcodes"; mnemonic = "dsub"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DSUB_I"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 767; table = "mips_builtin_opcodes"; mnemonic = "dsub"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45e00001; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 768; table = "mips_builtin_opcodes"; mnemonic = "dsub"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b60000d; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSUBU { width = 32;
+  base = 0x2f;
+  rd = 11:5;
+  rs1 = 21:5;
+  rs2 = 16:5;
+}
+
+op dsubu { class = arithmetic; encoding = DSUBU;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dsubu ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dsubu\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsubu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 769; table = "mips_builtin_opcodes"; mnemonic = "dsubu"; operand_codes = "d,v,t"; pinfo = "WR_d|RD_s|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x2f; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 770; table = "mips_builtin_opcodes"; mnemonic = "dsubu"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DSUBU_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIV { width = 32;
+  base = 0x1a;
+  rd = 21:5;
+  rs1 = 16:5;
+}
+
+op div { class = arithmetic; encoding = DIV;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "div ${rd}, ${rs1}";
+  semantics = "(set rd (div rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "div";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 668; table = "mips_builtin_opcodes"; mnemonic = "div"; operand_codes = "z,s,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x1a; mask = 0xfc00ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 669; table = "mips_builtin_opcodes"; mnemonic = "div"; operand_codes = "z,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x1a; mask = 0xffe0ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 670; table = "mips_builtin_opcodes"; mnemonic = "div"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_DIV_3"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 671; table = "mips_builtin_opcodes"; mnemonic = "div"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_DIV_3I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DIVU { width = 32;
+  base = 0x1b;
+  rd = 21:5;
+  rs1 = 16:5;
+}
+
+op divu { class = arithmetic; encoding = DIVU;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "divu ${rd}, ${rs1}";
+  semantics = "(set rd (div rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "divu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 676; table = "mips_builtin_opcodes"; mnemonic = "divu"; operand_codes = "z,s,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x1b; mask = 0xfc00ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 677; table = "mips_builtin_opcodes"; mnemonic = "divu"; operand_codes = "z,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x1b; mask = 0xffe0ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 678; table = "mips_builtin_opcodes"; mnemonic = "divu"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_DIVU_3"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 679; table = "mips_builtin_opcodes"; mnemonic = "divu"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_DIVU_3I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DDIV { width = 32;
+  base = 0x1e;
+  rd = 21:5;
+  rs1 = 16:5;
+}
+
+op ddiv { class = arithmetic; encoding = DDIV;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ddiv ${rd}, ${rs1}";
+  semantics = "(set rd (intrinsic \"ddiv\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ddiv";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 651; table = "mips_builtin_opcodes"; mnemonic = "ddiv"; operand_codes = "z,s,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x1e; mask = 0xfc00ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 652; table = "mips_builtin_opcodes"; mnemonic = "ddiv"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DDIV_3"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 653; table = "mips_builtin_opcodes"; mnemonic = "ddiv"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DDIV_3I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DDIVU { width = 32;
+  base = 0x1f;
+  rd = 21:5;
+  rs1 = 16:5;
+}
+
+op ddivu { class = arithmetic; encoding = DDIVU;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "ddivu ${rd}, ${rs1}";
+  semantics = "(set rd (intrinsic \"ddivu\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ddivu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 655; table = "mips_builtin_opcodes"; mnemonic = "ddivu"; operand_codes = "z,s,t"; pinfo = "RD_s|RD_t|WR_HILO"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x1f; mask = 0xfc00ffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 656; table = "mips_builtin_opcodes"; mnemonic = "ddivu"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DDIVU_3"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 657; table = "mips_builtin_opcodes"; mnemonic = "ddivu"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_DDIVU_3I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLO { width = 32;
+  base = 0x70002021;
+  rd = 16:5;
+  rs1 = 21:5;
+}
+
+op clo { class = misc; encoding = CLO;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "clo ${rd}, ${rs1}";
+  semantics = "(effect (intrinsic \"clo\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clo";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 604; table = "mips_builtin_opcodes"; mnemonic = "clo"; operand_codes = "U,s"; pinfo = "WR_d|WR_t|RD_s"; pinfo2 = "0"; membership = "I32|N55"; kind = "instruction"; match = 0x70000021; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding CLZ { width = 32;
+  base = 0x70002020;
+  rd = 16:5;
+  rs1 = 21:5;
+}
+
+op clz { class = misc; encoding = CLZ;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "clz ${rd}, ${rs1}";
+  semantics = "(effect (intrinsic \"clz\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "clz";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 605; table = "mips_builtin_opcodes"; mnemonic = "clz"; operand_codes = "U,s"; pinfo = "WR_d|WR_t|RD_s"; pinfo2 = "0"; membership = "I32|N55"; kind = "instruction"; match = 0x70000020; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DCLO { width = 32;
+  base = 0x70002025;
+  rd = 16:5;
+  rs1 = 21:5;
+}
+
+op dclo { class = misc; encoding = DCLO;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "dclo ${rd}, ${rs1}";
+  semantics = "(effect (intrinsic \"dclo\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dclo";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 640; table = "mips_builtin_opcodes"; mnemonic = "dclo"; operand_codes = "U,s"; pinfo = "RD_s|WR_d|WR_t"; pinfo2 = "0"; membership = "I64|N55"; kind = "instruction"; match = 0x70000025; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DCLZ { width = 32;
+  base = 0x70002024;
+  rd = 16:5;
+  rs1 = 21:5;
+}
+
+op dclz { class = misc; encoding = DCLZ;
+  operands = rd: GPR, rs1: GPR;
+  syntax = "dclz ${rd}, ${rs1}";
+  semantics = "(effect (intrinsic \"dclz\" rd rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dclz";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 641; table = "mips_builtin_opcodes"; mnemonic = "dclz"; operand_codes = "U,s"; pinfo = "RD_s|WR_d|WR_t"; pinfo2 = "0"; membership = "I64|N55"; kind = "instruction"; match = 0x70000024; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLL { width = 32;
+  base = 0x0;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op sll { class = arithmetic; encoding = SLL;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sll ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (shl rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sll";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1324; table = "mips_builtin_opcodes"; mnemonic = "sll"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x4; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1325; table = "mips_builtin_opcodes"; mnemonic = "sll"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x0; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1326; table = "mips_builtin_opcodes"; mnemonic = "sll"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45800002; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1327; table = "mips_builtin_opcodes"; mnemonic = "sll"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b00000e; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRL { width = 32;
+  base = 0x2;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op srl { class = arithmetic; encoding = SRL;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "srl ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (shr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srl";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1356; table = "mips_builtin_opcodes"; mnemonic = "srl"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x6; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1357; table = "mips_builtin_opcodes"; mnemonic = "srl"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x2; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1358; table = "mips_builtin_opcodes"; mnemonic = "srl"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45800003; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1359; table = "mips_builtin_opcodes"; mnemonic = "srl"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b00000f; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRA { width = 32;
+  base = 0x3;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op sra { class = arithmetic; encoding = SRA;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sra ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (ashr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sra";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1350; table = "mips_builtin_opcodes"; mnemonic = "sra"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x7; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1351; table = "mips_builtin_opcodes"; mnemonic = "sra"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x3; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1352; table = "mips_builtin_opcodes"; mnemonic = "sra"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45c00003; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1353; table = "mips_builtin_opcodes"; mnemonic = "sra"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b40000f; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ROTR { width = 32;
+  base = 0x200002;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op rotr { class = arithmetic; encoding = ROTR;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "rotr ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (rotr rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "rotr";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1230; table = "mips_builtin_opcodes"; mnemonic = "rotr"; operand_codes = "d,v,t"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I33|SMT"; kind = "assembler_macro"; macro_id = "M_ROR"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1231; table = "mips_builtin_opcodes"; mnemonic = "rotr"; operand_codes = "d,v,I"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I33|SMT"; kind = "assembler_macro"; macro_id = "M_ROR_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSLL { width = 32;
+  base = 0x38;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsll { class = arithmetic; encoding = DSLL;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsll ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsll\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsll";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 746; table = "mips_builtin_opcodes"; mnemonic = "dsll"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x14; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 747; table = "mips_builtin_opcodes"; mnemonic = "dsll"; operand_codes = "d,w,>"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3c; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 748; table = "mips_builtin_opcodes"; mnemonic = "dsll"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x38; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 749; table = "mips_builtin_opcodes"; mnemonic = "dsll"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45a00002; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 750; table = "mips_builtin_opcodes"; mnemonic = "dsll"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b20000e; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRL { width = 32;
+  base = 0x3a;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsrl { class = arithmetic; encoding = DSRL;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsrl ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsrl\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsrl";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 760; table = "mips_builtin_opcodes"; mnemonic = "dsrl"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x16; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 761; table = "mips_builtin_opcodes"; mnemonic = "dsrl"; operand_codes = "d,w,>"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3e; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 762; table = "mips_builtin_opcodes"; mnemonic = "dsrl"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3a; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 763; table = "mips_builtin_opcodes"; mnemonic = "dsrl"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45a00003; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 764; table = "mips_builtin_opcodes"; mnemonic = "dsrl"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b20000f; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRA { width = 32;
+  base = 0x3b;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsra { class = arithmetic; encoding = DSRA;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsra ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsra\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsra";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 753; table = "mips_builtin_opcodes"; mnemonic = "dsra"; operand_codes = "d,w,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x17; mask = 0xfc0007ff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 754; table = "mips_builtin_opcodes"; mnemonic = "dsra"; operand_codes = "d,w,>"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3f; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 755; table = "mips_builtin_opcodes"; mnemonic = "dsra"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3b; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 756; table = "mips_builtin_opcodes"; mnemonic = "dsra"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2E"; kind = "instruction"; match = 0x45e00003; mask = 0xffe0003f; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 757; table = "mips_builtin_opcodes"; mnemonic = "dsra"; operand_codes = "D,S,T"; pinfo = "RD_S|RD_T|WR_D|FP_D"; pinfo2 = "0"; membership = "IL2F|IL3A"; kind = "instruction"; match = 0x4b60000f; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSLL32 { width = 32;
+  base = 0x3c;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsll32 { class = arithmetic; encoding = DSLL32;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsll32 ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsll32\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsll32";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 745; table = "mips_builtin_opcodes"; mnemonic = "dsll32"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3c; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRL32 { width = 32;
+  base = 0x3e;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsrl32 { class = arithmetic; encoding = DSRL32;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsrl32 ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsrl32\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsrl32";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 759; table = "mips_builtin_opcodes"; mnemonic = "dsrl32"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3e; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRA32 { width = 32;
+  base = 0x3f;
+  rd = 11:5;
+  rs1 = 16:5;
+  imm = 6:5;
+}
+
+op dsra32 { class = arithmetic; encoding = DSRA32;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "dsra32 ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"dsra32\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsra32";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 752; table = "mips_builtin_opcodes"; mnemonic = "dsra32"; operand_codes = "d,w,<"; pinfo = "WR_d|RD_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x3f; mask = 0xffe0003f; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLLV { width = 32;
+  base = 0x4;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op sllv { class = arithmetic; encoding = SLLV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "sllv ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (shl rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sllv";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1323; table = "mips_builtin_opcodes"; mnemonic = "sllv"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x4; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRLV { width = 32;
+  base = 0x6;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op srlv { class = arithmetic; encoding = SRLV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "srlv ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (shr rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srlv";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1355; table = "mips_builtin_opcodes"; mnemonic = "srlv"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x6; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SRAV { width = 32;
+  base = 0x7;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op srav { class = arithmetic; encoding = SRAV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "srav ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (ashr rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "srav";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1349; table = "mips_builtin_opcodes"; mnemonic = "srav"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x7; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSLLV { width = 32;
+  base = 0x14;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op dsllv { class = arithmetic; encoding = DSLLV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dsllv ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dsllv\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsllv";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 744; table = "mips_builtin_opcodes"; mnemonic = "dsllv"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x14; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRLV { width = 32;
+  base = 0x16;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op dsrlv { class = arithmetic; encoding = DSRLV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dsrlv ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dsrlv\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsrlv";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 758; table = "mips_builtin_opcodes"; mnemonic = "dsrlv"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x16; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DSRAV { width = 32;
+  base = 0x17;
+  rd = 11:5;
+  rs1 = 16:5;
+  rs2 = 21:5;
+}
+
+op dsrav { class = arithmetic; encoding = DSRAV;
+  operands = rd: GPR, rs1: GPR, rs2: GPR;
+  syntax = "dsrav ${rd}, ${rs1}, ${rs2}";
+  semantics = "(set rd (intrinsic \"dsrav\" rs1 rs2))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "dsrav";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 751; table = "mips_builtin_opcodes"; mnemonic = "dsrav"; operand_codes = "d,t,s"; pinfo = "WR_d|RD_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x17; mask = 0xfc0007ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ADDIU { width = 32;
+  base = 0x24000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op addiu { class = arithmetic; encoding = ADDIU;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "addiu ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (add rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "addiu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 297; table = "mips_builtin_opcodes"; mnemonic = "addiu"; operand_codes = "t,r,j"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x24000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DADDIU { width = 32;
+  base = 0x64000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op daddiu { class = arithmetic; encoding = DADDIU;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "daddiu ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"daddiu\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "daddiu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 635; table = "mips_builtin_opcodes"; mnemonic = "daddiu"; operand_codes = "t,r,j"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x64000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding DADDI { width = 32;
+  base = 0x60000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op daddi { class = arithmetic; encoding = DADDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "daddi ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (intrinsic \"daddi\" rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "daddi";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 634; table = "mips_builtin_opcodes"; mnemonic = "daddi"; operand_codes = "t,r,j"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x60000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ORI { width = 32;
+  base = 0x34000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 0;
+}
+
+op ori { class = arithmetic; encoding = ORI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "ori ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (or rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ori";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1168; table = "mips_builtin_opcodes"; mnemonic = "ori"; operand_codes = "t,r,i"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x34000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding ANDI { width = 32;
+  base = 0x30000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 0;
+}
+
+op andi { class = arithmetic; encoding = ANDI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "andi ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (and rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "andi";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 320; table = "mips_builtin_opcodes"; mnemonic = "andi"; operand_codes = "t,r,i"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x30000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding XORI { width = 32;
+  base = 0x38000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 0;
+}
+
+op xori { class = arithmetic; encoding = XORI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "xori ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (xor rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "xori";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1510; table = "mips_builtin_opcodes"; mnemonic = "xori"; operand_codes = "t,r,i"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x38000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLTI { width = 32;
+  base = 0x28000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op slti { class = compare; encoding = SLTI;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "slti ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (slt rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "slti";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1336; table = "mips_builtin_opcodes"; mnemonic = "slti"; operand_codes = "t,r,j"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x28000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SLTIU { width = 32;
+  base = 0x2c000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  imm = 0:16;
+  signed = 1;
+}
+
+op sltiu { class = compare; encoding = SLTIU;
+  operands = rd: GPR, rs1: GPR, imm: imm;
+  syntax = "sltiu ${rd}, ${rs1}, {imm}";
+  semantics = "(set rd (ult rs1 imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sltiu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1337; table = "mips_builtin_opcodes"; mnemonic = "sltiu"; operand_codes = "t,r,j"; pinfo = "WR_t|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x2c000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LUI { width = 32;
+  base = 0x3c000000;
+  rd = 16:5;
+  imm = 0:16;
+}
+
+op lui { class = misc; encoding = LUI;
+  operands = rd: GPR, imm: imm;
+  syntax = "lui ${rd}, {imm}";
+  semantics = "(set rd (move imm))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lui";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 861; table = "mips_builtin_opcodes"; mnemonic = "lui"; operand_codes = "t,u"; pinfo = "WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x3c000000; mask = 0xffe00000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BEQ { width = 32;
+  base = 0x10000000;
+  rs1 = 21:5;
+  rs2 = 16:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op beq { class = branch; encoding = BEQ;
+  operands = rs1: GPR, rs2: GPR, offset: rel;
+  syntax = "beq ${rs1}, ${rs2}, {offset}";
+  semantics = "(if (eq rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "beq";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 350; table = "mips_builtin_opcodes"; mnemonic = "beq"; operand_codes = "s,t,p"; pinfo = "CBD|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x10000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 351; table = "mips_builtin_opcodes"; mnemonic = "beq"; operand_codes = "s,I,p"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_BEQ_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BNE { width = 32;
+  base = 0x14000000;
+  rs1 = 21:5;
+  rs2 = 16:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bne { class = branch; encoding = BNE;
+  operands = rs1: GPR, rs2: GPR, offset: rel;
+  syntax = "bne ${rs1}, ${rs2}, {offset}";
+  semantics = "(if (ne rs1 rs2) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bne";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 400; table = "mips_builtin_opcodes"; mnemonic = "bne"; operand_codes = "s,t,p"; pinfo = "CBD|RD_s|RD_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x14000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 401; table = "mips_builtin_opcodes"; mnemonic = "bne"; operand_codes = "s,I,p"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_BNE_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BEQL { width = 32;
+  base = 0x50000000;
+  rs1 = 21:5;
+  rs2 = 16:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op beql { class = branch; encoding = BEQL;
+  operands = rs1: GPR, rs2: GPR, offset: rel;
+  syntax = "beql ${rs1}, ${rs2}, {offset}";
+  semantics = "(effect (branch \"beql\" rs1 rs2 offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "beql";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 352; table = "mips_builtin_opcodes"; mnemonic = "beql"; operand_codes = "s,t,p"; pinfo = "CBL|RD_s|RD_t"; pinfo2 = "0"; membership = "I2|T3"; kind = "instruction"; match = 0x50000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 353; table = "mips_builtin_opcodes"; mnemonic = "beql"; operand_codes = "s,I,p"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I2|T3"; kind = "assembler_macro"; macro_id = "M_BEQL_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BNEL { width = 32;
+  base = 0x54000000;
+  rs1 = 21:5;
+  rs2 = 16:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bnel { class = branch; encoding = BNEL;
+  operands = rs1: GPR, rs2: GPR, offset: rel;
+  syntax = "bnel ${rs1}, ${rs2}, {offset}";
+  semantics = "(effect (branch \"bnel\" rs1 rs2 offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bnel";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 402; table = "mips_builtin_opcodes"; mnemonic = "bnel"; operand_codes = "s,t,p"; pinfo = "CBL|RD_s|RD_t"; pinfo2 = "0"; membership = "I2|T3"; kind = "instruction"; match = 0x54000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 403; table = "mips_builtin_opcodes"; mnemonic = "bnel"; operand_codes = "s,I,p"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I2|T3"; kind = "assembler_macro"; macro_id = "M_BNEL_I"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BEQZ { width = 32;
+  base = 0x10000000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op beqz { class = branch; encoding = BEQZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "beqz ${rs1}, {offset}";
+  semantics = "(if (eq rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "beqz";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 348; table = "mips_builtin_opcodes"; mnemonic = "beqz"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x10000000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BNEZ { width = 32;
+  base = 0x14000000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bnez { class = branch; encoding = BNEZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "bnez ${rs1}, {offset}";
+  semantics = "(if (ne rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bnez";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 398; table = "mips_builtin_opcodes"; mnemonic = "bnez"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x14000000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLEZ { width = 32;
+  base = 0x18000000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op blez { class = branch; encoding = BLEZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "blez ${rs1}, {offset}";
+  semantics = "(if (sle rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "blez";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 384; table = "mips_builtin_opcodes"; mnemonic = "blez"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x18000000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BGTZ { width = 32;
+  base = 0x1c000000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bgtz { class = branch; encoding = BGTZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "bgtz ${rs1}, {offset}";
+  semantics = "(if (sgt rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bgtz";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 374; table = "mips_builtin_opcodes"; mnemonic = "bgtz"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x1c000000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BLTZ { width = 32;
+  base = 0x4000000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bltz { class = branch; encoding = BLTZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "bltz ${rs1}, {offset}";
+  semantics = "(if (slt rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bltz";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 394; table = "mips_builtin_opcodes"; mnemonic = "bltz"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x4000000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding BGEZ { width = 32;
+  base = 0x4010000;
+  rs1 = 21:5;
+  offset[15:2] = 0:14;
+  signed = 1;
+  alignment = 4;
+}
+
+op bgez { class = branch; encoding = BGEZ;
+  operands = rs1: GPR, offset: rel;
+  syntax = "bgez ${rs1}, {offset}";
+  semantics = "(if (sge rs1 0) (branch offset))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "bgez";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 362; table = "mips_builtin_opcodes"; mnemonic = "bgez"; operand_codes = "s,p"; pinfo = "CBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x4010000; mask = 0xfc1f0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding B { width = 32;
+  base = 0x10000000;
+  offset[25:2] = 0:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op b { class = branch; encoding = B;
+  operands = offset: rel;
+  syntax = "b {offset}";
+  semantics = "(branch offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "b";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 211; table = "mips_builtin_opcodes"; mnemonic = "b"; operand_codes = "p"; pinfo = "UBD"; pinfo2 = "INSN2_ALIAS"; membership = "I1"; kind = "instruction"; match = 0x10000000; mask = 0xffff0000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 212; table = "mips_builtin_opcodes"; mnemonic = "b"; operand_codes = "p"; pinfo = "UBD"; pinfo2 = "INSN2_ALIAS"; membership = "I1"; kind = "instruction"; match = 0x4010000; mask = 0xffff0000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding J { width = 32;
+  base = 0x8000000;
+  offset[25:2] = 0:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op j { class = branch; encoding = J;
+  operands = offset: rel;
+  syntax = "j {offset}";
+  semantics = "(branch offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "j";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 795; table = "mips_builtin_opcodes"; mnemonic = "j"; operand_codes = "s"; pinfo = "UBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x8; mask = 0xfc1fffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 798; table = "mips_builtin_opcodes"; mnemonic = "j"; operand_codes = "a"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_J_A"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 802; table = "mips_builtin_opcodes"; mnemonic = "j"; operand_codes = "a"; pinfo = "UBD"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x8000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding JAL { width = 32;
+  base = 0xc000000;
+  offset[25:2] = 0:24;
+  signed = 1;
+  alignment = 4;
+}
+
+op jal { class = branch; encoding = JAL;
+  operands = offset: rel;
+  syntax = "jal {offset}";
+  semantics = "(call offset)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "jal";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 811; table = "mips_builtin_opcodes"; mnemonic = "jal"; operand_codes = "d,s"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_JAL_2"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 812; table = "mips_builtin_opcodes"; mnemonic = "jal"; operand_codes = "s"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_JAL_1"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 813; table = "mips_builtin_opcodes"; mnemonic = "jal"; operand_codes = "a"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_JAL_A"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 817; table = "mips_builtin_opcodes"; mnemonic = "jal"; operand_codes = "a"; pinfo = "UBD|WR_31"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xc000000; mask = 0xfc000000; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding JR { width = 32;
+  base = 0x8;
+  rs1 = 21:5;
+}
+
+op jr { class = branch; encoding = JR;
+  operands = rs1: GPR;
+  syntax = "jr ${rs1}";
+  semantics = "(effect (branch \"jr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "jr";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 791; table = "mips_builtin_opcodes"; mnemonic = "jr"; operand_codes = "s"; pinfo = "UBD|RD_s"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x8; mask = 0xfc1fffff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding JALR { width = 32;
+  base = 0xf809;
+  rs1 = 21:5;
+}
+
+op jalr { class = branch; encoding = JALR;
+  operands = rs1: GPR;
+  syntax = "jalr ${rs1}";
+  semantics = "(effect (branch \"jalr\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "jalr";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 803; table = "mips_builtin_opcodes"; mnemonic = "jalr"; operand_codes = "s"; pinfo = "UBD|RD_s|WR_d"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xf809; mask = 0xfc1fffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 804; table = "mips_builtin_opcodes"; mnemonic = "jalr"; operand_codes = "d,s"; pinfo = "UBD|RD_s|WR_d"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x9; mask = 0xfc1f07ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding JALR.HB { width = 32;
+  base = 0xfc09;
+  rs1 = 21:5;
+}
+
+op jalr.hb { class = branch; encoding = JALR.HB;
+  operands = rs1: GPR;
+  syntax = "jalr.hb ${rs1}";
+  semantics = "(effect (branch \"jalr.hb\" rs1))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "jalr.hb";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 807; table = "mips_builtin_opcodes"; mnemonic = "jalr.hb"; operand_codes = "s"; pinfo = "UBD|RD_s|WR_d"; pinfo2 = "0"; membership = "I32"; kind = "instruction"; match = 0xfc09; mask = 0xfc1fffff; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 808; table = "mips_builtin_opcodes"; mnemonic = "jalr.hb"; operand_codes = "d,s"; pinfo = "UBD|RD_s|WR_d"; pinfo2 = "0"; membership = "I32"; kind = "instruction"; match = 0x409; mask = 0xfc1f07ff; encoding_bits = 32; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LB { width = 32;
+  base = 0x80000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lb { class = load; encoding = LB;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lb ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lb";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 820; table = "mips_builtin_opcodes"; mnemonic = "lb"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x80000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 821; table = "mips_builtin_opcodes"; mnemonic = "lb"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LB_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LBU { width = 32;
+  base = 0x90000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lbu { class = load; encoding = LBU;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lbu ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lbu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 822; table = "mips_builtin_opcodes"; mnemonic = "lbu"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x90000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 823; table = "mips_builtin_opcodes"; mnemonic = "lbu"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LBU_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LH { width = 32;
+  base = 0x84000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lh { class = load; encoding = LH;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lh ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lh";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 848; table = "mips_builtin_opcodes"; mnemonic = "lh"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x84000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 849; table = "mips_builtin_opcodes"; mnemonic = "lh"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LH_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LHU { width = 32;
+  base = 0x94000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lhu { class = load; encoding = LHU;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lhu ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lhu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 850; table = "mips_builtin_opcodes"; mnemonic = "lhu"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x94000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 851; table = "mips_builtin_opcodes"; mnemonic = "lhu"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LHU_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LW { width = 32;
+  base = 0x8c000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lw { class = load; encoding = LW;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lw ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lw";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 863; table = "mips_builtin_opcodes"; mnemonic = "lw"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0x8c000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 864; table = "mips_builtin_opcodes"; mnemonic = "lw"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LW_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LWU { width = 32;
+  base = 0x9c000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lwu { class = load; encoding = LWU;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "lwu ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lwu";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 886; table = "mips_builtin_opcodes"; mnemonic = "lwu"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0x9c000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 887; table = "mips_builtin_opcodes"; mnemonic = "lwu"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I3"; kind = "assembler_macro"; macro_id = "M_LWU_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LL { width = 32;
+  base = 0xc0000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op ll { class = load; encoding = LL;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ll ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ll";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 857; table = "mips_builtin_opcodes"; mnemonic = "ll"; operand_codes = "t,o(b)"; pinfo = "LDD|RD_b|WR_t"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xc0000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 858; table = "mips_builtin_opcodes"; mnemonic = "ll"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_LL_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LD { width = 32;
+  base = 0xdc000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op ld { class = load; encoding = LD;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "ld ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ld";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 826; table = "mips_builtin_opcodes"; mnemonic = "ld"; operand_codes = "t,o(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LD_OB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 827; table = "mips_builtin_opcodes"; mnemonic = "ld"; operand_codes = "t,o(b)"; pinfo = "WR_t|RD_b"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0xdc000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 828; table = "mips_builtin_opcodes"; mnemonic = "ld"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LD_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LWC1 { width = 32;
+  base = 0xc4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op lwc1 { class = load; encoding = LWC1;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "lwc1 ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load 1 (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "lwc1";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 867; table = "mips_builtin_opcodes"; mnemonic = "lwc1"; operand_codes = "T,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xc4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 868; table = "mips_builtin_opcodes"; mnemonic = "lwc1"; operand_codes = "E,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xc4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 869; table = "mips_builtin_opcodes"; mnemonic = "lwc1"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LWC1_AB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 870; table = "mips_builtin_opcodes"; mnemonic = "lwc1"; operand_codes = "E,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LWC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding LDC1 { width = 32;
+  base = 0xd4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op ldc1 { class = load; encoding = LDC1;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "ldc1 ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load 1 (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "ldc1";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 832; table = "mips_builtin_opcodes"; mnemonic = "ldc1"; operand_codes = "T,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xd4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 833; table = "mips_builtin_opcodes"; mnemonic = "ldc1"; operand_codes = "E,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xd4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 834; table = "mips_builtin_opcodes"; mnemonic = "ldc1"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_LDC1_AB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 835; table = "mips_builtin_opcodes"; mnemonic = "ldc1"; operand_codes = "E,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_LDC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding L.S { width = 32;
+  base = 0xc4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op l.s { class = load; encoding = L.S;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "l.s ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "l.s";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 871; table = "mips_builtin_opcodes"; mnemonic = "l.s"; operand_codes = "T,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xc4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 872; table = "mips_builtin_opcodes"; mnemonic = "l.s"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_LWC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding L.D { width = 32;
+  base = 0xd4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op l.d { class = load; encoding = L.D;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "l.d ${rd}, {offset}(${rs1})";
+  semantics = "(set rd (load target (addr rs1 imm)))";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "l.d";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 836; table = "mips_builtin_opcodes"; mnemonic = "l.d"; operand_codes = "T,o(b)"; pinfo = "CLD|RD_b|WR_T|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xd4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 837; table = "mips_builtin_opcodes"; mnemonic = "l.d"; operand_codes = "T,o(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_L_DOB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 838; table = "mips_builtin_opcodes"; mnemonic = "l.d"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_L_DAB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SB { width = 32;
+  base = 0xa0000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sb { class = store; encoding = SB;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sb ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sb";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1250; table = "mips_builtin_opcodes"; mnemonic = "sb"; operand_codes = "t,o(b)"; pinfo = "SM|RD_t|RD_b"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xa0000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1251; table = "mips_builtin_opcodes"; mnemonic = "sb"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SB_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SH { width = 32;
+  base = 0xa4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sh { class = store; encoding = SH;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sh ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sh";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1299; table = "mips_builtin_opcodes"; mnemonic = "sh"; operand_codes = "t,o(b)"; pinfo = "SM|RD_t|RD_b"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xa4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1300; table = "mips_builtin_opcodes"; mnemonic = "sh"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SH_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SW { width = 32;
+  base = 0xac000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sw { class = store; encoding = SW;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sw ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sw";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1389; table = "mips_builtin_opcodes"; mnemonic = "sw"; operand_codes = "t,o(b)"; pinfo = "SM|RD_t|RD_b"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xac000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1390; table = "mips_builtin_opcodes"; mnemonic = "sw"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SW_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SC { width = 32;
+  base = 0xe0000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sc { class = store; encoding = SC;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sc ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sc";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1252; table = "mips_builtin_opcodes"; mnemonic = "sc"; operand_codes = "t,o(b)"; pinfo = "SM|RD_t|WR_t|RD_b"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xe0000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1253; table = "mips_builtin_opcodes"; mnemonic = "sc"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_SC_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SD { width = 32;
+  base = 0xfc000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sd { class = store; encoding = SD;
+  operands = rd: GPR, rs1: GPR, offset: imm;
+  syntax = "sd ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sd";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1257; table = "mips_builtin_opcodes"; mnemonic = "sd"; operand_codes = "t,o(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SD_OB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1258; table = "mips_builtin_opcodes"; mnemonic = "sd"; operand_codes = "t,o(b)"; pinfo = "SM|RD_t|RD_b"; pinfo2 = "0"; membership = "I3"; kind = "instruction"; match = 0xfc000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1259; table = "mips_builtin_opcodes"; mnemonic = "sd"; operand_codes = "t,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "0"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SD_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SWC1 { width = 32;
+  base = 0xe4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op swc1 { class = store; encoding = SWC1;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "swc1 ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "swc1";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1396; table = "mips_builtin_opcodes"; mnemonic = "swc1"; operand_codes = "T,o(b)"; pinfo = "SM|RD_T|RD_b|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xe4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1397; table = "mips_builtin_opcodes"; mnemonic = "swc1"; operand_codes = "E,o(b)"; pinfo = "SM|RD_T|RD_b|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xe4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1398; table = "mips_builtin_opcodes"; mnemonic = "swc1"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SWC1_AB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1399; table = "mips_builtin_opcodes"; mnemonic = "swc1"; operand_codes = "E,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SWC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding SDC1 { width = 32;
+  base = 0xf4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op sdc1 { class = store; encoding = SDC1;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "sdc1 ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "sdc1";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1265; table = "mips_builtin_opcodes"; mnemonic = "sdc1"; operand_codes = "T,o(b)"; pinfo = "SM|RD_T|RD_b|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xf4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1266; table = "mips_builtin_opcodes"; mnemonic = "sdc1"; operand_codes = "E,o(b)"; pinfo = "SM|RD_T|RD_b|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xf4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1267; table = "mips_builtin_opcodes"; mnemonic = "sdc1"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_SDC1_AB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1268; table = "mips_builtin_opcodes"; mnemonic = "sdc1"; operand_codes = "E,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I2"; kind = "assembler_macro"; macro_id = "M_SDC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding S.S { width = 32;
+  base = 0xe4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op s.s { class = store; encoding = S.S;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "s.s ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "s.s";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1400; table = "mips_builtin_opcodes"; mnemonic = "s.s"; operand_codes = "T,o(b)"; pinfo = "SM|RD_T|RD_b|FP_S"; pinfo2 = "0"; membership = "I1"; kind = "instruction"; match = 0xe4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1401; table = "mips_builtin_opcodes"; mnemonic = "s.s"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_S"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_SWC1_AB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
+
+encoding S.D { width = 32;
+  base = 0xf4000000;
+  rd = 16:5;
+  rs1 = 21:5;
+  offset = 0:16;
+  signed = 1;
+}
+
+op s.d { class = store; encoding = S.D;
+  operands = rd: FPR, rs1: GPR, offset: imm;
+  syntax = "s.d ${rd}, {offset}(${rs1})";
+  semantics = "(store (memory-address rd offset) rs1)";
+  # BEGIN BINUTILS METADATA
+  binutils = {
+    lookup = "syntax_mnemonic";
+    mnemonic = "s.d";
+    variants = [
+      { source = "binutils/opcodes/mips-opc.c"; line = 1273; table = "mips_builtin_opcodes"; mnemonic = "s.d"; operand_codes = "T,o(b)"; pinfo = "SM|RD_T|RD_b|FP_D"; pinfo2 = "0"; membership = "I2"; kind = "instruction"; match = 0xf4000000; mask = 0xfc000000; encoding_bits = 32; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1274; table = "mips_builtin_opcodes"; mnemonic = "s.d"; operand_codes = "T,o(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_S_DOB"; },
+      { source = "binutils/opcodes/mips-opc.c"; line = 1275; table = "mips_builtin_opcodes"; mnemonic = "s.d"; operand_codes = "T,A(b)"; pinfo = "INSN_MACRO"; pinfo2 = "INSN2_M_FP_D"; membership = "I1"; kind = "assembler_macro"; macro_id = "M_S_DAB"; }
+    ];
+  };
+  # END BINUTILS METADATA
+}
