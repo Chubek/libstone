@@ -22,7 +22,63 @@ The tests independently compile the upstream MIPS, PowerPC, M68K, and SPARC
 tables to compare every imported match/mask, and run the upstream S390 mnemonic
 generator to check conditional instruction expansion.
 
-## Coverage
+## Complete architecture inventory
+
+The bundle covers **all 70 architecture cases** in this checkout's
+`opcodes/disassemble.c`. `manifest.json` records the exhaustive mapping in
+`binutils_coverage`, including the dispatcher source digest. Existing ARM, AVR,
+M68K, MIPS, PowerPC, S390, and SPARC descriptions supply seven architecture
+families; **63 generated files** supply the other dispatcher targets. `i386.isa`
+is the 32-bit inventory, alongside the existing AMD64 `x86.isa`.
+
+```sh
+python3 yellowstone/scripts/generate_binutils_isa.py
+python3 yellowstone/scripts/generate_binutils_isa.py --check
+python3 -m unittest discover -s yellowstone/scripts -p 'test_*isa*.py'
+```
+
+The generator also updates manifest operation counts and architecture coverage.
+It refuses to replace a file that does not carry its generated-file marker.
+Adding an upstream dispatcher target without an importer mapping is an error.
+
+### Generated description conventions
+
+- Each operation groups the variants of one **source mnemonic/template**.
+  Sanitized ISA identifiers retain the original spelling in `mnemonic`.
+- `source_fields` preserves the upstream initializer's ordered C expressions,
+  including operand descriptors, flags, encoding patterns, and macro expansions.
+  Where supplied, `field_names` labels those columns. These are source records,
+  not a uniform executable encoding schema.
+- CGEN descriptions join the descriptor and opcode tables by their shared index,
+  retaining instruction IDs, bit widths, syntax fields, attributes, and format
+  match/mask values. `match_bits` is the CGEN format's mask width, which can be
+  smaller than the full instruction.
+- Blackfin uses decoder families with dispatch predicates and display fragments;
+  RX uses its declarative decoder patterns. Z80 includes callback-generated
+  arithmetic, bit, and block-operation names.
+- Xtensa obtains its configured opcode table from `bfd/xtensa-modules.c`, the
+  ISA module used by `opcodes/xtensa-dis.c`. SPU and C6X include their upstream
+  instruction headers. SH includes both SHcompact and SHmedia tables.
+- L1OM and K1OM use the shared x86 disassembler's 64-bit template inventory;
+  the backend identity is explicit. RS/6000 is filtered to the
+  `PPC_OPCODE_POWER` dialect selected by `print_insn_rs6000`.
+- Word/address sizes and `bits_per_byte` are taken from the default BFD CPU
+  descriptor, retained alongside its source reference. These include non-octet
+  addressable units on TI DSPs. Byte order is supplied by the object file.
+- Execution semantics are explicitly **`(unknown)`**. Register typing,
+  instruction classes, scheduling, allocation, and optimization legality require
+  further architecture-specific modeling. `misc` is the unclassified operation
+  class, and the compiler sections record the missing models explicitly.
+- `encoding` blocks are marked `upstream_reference`; numeric matching information
+  stays with its source variant. The generated files support inventory/query
+  consumers without presenting incomplete operand definitions as usable machine
+  encoders. Manifest counts include mnemonic/template groups and decoder families,
+  rather than claiming a hardware instruction census.
+
+The generated inventories are checked against independently compiled upstream
+macro tables, the dispatcher, and their manifest counts.
+
+## Enrichment of existing descriptions
 
 | ISA files | Source tables |
 | --- | --- |
@@ -35,8 +91,8 @@ generator to check conditional instruction expansion.
 | `sparc64.isa` | `sparc-opc.c`, including macro-expanded table entries |
 | `x86.isa` | `i386-opc.tbl` |
 
-The remaining architecture files have no corresponding table in this checkout.
-In particular, this release predates AArch64 and RISC-V support. Individual
+Architecture files outside these importers, such as AArch64 and RISC-V, have no
+corresponding table in this older checkout. Individual
 unmatched operations are listed in each enriched profile; absence from this
 inventory is not evidence that an instruction is invalid.
 

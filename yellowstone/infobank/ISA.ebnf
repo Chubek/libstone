@@ -1,0 +1,49 @@
+(* Zephyr ISA description grammar. Comments begin with #. *)
+
+Document       = { Whitespace }, { Declaration }, { Whitespace }, EOF ;
+Declaration    = Arch | Profile | Compiler | Regclass | Encoding | Operation | Legacy ;
+
+Arch           = "arch", Identifier, "{", { Field }, "}" ;
+Profile        = "profile", "{", { Field }, "}" ;
+Compiler       = "compiler", "{", { Section }, "}" ;
+Section        = Identifier, "{", { Field | Section }, "}" ;
+Legacy         = "legacy", "{", { Field }, "}" ;
+
+Regclass       = "regclass", Identifier, "{", { Register }, "}" ;
+Register       = Identifier, "(", Number, ")", "=", Number, "," ;
+Encoding       = "encoding", Identifier, "{", { Field }, "}" ;
+Operation      = "op", Identifier, "{", { Field }, "}" ;
+
+Field          = Identifier, "=", Value, ";" ;
+Value          = String | Number | Boolean | Array | Object | CallList | BareList ;
+Array          = "[", [ Value, { ",", Value } ], "]" ;
+Object         = "{", { Field }, "}" ;
+CallList       = Call, { ",", Call } ;
+Call           = Identifier, "(", [ Value, { ",", Value } ], ")" ;
+BareList       = [ BareAtom, { ",", BareAtom } ] ;
+
+(* The semantics field is a quoted string or an S-expression. *)
+SemanticField  = "semantics", "=", (String | SExpr), ";" ;
+SExpr          = "(", { SExprItem }, ")" ;
+SExprItem      = String | Number | Identifier | SExpr ;
+
+Boolean        = "true" | "false" ;
+Number         = Hex | Decimal ;
+Hex            = "0x", HexDigit, { HexDigit } ;
+Decimal        = [ "-" ], Digit, { Digit } ;
+
+String         = '"', { StringChar }, '"' ;
+StringChar     = Escape | ? any character except quote and backslash ? ;
+Escape         = "\\", ? any character ? ;
+Identifier     = IdentifierStart, { IdentifierPart } ;
+IdentifierStart= Letter | "_" ;
+IdentifierPart = Letter | Digit | "_" | "." | "-" ;
+BareAtom       = ? characters other than comma, semicolon, braces, brackets,
+                   parentheses, and whitespace ? ;
+
+Letter         = "A".."Z" | "a".."z" ;
+Digit          = "0".."9" ;
+HexDigit       = Digit | "A".."F" | "a".."f" ;
+Whitespace     = " " | "\t" | "\r" | "\n" | Comment ;
+Comment        = "#", { ? any character except newline ? }, [ "\n" ] ;
+EOF            = ? end of input ? ;

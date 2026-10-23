@@ -1,0 +1,31 @@
+module ISA {
+  Document = document(declarations: Declaration*)
+
+  Declaration = arch(name: string, fields: Field*)
+              | profile(fields: Field*)
+              | compiler(fields: Section*)
+              | regclass(name: string, entries: Register*)
+              | encoding(name: string, fields: Field*)
+              | operation(name: string, fields: Field*)
+              | legacy(fields: Field*)
+
+  Section = section(name: string, fields: Field*)
+  Register = register(name: string, width: int, number: int)
+  Field = field(name: string, value: Value)
+
+  Value = string(value: string)
+        | integer(value: int)
+        | boolean(value: bool)
+        | identifier(value: string)
+        | bare(value: string)
+        | array(items: Value*)
+        | object(fields: Field*)
+        | call(name: string, args: Value*)
+        | list(items: Value*)
+        | semantic(expression: SExpr)
+
+  SExpr = atom(value: string)
+        | number(value: int)
+        | string_atom(value: string)
+        | list(items: SExpr*)
+}
