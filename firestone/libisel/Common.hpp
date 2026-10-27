@@ -70,14 +70,24 @@ struct Rule {
     std::string resource = "alu";
     // Target legality (types, immediates, overflow semantics) belongs to the caller.
     std::function<bool(const Graph&, NodeId, const Bindings&)> guard;
+    std::size_t occupancy = 1;
+    std::size_t units = 1;
+    // Empty retains lexicographic binding order. Explicit order may repeat inputs.
+    std::vector<std::string> operand_order;
+
 };
 class Rules {
 public:
     std::size_t add(Rule rule) {
         rewrite::validate_term(rule.pattern, true);
         if (rewrite::is_variable(rule.pattern) || rule.name.empty() || rule.instruction.empty() ||
-            !std::isfinite(rule.cost) || rule.cost < 0 || rule.latency == 0 || rule.resource.empty())
+            !std::isfinite(rule.cost) || rule.cost < 0 || rule.latency == 0 || rule.resource.empty() || rule.occupancy == 0 || rule.units == 0)
             throw std::invalid_argument("invalid selection rule");
+        if (!rule.operand_order.empty()) {
+            const auto variables = rewrite::variables(rule.pattern);
+            const std::set<std::string> supplied(rule.operand_order.begin(), rule.operand_order.end());
+            if (variables != supplied) throw std::invalid_argument("operand order must cover exactly the pattern bindings");
+        }
         rules_.push_back(std::move(rule)); return rules_.size() - 1;
     }
     const Rule& operator[](std::size_t id) const { return rules_.at(id); }
@@ -100,6 +110,8 @@ struct Instruction {
     std::string resource = "alu";
     std::vector<NodeId> covered;
     std::size_t rule = 0;
+    std::size_t occupancy = 1;
+    std::size_t units = 1;
 };
 enum class Stop { Complete, Infeasible, SearchLimit };
 struct Selection {
@@ -163,10 +175,13 @@ inline Selection materialize(const Problem& p, const std::vector<std::size_t>& c
     for (const auto& pair : roots) {
         const auto& t = p.tiles[pair.second]; const auto& rule = p.rules[t.rule];
         Instruction inst{t.root, rule.instruction, {}, {}, rule.latency, rule.resource,
-                         {t.covered.begin(), t.covered.end()}, t.rule};
-        for (const auto& binding : t.bindings) {
-            if (!roots.count(binding.second)) throw std::invalid_argument("tile input is not a selected result");
-            inst.inputs.push_back(binding.second); inst.input_names.push_back(binding.first);
+                         {t.covered.begin(), t.covered.end()}, t.rule, rule.occupancy, rule.units};
+        auto names = rule.operand_order;
+        if (names.empty()) for (const auto& binding : t.bindings) names.push_back(binding.first);
+        for (const auto& name : names) {
+            const auto input = t.bindings.at(name);
+            if (!roots.count(input)) throw std::invalid_argument("tile input is not a selected result");
+            inst.inputs.push_back(input); inst.input_names.push_back(name);
         }
         out.instructions.push_back(std::move(inst)); out.cost += rule.cost;
         if (!std::isfinite(out.cost)) throw std::overflow_error("selection cost overflow");

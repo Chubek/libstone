@@ -45,9 +45,12 @@ without converting to a second unrelated expression representation.
 Rules match `librewrite` patterns. Variables are named leaves, and repeated
 variables require the same node ID. Guards receive the graph, root ID and bindings
 for target-specific type/immediate legality. A rule emits one instruction, with
-nonnegative finite cost, positive latency and a named resource. Different target
-operand forms can be expressed by different rules and guards. Variables are
-ordered lexicographically in emitted inputs; `input_names` preserves their names.
+nonnegative finite cost, positive latency, occupancy, unit count, and a named
+resource. Different target operand forms can be expressed by different rules and
+guards. Variables default to lexicographic order in emitted inputs; `input_names` preserves
+their names. `Rule::operand_order` can specify target operand order and repeated
+operands. When supplied, it must mention every pattern binding and no unknown
+bindings. Occupancy and unit count pass unchanged into the scheduling graph.
 The selected root and covered node IDs refer back to the original graph, so a
 backend can recover immediates and types for encoding. These libraries do not
 encode machine bytes or invent ISA-specific semantic equivalences.
@@ -81,6 +84,14 @@ optimality. `explored` reports search nodes where applicable. Bounds for factor
 elimination limit bag size, while other exact selectors bound visited search
 nodes. Exact solvers are intended for modest regions; heuristics work on larger
 ones. Pattern matching and tree traversal currently use recursive C++ calls.
+
+`libisel/Verify.hpp` provides `verify(graph, rules, roots, selection)`. It checks
+matched target instructions, ordered inputs, coverage, definition order, metadata,
+outputs and cost independently of the selector. It accepts feasible incumbents
+from limited searches but rejects claims of optimality on those results. Guards
+are evaluated again during verification and should be deterministic. Verification
+checks feasibility and status consistency; it does not rerun optimization to
+certify a caller-supplied `optimal` flag.
 
 ## Scheduling model
 
@@ -147,6 +158,47 @@ renaming. The simulators model scheduling, not execution of instruction values.
 Modulo scheduling returns the kernel and initiation interval, with a dedicated
 `verify` overload for periodic occupancy and carried dependencies. Its finite
 stage and search bounds mean failure is `SearchLimit`, not proof of infeasibility;
-a successful result does not claim global optimality outside those bounds.
+`optimal_interval` is true only when a feasible kernel achieves the global
+resource/recurrence lower bound. A false flag leaves optimality unproved.
 Unrolling is a dependence-graph transformation: loop control, induction updates,
 remainder loops, and prologue/epilogue machine code remain the backend's job.
+
+## Scheduled values to register allocation
+
+`libisched/RegisterAllocation.hpp` connects a selected and scheduled region to
+`libregalloc`:
+
+```cpp
+#include <libisched/RegisterAllocation.hpp>
+#include <libregalloc/LinearScanRegalloc.hpp>
+#include <libregalloc/RegisterPressure.hpp>
+
+auto input = firestone::isched::allocation_problem(selected, schedule);
+auto registers = firestone::regalloc::Machine::uniform(8);
+auto allocation = firestone::regalloc::LinearScanRegalloc{}.allocate(input.problem, registers);
+auto pressure = firestone::regalloc::RegisterPressure{}.estimate(input.problem);
+```
+
+Pass the scheduling machine as the third argument when using nondefault resources.
+The adapter verifies the schedule, preserves original selection IDs in `sources`
+and the inverse `values` map, and builds intervals using read slot `2*cycle` and
+destination-reservation slot `2*cycle+1`. Destinations stay reserved through result
+completion and the last read; requested outputs stay live through the region exit.
+Simultaneous definitions interfere, and a value consumed for the last time can
+share a register with that consumer's destination. This models read-before-write
+operands; target-specific early-clobber or tied-operand constraints must be added
+by the backend. Modulo kernels need iteration-aware allocation; this adapter models ordinary
+schedules only.
+
+An optional callback receives each selected instruction and its `regalloc::Value`
+so targets can set register classes, precolors, banks, spill layout and costs.
+Derived ranges and uses are retained regardless of callback edits. The returned
+problem can be inspected with `RegisterPressure`, allocated with any compatible
+`libregalloc` algorithm, and checked with `regalloc::verify`. Allocation does not
+insert spill/reload machine instructions.
+
+Modulo scheduling computes resource demand and recurrence difference-constraint
+bounds before start-time search. Positive recurrence cycles are detected by
+longest-path relaxation; binary search finds the minimum recurrence-feasible
+interval within the caller's bound. The search budget counts visited search states
+and attempted start times, including resource-conflicting attempts.

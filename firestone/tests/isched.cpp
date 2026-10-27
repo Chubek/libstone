@@ -1,5 +1,8 @@
 #include "Test.hpp"
 #include "../libisched/AntColonyOpt.hpp"
+#include "../libisched/RegisterAllocation.hpp"
+#include "../libregalloc/LinearScanRegalloc.hpp"
+#include "../libregalloc/RegisterPressure.hpp"
 #include "../libisched/ConstraintProgSched.hpp"
 #include "../libisched/DelaySlotSched.hpp"
 #include "../libisched/HyperblockSched.hpp"
@@ -127,5 +130,68 @@ int main() { return test_main([] {
     CHECK(!verify(loop, {}, broken_modulo).empty());
     Graph backwards; backwards.add(op("use")); backwards.add(op("def")); backwards.depend(1,0,1);
     throws<std::invalid_argument>([&] { ScoreBoarding{}.run(backwards, m); });
+    // Exhaustive periodic oracle checks recurrence bounds and resource overlap.
+    for (Cycle latency = 1; latency <= 3; ++latency) for (Cycle distance = 1; distance <= 2; ++distance) {
+        Graph kernel; kernel.add(op("a", latency)); kernel.add(op("b", 2));
+        kernel.depend(0, 1, latency); kernel.depend(1, 0, 2, DependencyKind::Data, distance);
+        Cycle oracle = 0;
+        for (Cycle ii = 1; ii <= 6 && oracle == 0; ++ii)
+            for (Cycle x = 0; x < ii * 3; ++x) for (Cycle y = 0; y < ii * 3; ++y) {
+                ModuloResult candidate; candidate.initiation_interval = ii;
+                candidate.kernel.start = {x,y}; candidate.kernel.makespan = std::max(x + latency, y + 2);
+                if (verify(kernel, m, candidate).empty()) oracle = ii;
+            }
+        auto actual = ModuloSched{}.schedule(kernel, m, 6, 3);
+        CHECK(oracle != 0); CHECK(actual.initiation_interval == oracle);
+        CHECK(verify(kernel, m, actual).empty());
+    }
+    CHECK(modulo.optimal_interval);
+    CHECK(ModuloSched{}.lower_bound(loop, {}, 8) == 3);
+    CHECK(ModuloSched{}.lower_bound(occupied, {}, 8) == 6);
+    Graph recurrence;
+    recurrence.add(op("a", 3)); recurrence.add(op("b", 4));
+    recurrence.depend(0, 1, 3); recurrence.depend(1, 0, 4, DependencyKind::Data, 1);
+    CHECK(ModuloSched{}.lower_bound(recurrence, m, 16) == 7);
+    CHECK(!ModuloSched{}.lower_bound(recurrence, m, 6));
+    CHECK(!ModuloSched{}.recurrence_feasible(recurrence, 6));
+    auto recurring = ModuloSched{}.schedule(recurrence, m, 16, 3);
+    CHECK(recurring.initiation_interval == 7); CHECK(recurring.optimal_interval);
+    CHECK(verify(recurrence, m, recurring).empty());
+    CHECK(ModuloSched{}.schedule(recurrence, m, 16, 3, 1).kernel.stop == Stop::SearchLimit);
+    throws<std::invalid_argument>([&] { modulo_dependencies(recurrence, {0}, 7); });
+    // Destination reservation, live-outs and target properties survive the pipeline.
+    auto sequential = ListSched{}.schedule(scheduled);
+    auto alloc_input = allocation_problem(selected, sequential);
+    CHECK(alloc_input.values.at(root) == 1); CHECK(alloc_input.sources[0] == leaf);
+    CHECK(alloc_input.problem.value(0).uses == std::vector<firestone::regalloc::Position>({2}));
+    auto registers_machine = firestone::regalloc::Machine::uniform(1);
+    auto allocated = firestone::regalloc::LinearScanRegalloc{}.allocate(alloc_input.problem, registers_machine);
+    CHECK(firestone::regalloc::verify(alloc_input.problem, registers_machine, allocated).empty());
+    CHECK(allocated.locations[0].kind == firestone::regalloc::LocationKind::Register);
+    CHECK(allocated.locations[1].kind == firestone::regalloc::LocationKind::Register);
+    auto profile = firestone::regalloc::RegisterPressure{}.estimate(alloc_input.problem);
+    CHECK(profile.peak == 1);
+    auto configured = allocation_problem(selected, sequential, {}, [](const auto&, auto& value_info) {
+        value_info.fixed = 0; value_info.spill_cost = 5;
+        value_info.ranges.clear(); value_info.uses.clear();
+    });
+    CHECK(configured.problem.value(0).fixed == 0);
+    CHECK(!configured.problem.value(0).ranges.empty()); CHECK(!configured.problem.value(0).uses.empty());
+    auto invalid_schedule = sequential; invalid_schedule.start[1] = 0;
+    throws<std::invalid_argument>([&] { allocation_problem(selected, invalid_schedule); });
+    auto live_outputs = selected; live_outputs.roots = {leaf, root};
+    auto live_input = allocation_problem(live_outputs, sequential);
+    CHECK(live_input.problem.interferes(0, 1));
+    CHECK(firestone::regalloc::RegisterPressure{}.estimate(live_input.problem).peak == 2);
+    auto root_order = selected; std::reverse(root_order.instructions.begin(), root_order.instructions.end());
+    throws<std::invalid_argument>([&] { allocation_problem(root_order, sequential); });
+    auto wide_selection = selected;
+    for (auto& inst : wide_selection.instructions) { inst.occupancy = 4; inst.units = 2; }
+    auto wide_graph = from_selection(wide_selection);
+    CHECK(wide_graph.node(0).occupancy == 4); CHECK(wide_graph.node(0).units == 2);
+    auto wide_schedule = ListSched{}.schedule(wide_graph, m);
+    CHECK(wide_schedule.start[1] == 4);
+    auto wide_allocation = allocation_problem(wide_selection, wide_schedule, m);
+    CHECK(wide_allocation.problem.size() == 2);
     Graph empty; CHECK(ListSched{}.schedule(empty).start.empty()); CHECK(OutOfOrder{}.run(empty).cycles == 0);
 }); }

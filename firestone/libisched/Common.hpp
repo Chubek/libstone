@@ -200,7 +200,7 @@ inline Graph from_selection(const isel::Selection& selection) {
         throw std::invalid_argument("selection has no feasible cover");
     Graph out; std::map<NodeId, NodeId> ids;
     for (const auto& inst : selection.instructions) {
-        Operation op; op.opcode = inst.opcode; op.latency = inst.latency; op.resource = inst.resource; op.source = inst.result;
+        Operation op; op.opcode = inst.opcode; op.latency = inst.latency; op.resource = inst.resource; op.source = inst.result; op.occupancy = inst.occupancy; op.units = inst.units;
         if (ids.count(inst.result)) throw std::invalid_argument("duplicate selection result");
         auto id = out.add(op);
         for (auto input : inst.inputs) {

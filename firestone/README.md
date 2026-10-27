@@ -152,6 +152,7 @@ concurrency, vector semantics, and compute/graphics adapter contracts.
 The [TRS guide](docs/TRS.md) describes string, term-graph, and combinator rewriting.
 
 The [code generation guide](docs/Codegen.md) describes selection/scheduling algorithms,
-IR/rewrite/equality-saturation integration, search limits, and target contracts.
+IR/rewrite/equality-saturation integration, scheduled register-allocation inputs,
+search limits, and target contracts.
 The [register allocation guide](docs/Regalloc.md) describes the 20 selected methods,
 physical-register constraints, SSA integration, spill/transfer plans and verification.

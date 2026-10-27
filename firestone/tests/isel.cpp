@@ -1,5 +1,6 @@
 #include "Test.hpp"
 #include "../libisel/BURS.hpp"
+#include "../libisel/Verify.hpp"
 #include "../libisel/DAGDynProg.hpp"
 #include "../libisel/DynamicProg.hpp"
 #include "../libisel/GraphCovering.hpp"
@@ -24,6 +25,33 @@ int main() { return test_main([] {
     auto dp = DynamicProg{}.select(g, rules, {root});
     CHECK(dp.stop == Stop::Complete); CHECK(dp.cost == 5); CHECK(dp.optimal);
     CHECK(dp.instructions.back().opcode == "FMA");
+    CHECK(verify(g, rules, {root}, dp).empty());
+    auto bad_selection = dp; bad_selection.instructions.back().inputs.clear();
+    CHECK(!verify(g, rules, {root}, bad_selection).empty());
+    bad_selection = dp; bad_selection.instructions.front().covered.clear();
+    CHECK(!verify(g, rules, {root}, bad_selection).empty());
+    bad_selection = dp; bad_selection.instructions.pop_back();
+    CHECK(!verify(g, rules, {root}, bad_selection).empty());
+    bad_selection = dp; bad_selection.cost += 1;
+    CHECK(!verify(g, rules, {root}, bad_selection).empty());
+    bad_selection = dp; bad_selection.instructions.back().rule = rules.size();
+    CHECK(!verify(g, rules, {root}, bad_selection).empty());
+    Rules ordered_rules;
+    ordered_rules.add(rule("X", "x", 1)); ordered_rules.add(rule("Y", "y", 1));
+    auto ordered_rule = rule("SUB", "(sub ?lhs ?rhs)", 1);
+    ordered_rule.operand_order = {"?rhs", "?lhs", "?rhs"};
+    ordered_rule.occupancy = 3; ordered_rule.units = 2;
+    ordered_rules.add(ordered_rule);
+    Graph operands; auto lhs = operands.add("x"), rhs = operands.add("y");
+    auto sub = operands.add("sub", {lhs, rhs});
+    auto ordered = BURS{}.select(operands, ordered_rules, {sub});
+    CHECK(ordered.instructions.back().inputs == std::vector<NodeId>({rhs, lhs, rhs}));
+    CHECK(ordered.instructions.back().occupancy == 3); CHECK(ordered.instructions.back().units == 2);
+    CHECK(verify(operands, ordered_rules, {sub}, ordered).empty());
+    ordered_rule.operand_order = {"?lhs"};
+    throws<std::invalid_argument>([&] { ordered_rules.add(ordered_rule); });
+    ordered_rule.operand_order.clear(); ordered_rule.units = 0;
+    throws<std::invalid_argument>([&] { ordered_rules.add(ordered_rule); });
     CHECK(BURS{}.select(g, rules, {root}).cost == dp.cost);
     CHECK(MaximalMunch{}.select(g, rules, {root}).cost == dp.cost);
     CHECK(DAGDynProg{}.select(g, rules, {root}).cost == dp.cost);
