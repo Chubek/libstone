@@ -32,3 +32,12 @@ execute_process(COMMAND "${FIRESTONE_BINARY}/install-test/consumer/trs_consumer"
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Firestone installed TRS consumer failed")
 endif()
+
+execute_process(COMMAND "${FIRESTONE_BINARY}/install-test/consumer/codegen_consumer" RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "Firestone installed codegen consumer failed")
+endif()
+execute_process(COMMAND "${FIRESTONE_BINARY}/install-test/consumer/regalloc_consumer" RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "Firestone installed regalloc consumer failed")
+endif()

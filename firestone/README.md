@@ -4,7 +4,7 @@ Firestone is a dependency-free, header-only C++17 library for compiler IRs,
 graph analysis, CPS, type systems, semantic checking, memory management,
 object models, term rewriting, equality saturation, bytecode virtual machines,
 arbitrary-precision arithmetic, concurrency, portable vector operations, and
-compute/graphics adapters.
+compute/graphics adapters, instruction selection, instruction scheduling, and register allocation.
 
 ## Build and test
 
@@ -38,7 +38,8 @@ target_link_libraries(my_compiler PRIVATE Firestone::firestone)
 Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::trs`, `Firestone::eqsat`,
 `Firestone::cps`, `Firestone::memory`, `Firestone::object`, `Firestone::sema`, and
 `Firestone::type`, `Firestone::vm`, `Firestone::bignum`, `Firestone::compute`,
-`Firestone::concurrency`, `Firestone::gfx`, and `Firestone::intrin`.
+`Firestone::concurrency`, `Firestone::gfx`, `Firestone::intrin`, `Firestone::isel`,
+`Firestone::isched`, and `Firestone::regalloc`.
 Source-tree embedding uses `add_subdirectory(firestone)`
 with the same target names. Include `<Firestone.hpp>` or individual headers,
 such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
@@ -47,6 +48,9 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 
 | Header / API | Implemented behavior |
 | --- | --- |
+| `libisel/*.hpp` | Pattern-based tree/DAG selection, BURS labeling, exact covering, bounded ILP/SMT selection, factor elimination, macros and peepholes |
+| `libisched/*.hpp` | Latency/resource scheduling, exact search, modulo kernels, unrolling, dynamic issue simulation, regional plans and delay slots |
+| `libregalloc/*.hpp` | Twenty allocation/support methods: coloring, linear scan, greedy/SSA/local allocation, exact PBQP/ILP, matching, annealing, spills, splits, copies and pressure |
 | `libir/Graph.hpp` | Stable node IDs, typed/ported edges, reachability, deterministic topological ordering, SCCs, DOT output |
 | `RawDAG.hpp` | Cycle-rejecting DAG construction |
 | `ControlFlowGraph.hpp` | Basic blocks, terminators, dominance, postdominance, frontiers, control dependence |
@@ -98,7 +102,8 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 Namespaces follow component names: `firestone::ir`, `firestone::rewrite`,
 `firestone::eqsat`, `firestone::cps`, `firestone::memory`, `firestone::object`,
 `firestone::sema`, `firestone::type`, `firestone::trs`, `firestone::vm`, `firestone::bignum`,
-`firestone::compute`, `firestone::gfx`, `firestone::intrin`, and `firestone::concurrency`.
+`firestone::compute`, `firestone::gfx`, `firestone::intrin`, `firestone::concurrency`,
+`firestone::isel`, `firestone::isched`, and `firestone::regalloc`.
 The original `DataDependenceGrahp.hpp` spelling remains a compatibility include
 and type alias.
 
@@ -145,3 +150,8 @@ The [VM guide](docs/VM.md) specifies bytecode, execution, binary, and backend co
 The [foundation libraries guide](docs/Foundations.md) specifies arithmetic,
 concurrency, vector semantics, and compute/graphics adapter contracts.
 The [TRS guide](docs/TRS.md) describes string, term-graph, and combinator rewriting.
+
+The [code generation guide](docs/Codegen.md) describes selection/scheduling algorithms,
+IR/rewrite/equality-saturation integration, search limits, and target contracts.
+The [register allocation guide](docs/Regalloc.md) describes the 20 selected methods,
+physical-register constraints, SSA integration, spill/transfer plans and verification.
