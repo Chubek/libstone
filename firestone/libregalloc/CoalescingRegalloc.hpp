@@ -8,7 +8,8 @@ struct CoalescingResult {
 };
 // Briggs's conservative criterion on a uniform register domain. For irregular
 // domains conservative mode declines contraction; preferences still guide coloring.
-inline CoalescingResult coalesce(const Problem& p, const Machine& m, bool aggressive = false) {
+inline CoalescingResult coalesce(const Problem& p, const Machine& m, bool aggressive = false,
+                                 bool george_precolors = false) {
     validate(p, m);
     std::vector<std::set<ValueId>> groups(p.size());
     auto owner = detail::ids(p);
@@ -55,7 +56,30 @@ inline CoalescingResult coalesce(const Problem& p, const Machine& m, bool aggres
                     if (domain(n) != common) uniform = false;
                     if (neighbors(n).size() >= common.size()) ++high_degree;
                 }
-                if (!uniform || high_degree >= common.size()) continue;
+                bool safe = uniform && high_degree < common.size();
+                // George's criterion: when merging into a precolored node,
+                // each neighbor of the other endpoint must already interfere
+                // with that node, be precolored, or have degree below K.
+                if (george_precolors && fixed) {
+                    auto is_fixed = [&](ValueId group) {
+                        for (auto v : groups[group]) if (p.value(v).fixed) return true;
+                        return false;
+                    };
+                    auto target = is_fixed(a) ? a : b;
+                    auto source = target == a ? b : a;
+                    auto palette = domain(source);
+                    bool george_safe = !is_fixed(source) && palette.count(*fixed) != 0;
+                    for (auto r : palette) for (auto s : palette)
+                        if (r != s && m.aliases(r, s)) george_safe = false;
+                    auto target_neighbors = neighbors(target);
+                    for (auto n : neighbors(source)) {
+                        if (!is_fixed(n) && domain(n) != palette) george_safe = false;
+                        if (!target_neighbors.count(n) && !is_fixed(n) && neighbors(n).size() >= palette.size())
+                            george_safe = false;
+                    }
+                    safe = safe || george_safe;
+                }
+                if (!safe) continue;
             }
             for (auto v : groups[b]) { groups[a].insert(v); owner[v] = a; }
             groups[b].clear(); changed = true;

@@ -15,6 +15,9 @@
 #include "../libregalloc/SSABasedLS.hpp"
 #include "../libregalloc/SSABasedSpilling.hpp"
 #include "../libregalloc/SSAChordalRegalloc.hpp"
+#include "../libregalloc/GeorgeAppelGC.hpp"
+#include "../libregalloc/RegionBasedGC.hpp"
+#include "../libregalloc/TraceBasedLS.hpp"
 using namespace firestone::regalloc;
 static Value interval(Position begin, Position end, double cost = 1) {
     Value v; v.ranges = {{begin, end}}; v.spill_cost = cost; return v;
@@ -77,7 +80,8 @@ int main() { return test_main([] {
         p.prefer(0, 2, 2); auto m = machine; m.registers[1].cost = 0.25;
         auto expected = oracle(p, m); auto pbqp = PBQPRegalloc{}.allocate(p, m); auto ilp = ILPRegalloc{}.allocate(p, m);
         CHECK(pbqp.optimal); CHECK(pbqp.cost == expected); CHECK(ilp.cost == expected); CHECK(verify(p, m, pbqp).empty());
-        for (auto a : {GreedyRegalloc{}.allocate(p, m), BriggsRegalloc{}.allocate(p, m), CoalescingRegalloc{}.allocate(p, m)})
+        for (auto a : {GreedyRegalloc{}.allocate(p, m), BriggsRegalloc{}.allocate(p, m), CoalescingRegalloc{}.allocate(p, m),
+                       GeorgeAppelGC{}.allocate(p, m), RegionBasedGC{}.allocate(p, m, {{{2, 0}, 10}, {{1}, 1}})})
             if (a.feasible) CHECK(verify(p, m, a).empty());
         if (mask == 63) { auto match = BipartiteMatchingRegalloc{}.allocate(p, m); CHECK(match.cost == expected); CHECK(verify(p, m, match).empty()); }
         // Evaluate the inspectable ILP on the returned assignment.
@@ -136,6 +140,29 @@ int main() { return test_main([] {
     Problem holes; auto holed = interval(0, 2); holed.ranges.push_back({6, 8}); holes.add(holed); holes.add(interval(2, 6));
     CHECK(spills(LinearScanRegalloc{}.allocate(holes, Machine::uniform(1))) == 1);
     CHECK(spills(ExtendedLinearScanRegalloc{}.allocate(holes, Machine::uniform(1))) == 0);
+    CHECK(spills(RegionBasedLS{}.allocate(holes, Machine::uniform(1))) == 0);
+    CHECK(spills(TraceBasedLS{}.allocate(holes, Machine::uniform(1))) == 0);
+    // Region ordering changes placement without dropping cross-region edges.
+    Problem regional; regional.add(interval(0, 4)); regional.add(interval(0, 4));
+    std::vector<AllocationRegion> regions{{{0}, 1}, {{1}, 10}};
+    GreedyOptions no_repair; no_repair.eviction = false; no_repair.recolor_depth = 0;
+    auto hot = RegionBasedGC{}.allocate(regional, Machine::uniform(1), regions, no_repair);
+    CHECK(hot.locations[1] == Location::reg(0)); CHECK(hot.locations[0].kind == LocationKind::Stack);
+    CHECK(verify(regional, Machine::uniform(1), hot).empty());
+    hot = RegionBasedLS{}.allocate(regional, Machine::uniform(1), regions);
+    CHECK(hot.locations[1] == Location::reg(0)); CHECK(verify(regional, Machine::uniform(1), hot).empty());
+    CHECK(RegionBasedGC{}.allocate(empty, {}).feasible);
+    CHECK(RegionBasedLS{}.allocate(empty, {}).feasible);
+    CHECK(GeorgeAppelGC{}.allocate(empty, {}).feasible);
+    CHECK(!RegionBasedGC{}.allocate(impossible, {}).feasible);
+    for (const auto& bad : std::vector<std::vector<AllocationRegion>>{
+             {{{0, 0}, 1}}, {{{0}, 1}, {{0}, 2}}, {{{2}, 1}}, {{{}, -1}},
+             {{{}, std::numeric_limits<double>::quiet_NaN()}}}) {
+        throws<std::invalid_argument>([&] { RegionBasedGC{}.allocate(regional, machine, bad); });
+        throws<std::invalid_argument>([&] { RegionBasedLS{}.allocate(regional, machine, bad); });
+        throws<std::invalid_argument>([&] { TraceBasedLS{}.allocate(regional, machine, bad); });
+    }
+    throws<std::invalid_argument>([&] { RegionBasedLS{}.allocate(impossible, machine); });
     auto pressure = RegisterPressure{}.estimate(holes); CHECK(pressure.peak == 1); CHECK(pressure.peak_by_class.at("general") == 1);
     CHECK(RegisterPressure{}.estimate(triangle).peak == 3);
     for (unsigned seed = 0; seed < 24; ++seed) {
@@ -146,14 +173,23 @@ int main() { return test_main([] {
             value.ranges.push_back({begin + 8, begin + 10}); ranges.add(value);
         }
         for (auto allocation : {GreedyRegalloc{}.allocate(ranges, machine), LinearScanRegalloc{}.allocate(ranges, machine),
-                               ExtendedLinearScanRegalloc{}.allocate(ranges, machine), SimulatedAnnealingRegalloc{}.allocate(ranges, machine, 100, seed)})
+                               ExtendedLinearScanRegalloc{}.allocate(ranges, machine), SimulatedAnnealingRegalloc{}.allocate(ranges, machine, 100, seed),
+                               RegionBasedLS{}.allocate(ranges, machine, {{{4, 1}, 10}, {{0, 3}, 1}}),
+                               TraceBasedLS{}.allocate(ranges, machine, {{{2, 5}, 10}})})
             CHECK(verify(ranges, machine, allocation).empty());
+        auto aliased_trace = TraceBasedLS{}.allocate(ranges, irregular, {{{2, 5}, 10}});
+        CHECK(verify(ranges, irregular, aliased_trace).empty());
     }
     Problem split_input; split_input.add(interval(0, 10)); auto occupied = interval(5, 10); occupied.fixed = 0; split_input.add(occupied);
     auto split = IntervalSplittingRegalloc{}.allocate(split_input, Machine::uniform(1), {{0, {5}}});
     CHECK(split.split.fragments[0].size() == 2); CHECK(split.transfers.size() == 1);
     CHECK(split.transfers[0].position == 5); CHECK(split.transfers[0].from.kind == LocationKind::Register);
     CHECK(split.transfers[0].to.kind == LocationKind::Stack); CHECK(verify(split.split.problem, Machine::uniform(1), split.allocation).empty());
+    auto trace_split = TraceBasedLS{}.allocate_split(split_input, Machine::uniform(1), {{0, {5}}}, {{{0}, 10}});
+    CHECK(trace_split.split.fragments[0].size() == 2); CHECK(trace_split.transfers.size() == 1);
+    CHECK(trace_split.transfers[0].position == 5);
+    CHECK(verify(trace_split.split.problem, Machine::uniform(1), trace_split.allocation).empty());
+    throws<std::invalid_argument>([&] { TraceBasedLS{}.allocate_split(split_input, machine, {}, {{{9}, 1}}); });
     throws<std::invalid_argument>([&] { LiveRangeSplitting{}.split(split_input, {{0, {5, 5}}}); });
     throws<std::invalid_argument>([&] { LiveRangeSplitting{}.split(split_input, {{0, {10}}}); });
     // Coalescing contracts copies only when the endpoints do not interfere.
@@ -161,6 +197,21 @@ int main() { return test_main([] {
     auto contracted = coalesce(copies, machine); CHECK(contracted.problem.size() == 2);
     auto coalesced = CoalescingRegalloc{}.allocate(copies, machine); CHECK(coalesced.locations[0] == coalesced.locations[1]); CHECK(verify(copies, machine, coalesced).empty());
     copies.prefer(0, 2, 10); CHECK(coalesce(copies, machine, true).problem.size() == 2);
+    // A fixed endpoint has a singleton domain: Briggs alone cannot contract it,
+    // whereas George can prove the merge safe using its neighbor criterion.
+    Problem george; Value precolor; precolor.fixed = 0;
+    george.add(precolor); george.add(); george.add(); george.interfere(1, 2); george.prefer(0, 1);
+    CHECK(coalesce(george, machine).problem.size() == 3);
+    CHECK(GeorgeAppelGC{}.contract(george, machine).problem.size() == 2);
+    auto george_allocation = GeorgeAppelGC{}.allocate(george, machine);
+    CHECK(george_allocation.locations[0] == george_allocation.locations[1]);
+    CHECK(verify(george, machine, george_allocation).empty());
+    // A high-degree neighbor not adjacent to the target blocks contraction.
+    george.add(); george.interfere(2, 3);
+    CHECK(GeorgeAppelGC{}.contract(george, machine).problem.size() == 4);
+    george.interfere(0, 2);
+    CHECK(GeorgeAppelGC{}.contract(george, machine).problem.size() == 3);
+    CHECK(verify(george, machine, GeorgeAppelGC{}.allocate(george, machine)).empty());
     Problem kempe; for (int i = 0; i < 4; ++i) kempe.add();
     kempe.interfere(0, 1); kempe.interfere(0, 2); kempe.interfere(1, 3);
     Allocation seed; seed.locations = {Location::stack(0), Location::reg(0), Location::reg(1), Location::reg(1)};

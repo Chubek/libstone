@@ -49,7 +49,7 @@ foreach(component IN LISTS firestone_components)
 endforeach()
 
 install(TARGETS firestone ${firestone_targets} EXPORT FirestoneTargets)
-install(FILES Firestone.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone)
+install(FILES Firestone.hpp FireIR.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone)
 install(DIRECTORY ${firestone_directories} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone FILES_MATCHING PATTERN "*.hpp")
 install(EXPORT FirestoneTargets NAMESPACE Firestone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Firestone)
 configure_package_config_file(cmake/FirestoneConfig.cmake.in
@@ -73,7 +73,7 @@ if(FIRESTONE_BUILD_TESTS)
   endforeach()
   file(GLOB_RECURSE firestone_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS
     ${firestone_header_patterns})
-  list(APPEND firestone_headers Firestone.hpp)
+  list(APPEND firestone_headers Firestone.hpp FireIR.hpp)
   foreach(header IN LISTS firestone_headers)
     string(MAKE_C_IDENTIFIER ${header} header_id)
     set(source ${CMAKE_CURRENT_BINARY_DIR}/headers/${header_id}.cpp)

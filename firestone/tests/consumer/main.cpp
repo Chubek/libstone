@@ -1,8 +1,16 @@
 #include <Firestone.hpp>
+#include <FireIR.hpp>
 #include <libir/Typed3AC.hpp>
 #include <libeqsat/Saturation.hpp>
 
 int main() {
+    firestone::regalloc::Problem allocation_problem;
+    firestone::regalloc::Value live;
+    live.ranges = {{0, 2}};
+    allocation_problem.add(live);
+    auto machine = firestone::regalloc::Machine::uniform(1);
+    auto allocation = firestone::regalloc::TraceBasedLS{}.allocate(allocation_problem, machine);
+    if (!firestone::regalloc::verify(allocation_problem, machine, allocation).empty()) return 1;
     firestone::memory::Arena arena;
     firestone::memory::ArenaResource resource(arena);
     std::pmr::vector<int> values(&resource);

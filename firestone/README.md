@@ -35,6 +35,8 @@ find_package(Firestone 0.1 CONFIG REQUIRED COMPONENTS ir rewrite eqsat)
 target_link_libraries(my_compiler PRIVATE Firestone::firestone)
 ```
 
+For an IR-only umbrella, include `<FireIR.hpp>` (also installed and checked independently).
+
 Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::trs`, `Firestone::eqsat`,
 `Firestone::cps`, `Firestone::memory`, `Firestone::object`, `Firestone::sema`, and
 `Firestone::type`, `Firestone::vm`, `Firestone::bignum`, `Firestone::compute`,

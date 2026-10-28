@@ -197,6 +197,10 @@
 #include "libregalloc/SpillSlotColoring.hpp"
 #include "libregalloc/SSABasedSpilling.hpp"
 #include "libregalloc/SSAChordalRegalloc.hpp"
+#include "libregalloc/GeorgeAppelGC.hpp"
+#include "libregalloc/RegionBasedGC.hpp"
+#include "libregalloc/RegionBasedLS.hpp"
+#include "libregalloc/TraceBasedLS.hpp"
 
 #include "libisel/Verify.hpp"
 #include "libisched/RegisterAllocation.hpp"

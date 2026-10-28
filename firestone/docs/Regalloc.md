@@ -33,7 +33,36 @@ analysis. `BranchAndBoundRegalloc` is an alias for the PBQP solver, not another
 independent implementation. Original populated abbreviated headers such as
 `BasicLS.hpp`, `BriggsGC.hpp` and `IntervaSplittingLS.hpp` are compatibility entry
 points. Their canonical names above should be used for new code. The original
-empty George–Appel and regional/trace headers are not implementations.
+George–Appel and regional/trace headers now provide the additional heuristics
+described below; they are not aliases for the twenty methods above.
+
+## Regional and George–Appel heuristics
+
+`GeorgeAppelGC::contract` combines Briggs's conservative test for uncolored
+endpoints with George's neighbor test for a precolored endpoint. `allocate`
+colors the contracted graph and expands the result back to original value IDs.
+This is batch conservative coalescing followed by simplify/select, not the full
+iterated George–Appel worklist algorithm. Irregular domains decline contractions
+when the uniform-palette safety assumptions cannot be established.
+
+`RegionBasedGC`, `RegionBasedLS`, and `TraceBasedLS` accept a vector of
+`AllocationRegion { values, frequency }`. Frequencies must be finite and
+nonnegative. Values must be known and occur at most once, including across groups.
+Groups run hottest first (stable for ties); omitted values run last. Graph coloring
+orders values within each group by nonspillability, spill cost, then degree.
+Linear scan orders them by start position and defaults to lifetime holes plus a
+second-chance pass. All methods retain global interference and fixed assignments;
+regions never independently allocate conflicting values to the same register.
+Repair/eviction may revisit earlier choices, so hot-first is an ordering heuristic,
+not a guarantee that every hot value remains in a register. `GreedyOptions::priority`
+does not override the regional ordering; its repair options still apply.
+
+These APIs consume caller-selected value groups, not CFG trace discovery. A value
+shared across traces is listed once and retains its whole global lifetime.
+`TraceBasedLS::allocate_split(problem, machine, cuts, traces)` instead returns a
+`SplitAllocation`: trace groups use original IDs and expand to fragment IDs;
+explicit cuts enable independent placement and generate required boundary
+transfers. The same lowering obligations as ordinary interval splitting apply.
 
 ## Example
 
