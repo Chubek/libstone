@@ -67,7 +67,7 @@ add_library(flintstone SHARED Flintstone.cpp Flinestone.c ir.cpp
   dialects/builtin.cpp dialects/vector.cpp dialects/tuple.cpp dialects/ptr.cpp
   frontend/parser.cpp frontend/semantic_analysis.cpp frontend/imports.cpp
   pass/pipeline.cpp pass/scalarize.cpp
-  targets/firestone.cpp targets/native.cpp targets/sandstone_targets.cpp)
+  targets/firestone.cpp targets/firestone_codegen.cpp targets/native.cpp targets/sandstone_targets.cpp)
 add_library(Flintstone::flintstone ALIAS flintstone)
 target_compile_features(flintstone PUBLIC cxx_std_20)
 target_compile_definitions(flintstone PRIVATE FLINTSTONE_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
@@ -76,13 +76,19 @@ target_include_directories(flintstone PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/flintstone>)
 target_include_directories(flintstone SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../limestone")
 target_link_libraries(flintstone PUBLIC Firestone::ir Firestone::vm
-  PRIVATE Blackstone::blackstone sandstone XBind::xbind ${flintstone_limestone_libraries} ${CMAKE_DL_LIBS})
+  PRIVATE Firestone::isel Firestone::isched Firestone::regalloc
+    Blackstone::blackstone sandstone XBind::xbind ${flintstone_limestone_libraries} ${CMAKE_DL_LIBS})
 set_target_properties(flintstone PROPERTIES CXX_EXTENSIONS OFF VERSION ${PROJECT_VERSION}
   SOVERSION 0 WINDOWS_EXPORT_ALL_SYMBOLS ON)
 if(UNIX AND NOT APPLE)
   set_property(TARGET flintstone PROPERTY INSTALL_RPATH "$ORIGIN")
 endif()
 libstone_warnings(flintstone)
+
+add_library(flintstone_codegen INTERFACE)
+add_library(Flintstone::codegen ALIAS flintstone_codegen)
+set_target_properties(flintstone_codegen PROPERTIES EXPORT_NAME codegen)
+target_link_libraries(flintstone_codegen INTERFACE flintstone Firestone::isel Firestone::isched Firestone::regalloc)
 
 add_library(flintstone_native INTERFACE)
 add_library(Flintstone::native ALIAS flintstone_native)
@@ -102,12 +108,12 @@ endif()
 if(FLINTSTONE_BUILD_TOOLS)
   install(TARGETS flintstone-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS flintstone flintstone_native EXPORT FlintstoneTargets
+install(TARGETS flintstone flintstone_native flintstone_codegen EXPORT FlintstoneTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES Flintstone.hpp Flintstone.h Flinestone.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flintstone)
 install(FILES frontend/ast.hpp frontend/visitor.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flintstone/frontend)
-install(FILES targets/Native.hpp targets/SandstoneTargets.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flintstone/targets)
+install(FILES targets/Native.hpp targets/SandstoneTargets.hpp targets/Firestone.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flintstone/targets)
 foreach(directory IN ITEMS schedrow regtl metacode)
   if(directory STREQUAL "schedrow")
     set(headers schedrow.hpp)
@@ -141,18 +147,22 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FlintstoneConfig.cmake"
 
 if(FLINTSTONE_BUILD_TESTS)
   enable_testing()
-  foreach(header IN ITEMS Flintstone.hpp frontend/ast.hpp frontend/visitor.hpp targets/Native.hpp targets/SandstoneTargets.hpp)
+  foreach(header IN ITEMS Flintstone.hpp frontend/ast.hpp frontend/visitor.hpp targets/Native.hpp targets/SandstoneTargets.hpp targets/Firestone.hpp)
     string(MAKE_C_IDENTIFIER "${header}" identifier)
     set(source "${CMAKE_CURRENT_BINARY_DIR}/headers/${identifier}.cpp")
     file(WRITE "${source}" "#include <${header}>\n")
     list(APPEND flintstone_header_sources "${source}")
   endforeach()
   add_library(flintstone-header-check OBJECT ${flintstone_header_sources})
-  target_link_libraries(flintstone-header-check PRIVATE Flintstone::native)
+  target_link_libraries(flintstone-header-check PRIVATE Flintstone::native Flintstone::codegen)
   libstone_warnings(flintstone-header-check)
-  foreach(suite IN ITEMS core native)
+  foreach(suite IN ITEMS core native firestone)
     add_executable(flintstone-${suite}-test tests/${suite}.cpp)
-    target_link_libraries(flintstone-${suite}-test PRIVATE Flintstone::native)
+    if(suite STREQUAL "firestone")
+      target_link_libraries(flintstone-${suite}-test PRIVATE Flintstone::codegen)
+    else()
+      target_link_libraries(flintstone-${suite}-test PRIVATE Flintstone::native)
+    endif()
     target_compile_definitions(flintstone-${suite}-test PRIVATE FLINTSTONE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
       BLACKSTONE_KERNEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../blackstone/kernels")
     libstone_warnings(flintstone-${suite}-test)

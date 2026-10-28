@@ -13,6 +13,7 @@
 | `lowering.*` | Missing rule, illegal direction, lost result identity or rewrite budget. |
 | `analysis.*` / `pass.*` | Missing analysis, failed verification or change-contract mismatch. |
 | `vm.*` | Unsupported execution type/target, bad signature, runtime trap or budget exhaustion. |
+| `firestone.*` | Unsupported selection region/effects, infeasible selection, invalid schedule or illegal allocation. |
 | `sandstone.*` / `native.*` | Missing target facts, inconsistent handoff, illegal form/binding, unresolved spill or bad relocation. |
 | `backend.unavailable` | Explicitly requested backend has not been registered. |
 
@@ -54,11 +55,12 @@ The suites cover:
 | --- | --- |
 | `flintstone.core` | High/core/VM conversion; parse/print round trips; type and dialect specialization; loops/phis/dominance; forward/mutual recursion; native VM callbacks; heap-cell memory; modular overflow; vector/tuple scalarization (including loop-carried aggregates and symbol fields); math extensions; trap execution and the reserved-intrinsic contract; ptr/atomic verification and explicit VM rejection; standard-library import resolution with every negative contract, including transitive dependency contracts; Blackstone/DCE; transactional failure and extension APIs. |
 | `flintstone.native` | Bank-backed instruction forms; model/resource import; scheduling and liveness; all four allocators (linear-scan, greedy, coloring, PBQP); aliases/ties/fixed registers; exact encoding; relocation rebasing; negative handoffs; shipped x86-64/AArch64/RISC-V tiny targets checked byte-exactly with host execution on AMD64; 27-architecture registry. |
+| `flintstone.firestone` | Shared-DAG selection, sparse value identities, schedule/allocation provenance, pressure, Blackstone modular-overflow equivalence, high/core/machine input, bounded-search incumbents, spills, invalid callback output and rejection of effectful/trapping regions. |
 | `flintstone.c` | Separate C translation units, compatibility header, lifecycle, integer execution, Blackstone optimization through the C ABI, diagnostics, invalid arguments and context-independent module ownership. |
 | `flintstone.cli` | Real example execution, conversion, bytecode framing and error exit behavior. |
 | `flintstone.xbind` | Executed manifest validation and generated exact C signature assertions. |
 | `flintstone.lua` | Generated Lua glue and real DomLuaBind API compiled/executed with lifecycle and conversion calls. |
-| `flintstone.install` | Installed prefix moved, package rediscovered, separate C/C++ consumer compiled and executed, including standard-library resolution from the relocated prefix. |
+| `flintstone.install` | Installed prefix moved, package rediscovered, separate C/C++ consumer compiled and executed, including Firestone code-generation planning and standard-library resolution from the relocated prefix. |
 
 Binding tests require Python for the existing DomLuaBind generator. Disable
 `FLINTSTONE_BUILD_BINDING_TESTS` explicitly if that toolchain is intentionally

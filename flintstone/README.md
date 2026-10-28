@@ -13,6 +13,11 @@ native targets with verified machine encodings, all four RegTL allocators, and
 all nine Tourchstone binding targets (plus a 27-architecture Sandstone
 registry).
 
+`Flintstone::codegen` exposes verified Firestone selection, scheduling and
+register-allocation plans for pure, scalar single-block functions, including
+Blackstone-optimized input. See [Firestone code-generation plans](manual/11-firestone-codegen.md).
+The existing VM and Limestone/Sandstone native paths remain unchanged.
+
 A standard library lives in `stdlib/` and is imported with `import "std";`;
 see the [manual](manual/10-stdlib-and-imports.md).
 

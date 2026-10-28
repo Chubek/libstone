@@ -9,11 +9,12 @@ endif()
 file(RENAME "${prefix}" "${relocated}")
 set(consumer "${PREFIX_ROOT}/consumer-${suffix}")
 file(MAKE_DIRECTORY "${consumer}")
-file(WRITE "${consumer}/CMakeLists.txt" "cmake_minimum_required(VERSION 3.20)\nproject(InstalledConsumer LANGUAGES C CXX)\nfind_package(Flintstone CONFIG REQUIRED)\nadd_executable(consumer main.cpp c.c)\ntarget_link_libraries(consumer PRIVATE Flintstone::native)\n")
+file(WRITE "${consumer}/CMakeLists.txt" "cmake_minimum_required(VERSION 3.20)\nproject(InstalledConsumer LANGUAGES C CXX)\nfind_package(Flintstone CONFIG REQUIRED COMPONENTS core native codegen)\nadd_executable(consumer main.cpp c.c)\ntarget_link_libraries(consumer PRIVATE Flintstone::native Flintstone::codegen)\n")
 file(WRITE "${consumer}/c.c" "#include <Flintstone.h>\nint c_header(void) {return flintstone_binding_target_count() == 9;}\n")
 file(WRITE "${consumer}/main.cpp" [=[
 #include <Flintstone.hpp>
 #include <targets/Native.hpp>
+#include <targets/Firestone.hpp>
 #include <frontend/visitor.hpp>
 #include <iostream>
 extern "C" int c_header(void);
@@ -22,6 +23,14 @@ int main() {
   auto module = flintstone::parse("module m level core {import \"math\";func @f()->i32{^e:%x:i32=func.call(6:i32,7:i32) attrs {callee=\"std.math.max_i32\";};%r:i32=arith.mul(%x,6:i32);func.return(%r);}}");
   flintstone::resolve_imports(module, registry);
   domsymas::Builder bank;
+  auto scalar = flintstone::parse("module m level core {func @f()->i32 {^e:func.return(42:i32);}}");
+  flintstone::FirestoneTarget target;
+  firestone::isel::Rule rule;
+  rule.name = "literal"; rule.instruction = "IMM";
+  rule.pattern = firestone::rewrite::parse("constant");
+  target.rules.add(rule);
+  target.registers = firestone::regalloc::Machine::uniform(1);
+  if (!flintstone::plan_firestone(scalar, scalar.function("f"), registry, target).allocation.feasible) return 1;
   if (!c_header() || std::get<std::int64_t>(flintstone::execute(module,registry,"f")) != 42) return 1;
   return 0;
 }

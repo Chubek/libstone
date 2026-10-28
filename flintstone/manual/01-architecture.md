@@ -37,7 +37,7 @@ High dialects -- conversion rules --> scalar core dialects
 
 | Library | Flintstone's use |
 | --- | --- |
-| Firestone | CFG, dominance and natural-loop algorithms; verified scalar SSA; bytecode compilation, linking, binary format and VM execution. |
+| Firestone | CFG, dominance and natural-loop algorithms; verified scalar SSA; bytecode compilation, linking, binary format and VM execution; explicit selection/scheduling/register-allocation plans through `Flintstone::codegen`. |
 | Blackstone | Existing Lua kernel catalog and transactional SSA rewrite adapter. Flintstone does not implement a competing optimization catalog. |
 | Limestone | Schedrow scheduling/verification and RegTL CFG liveness, allocation and allocation verification. Existing representations cross the dedicated native-adapter boundary. |
 | Sandstone | Authoritative SymAS target/register/form records, timing queries, encoding-language execution and relocation identities. |
@@ -48,6 +48,11 @@ the narrow Schedrow/RegTL source set from Limestone itself; they do not copy the
 algorithms into Flintstone. A full Limestone build supplies its existing targets
 instead. Standalone Flintstone does not need Tunah, Satie, LMDB, libffi or a D
 compiler merely to schedule and allocate an already selected function.
+
+The [Firestone planning interface](11-firestone-codegen.md) provides a separate
+pure, scalar single-block path using Firestone's code-generation algorithms.
+It accepts Blackstone-optimized functions and returns verified plans/provenance,
+not machine bytes. It does not replace the Limestone/Sandstone encoding handoff.
 
 Yellowstone is currently decommissioned in this checkout. Flintstone does not
 resurrect it. Tourchstone's native loader/invocation facilities depend on its

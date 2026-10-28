@@ -1,7 +1,7 @@
 @PACKAGE_INIT@
 set(_flintstone_prefix "${PACKAGE_PREFIX_DIR}")
 include(CMakeFindDependencyMacro)
-find_dependency(Firestone 0.1 CONFIG)
+find_dependency(Firestone 0.1 CONFIG COMPONENTS ir vm isel isched regalloc)
 # Sandstone currently installs its archive and headers without a package file.
 # Resolve it from this installation, not a hard-coded source-tree pathname.
 if(NOT TARGET Flintstone::sandstone)
@@ -23,4 +23,5 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/FlintstoneTargets.cmake")
 set(Flintstone_core_FOUND TRUE)
 set(Flintstone_native_FOUND TRUE)
+set(Flintstone_codegen_FOUND TRUE)
 check_required_components(Flintstone)
