@@ -294,3 +294,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent residue
+AGENTS.md
+.agents
+.aws
