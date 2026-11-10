@@ -25,6 +25,8 @@ A function contains uniquely identified blocks. A branch lists its true successo
 
 The generic solver initializes all reachable states to bottom, joins predecessor (or successor) facts and applies transfer. For cyclic graphs, delayed widening avoids infinite ascending chains. State updates trigger dependent blocks. An exhausted evaluation budget sets `converged=false`.
 
+After a widened post-fixpoint is reached, an optional **narrowing pass** (`narrowing_iterations` parameter on `df::solve`, `df::forwards`, `df::backwards`, and `ai::analyze_intervals`) refines retracted `±infinity` endpoints back toward the joined successor value. Only domains exposing a dedicated sound `narrow()` member participate; the generic `ai::narrow` (which is just `meet`) is deliberately not used, because meet can drop below the true fixpoint and forge an unsound proof. Narrowing is monotone (it only tightens) and bounded, so it preserves soundness. The default of `0` leaves widening-only behavior unchanged.
+
 `ai::analyze_intervals` returns an `Environment` per block at entry and exit. Missing value bindings mean unconstrained Top, not zero. `Environment::bottom()` denotes unreachable control-flow.
 
 ## Solver failure conventions

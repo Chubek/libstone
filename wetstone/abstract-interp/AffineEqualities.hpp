@@ -12,7 +12,16 @@ struct AffineEqualities {
     bool unreachable=false;
     static AffineEqualities top(){return {};}
     static AffineEqualities bottom(){AffineEqualities r;r.unreachable=true;return r;}
-    void assign(std::uint32_t x,std::uint32_t y,std::int64_t offset){facts.erase(x);if(x==y && offset!=0){facts.clear();return;}facts[x]={y,offset};}
+    void assign(std::uint32_t x,std::uint32_t y,std::int64_t offset){
+        // x is redefined here: its old fact and any fact keyed on x as a base are
+        // now stale. kill() drops both soundly (dropping facts loses precision but
+        // never preserves a relation that no longer holds).
+        kill(x);
+        if(x!=y)facts[x]={y,offset};
+        // x==y models x:=x+offset, which has no distinct base to record against;
+        // leaving x unconstrained is sound and, unlike the old clear()-all path,
+        // preserves every unrelated fact.
+    }
     void kill(std::uint32_t x){facts.erase(x);for(auto it=facts.begin();it!=facts.end();)if(it->second.base==x)it=facts.erase(it);else ++it;}
     bool leq(const AffineEqualities& b)const{if(unreachable)return true;if(b.unreachable)return false;for(auto [id,f]:b.facts){auto it=facts.find(id);if(it==facts.end()||it->second!=f)return false;}return true;}
     AffineEqualities join(const AffineEqualities& b)const{if(unreachable)return b;if(b.unreachable)return *this;AffineEqualities r;

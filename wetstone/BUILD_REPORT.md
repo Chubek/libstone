@@ -6,7 +6,9 @@
 - C++20, header-only interface library; local build uses GNU C++ compiler.
 - `cmake -S wetstone -B build-wetstone -DWETSTONE_USE_FLINTSTONE=OFF`: successful.
 - `cmake --build build-wetstone -j4`: successful.
-- `ctest --test-dir build-wetstone --output-on-failure`: **7 of 7 suites passed** (`core`, `cfg`, `domains`, `interprocedural`, `symbolic`, `pointer`, `soundness`).
+- `ctest --test-dir build-wetstone --output-on-failure`: **8 of 8 suites passed** (`core`, `cfg`, `domains`, `interprocedural`, `symbolic`, `pointer`, `soundness`, `typed`).
+- Test executables are compiled with `-UNDEBUG` so the assert-based suite is live even in Release builds (where `-DNDEBUG` would otherwise disable every check).
+- Re-validated under AddressSanitizer + UndefinedBehaviorSanitizer (Debug): all 8 suites pass clean, including the exhaustive small-range bitvector/typed/octagon/narrowing soundness loops.
 - Examples `interval.cpp`, `pointer.cpp`, `smt.cpp` compiled and ran individually using `g++ -std=c++20` and the new headers.
 - Soundness suite exhaustively samples selected small integer ranges; this is **not** a general formal proof.
 - The local environment could not perform a network Git clone; the original repository layout and LibStone interfaces were examined through GitHub access.

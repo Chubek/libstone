@@ -21,6 +21,9 @@ public:
     std::size_t dimensions()const{return n_;}
     bool is_bottom()const{return empty_;}
     std::int64_t bound(std::size_t i,std::size_t j)const{check(i);check(j);return at(i,j);}
+    // Mutable, bounds-checked element access for closure variants (e.g. octagon
+    // strong closure) that need to tighten individual entries after Floyd-Warshall.
+    std::int64_t& ref(std::size_t i,std::size_t j){check(i);check(j);return d_[i*n_+j];}
     void constrain(std::size_t i,std::size_t j,std::int64_t c){check(i);check(j);if(empty_)return;at(i,j)=std::min(at(i,j),std::clamp(c,-inf,inf));close();}
     void close(){
         if(empty_)return;

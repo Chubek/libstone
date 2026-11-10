@@ -42,6 +42,17 @@ public:
         for(auto [id,v]:values_)if(auto it=b.values_.find(id);it!=b.values_.end())r.assign(id,v.widen(it->second));
         return r;
     }
+    // Sound narrowing: refine each bound toward b using Interval::narrow, which
+    // only retracts endpoints that were widened to +/-infinity. Never drops below
+    // b (the joined successor value), so it cannot lose feasible states. Used by
+    // the narrowing phase of the fixpoint solvers after a widened post-fixpoint.
+    Environment narrow(const Environment& b)const{
+        if(unreachable_||b.unreachable_)return *this;
+        Environment r;
+        for(const auto& [id,v]:values_)r.assign(id,v.narrow(b.get(id)));
+        for(const auto& [id,v]:b.values_)if(!values_.count(id))r.assign(id,v);
+        return r;
+    }
     friend bool operator==(const Environment& a,const Environment& b){return a.unreachable_==b.unreachable_&&(a.unreachable_||a.values_==b.values_);}
 };
 }

@@ -21,6 +21,7 @@
 #include "abstract-interp/FiniteSet.hpp"
 #include "abstract-interp/StridedInterval.hpp"
 #include "abstract-interp/BitvectorInterval.hpp"
+#include "abstract-interp/TypedInt.hpp"
 #include "abstract-interp/AffineEqualities.hpp"
 #include "abstract-interp/Predicate.hpp"
 #include "dataflow-analysis/DataFlowLattice.hpp"

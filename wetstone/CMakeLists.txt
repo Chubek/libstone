@@ -25,9 +25,12 @@ if(WETSTONE_USE_FLINTSTONE AND EXISTS "${LIBSTONE_ROOT}/flintstone/Flintstone.hp
     target_include_directories(wetstone INTERFACE "${LIBSTONE_ROOT}/flintstone" "${LIBSTONE_ROOT}/firestone")
 endif()
 if(BUILD_TESTING)
-    foreach(test IN ITEMS core cfg domains interprocedural symbolic pointer soundness)
+    foreach(test IN ITEMS core cfg domains interprocedural symbolic pointer soundness typed)
         add_executable(wetstone-${test}-test tests/test_${test}.cpp)
         target_link_libraries(wetstone-${test}-test PRIVATE wetstone)
+        # The suite is assert-based; keep assertions live even in Release builds
+        # (where -DNDEBUG would otherwise silently disable every check).
+        target_compile_options(wetstone-${test}-test PRIVATE -UNDEBUG)
         add_test(NAME wetstone.${test} COMMAND wetstone-${test}-test)
     endforeach()
 endif()
