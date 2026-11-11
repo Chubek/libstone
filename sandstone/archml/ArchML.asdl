@@ -1,0 +1,10 @@
+-- Syntax is deliberately extensible: compiler metadata and P-code are trees,
+-- rather than a closed inventory of architecture-specific record types.
+%prefix archml_ast
+%option no-builtins
+%%
+document = (expr root)
+expr = Symbol(string text)
+     | String(string spelling)
+     | List(expr* items)
+     attributes (usize offset)

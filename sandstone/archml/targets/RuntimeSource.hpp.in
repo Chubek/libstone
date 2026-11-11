@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr char archml_runtime_source[] = R"ARCHML_RUNTIME(@ARCHML_RUNTIME_SOURCE@)ARCHML_RUNTIME";

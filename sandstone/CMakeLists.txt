@@ -28,12 +28,16 @@ option(SANDSTONE_BUILD_ASSEMBLER "Build the assembler framework and CLI" ON)
 option(SANDSTONE_BUILD_TESTS "Build and register tests" "${LIBSTONE_BUILD_TESTS}")
 option(SANDSTONE_BUILD_DOCS "Build documentation (needs Doxygen)" OFF)
 option(SANDSTONE_BUILD_SANDSLAB "Build the machine-near C++ code generator and Forth example" ON)
+option(SANDSTONE_BUILD_ARCHML "Build the ArchML architecture compiler" ON)
 
 if(SANDSTONE_BUILD_TESTS)
   enable_testing()
 endif()
 if(SANDSTONE_BUILD_SANDSLAB)
   add_subdirectory(sandslab)
+endif()
+if(SANDSTONE_BUILD_ARCHML)
+  add_subdirectory(archml)
 endif()
 
 # ---- core databank library ----

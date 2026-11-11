@@ -1,0 +1,488 @@
+-- on1x: abstract syntax tree specification
+-- For the ASDL/C11 generator documented in asdl.pl(1).
+-- Recursive syntactic categories are sums, not products.
+-- Sequence (+) is used only where one or more elements are required.
+
+%prefix on1x
+%option enums line-directives
+
+%%
+
+-- =====================================================================
+-- Translation unit and common source metadata
+-- =====================================================================
+
+program = (statement* tl_stmts,
+           directive* tl_directives,
+           docstring* tl_docstring,
+           environ? eval_env)
+
+source_pos = (string file, uint line, uint column, uint offset)
+source_span = (source_pos start, source_pos end)
+
+docstring = (string text, doc_style style, source_span? span)
+
+doc_style = PlainDoc | MarkdownDoc | ReStructuredDoc | ApiDoc
+
+label = (identifier name)
+
+-- The optional environment is parse/evaluation metadata.  Do not use it
+-- as a representation of live mutable runtime objects or closures.
+environ = (environment_entry* entries,
+           identifier* opened_namespaces,
+           string* module_search_paths,
+           bool strict_mode)
+
+environment_entry = (identifier name, expression? initial_value,
+                     bool mutable, bool exported)
+
+-- =====================================================================
+-- Statements; retains the original constructors and field spellings
+-- =====================================================================
+
+statement = ExprStmt(expression+ expr_lst)
+          | DeclVarStmt(identifier+ decl_ids)
+          | DeclValStmt(identifier+ decl_ids)
+          | DeclRefStmt(identifier+ decl_ids)
+          | InitStmt(variable+ init_lhs, expression+ init_rhs)
+          | CopyAssign(variable cpy_lhs, expression cpy_rhs)
+          | ReferenceAssign(variable ref_lhs, expression ref_rhs)
+          | BorrowAssign(variable borr_lhs, expression borr_rhs)
+          | ConditionalStmt(expression* cond_base,
+                            statement true_arm,
+                            statement? false_arm,
+                            bool falsity)
+          | MatchStmt(expression discrim, match_arm* arms,
+                      match_arm? default_arm)
+          | SwitchStmt(expression discrim, switch_arm* arms,
+                       switch_arm? default_arm)
+          | LoopStmt(loop_base base, statement? loop_body)
+          | ReturnStmt(expression* retr_expr)
+          | BreakStmt
+          | ContinueStmt
+          | BlankStmt
+          | LabelStmt(identifier lbl_name)
+          | GotoStmt(label lbl_name)
+          | BlockStmt(statement+ stmt_blk)
+          | ExitStmt(expression? code)
+          | PrintStmt(expression* str_exp)
+          | PrintfStmt(string fmt_str, expression* str_exp)
+          | ThrowStmt(expression err)
+          | AssertStmt(expression+ base, bool falsity)
+          | ImportStmt(import_spec spec)
+          | FuncDefStmt(function_def definition)
+          | BindingDeclStmt(pattern binding, type_expr? annotation,
+                            expression? initializer,
+                            storage_class storage, bool mutable)
+          | DestructureAssign(pattern target, expression value)
+          | CompoundAssign(variable target, assign_op op, expression value)
+          | WhileStmt(expression condition, statement body, bool until)
+          | DoWhileStmt(statement body, expression condition, bool until)
+          | ForEachStmt(pattern binding, expression iterable,
+                        statement body, bool asynchronous)
+          | DeferStmt(statement action)
+          | TryStmt(statement body, catch_arm* catches,
+                    statement? finally_arm)
+          | WithStmt(with_item+ resources, statement body,
+                     bool asynchronous)
+          | YieldStmt(expression* values, bool delegated)
+          | ExportStmt(statement declaration)
+          | NamespaceStmt(identifier+ path, statement+ body)
+          | TypeDefStmt(type_decl declaration)
+          | MacroDefStmt(macro_def definition)
+          | DirectiveStmt(directive value)
+          | DocStmt(docstring value)
+          | DeleteStmt(variable target)
+          | UnreachableStmt
+          attributes (directive* assoc_dirs,
+                      docstring* assoc_docs,
+                      source_span? span)
+
+-- A default arm is absent when there is no fallback; semantic checking
+-- ensures a present default has a DefaultMatchArm/DefaultSwitchArm tag.
+match_arm = MatchCaseArm(pattern test, expression? guard, statement body)
+          | DefaultMatchArm(statement body)
+          attributes (source_span? span)
+
+switch_arm = SwitchCaseArm(expression+ selectors, statement+ body,
+                           bool falls_through)
+           | DefaultSwitchArm(statement+ body)
+           attributes (source_span? span)
+
+loop_base = InfiniteLoop
+          | WhileLoop(expression condition, bool until)
+          | CountedLoop(statement? initializer, expression? condition,
+                        expression* steps)
+          | IteratorLoop(pattern binding, expression iterable,
+                         bool asynchronous)
+          | RepeatLoop(expression repetitions)
+          | RangeLoop(pattern binding, expression begin, expression end,
+                      expression? step, bool inclusive)
+          attributes (identifier? loop_label, source_span? span)
+
+catch_arm = CatchArm(pattern? binding, type_expr? error_type,
+                     expression? guard, statement body)
+          | CatchAllArm(statement body)
+          attributes (source_span? span)
+
+with_item = WithResource(expression resource, pattern? bound_as)
+          | WithDeferred(expression resource, expression release)
+          attributes (source_span? span)
+
+-- =====================================================================
+-- Names, variable targets, and assignment / ownership operations
+-- =====================================================================
+
+variable = NameVariable(identifier name)
+         | QualifiedVariable(identifier+ path)
+         | MemberVariable(expression object, identifier member,
+                          bool optional)
+         | IndexVariable(expression object, expression index)
+         | SliceVariable(expression object, expression? lower,
+                         expression? upper, expression? step)
+         | DerefVariable(expression pointer)
+         | TupleVariable(variable+ elements)
+         | RecordVariable(variable_field+ fields)
+         attributes (source_span? span)
+
+variable_field = NamedVariableField(identifier field, variable target)
+               | RestVariableField(variable target)
+
+storage_class = LocalStorage | GlobalStorage | StaticStorage
+              | ThreadLocalStorage | ExternStorage
+
+assign_op = ReplaceAssign | AddAssign | SubtractAssign | MultiplyAssign
+          | DivideAssign | RemainderAssign | PowerAssign
+          | BitAndAssign | BitOrAssign | BitXorAssign
+          | ShiftLeftAssign | ShiftRightAssign
+          | LogicalAndAssign | LogicalOrAssign | CoalesceAssign
+
+borrow_kind = SharedBorrow | MutableBorrow | UniqueBorrow
+
+-- =====================================================================
+-- Expressions
+-- =====================================================================
+
+expression = LiteralExpr(literal value)
+           | NameExpr(identifier name)
+           | QualifiedNameExpr(identifier+ path)
+           | SelfExpr
+           | SuperExpr
+           | RootExpr
+           | TupleExpr(expression* elements)
+           | ListExpr(expression* elements)
+           | ArrayExpr(expression* elements)
+           | ArrayRepeatExpr(expression value, expression count)
+           | SetExpr(expression* elements)
+           | MapExpr(map_entry* entries)
+           | RecordExpr(record_entry* fields, expression? spread)
+           | RangeExpr(expression? lower, expression? upper,
+                       expression? step, bool inclusive)
+           | UnaryExpr(unary_op op, expression operand)
+           | BinaryExpr(binary_op op, expression left, expression right)
+           | LogicalExpr(logical_op op, expression+ operands)
+           | CompareExpr(compare_op op, expression left, expression right)
+           | CompareChainExpr(expression+ operands, compare_op+ operators)
+           | ConditionalExpr(expression test, expression true_value,
+                             expression false_value)
+           | CoalesceExpr(expression+ alternatives)
+           | CallExpr(expression callee, call_arg* args,
+                      type_expr* type_arguments)
+           | MemberExpr(expression object, identifier member,
+                        bool optional)
+           | IndexExpr(expression object, expression index)
+           | SliceExpr(expression object, expression? lower,
+                       expression? upper, expression? step)
+           | TupleIndexExpr(expression object, uint index)
+           | CastExpr(expression value, type_expr destination,
+                      cast_mode mode)
+           | TypeTestExpr(expression value, type_expr target, bool falsity)
+           | TypeOfExpr(expression operand)
+           | SizeOfExpr(type_expr subject)
+           | AlignOfExpr(type_expr subject)
+           | LambdaExpr(param_decl* parameters, type_expr? result_type,
+                        function_body body, bool asynchronous)
+           | BlockExpr(statement* statements, expression? result)
+           | MatchExpr(expression discrim, expr_match_arm* arms,
+                       expr_match_arm? default_arm)
+           | LoopExpr(loop_base base, statement body)
+           | TryExpr(expression value, expression? fallback)
+           | AwaitExpr(expression value)
+           | YieldExpr(expression* values, bool delegated)
+           | ThrowExpr(expression error)
+           | ReferenceExpr(expression value, borrow_kind kind)
+           | DereferenceExpr(expression value)
+           | MoveExpr(expression value)
+           | AddressOfExpr(variable target)
+           | AssignExpr(variable target, assign_op op, expression value)
+           | PipeExpr(expression input, expression+ stages)
+           | ComprehensionExpr(expression result,
+                               comprehension_clause+ clauses)
+           | NewExpr(type_expr type, call_arg* args)
+           | InterpolatedStringExpr(interpolation_part+ parts)
+           | MacroCallExpr(identifier name, token_tree* tokens)
+           | QuoteExpr(token_tree+ tokens)
+           attributes (source_span? span, directive* annotations)
+
+literal = NullLiteral
+        | UnitLiteral
+        | BooleanLiteral(bool value)
+        | IntegerLiteral(string spelling, uint base)
+        | UnsignedLiteral(string spelling, uint base)
+        | FloatingLiteral(string spelling)
+        | CharacterLiteral(uint codepoint)
+        | StringLiteral(string value)
+        | ByteStringLiteral(string bytes)
+        | RegularExpressionLiteral(string pattern, string flags)
+        | SymbolLiteral(identifier value)
+        attributes (source_span? span)
+
+map_entry = KeyValueEntry(expression key, expression value)
+          | SpreadMapEntry(expression value)
+
+record_entry = NamedRecordEntry(identifier name, expression value)
+             | ShorthandRecordEntry(identifier name)
+             | SpreadRecordEntry(expression value)
+
+call_arg = PositionalCallArg(expression value)
+         | KeywordCallArg(identifier name, expression value)
+         | SpreadCallArg(expression value)
+
+expr_match_arm = ExprCaseArm(pattern test, expression? guard,
+                             expression result)
+               | ExprDefaultArm(expression result)
+               attributes (source_span? span)
+
+comprehension_clause = GeneratorClause(pattern binding,
+                                       expression iterable,
+                                       bool asynchronous)
+                     | FilterClause(expression predicate, bool falsity)
+                     | LetClause(pattern binding, expression value)
+
+interpolation_part = TextInterpolation(string text)
+                   | ExprInterpolation(expression value,
+                                       string? format_spec)
+
+unary_op = UnaryPositive | UnaryNegative | UnaryLogicalNot
+         | UnaryBitwiseNot | UnaryPreIncrement | UnaryPreDecrement
+         | UnaryPostIncrement | UnaryPostDecrement
+
+binary_op = BinaryAdd | BinarySubtract | BinaryMultiply | BinaryDivide
+          | BinaryFloorDivide | BinaryRemainder | BinaryPower
+          | BinaryBitAnd | BinaryBitOr | BinaryBitXor
+          | BinaryShiftLeft | BinaryShiftRight
+          | BinaryConcat | BinaryMatrixMultiply
+
+logical_op = LogicalAnd | LogicalOr | LogicalXor | LogicalImplication
+
+compare_op = EqualCompare | NotEqualCompare
+           | LessCompare | LessEqualCompare
+           | GreaterCompare | GreaterEqualCompare
+           | IdentityCompare | NotIdentityCompare
+           | MembershipCompare | NotMembershipCompare
+           | PatternCompare
+
+cast_mode = CheckedCast | UncheckedCast | OptionalCast | SaturatingCast
+
+-- =====================================================================
+-- Patterns and destructuring
+-- =====================================================================
+
+pattern = WildcardPattern
+        | IdentifierPattern(identifier name, bool mutable,
+                            bool by_reference)
+        | LiteralPattern(literal value)
+        | TuplePattern(pattern* elements, pattern? rest)
+        | ListPattern(pattern* elements, pattern? rest)
+        | RecordPattern(type_expr? type, pattern_field* fields,
+                        bool allow_extra)
+        | VariantPattern(type_expr variant, pattern* arguments)
+        | RangePattern(expression lower, expression upper, bool inclusive)
+        | OrPattern(pattern+ alternatives)
+        | AndPattern(pattern+ components)
+        | AsPattern(pattern subject, identifier alias)
+        | TypedPattern(pattern subject, type_expr type)
+        | RestPattern(identifier? name)
+        | ExpressionPattern(expression value)
+        attributes (source_span? span)
+
+pattern_field = ShorthandPatternField(identifier name)
+              | NamedPatternField(identifier name, pattern value)
+              | RestPatternField(identifier? name)
+
+-- =====================================================================
+-- Type expressions / generic parameters
+-- =====================================================================
+
+type_expr = InferType
+          | NeverType
+          | UnitType
+          | AnyType
+          | NamedType(identifier+ path)
+          | AppliedType(type_expr constructor, type_expr+ arguments)
+          | TupleType(type_expr* elements)
+          | FunctionType(type_expr* arguments, type_expr result,
+                         bool variadic, bool asynchronous)
+          | PointerType(type_expr pointee, bool mutable)
+          | ReferenceType(type_expr referent, borrow_kind kind)
+          | SliceType(type_expr element, bool mutable)
+          | ArrayType(type_expr element, expression? length)
+          | OptionalType(type_expr wrapped)
+          | ResultType(type_expr success, type_expr failure)
+          | UnionType(type_expr+ alternatives)
+          | IntersectionType(type_expr+ constraints)
+          | RecordType(type_field* fields, bool open)
+          | MapType(type_expr key, type_expr value)
+          | TypeOfType(expression value)
+          | LiteralValueType(literal value)
+          | QualifiedType(type_expr base, type_qualifier+ qualifiers)
+          | TraitObjectType(type_expr+ traits, bool dynamic)
+          attributes (source_span? span)
+
+type_field = NamedTypeField(identifier name, type_expr value,
+                            bool mutable)
+           | SpreadTypeField(type_expr value)
+
+type_qualifier = ConstQualifier | VolatileQualifier | AtomicQualifier
+               | RestrictQualifier | NullableQualifier
+               | ReadOnlyQualifier
+
+generic_param = TypeGenericParam(identifier name, type_expr* bounds,
+                                  type_expr? default_type)
+              | ValueGenericParam(identifier name, type_expr type,
+                                   expression? default_value)
+              | LifetimeGenericParam(identifier name,
+                                      identifier* outlives)
+
+-- =====================================================================
+-- Function declarations, function bodies, and parameter patterns
+-- =====================================================================
+
+function_def = DefinedFunction(identifier? name, generic_param* generics,
+                               param_decl* parameters,
+                               type_expr? result_type,
+                               function_body body,
+                               function_modifier* modifiers,
+                               type_expr* thrown_types)
+             | ExternFunction(identifier name, generic_param* generics,
+                              param_decl* parameters,
+                              type_expr? result_type,
+                              string? abi, string? external_symbol)
+             attributes (source_span? span,
+                         directive* assoc_dirs,
+                         docstring* assoc_docs)
+
+function_body = StatementFunctionBody(statement body)
+              | ExpressionFunctionBody(expression value)
+              | DeclarationOnlyBody
+
+param_decl = PositionalParam(pattern binding, type_expr? annotation,
+                             expression? default_value, bool variadic)
+           | KeywordOnlyParam(identifier name, type_expr? annotation,
+                              expression? default_value)
+           | ReceiverParam(type_expr? annotation, borrow_kind kind)
+           | RestParam(pattern binding, type_expr? annotation)
+           attributes (source_span? span)
+
+function_modifier = AsyncFunction | PureFunction | UnsafeFunction
+                  | InlineFunction | ConstexprFunction | GeneratorFunction
+                  | NoReturnFunction | ComptimeFunction
+
+-- =====================================================================
+-- Imports, namespace members, and named type definitions
+-- =====================================================================
+
+module_path = (identifier+ segments, bool absolute)
+import_binding = (identifier imported, identifier? local_name)
+
+import_spec = ModuleImport(module_path module, identifier? alias,
+                           bool reexport)
+            | NamedImport(module_path module, import_binding+ symbols,
+                          bool reexport)
+            | GlobImport(module_path module, bool reexport)
+            | DynamicImport(expression source, identifier? alias)
+            attributes (source_span? span)
+
+type_decl = StructDecl(identifier name, generic_param* generics,
+                       type_member* members, type_expr* bases)
+          | UnionDecl(identifier name, generic_param* generics,
+                      type_member+ members)
+          | EnumDecl(identifier name, generic_param* generics,
+                     enum_variant+ variants)
+          | TraitDecl(identifier name, generic_param* generics,
+                      type_expr* supertraits, type_member* members)
+          | InterfaceDecl(identifier name, generic_param* generics,
+                          type_expr* bases, type_member* members)
+          | TypeAliasDecl(identifier name, generic_param* generics,
+                          type_expr target)
+          | ImplDecl(generic_param* generics, type_expr target,
+                     type_expr? trait, type_member* members)
+          attributes (source_span? span,
+                      directive* assoc_dirs,
+                      docstring* assoc_docs)
+
+type_member = FieldMember(identifier name, type_expr type,
+                          expression? initializer, bool mutable)
+            | MethodMember(function_def method)
+            | AssociatedTypeMember(identifier name,
+                                   type_expr* constraints,
+                                   type_expr? default_type)
+            | AssociatedValueMember(identifier name, type_expr? type,
+                                    expression value)
+            | NestedTypeMember(type_decl definition)
+            attributes (source_span? span, directive* assoc_dirs)
+
+enum_variant = UnitVariant(identifier name)
+             | TupleVariant(identifier name, type_expr+ elements)
+             | StructVariant(identifier name, type_field+ fields)
+             | ValueVariant(identifier name, expression discriminant)
+             attributes (source_span? span, directive* assoc_dirs)
+
+-- =====================================================================
+-- Compiler directives, macros, and token trees
+-- =====================================================================
+
+directive = NamedDirective(identifier name, directive_arg* arguments,
+                           directive_target target)
+          | ConditionalDirective(expression condition,
+                                 directive* positive,
+                                 directive* negative)
+          | DefineDirective(identifier name, token_tree* replacement)
+          | UndefineDirective(identifier name)
+          | IncludeDirective(string path, bool system)
+          | WarningDirective(string message)
+          | ErrorDirective(string message)
+          | RawDirective(string text)
+          attributes (source_span? span)
+
+directive_arg = ValueDirectiveArg(expression value)
+              | NamedDirectiveArg(identifier name, expression value)
+              | FlagDirectiveArg(identifier name, bool value)
+              | TextDirectiveArg(string text)
+
+directive_target = AnyDirectiveTarget | ProgramDirectiveTarget
+                 | StatementDirectiveTarget | ExpressionDirectiveTarget
+                 | TypeDirectiveTarget | FunctionDirectiveTarget
+                 | MemberDirectiveTarget | PatternDirectiveTarget
+
+macro_def = DeclarativeMacro(identifier name, identifier* parameters,
+                             token_tree+ replacement)
+          | ExpressionMacro(identifier name, param_decl* parameters,
+                            expression body)
+          | StatementMacro(identifier name, param_decl* parameters,
+                           statement body)
+          attributes (source_span? span,
+                      directive* assoc_dirs,
+                      docstring* assoc_docs)
+
+token_tree = TokenAtom(string spelling, token_class category)
+           | TokenDelimited(delimiter kind, token_tree* children)
+           | TokenSplice(expression value)
+           attributes (source_span? span)
+
+token_class = IdentifierToken | KeywordToken | PunctuationToken
+            | LiteralToken | TriviaToken | OperatorToken | OtherToken
+
+delimiter = ParenthesesDelimiter | BracesDelimiter
+          | BracketsDelimiter | AngleDelimiter | NoDelimiter
+

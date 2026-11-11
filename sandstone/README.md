@@ -23,6 +23,7 @@ sandstone-as --bank x86.symas --syntax intel -o out.bin prog.s
 | `compiler/` | Spec compiler: JSON documents → `.symas` (`sandstone-spec-compiler`) |
 | `compiler/stdspec/` | Shipped `.dsymspec` architecture specifications (Lua DSL) |
 | `assembler/` | Assembler framework (`libsandstone_assembler`) + `sandstone-as` CLI |
+| `archml/` | Architecture compiler, C/C++ APIs, standalone C++ code generation and 17 profiles |
 | `bindings/` | SWIG 4.0 interface (`sandstone.i`) + `generate-bindings.sh` |
 | `isa/` | Small `.isa` sources with Python (`simple_isa.py`) and C++ loaders |
 | `scripts/` | `spec-compiler.py` (`.dsymspec` → `.symas` driver), `compile-specs.py` |
@@ -63,3 +64,14 @@ use the instruction forms in `isa/` as a machine-near IR, with assembly and
 binary emission and local branch fixups. Build with
 `SANDSTONE_BUILD_SANDSLAB=ON` (default). DSLtk comes from MLVM's
 `third_party/metatk/DSLtk`; set `MLVM_METATK_SOURCE_DIR` to use another checkout.
+
+## ArchML architecture compilation
+
+The [ArchML compiler](archml/README.md) validates `.am`/`.aml` architecture
+profiles and generates standalone C++20 encoders/decoders, assembly templates,
+and compiler metadata. It also emits JSON and canonical ArchML.
+Build with `SANDSTONE_BUILD_ARCHML=ON` (default; requires Perl).
+
+```sh
+./build/archml/archml --target cpp -o riscv64.hpp archml/stdspec/riscv64.aml
+```
