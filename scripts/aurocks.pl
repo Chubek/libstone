@@ -2,6 +2,9 @@
 use strict;
 use warnings;
 use 5.010;
+use Encode qw(decode FB_CROAK);
+use File::Basename qw(dirname);
+use File::Temp qw(tempfile);
 
 =pod
 
@@ -13,10 +16,14 @@ aurocks.pl - generate a scannerless GLR-style C99 parser from an Aurocks grammar
 
   perl scripts/aurocks.pl grammar.g > parser.c
   perl scripts/aurocks.pl --entrypoint parse_expr grammar.g > parser.c
+  perl scripts/aurocks.pl --poolfile data/keywords.txt grammar.g > parser.c
+  perl scripts/aurocks.pl --no-strpool grammar.g > parser.c
   perl scripts/aurocks.pl --help
   perl scripts/aurocks.pl --version
 
-The generated output is complete, self-contained C99 source code.
+The generated output is C99 source code plus a UTF-8 string pool named
+F<AUROCKS_STRPOOL> by default.  Use C<--no-strpool> for self-contained C99
+source without a companion file or POSIX memory-mapping dependency.
 
 =head1 DESCRIPTION
 
@@ -43,10 +50,11 @@ through a seed/tail iteration, so a production such as
 parses iteratively instead of overflowing the stack.  Successful
 alternatives produce a value through the production's semantic action.
 
-Everything the generated parser needs is emitted into a single translation
-unit: a C<aurocks_> runtime library of exactly 35 helper functions (see
+The generated code occupies a single translation unit: a C<aurocks_>
+runtime library of exactly 35 general helper functions (see
 L</"THE AUROCKS RUNTIME LIBRARY">), a scannerless regular-expression
-engine, the generated productions, and the public entry points.
+engine, the generated productions, and the public entry points.  By default
+it also contains string-pool support and loads the companion pool file.
 
 =head1 OPTIONS
 
@@ -57,6 +65,24 @@ engine, the generated productions, and the public entry points.
 Use I<NAME> as the name of the generated entry point instead of
 C<parse_I<start production>>.  The default name is always generated as well,
 so both C<NAME> and C<parse_I<start>> are callable.
+
+=item C<--strpool>, C<--no-strpool>
+
+Enable or disable the string pool.  It is B<enabled by default>.  With pooling,
+known terminal strings are interned once and matching uses shared storage
+instead of allocating a fresh string for every occurrence.  Disabling it
+restores heap-owned captured terminal text and produces no pool file.
+
+=item C<--poolfile I<PATH>>, C<--poolfile=I<PATH>>
+
+Write the pool to I<PATH> and use that path as the generated parser's default
+runtime path.  The default is F<AUROCKS_STRPOOL>.  Relative paths are resolved
+against the generator's or parser process's current working directory,
+respectively.  Parent directories must already exist.  This option selects
+a name; C<--strpool>/C<--no-strpool> controls whether pooling is enabled.
+
+The runtime path can also be selected before the first parse with
+C<strpool_init(path)>, or at compile time with C<AUROCKS_STRPOOL_FILE>.
 
 =item C<--help>, C<-h>
 
@@ -316,7 +342,8 @@ alternative.  The type of C<$I> depends on the symbol:
 by that nonterminal.
 
 =item * For a literal or regular-expression terminal, C<$I> is a C<char *>
-holding the matched text, NUL-terminated and heap allocated.
+holding the matched text, NUL-terminated.  It may be a shared string-pool
+value or a heap allocation; see L</"Ownership of terminal text">.
 
 =back
 
@@ -335,21 +362,28 @@ C<$$>.
 
 =head2 Ownership of terminal text
 
-Terminal text is copied out of the input buffer into the heap when the
-terminal is matched.  The generated code releases a copy that the semantic
-action never looked at, so a production that matches a terminal without
-inspecting its text does not leak.
+Terminal text is materialized only when the action uses C<$I> or C<$TOKEN>.
+An uninspected terminal, including a variable regular-expression match,
+requires no text allocation.
 
-A copy that the action B<does> use belongs to the action.  The action may
-keep it, for example by assigning it to C<$$>, and is then responsible for
-releasing it with C<aurocks_free> when it is no longer needed.  An action
-that copies the text, for example with C<aurocks_strdup> or C<aurocks_strndup>,
-should release the original:
+With the default string pool, known terminal values are shared,
+NUL-terminated strings cached in static storage.  Treat them as B<read-only>;
+their addresses remain valid for the process lifetime, including across
+subsequent parses.  C<aurocks_free> safely ignores these pointers.
+
+Variable matches that are absent from the pool, and all captured terminals
+with C<--no-strpool>, are heap-owned copies.  A copy used by an action belongs
+to that action, which may keep it by assigning it to C<$$>.  Release terminal
+values with C<aurocks_free> rather than C<free>; this works for both ownership
+cases.  Failed alternatives release their captured heap-owned terminals.
+
+An action that needs writable text should make a private copy.  For example:
 
   FOO: /a+/ { $$ = aurocks_strdup($TOKEN); aurocks_free((void *)$TOKEN); }
 
 Use C<aurocks_strdup> or C<aurocks_strndup> when a private copy of a string
-that the action does not own is required.
+is required.  C<aurocks_realloc> on a pooled C string likewise returns a
+private heap allocation, preserving the shared original.
 
 =head2 Automatic boxing
 
@@ -375,14 +409,121 @@ numeric semantic values are boxed as C<double *>.
 
 =back
 
+=head1 STRING POOL
+
+=head2 Contents and lookup
+
+The pool is a raw UTF-8 file: distinct terminal values are concatenated in
+first-seen order with B<no separators, padding, BOM or added NUL terminators>.
+Offsets and lengths always count encoded bytes, not Unicode characters.
+Equal values share one entry even when they come from different terminals.
+
+Quoted grammar literals are pooled.  Finite regular-expression values are
+also pooled when they can be enumerated within 256 distinct values at every
+expansion step; bounded repetition is expanded up to 256 repetitions.
+This includes text-only patterns, small alternatives, character classes and
+fixed repetitions.  Assertions still run through the regular-expression
+matcher.  Only valid UTF-8 values enter the pool; byte-oriented regex matches
+remain supported, while invalid UTF-8 quoted literals require C<--no-strpool>.
+
+A variable regex match equal to any pooled value reuses that entry.  Other
+captured variable matches use heap storage.  C fragments in prologues,
+semantic actions and epilogues retain ordinary C string-literal semantics,
+including static initialization, concatenation and C<sizeof>; their C
+literals already have static storage duration.
+
+Known strings use dense, generator-assigned IDs and direct table indexing.
+This provides collision-free constant-time lookup without hashing at runtime.
+IDs are local to a generated parser and may change when its grammar changes.
+Runtime text discovery uses 32-bit djb2, with length and byte comparisons to
+resolve collisions; a hash alone is never treated as a string's identity.
+
+Each entry has one packed C<uintptr_t>: its low bits encode the byte length
+and its remaining bits encode the byte offset.  The generator chooses the
+length field width to fit the longest entry, and the generated code rejects
+targets whose C<uintptr_t> cannot hold the packed spans.  Decode entries with
+C<AUROCKS_STRPOOL_GET_OFFSET(value)> and
+C<AUROCKS_STRPOOL_GET_LENGTH(value)>.
+
+Literal matching reads spans directly from the read-only mapping.  For the
+existing NUL-terminated terminal API, C<strpool_lookup> copies an entry once
+into a statically reserved cache and appends a NUL there.  Later lookups
+return the same address.  This requires no per-string or per-match heap
+allocation and keeps the on-disk pool tightly packed.
+
+=head2 Loading and deployment
+
+Deploy the pool together with its generated parser.  The first non-NULL
+parse input or pool lookup opens and memory-maps the file using POSIX
+C<mmap>; C<strpool_init> can load it explicitly beforehand.  Empty pools are
+valid and are opened and checked without attempting a zero-length mapping.
+The mapping and cache are retained for the process lifetime.  Use a distinct
+pool filename for each grammar and keep a loaded file's contents stable.
+
+Loading verifies the exact file size and a generated FNV-1a content checksum
+to detect a mismatched companion file.  A missing, unreadable or mismatched
+file causes parsing to return C<NULL>, sets the parse error position to the
+input start, and exposes a diagnostic through C<strpool_error>.  A failed
+load can be retried after correcting the file.  Generation validates the
+grammar before atomically replacing the pool file and emitting C.
+
+Pool initialization and cache access, like the parser's other global state,
+require serialized access when used by multiple threads.
+
+=head2 Pool API
+
+These additional functions are available when pooling is enabled:
+
+=over 2
+
+=item C<int strpool_init(const char *poolfile)>
+
+Load an explicit path, or the configured default when passed C<NULL>.
+Returns 1 on success and 0 on failure.  After a successful load,
+C<strpool_init(NULL)> succeeds without reloading; a non-NULL path is rejected
+to preserve outstanding pointers.  Define C<AUROCKS_STRPOOL_FILE> to a C
+string in the prologue or compiler options to override the compiled default.
+
+=item C<const char *strpool_error(void)>
+
+Return the last loading diagnostic, or C<NULL> after successful initialization.
+
+=item C<size_t strpool_id(const char *text, size_t length)>
+
+Find a value by its bytes and byte length.  Returns C<SIZE_MAX> if absent or
+loading fails.  For single-valued terminals the generated
+C<AUROCKS_STRPOOL_TERM_I<N>> macros supply their IDs directly.
+
+=item C<const char *strpool_lookup(size_t id)>
+
+Return the shared NUL-terminated cached value, or C<NULL> for an invalid ID
+or loading failure.  Treat the returned string as read-only.
+
+=item C<const char *strpool_view(size_t id, size_t *length)>
+
+Return a zero-copy mapped span and its byte length.  The span is B<not>
+NUL-terminated; use length-aware operations such as C<memcmp>.  It must
+neither be modified nor freed.  Failure returns C<NULL> and sets a supplied
+length to zero.
+
+=item C<uintptr_t strpool_packed(size_t id)>
+
+Return the packed offset/length without loading the file.  Invalid IDs
+return zero, which is also a possible empty-string span.  Valid IDs are
+less than C<AUROCKS_STRPOOL_COUNT>; C<AUROCKS_STRPOOL_SIZE> is the file size
+in bytes.
+
+=back
+
 =head1 THE AUROCKS RUNTIME LIBRARY
 
-Every generated parser contains a runtime library of exactly B<35> helper
+Every generated parser contains a runtime library of exactly B<35> general helper
 functions, all prefixed with C<aurocks_>.  They are emitted with external
 linkage so that semantic actions and the C epilogue can call them.  The
 generated source also contains a manifest array, C<aurocks_runtime_functions>,
 listing the 35 names, together with a compile-time assertion that the
 manifest really holds 35 entries.
+The optional string-pool API is additional to these general helpers.
 
 =head2 Memory management (7)
 
@@ -399,10 +540,13 @@ Allocate C<count * size> zeroed bytes, with overflow checking.
 =item * C<void *aurocks_realloc(void *ptr, size_t size)>
 
 Resize an allocation.  A size of zero frees the block and returns C<NULL>.
+For a pooled C string, return a private copy of up to C<size> bytes instead;
+a size of zero returns C<NULL> without releasing shared storage.
 
 =item * C<void aurocks_free(void *ptr)>
 
 Release a block obtained from this library.
+Shared terminal values from C<strpool_lookup> are safely ignored.
 
 =item * C<char *aurocks_strdup(const char *s)>
 
@@ -525,6 +669,8 @@ records and the C<GLR_MAX_DEPTH> tunable.
 
 =item * The C prologue.
 
+=item * The optional packed string-pool table, mmap loader and lookup cache.
+
 =item * The 35 runtime helper implementations.
 
 =item * The scannerless matching engine: one state table and one matcher
@@ -618,6 +764,8 @@ scannerless matching engine, the generated parsing functions, the public
 entry points, and the C epilogue in one translation unit.  Diagnostics and
 malformed-input errors are written by the Perl generator to standard error
 and terminate with a non-zero exit status.
+With pooling enabled, the companion UTF-8 file is written separately to
+F<AUROCKS_STRPOOL> or the C<--poolfile> path.
 
 =head1 EXAMPLES
 
@@ -679,7 +827,7 @@ sub trim {
 
 sub slurp {
     my ($path) = @_;
-    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    open my $fh, '<:raw', $path or die "cannot open $path: $!\n";
     local $/;
     return <$fh>;
 }
@@ -690,6 +838,14 @@ sub c_byte_literal {
     return "'\\''" if $n == 39;
     return sprintf("0x%02X", $n) if $n < 32 || $n > 126;
     return sprintf("'%s'", chr($n));
+}
+
+sub c_string_literal {
+    my ($s) = @_;
+    return '"' . join('', map {
+        $_ >= 32 && $_ <= 126 && $_ != 34 && $_ != 92 && $_ != 63
+            ? chr($_) : sprintf('\\%03o', $_)
+    } unpack('C*', $s)) . '"';
 }
 
 # ---------------------------------------------------------------------------
@@ -1665,6 +1821,324 @@ sub collect_terminals {
 }
 
 # ---------------------------------------------------------------------------
+# String pool: intern known UTF-8 terminal values at generation time. Dense
+# IDs are a collision-free, direct-index substitute for a perfect hash table.
+# A separate, collision-checked djb2 index handles text known only at runtime.
+# ---------------------------------------------------------------------------
+
+sub regex_text_product {
+    my ($left, $right) = @_;
+    my %seen;
+    my @out;
+    for my $a (@$left) {
+        for my $b (@$right) {
+            my $text = $a . $b;
+            push @out, $text unless $seen{$text}++;
+            return undef if @out > 256;
+        }
+    }
+    return \@out;
+}
+
+sub regex_pool_texts {
+    my ($node) = @_;
+    my $type = $node->{type};
+    return [$node->{text}] if $type eq 'literal';
+    return [chr($node->{ch})] if $type eq 'char';
+    return [''] if $type =~ /\A(?:empty|bol|eol|boundary)\z/;
+    if ($type eq 'concat' || $type eq 'alt') {
+        my $out = $type eq 'concat' ? [''] : [];
+        for my $part (@{ $node->{parts} }) {
+            my $texts = regex_pool_texts($part);
+            return undef unless defined $texts;
+            if ($type eq 'concat') {
+                $out = regex_text_product($out, $texts);
+                return undef unless defined $out;
+            } else {
+                my %seen = map { $_ => 1 } @$out;
+                push @$out, grep { !$seen{$_}++ } @$texts;
+                return undef if @$out > 256;
+            }
+        }
+        return $out;
+    }
+    if ($type eq 'repeat') {
+        my ($min, $max) = @{$node}{qw(min max)};
+        return undef unless defined $max && $max <= 256 && $max >= $min;
+        my $texts = regex_pool_texts($node->{child});
+        return undef unless defined $texts;
+        my (@out, %seen);
+        my $power = [''];
+        for my $n (0 .. $max) {
+            push @out, grep { !$seen{$_}++ } @$power if $n >= $min;
+            return undef if @out > 256;
+            last if $n == $max;
+            $power = regex_text_product($power, $texts);
+            return undef unless defined $power;
+        }
+        return \@out;
+    }
+    if ($type eq 'class' && !$node->{neg}) {
+        my (@out, %seen);
+        for my $item (@{ $node->{items} }) {
+            my @chars;
+            if ($item->{type} eq 'char') { @chars = ($item->{ch}); }
+            elsif ($item->{type} eq 'range') { @chars = ($item->{from} .. $item->{to}); }
+            else { return undef; }
+            push @out, map { chr($_) } grep { !$seen{$_}++ } @chars;
+            return undef if @out > 256;
+        }
+        return \@out;
+    }
+    return undef;
+}
+
+sub strpool_djb2 {
+    my ($text) = @_;
+    my $hash = 5381;
+    $hash = (($hash * 33) + $_) & 0xffffffff for unpack('C*', $text);
+    return $hash;
+}
+
+sub strpool_checksum {
+    my ($text) = @_;
+    my $hash = 2166136261;
+    for my $byte (unpack('C*', $text)) {
+        my $value = $hash ^ $byte;
+        # 16777619 = 403 + 2**24. Keep intermediates exactly representable
+        # even on Perls with 32-bit integers and double-precision numbers.
+        $hash = ($value * 403 + ($value & 255) * 16777216) & 0xffffffff;
+    }
+    return $hash;
+}
+
+sub build_strpool {
+    my ($terms, $path) = @_;
+    my (%ids, @entries);
+    my $bytes = '';
+    my $max_length = 0;
+    for my $term (@$terms) {
+        my $texts = regex_pool_texts($term->{ast});
+        next unless defined $texts;
+        for my $text (@$texts) {
+            # Keep byte-oriented regexes usable, but never put invalid UTF-8
+            # in the text file. Quoted literals must themselves be UTF-8.
+            my $copy = $text;
+            unless (eval { decode('UTF-8', $copy, FB_CROAK); 1 }) {
+                die "string pool literal is not valid UTF-8 (use --no-strpool for byte grammars)\n"
+                    if $term->{kind} eq 'literal';
+                next;
+            }
+            unless (exists $ids{$text}) {
+                $ids{$text} = scalar @entries;
+                my $len = length $text;
+                push @entries, { offset => length($bytes), length => $len,
+                                 hash => strpool_djb2($text) };
+                $bytes .= $text;
+                $max_length = $len if $len > $max_length;
+            }
+            $term->{pool_id} = $ids{$text} if @$texts == 1;
+        }
+    }
+    my $bits = 1;
+    $bits++ while (2 ** $bits) <= $max_length;
+    my @buckets = (0) x (@entries * 2 + 1);
+    for my $id (0 .. $#entries) {
+        my $entry = $entries[$id];
+        my $bucket = $entry->{hash} % @buckets;
+        $entry->{next} = $buckets[$bucket];
+        $buckets[$bucket] = $id + 1;
+    }
+    return { path => $path, bytes => $bytes, entries => \@entries,
+             bits => $bits, buckets => \@buckets };
+}
+
+sub write_strpool {
+    my ($pool, $grammar_path) = @_;
+    my $path = $pool->{path};
+    my @target = stat($path);
+    for my $source ($grammar_path, \*STDOUT) {
+        my @source = stat($source);
+        die "poolfile must differ from the grammar and generated C file\n"
+            if @target && @source && $target[0] == $source[0] && $target[1] == $source[1];
+    }
+    my ($fh, $tmp) = tempfile('.aurocks-strpool-XXXXXX', DIR => dirname($path), UNLINK => 1);
+    binmode $fh, ':raw' or die "cannot set poolfile byte mode: $!\n";
+    print {$fh} $pool->{bytes} or die "cannot write poolfile $path: $!\n";
+    close $fh or die "cannot close poolfile $path: $!\n";
+    chmod(0666 & ~umask, $tmp) or die "cannot set poolfile permissions: $!\n";
+    rename($tmp, $path) or die "cannot install poolfile $path: $!\n";
+}
+
+sub emit_strpool_api {
+    return <<'C_CODE';
+/* Optional string pool API, separate from the 35 general runtime helpers. */
+int strpool_init(const char *poolfile);
+const char *strpool_error(void);
+const char *strpool_lookup(size_t id);
+const char *strpool_view(size_t id, size_t *length);
+size_t strpool_id(const char *text, size_t length);
+uintptr_t strpool_packed(size_t id);
+C_CODE
+}
+
+sub emit_strpool_impl {
+    my ($pool, $terms) = @_;
+    my $entries = $pool->{entries};
+    my $count = @$entries;
+    my $size = length $pool->{bytes};
+    my $slots = $count || 1;
+    my $cache_size = $size + $count || 1;
+    my $bits = $pool->{bits};
+    my $mask = 2 ** $bits - 1;
+    my $max_offset = $count ? $entries->[-1]{offset} : 0;
+    my $buckets = scalar @{ $pool->{buckets} };
+    my $path = c_string_literal($pool->{path});
+    my $checksum = strpool_checksum($pool->{bytes});
+    my $out = <<C_CODE;
+/* Packed UTF-8 spans; dense IDs need no runtime hash or collision handling. */
+#ifndef AUROCKS_STRPOOL_FILE
+#define AUROCKS_STRPOOL_FILE $path
+#endif
+#define AUROCKS_STRPOOL_COUNT ((size_t)$count)
+#define AUROCKS_STRPOOL_SIZE ((size_t)$size)
+#define AUROCKS_STRPOOL_GET_OFFSET(v) ((size_t)((uintptr_t)(v) >> $bits))
+#define AUROCKS_STRPOOL_GET_LENGTH(v) ((size_t)((uintptr_t)(v) & (uintptr_t)$mask))
+#if (UINTPTR_MAX >> $bits) < $max_offset || UINTPTR_MAX < $mask
+#error "string pool offsets and lengths do not fit uintptr_t"
+#endif
+struct GLRStrpoolEntry { uintptr_t packed; uint32_t hash; size_t next; };
+static const struct GLRStrpoolEntry glr_strpool_entries[$slots] = {
+C_CODE
+    for my $entry (@$entries) {
+        $out .= "  { ((uintptr_t)$entry->{offset} << $bits) | (uintptr_t)$entry->{length}, UINT32_C($entry->{hash}), $entry->{next} },\n";
+    }
+    $out .= "  { 0, 0, 0 }\n" unless $count;
+    $out .= "};\nstatic const size_t glr_strpool_buckets[$buckets] = { "
+          . join(', ', @{ $pool->{buckets} }) . " };\n";
+    for my $term (@$terms) {
+        $out .= "#define AUROCKS_STRPOOL_TERM_$term->{id} ((size_t)$term->{pool_id})\n"
+            if defined $term->{pool_id};
+    }
+    $out .= <<C_CODE;
+static const char *glr_strpool_map = NULL;
+static const size_t glr_strpool_count = AUROCKS_STRPOOL_COUNT;
+static char glr_strpool_cache[$cache_size];
+static unsigned char glr_strpool_cached[$slots];
+static int glr_strpool_loaded = 0;
+static const char *glr_strpool_message = NULL;
+
+int strpool_init(const char *poolfile)
+{
+    int fd;
+    struct stat st;
+    void *mapped = NULL;
+    const unsigned char *bytes;
+    size_t i;
+    uint32_t checksum = UINT32_C(2166136261);
+    if (glr_strpool_loaded) {
+        if (poolfile) {
+            glr_strpool_message = "string pool is already initialized";
+            return 0;
+        }
+        glr_strpool_message = NULL;
+        return 1;
+    }
+    glr_strpool_message = NULL;
+    fd = open(poolfile ? poolfile : AUROCKS_STRPOOL_FILE, O_RDONLY);
+    if (fd < 0) { glr_strpool_message = "cannot open string pool"; return 0; }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uintmax_t)st.st_size != (uintmax_t)AUROCKS_STRPOOL_SIZE) {
+        close(fd);
+        glr_strpool_message = "string pool size/type mismatch";
+        return 0;
+    }
+    if (AUROCKS_STRPOOL_SIZE) {
+        mapped = mmap(NULL, AUROCKS_STRPOOL_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (mapped == MAP_FAILED) {
+            close(fd);
+            glr_strpool_message = "cannot mmap string pool";
+            return 0;
+        }
+    }
+    close(fd);
+    bytes = (const unsigned char *)mapped;
+    for (i = 0; i != AUROCKS_STRPOOL_SIZE; i++)
+        checksum = (checksum ^ bytes[i]) * UINT32_C(16777619);
+    if (checksum != UINT32_C($checksum)) {
+        if (mapped) munmap(mapped, AUROCKS_STRPOOL_SIZE);
+        glr_strpool_message = "string pool content mismatch";
+        return 0;
+    }
+    glr_strpool_map = mapped ? (const char *)mapped : glr_strpool_cache;
+    glr_strpool_loaded = 1;
+    return 1;
+}
+C_CODE
+    $out .= <<'C_CODE';
+
+const char *strpool_error(void) { return glr_strpool_message; }
+
+uintptr_t strpool_packed(size_t id)
+{
+    return id < glr_strpool_count ? glr_strpool_entries[id].packed : 0;
+}
+
+const char *strpool_view(size_t id, size_t *length)
+{
+    uintptr_t packed;
+    if (length) *length = 0;
+    if (id >= glr_strpool_count || !strpool_init(NULL)) return NULL;
+    packed = glr_strpool_entries[id].packed;
+    if (length) *length = AUROCKS_STRPOOL_GET_LENGTH(packed);
+    return glr_strpool_map + AUROCKS_STRPOOL_GET_OFFSET(packed);
+}
+
+const char *strpool_lookup(size_t id)
+{
+    const char *text;
+    size_t length, offset;
+    if (id >= glr_strpool_count) return NULL;
+    /* Each preceding entry contributes one extra byte for its C terminator. */
+    offset = AUROCKS_STRPOOL_GET_OFFSET(glr_strpool_entries[id].packed) + id;
+    if (!glr_strpool_cached[id]) {
+        text = strpool_view(id, &length);
+        if (!text) return NULL;
+        memcpy(glr_strpool_cache + offset, text, length);
+        glr_strpool_cache[offset + length] = '\0';
+        glr_strpool_cached[id] = 1;
+    }
+    return glr_strpool_cache + offset;
+}
+
+size_t strpool_id(const char *text, size_t length)
+{
+    uint32_t hash = UINT32_C(5381);
+    size_t i, link;
+    if (!text || !strpool_init(NULL)) return SIZE_MAX;
+    for (i = 0; i < length; i++) hash = hash * UINT32_C(33) + (unsigned char)text[i];
+    link = glr_strpool_buckets[hash % (sizeof glr_strpool_buckets / sizeof glr_strpool_buckets[0])];
+    while (link) {
+        const struct GLRStrpoolEntry *entry = &glr_strpool_entries[link - 1];
+        if (entry->hash == hash && AUROCKS_STRPOOL_GET_LENGTH(entry->packed) == length &&
+            memcmp(glr_strpool_map + AUROCKS_STRPOOL_GET_OFFSET(entry->packed), text, length) == 0)
+            return link - 1;
+        link = entry->next;
+    }
+    return SIZE_MAX;
+}
+
+static int glr_strpool_owns(const void *ptr)
+{
+    uintptr_t p = (uintptr_t)ptr, cache = (uintptr_t)glr_strpool_cache;
+    return ptr && p >= cache && p - cache < sizeof glr_strpool_cache;
+}
+
+C_CODE
+    return $out;
+}
+
+# ---------------------------------------------------------------------------
 # Semantic actions
 # ---------------------------------------------------------------------------
 
@@ -1863,12 +2337,27 @@ void *aurocks_calloc(size_t count, size_t size)
 
 void *aurocks_realloc(void *ptr, size_t size)
 {
+#ifdef AUROCKS_STRPOOL_COUNT
+    if (glr_strpool_owns(ptr)) {
+        void *copy;
+        size_t n;
+        if (!size) return NULL;
+        copy = malloc(size);
+        if (!copy) return NULL;
+        n = strlen((const char *)ptr) + 1;
+        memcpy(copy, ptr, n < size ? n : size);
+        return copy;
+    }
+#endif
     if (!size) { free(ptr); return NULL; }
     return realloc(ptr, size);
 }
 
 void aurocks_free(void *ptr)
 {
+#ifdef AUROCKS_STRPOOL_COUNT
+    if (glr_strpool_owns(ptr)) return;
+#endif
     free(ptr);
 }
 
@@ -2232,16 +2721,8 @@ sub emit_regex_matcher {
     return $out;
 }
 
-sub emit_matching_engine {
-    my ($terms, $skip_desc) = @_;
+sub emit_regex_runtime {
     my $out = "";
-
-    $out .= "/* ------------------------------------------------------------------------ *\n";
-    $out .= " * Scannerless matching engine.\n";
-    $out .= " * ------------------------------------------------------------------------ */\n\n";
-    $out .= "static const char *glr_error_pos = NULL;\n\n";
-    $out .= "static int glr_depth = 0;\n\n";
-
     $out .= "static int glr_rx_isword(unsigned char c) {\n";
     $out .= "  return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||\n";
     $out .= "         (c >= 'a' && c <= 'z') || c == '_';\n";
@@ -2280,6 +2761,21 @@ sub emit_matching_engine {
     $out .= "  }\n";
     $out .= "}\n\n";
 
+    return $out;
+}
+
+sub emit_matching_engine {
+    my ($terms, $skip_desc, $pool) = @_;
+    my $out = "";
+
+    $out .= "/* ------------------------------------------------------------------------ *\n";
+    $out .= " * Scannerless matching engine.\n";
+    $out .= " * ------------------------------------------------------------------------ */\n\n";
+    $out .= "static const char *glr_error_pos = NULL;\n\n";
+    $out .= "static int glr_depth = 0;\n\n";
+    $out .= emit_regex_runtime()
+        if defined($skip_desc) || grep { !$pool || $_->{kind} ne 'literal' } @$terms;
+
     if (defined $skip_desc) {
         $out .= emit_regex_matcher($skip_desc);
         $out .= "static void glr_skip(GLRParser *p) {\n";
@@ -2292,6 +2788,7 @@ sub emit_matching_engine {
     }
 
     for my $term (@$terms) {
+        next if $pool && $term->{kind} eq 'literal';
         $out .= emit_regex_matcher($term);
     }
 
@@ -2300,6 +2797,7 @@ sub emit_matching_engine {
     $out .= "  if (!glr_error_pos || p->s > glr_error_pos) glr_error_pos = p->s;\n";
     $out .= "}\n\n";
 
+    return $out unless @$terms;
     $out .= "static int glr_match(GLRParser *p, int term, char **tok) {\n";
     $out .= "  size_t n = 0;\n";
     $out .= "  const char *at = p->s;\n";
@@ -2307,15 +2805,31 @@ sub emit_matching_engine {
     $out .= "  switch (term) {\n";
     for my $term (@$terms) {
         my $id = $term->{id};
-        $out .= "  case AUROCKS_TERM_${id}:\n";
-        $out .= "    if (!glr_rx_${id}(p, &n) || n == 0) return 0;\n";
-        $out .= "    x = (char *)malloc(n + 1);\n";
-        $out .= "    if (!x) return 0;\n";
-        $out .= "    memcpy(x, at, n);\n";
-        $out .= "    x[n] = '\\0';\n";
+        $out .= "  case AUROCKS_TERM_${id}: {\n";
+        if ($pool && $term->{kind} eq 'literal') {
+            $out .= "    const char *literal = strpool_view(AUROCKS_STRPOOL_TERM_${id}, &n);\n";
+            $out .= "    if (!literal || !n || n > (size_t)(p->end - at) || memcmp(at, literal, n)) return 0;\n";
+        } else {
+            $out .= "    if (!glr_rx_${id}(p, &n) || n == 0) return 0;\n";
+        }
+        $out .= "    if (tok) {\n";
+        if ($pool && defined $term->{pool_id}) {
+            $out .= "      x = (char *)strpool_lookup(AUROCKS_STRPOOL_TERM_${id});\n";
+            $out .= "      if (!x) return 0;\n";
+        } else {
+            $out .= "      x = (char *)strpool_lookup(strpool_id(at, n));\n" if $pool;
+            $out .= "      if (!x) {\n";
+            $out .= "        x = (char *)malloc(n + 1);\n";
+            $out .= "        if (!x) return 0;\n";
+            $out .= "        memcpy(x, at, n);\n";
+            $out .= "        x[n] = '\\0';\n";
+            $out .= "      }\n";
+        }
+        $out .= "      *tok = x;\n";
+        $out .= "    }\n";
         $out .= "    p->s += n;\n";
-        $out .= "    *tok = x;\n";
         $out .= "    return 1;\n";
+        $out .= "  }\n";
     }
     $out .= "  default:\n";
     $out .= "    break;\n";
@@ -2353,6 +2867,7 @@ sub emit_match_code {
     $flag = 'ok' unless defined $flag;
     my $out = '';
     my $rhs = $rule->{rhs};
+    my %unused = map { $_ => 1 } @{ unused_token_positions($rule) };
     for my $i ($from .. $#{$rhs}) {
         my $s = $rhs->[$i];
         next if $s eq '%empty';
@@ -2363,8 +2878,9 @@ sub emit_match_code {
             my $id = $term_ids->{$s};
             die "unknown symbol [$s]: it is neither a production, a quoted"
               . " literal nor a /regular expression/\n" unless defined $id;
+            my $capture = $unused{$i} ? 'NULL' : '&v' . ($i + 1);
             $out .= "${indent}if (${flag}) { glr_skip(&${pvar});\n";
-            $out .= "${indent}  if (!glr_match(&${pvar}, AUROCKS_TERM_${id}, &v" . ($i + 1) . ")) { glr_fail(&${pvar}); ${flag} = 0; }\n";
+            $out .= "${indent}  if (!glr_match(&${pvar}, AUROCKS_TERM_${id}, $capture)) { glr_fail(&${pvar}); ${flag} = 0; }\n";
             $out .= "${indent}  else " . $tokvar . " = v" . ($i + 1) . ";\n"
                 if defined $tokvar;
             $out .= "${indent}}\n";
@@ -2484,7 +3000,7 @@ sub emit_nonterminal {
 # ---------------------------------------------------------------------------
 
 sub emit {
-    my ($grammar, $api_name) = @_;
+    my ($grammar, $api_name, $poolfile, $grammar_path) = @_;
     my $start = $grammar->{start};
     my $d     = $grammar->{directives};
     my $rules = $grammar->{rules};
@@ -2515,7 +3031,8 @@ sub emit {
     }
 
     my ($terms, $skip_desc, $term_ids) = collect_terminals($rules, $skip);
-    my $matching_engine = emit_matching_engine($terms, $skip_desc);
+    my $pool = defined($poolfile) ? build_strpool($terms, $poolfile) : undef;
+    my $matching_engine = emit_matching_engine($terms, $skip_desc, $pool);
 
     # --- productions ----------------------------------------------------
     my %rule_nonterm = (%$nonterm);
@@ -2536,6 +3053,9 @@ sub emit {
         }
         push @bodies, emit_nonterminal($nt, \@seed, \@left, $term_ids);
     }
+    my $pool_impl = $pool ? emit_strpool_impl($pool, $terms) : '';
+    # Validate and render everything before replacing the sidecar or emitting C.
+    write_strpool($pool, $grammar_path) if $pool;
 
     # --- emit -----------------------------------------------------------
     print "/* Generated by aurocks.pl -- do not edit. */\n";
@@ -2548,15 +3068,18 @@ sub emit {
     print "#include <string.h>\n";
     print "#include <stdarg.h>\n";
     print "#include <stdio.h>\n\n";
+    print "#include <stdint.h>\n#include <sys/mman.h>\n#include <sys/stat.h>\n#include <fcntl.h>\n#include <unistd.h>\n\n" if $pool;
     print "enum { GLR_SPPF_PREFER = 1, GLR_SPPF_AVOID = 2, GLR_SPPF_LONGEST = 4, GLR_SPPF_DPREC = 8 };\n\n";
 
     print emit_runtime_api();
+    print emit_strpool_api() if $pool;
     print "\n";
     print emit_parser_types();
     print "\n";
 
     print $grammar->{prologue}, "\n\n" if length $grammar->{prologue};
 
+    print $pool_impl;
     print emit_runtime_impl();
     print "\n";
 
@@ -2583,6 +3106,7 @@ sub emit {
     print "  void *out = NULL;\n";
     print "  glr_error_pos = NULL;\n";
     print "  if (!input) return NULL;\n";
+    print "  if (!strpool_init(NULL)) { glr_error_pos = input; return NULL; }\n" if $pool;
     print "  p.begin = input; p.s = input; p.end = input + strlen(input); p.error = NULL;\n";
     print "  if (!glr_${start}(&p, &out)) return NULL;\n";
     print "  glr_skip(&p);\n";
@@ -2603,36 +3127,51 @@ sub emit {
 
 sub main {
     my $entrypoint;
+    my $strpool = 1;
+    my $poolfile = 'AUROCKS_STRPOOL';
     my @args;
     while (@ARGV) {
         my $a = shift @ARGV;
         if ($a eq '--entrypoint' || $a eq '-e') {
             $entrypoint = shift @ARGV // die "--entrypoint requires a name\n";
         }
+        elsif ($a eq '--strpool') { $strpool = 1; }
+        elsif ($a eq '--no-strpool') { $strpool = 0; }
+        elsif ($a eq '--poolfile') {
+            $poolfile = shift @ARGV // die "--poolfile requires a path\n";
+        }
+        elsif ($a =~ /\A--poolfile=(.*)\z/s) { $poolfile = $1; }
         elsif ($a eq '--help' || $a eq '-h') {
-            print "usage: $0 [--entrypoint NAME] grammar.g\n";
+            print "usage: $0 [--entrypoint NAME] [--no-strpool] [--poolfile PATH] grammar.g\n";
             print "\n";
             print "  --entrypoint NAME  name of the generated entry point\n";
             print "                    (default: parse_<start production>)\n";
+            print "  --strpool         enable the mmap string pool (default)\n";
+            print "  --no-strpool      generate a standalone parser without a poolfile\n";
+            print "  --poolfile PATH   pool output and runtime path (default: AUROCKS_STRPOOL)\n";
             return;
         }
         elsif ($a eq '--version' || $a eq '-V') {
             print "aurocks.pl 2.0\n";
             return;
         }
+        elsif ($a eq '--') { push @args, @ARGV; last; }
+        elsif ($a =~ /^-/) { die "unknown option [$a]\n"; }
         else {
             push @args, $a;
         }
     }
-    die "usage: $0 [--entrypoint NAME] grammar.g\n" unless @args == 1;
+    die "usage: $0 [--entrypoint NAME] [--no-strpool] [--poolfile PATH] grammar.g\n" unless @args == 1;
+    die "--poolfile requires a nonempty path without NUL bytes\n" if $poolfile eq '' || index($poolfile, "\0") >= 0;
     my ($path) = @args;
     my $grammar = parse_grammar(slurp($path));
     die "invalid entrypoint name\n"
         if defined($entrypoint) && $entrypoint !~ /^[A-Za-z_]\w*$/;
     die "entrypoint name conflicts with generated API\n"
         if defined($entrypoint) && ($entrypoint eq 'yyparse'
-            || $entrypoint eq "parse_$grammar->{start}_error");
-    emit($grammar, $entrypoint);
+            || $entrypoint eq "parse_$grammar->{start}_error"
+            || ($strpool && $entrypoint =~ /\Astrpool_(?:init|error|lookup|view|id|packed)\z/));
+    emit($grammar, $entrypoint, $strpool ? $poolfile : undef, $path);
 }
 
 main();
