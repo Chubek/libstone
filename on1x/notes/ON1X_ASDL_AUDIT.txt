@@ -1,5 +1,0 @@
-PASS
-55 types (9 products, 46 sums), 337 unique constructors, 493 field references
-Cardinalities: {'*': 78, '?': 83, '+': 41}
-Undefined references: []
-All products non-recursive: yes
