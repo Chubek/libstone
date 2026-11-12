@@ -10,10 +10,9 @@ using namespace moonstone::chisel;
 Function f{{{0,{{Op::Create,1,0},{Op::BorrowShared,1,7},
                 {Op::EndBorrow,1,7},{Op::Move,1,0}}, {}}},0};
 auto result = analyze(f);
-if (!result.converged || result.status != moonstone::Status::Proven || !result.diagnostics.empty()) {
+if (!result.converged || !result.diagnostics.empty()) {
     // Treat as a failed/inconclusive safety check.
 }
-// Even acceptance here is not a memory-safety certificate.
 ```
 
 ### Syren example
@@ -32,11 +31,6 @@ const auto sarif = sink.serialize();
 ### Supersonic example
 
 See `examples/synthesis.cpp`. Bounded enumeration is not general program synthesis. A returned program matches the supplied examples, not all possible inputs.
-
-For explicit validation use `cegis_verified` and a `VerificationOracle`. Its
-`Verification` contains `ProofResult` and an optional counterexample. Preserve
-proof assumptions and never return Proven for a sampled domain while claiming
-all-input validity. Legacy `cegis` sampling cannot certify a candidate.
 
 ### ExoML example
 

@@ -1,5 +1,9 @@
 #pragma once
+#if __has_include("../../../core/Core.hpp")
 #include "../../../core/Core.hpp"
+#else
+#include <moonstone/core/Core.hpp>
+#endif
 #include <mutex>
 #include <deque>
 namespace moonstone::syren {

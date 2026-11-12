@@ -1,42 +1,112 @@
-# Moonstone — LibStone program safety and native language integration
+# Moonstone — program safety and language runtime toolkits
 
-Moonstone is a **tested, early implementation slice** of four planned subsystems: Chisel, Syren, Supersonic, and ExoML. It is **not a complete production-grade safety compiler**. See `AGENTS.md` for the uncompromised implementation backlog and acceptance criteria, and [docs/STATUS.md](docs/STATUS.md) for the current implementation/validation checkpoint.
+Moonstone is a collection of reusable C++20 components for language implementations,
+intended to be overlaid at `libstone/moonstone/`. It now comprises **five** subsystems:
 
-## Included working facilities
+| Library | Functionality present in this snapshot | Not yet present |
+| --- | --- | --- |
+| Chisel | Small CFG ownership analysis, explicit loans/regions, demonstration rooted GC | Rust-like NLL/Polonius, proven memory safety, production MemTKX integration |
+| Syren | S-expression diagnostic rules, stderr/SARIF, repair callback, runtime recorder | Complete error catalog, independent repair verification pipeline |
+| Supersonic | Bounded integer-expression synthesis, CEGIS callback, Lua SynthGram module | Fully typed general synthesis, native Satie/e-graph solver integration |
+| ExoML | Restricted DSL interpreter and declaration-model validation | Complete ExoML grammar, hatching, real header parsing, binding generation |
+| **Plaid** | One-shot continuations, explicit pure CPS machine, synchronous effect handlers, coroutine-frame liveness, C++20 manual coroutine, cooperative scheduling, work-stealing pool, structured task scope, bounded/rendezvous channels, buffered-channel select, serialized local actors, parallel loop/reduce, lane mapping, bounded affine-dependence checking, trace-based races and lock order, C runtime ABI | Arbitrary Scheme call/cc, delimited stack capture, multi-shot resource-safe continuations, compiler async lowering/codegen, stackful fibers, async I/O, full atomic Go select, native SIMD vectorizer, GPU lowering, instrumenting race detector |
 
-- **Core v1**: compiled C++20 API and versioned C source-management ABI; structured results/errors, strict UTF-8 immutable source snapshots and multiline byte spans, bounded diagnostics, synchronized symbol interning, proof/effect contracts, bounded S-expression parser, pattern unification and checked non-overlapping source edits.
-- **Chisel**: forward CFG explicit-loan policy, shared/exclusive loans, moves, drops, conservative reinitialization/joins, final reachable-state diagnostics, explicit invalid-input/exhaustion status, finite region closure and demonstration nonmoving tracing heap.
-- **Syren**: validated S-expression error-rule parsing, pattern-derived diagnostic messages, stderr and basic SARIF 2.1.0 serialization, bounded thread-safe runtime event recorder, explicit repair-validator callback and deterministic status/cost ranking.
-- **Supersonic**: bounded enumerative integer-expression synthesis, portable checked signed arithmetic, strict grammar validation, explicit verification-oracle CEGIS with preserved proof assumptions, separate provisional legacy sampling, pure Lua `lssonic.synthgram` module.
-- **ExoML**: a small, intentionally restricted executable DSL interpreter, explicit privilege gate for native host callbacks, typed StaticFFI declaration model, example ASDL and Aurocks grammar specifications.
+**Status:** working, tested implementation baseline. It must not be represented as a
+production-ready concurrency runtime, borrow checker, vectorizer or compiler pipeline.
+`AGENTS.md` and `plaid/AGENTS.md` provide detailed implementation steps, invariants,
+and acceptance gates. All APIs exposing a partial feature are documented as such.
 
-## Build and run
+## Building
 
-From the `libstone` root:
+From the LibStone repository root (after extracting this archive):
 
 ```sh
-cmake -S moonstone -B build-moonstone -DCMAKE_BUILD_TYPE=Debug
+cmake -S moonstone -B build-moonstone -DCMAKE_BUILD_TYPE=Debug \
+  -DMOONSTONE_BUILD_TESTS=ON -DMOONSTONE_BUILD_PLAID=ON
 cmake --build build-moonstone --parallel
 ctest --test-dir build-moonstone --output-on-failure
-build-moonstone/moonstone-cli synthesize-demo
-build-moonstone/moonstone-cli diagnose moonstone/syren/catalog/static/use-after-move.sexp '(use (moved x))'
+build-moonstone/plaid-continuations
+build-moonstone/plaid-csp-actor
 ```
 
-Standalone builds need C/C++20 compilers, threads and CMake >= 3.20. No dependency is downloaded. `BUILD_SHARED_LIBS=ON` selects a shared core. CMake exports, installation, pkg-config metadata and isolated public-header checks are implemented. See [manual/03-core-v1.md](manual/03-core-v1.md) for C/C++ embedding, installation and sanitizer options.
+The P0-hardened tree has **20 CTest tests**, including fourteen Plaid tests
+and the original six Moonstone tests. Public Plaid headers compile in isolation
+with warnings as errors, and the C ABI consumer uses strict C11. For current
+sanitizer and stress validation see `plaid/manual/06-runtime-hardening.md`;
+`docs/PROVENANCE.md` describes the original snapshot's verification scope.
+The package is also designed to build standalone with CMake >=3.20, C++20 and
+OS threads. CI across architectures, sanitizer runs and integration with the
+complete LibStone build are separate acceptance gates.
 
-`MOONSTONE_USE_MEMTKX`, `MOONSTONE_USE_SATIE`, and `MOONSTONE_USE_EQUINOX` default OFF. Enabling one now **fails explicitly** because functional adapters are not implemented; adding include paths is no longer presented as integration. `MOONSTONE_VENDOR_ROOT` remains reserved for future real adapters.
+## Using from C++
 
-Link `Moonstone::Core`, `Moonstone::Chisel`, `Moonstone::Syren`, `Moonstone::Supersonic`, or `Moonstone::Exoml` (existing capitalization) and include the matching header, for example `<chisel/Chisel.hpp>`. Core is no longer header-only.
+```cpp
+#include "moonstone/plaid/Plaid.hpp"
+using namespace moonstone::plaid;
+loom::WorkStealingPool workers(4);
+conduit::Channel<int> messages(8);
+workers.submit([&]{ messages.send(42); }).get();
+int answer = *messages.receive();
+```
 
-## Important limitations
+`WorkStealingPool`, `Channel`, `Actor` and `TaskScope` have distinct safety rules:
+read `plaid/manual/02-runtime.md` before using them in a runtime. A channel
+operation that blocks must not be executed on a single-thread event loop.
 
-- Chisel has a **small path-merged ownership state machine**, not a Rust-equivalent borrow checker. It requires explicit `EndBorrow` operations, does not model place projections or full NLL, and its join is deliberately conservative. It must not be used to establish memory safety of untrusted code.
-- The example tracing heap does not scan stacks, move objects, implement finalizers, or integrate with MemTKX's runtime collection plans.
-- Syren's syntactic patterns alone do not prove a diagnostic; call it only after a semantic violation was established by an analyzer. Repairs are verified only by a **caller-supplied** validator.
-- Supersonic's native enumerator handles pure signed 64-bit arithmetic, not a full synthesis grammar or general SAT/SMT. `cegis_verified` requires an independent sound/exhaustive oracle and retains its assumptions; the legacy `cegis` optional-counterexample callback never sets `fully_verified`. Lua SynthGram remains separate and uses Lua numeric semantics, not checked signed 64-bit arithmetic.
-- ExoML supports a restricted command subset, not the user's full pipeline/error syntax. Its `.g` and `.asdl` files are proposed formal frontend specifications, not a completed generated parser/AST pipeline. StaticFFI validates a declaration model but does not parse C headers, generate bindings, or execute ABI calls. Privileged callbacks execute host code and are **not** sandboxed.
-- The expanded tests verify a narrow baseline, not comprehensive safety/security or real vendor integration. Root CMake now registers Moonstone and Wetstone. Limestone's missing VMWeave has been restored and tested; full-root validation still has an unresolved vendor compatibility blocker. See [docs/STATUS.md](docs/STATUS.md). No production-readiness claim is made.
+A pure CPS example is in `plaid/tests/cps_machine.cpp`; a C ABI example is
+in `plaid/tests/c_api.c`. Standalone Plaid C++ API includes `plaid/Plaid.hpp`.
 
-## Vendor inventory inspected
+## Configuring dependencies
 
-The updated `master` tree of `github.com/Chubek/libstone` at commit `68bc6cf455c8f8e2e0c784e3a37307d684d1fa60` includes `third_party/memtkx`, `memtkx-c`, `satie`, `equinox-ng`, `exolangtk`, `cparser-iso11`, `ucpp`, `pkgconf`, `replxx`, `lua`, `kaguya`, `sfsexp`, `metatk`, `qamrpp`, and more. The ZIP does not vendor these or alter their licenses. Consult `docs/INTEGRATION.md` for the intended next steps.
+The repository's vendored `third_party/` directory is **not** shipped in this
+archive. CMake's `MOONSTONE_VENDOR_ROOT` defaults to `../third_party`. Optional
+MemTKX, Satie and Equinox-NG switches only make upstream headers available;
+they do **not** activate complete integrations. Inspect actual upstream APIs
+before implementing adapters. Existing Firestone `libcps`, `libconcurrency`,
+`libcompute`, `libintrin`, and Wetstone analysis should be reused, not duplicated.
+
+The current GitHub repository did not contain a committed `moonstone/` folder
+at inspection time, so this archive retains the complete previously generated
+Moonstone baseline while adding Plaid. No changes to the root LibStone checkout
+have been pushed or applied. See `cmake/ROOT-INTEGRATION.cmake.txt` for opt-in
+root-CMake registration.
+
+## Source tree
+
+- `core/`: common structures shared by Moonstone.
+- `chisel/`, `syren/`, `supersonic/`, `exoml/`: preexisting components and tests.
+- `plaid/continuum/`: one-shot continuations, prompts, effect dispatch, reference CPS machine.
+- `plaid/weaver/`: frame liveness across suspension points.
+- `plaid/loom/`: cooperative and multithreaded scheduling, cancellation, task scopes, manual coroutines.
+- `plaid/conduit/`: channels, buffered selection and wake notifications.
+- `plaid/chorus/`: single-handler local actor mailboxes.
+- `plaid/parallax/`: explicit parallel algorithms, conservative dependence checks.
+- `plaid/sentinel/`: vector-clock traces and lock-order checks.
+- `plaid/ir/`: small validating Plaid instruction vocabulary.
+- `plaid/runtime/`: stable versioned subset of a C ABI.
+- `plaid/integration/`: normalized Moonstone diagnostic and suspension-safety contracts.
+
+## Safety and scope
+
+- `plaid::continuum::OneShot` guards exactly-once callback invocation; it does not
+  capture or restore arbitrary native stacks. The pure CPS machine can clone
+  **only pure value snapshots**; this must not be generalized to resource-owning frames.
+- `EffectScope` synchronously routes handlers; it is not a resumable algebraic
+  effect interpreter.
+- `ManualCoroutine` is an explicitly resumed C++ coroutine using the compiler's
+  state machine; it is not a production async/await scheduler or compiler pass.
+- `weaver::analyze_frame` computes variables live after modeled suspend points;
+  it does not generate executable native coroutine code.
+- `conduit::select_receive` supports **buffered channels only**, a single
+  receiving select operation, and timeout. Rendezvous select is rejected rather
+  than incorrectly emulating atomic all-case selection.
+- `parallax::lane_map` executes scalar lane operations; it is not an ISA
+  vectorizer. `loop_dependence` only reasons about a bounded set of explicitly
+  identified affine byte accesses; unknown effects must not be parallelized.
+- `sentinel::races` analyzes supplied clocks and accesses; it does not instrument
+  programs or infer synchronization edges.
+- The C runtime is single-thread driven; lifetime and callbacks are owned by
+  the caller. Do not destroy it from inside a callback or concurrently with run.
+
+For production deployment, complete the agent acceptance plan, fuzz and stress
+concurrent operations, and run ASan/UBSan/TSan on each supported platform.

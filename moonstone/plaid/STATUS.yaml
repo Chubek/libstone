@@ -1,0 +1,57 @@
+name: Plaid
+version: 0.2.0
+language: C++20
+status: partial-tested-baseline
+features:
+  one_shot_callback_continuation: implemented
+  reference_integer_cps_machine: implemented
+  synchronous_effect_handlers: implemented
+  coroutine_frame_liveness: implemented
+  cxx20_manual_coroutine: implemented
+  cooperative_scheduler: implemented
+  work_stealing_thread_pool: implemented
+  structured_task_scope: implemented
+  bounded_and_rendezvous_channels: implemented
+  buffered_receive_select: implemented
+  local_serial_actors: implemented
+  explicit_parallel_for_and_reduce: implemented
+  portable_scalar_lane_map: implemented
+  bounded_affine_dependence_check: implemented
+  offline_vector_clock_race_checker: implemented
+  lock_order_analysis: implemented
+  c_cooperative_runtime_abi: implemented
+  concurrent_pool_shutdown_and_queue_limits: implemented
+  task_scope_failure_cancellation: implemented
+  rendezvous_per_offer_acknowledgment: implemented
+  scoped_select_observers_and_cancellation: implemented
+  bounded_actor_mailbox_and_self_wait_guard: implemented
+  parallel_reduction_failure_join: implemented
+  full_call_cc: not-implemented
+  multi_shot_native_continuations: not-implemented
+  stackful_fibers: not-implemented
+  async_await_compiler_lowering: not-implemented
+  async_io_reactors: not-implemented
+  atomic_rendezvous_select: not-implemented
+  auto_vectorization: not-implemented
+  gpu_codegen: not-implemented
+  full_instrumenting_race_detector: not-implemented
+  static_concurrency_proof: not-implemented
+feature_tests:
+  concurrent_pool_shutdown_and_queue_limits: [plaid/tests/loom_stress.cpp]
+  task_scope_failure_cancellation: [plaid/tests/loom_stress.cpp]
+  rendezvous_per_offer_acknowledgment: [plaid/tests/conduit_stress.cpp]
+  scoped_select_observers_and_cancellation: [plaid/tests/conduit_stress.cpp]
+  bounded_actor_mailbox_and_self_wait_guard: [plaid/tests/chorus_stress.cpp]
+  parallel_reduction_failure_join: [plaid/tests/parallax_failure.cpp]
+validation:
+  tests: 20
+  includes_existing_moonstone_tests: true
+  verified_environment: standalone-local
+  vendored_integrations_linked: false
+  compilers: [GCC-16.2.1, Clang-22.1.8]
+  asan_ubsan: all-20-tests-passed-clang
+  tsan: all-20-tests-passed-gcc
+  lifecycle_stress_repetitions: 30
+  isolated_public_headers: 16
+  c_consumer_standard: C11
+  record: plaid/manual/06-runtime-hardening.md

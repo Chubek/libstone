@@ -1,5 +1,9 @@
 #pragma once
+#if __has_include("../../../core/SExpr.hpp")
 #include "../../../core/SExpr.hpp"
+#else
+#include <moonstone/core/SExpr.hpp>
+#endif
 #include <iostream>
 namespace moonstone::syren {
 struct Rule {std::string id,name,category,phase,message;Severity severity=Severity::Error;sexpr::Node pattern;std::vector<std::string> repairs;};

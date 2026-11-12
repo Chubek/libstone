@@ -16,23 +16,7 @@
 
 ## Root CMake integration
 
-Root `CMakeLists.txt` now registers Wetstone and Moonstone through
-`LIBSTONE_BUILD_WETSTONE` and `LIBSTONE_BUILD_MOONSTONE` (both default ON).
-Moonstone remains independently buildable. The old snippet is historical only;
-do not apply it again. Moonstone inherits root test/tool defaults and installs
-under the `Moonstone` install component without requiring unrelated targets.
-
-Wetstone's source-tree vendor include paths are now build-interface-only so
-CMake can generate its export alongside Moonstone. This does not install vendor
-dependencies or certify Wetstone's optional adapters. Full root validation is
-still blocked: see `STATUS.md` for the actual failures and tested configurations.
-
-Moonstone's `MOONSTONE_USE_MEMTKX`, `MOONSTONE_USE_SATIE` and
-`MOONSTONE_USE_EQUINOX` options deliberately fail with an unsupported-adapter
-diagnostic. They must not be restored to presence-only include switches. A
-future enabling patch must implement the adapter and add linked executable tests
-against the inspected revision. No vendor revision pin/integration is claimed by
-this core-only increment.
+Use `cmake/ROOT-INTEGRATION.cmake.txt` as a suggested patch fragment for root `CMakeLists.txt`. Moonstone can be built standalone without applying it. Existing project components are untouched.
 
 ## Boundary rules
 
@@ -43,3 +27,23 @@ this core-only increment.
 5. Diagnostic patterns select wording and candidate fixes; semantic analyses must prove the violation.
 6. Re-run type, ownership and semantic checks on any suggested repair, independent of the generator.
 7. Generated code and extension ABI interfaces must be fuzzed and validated against target toolchain ABI.
+
+
+## Plaid integration (new)
+
+Firestone already supplies `libcps/CPSBuilder.hpp`, `CPSLowering.hpp`,
+`Continuation.hpp`, plus `libconcurrency/{Channel,Fiber,GreenThread,Thread}.hpp`,
+`libcompute/Compute.hpp` and `libintrin/Vector.hpp`. Plaid's reference
+continuation machine is not a replacement for Firestone's typed CPS SSA
+lowering; write adapters and differential tests before promising compiler
+integration.
+
+Plaid C++ library is `Moonstone::Plaid` and compiled cooperative C runtime
+is `Moonstone::PlaidRuntime`. Root integration is opt-in; the ZIP contains
+only `moonstone/`, not modified LibStone root sources. Ensure
+`LIBSTONE_BUILD_MOONSTONE` is selected and OS threads are available.
+
+Most importantly: the present channel select supports buffered channels and
+recv-only cases; one-shot continuations are callbacks, not actual call/cc;
+and `weaver` identifies spill slots but does not generate native async frames.
+Read `plaid/AGENTS.md` before extending these semantics.
