@@ -1,0 +1,11 @@
+# Historical guidance only: root CMakeLists.txt now registers both components.
+# Do not paste this fragment a second time. Use LIBSTONE_BUILD_WETSTONE and
+# LIBSTONE_BUILD_MOONSTONE there. See docs/STATUS.md for root-build blockers.
+option(LIBSTONE_BUILD_WETSTONE "Build Wetstone analysis framework" ON)
+if(LIBSTONE_BUILD_WETSTONE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/wetstone/CMakeLists.txt")
+  add_subdirectory(wetstone)
+endif()
+option(LIBSTONE_BUILD_MOONSTONE "Build Moonstone program safety framework" ON)
+if(LIBSTONE_BUILD_MOONSTONE)
+  add_subdirectory(moonstone)
+endif()

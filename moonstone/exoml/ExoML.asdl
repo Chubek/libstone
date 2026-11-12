@@ -1,0 +1,13 @@
+%prefix exoml
+%option enums line-directives
+%%
+expr = String(string value)
+     | Integer(int value)
+     | Reference(identifier name)
+     | Call(identifier callee, expr* args)
+     | Pipe(expr input, expr output)
+     attributes (int line, int column)
+statement = Bind(identifier name, expr value, bool constant)
+          | Hatch(expr effect)
+          | Import(identifier module_name)
+module = (statement* statements)

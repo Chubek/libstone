@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/@_moonstone_pc_prefix@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@/moonstone
+
+Name: Moonstone
+Description: LibStone language-safety baseline, core ABI v1
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lmoonstone_core
+Libs.private: @_moonstone_pc_threads@
+Cflags: @_moonstone_pc_definitions@ -I${includedir} -I${includedir}/chisel/include -I${includedir}/syren/include -I${includedir}/supersonic/include -I${includedir}/exoml/include
