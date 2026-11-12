@@ -1,6 +1,6 @@
 # Moonstone architecture and interfaces
 
-Moonstone is four independently buildable C++20 INTERFACE-library components sharing `core` public types. Chisel consumes control-flow and memory events, Supersonic synthesizes pure expressions from finite examples, Syren builds diagnostics from validated S-expressions, and ExoML executes a limited declarative command language through host-registered callbacks. These are **initial realizations**, not a substitute for a mature compiler.
+Moonstone has six reusable C++20 subsystems sharing `core` public types. Chisel consumes control-flow and memory events, Supersonic synthesizes pure expressions from finite examples, Syren builds diagnostics from validated S-expressions, ExoML executes a limited declarative command language through host-registered callbacks, Plaid supplies concurrency primitives and a compiled C runtime, and Prolific supplies compiled profiling/cache/Lua libraries. These are **initial realizations**, not a substitute for a mature compiler.
 
 `core/Core.hpp` defines SourceSpan, Diagnostic, ProofResult, SourceEdit, `apply_edits`, and JSON escaping. `core/SExpr.hpp` defines a depth- and node-bounded S-expression parser, syntax trees, variable pattern matching, and substitutions. `core/SafetyEffects.hpp` defines interoperation contracts. Every semantic boundary must distinguish proved/refuted/unknown.
 
@@ -19,3 +19,14 @@ Create `Problem{Grammar,examples,budget,predicate}`, call `solve`; the finite re
 ## ExoML
 
 `Parser` recognizes `NAME ~setconst! Service:Name(args);`, `~setvar!`, `~get!`, and `~hatch!`. `Interpreter::register_service` supplies callbacks. `enable_hatch` plus `allow_service` and `~hatch!` are required for privileged services. This explicitly limits accidental calls but does not isolate native code in a process sandbox. The separate `StaticFFI.hpp` provides a declaration model and validation only.
+
+## Prolific
+
+Include `prolific/Prolific.hpp` and link `Moonstone::Prolific`. Hosts supply compiler,
+VM and runtime observations to a bounded, synchronized `Recorder`; `Scope` measures
+thread-affine nested regions. `Cache` atomically persists snapshots and JSON using
+vendored lmdbxx over LMDB. Link `Moonstone::ProlificLua` to replay events through
+native Kaguya-backed Lua `lprofcc`/`lprofvm` callbacks. Analysis findings are
+heuristics, not proofs or verified repairs. Linux preload injection observes
+`-finstrument-functions` hosts only; arbitrary binary attachment is unsupported.
+See `prolific/README.md` for the v1 C ABI, failure/completeness semantics and limits.

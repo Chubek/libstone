@@ -11,6 +11,9 @@
 - `third_party/cparser-iso11`, `third_party/ucpp`: ExoML StaticFFI's eventual C frontend.
 - `third_party/pkgconf`, `third_party/replxx`: ExoML package resolution and interactive REPL.
 - `third_party/lua`, `third_party/kaguya`: native Supersonic Lua bindings.
+- `third_party/lua`, `third_party/kaguya`, `third_party/lmdbxx`: actual compiled
+  Prolific integrations (requires the LMDB C library/header). Supersonic's proposed
+  native bridge remains a separate workstream.
 - `wetstone/utils/IR.hpp`, `wetstone/pointer-analysis/Ownership.hpp`, `wetstone/utils/SARIF.hpp`: compiler analysis and diagnostic foundations.
 - `firestone/librewrite/Term.hpp`, `firestone/libeqsat/EGraph.hpp`: pattern and rewrite infrastructure.
 
@@ -47,3 +50,17 @@ Most importantly: the present channel select supports buffered channels and
 recv-only cases; one-shot continuations are callbacks, not actual call/cc;
 and `weaver` identifies spill slots but does not generate native async frames.
 Read `plaid/AGENTS.md` before extending these semantics.
+
+## Prolific integration
+
+`MOONSTONE_BUILD_PROLIFIC` enables `Moonstone::Prolific` and
+`Moonstone::ProlificLua` in standalone and root builds. Generic C/C++ hooks accept
+host-owned semantic names and original source/IR identities; adapters must not
+claim complete coverage without instrumenting relevant host operations. No
+Flintstone/Wetstone-specific adapter is implied by the generic event API. Linux
+preloading supports GCC/Clang function-instrumented hosts; uninstrumented binaries
+remain unsupported. Lua replay runs outside producer locks on the caller's thread,
+not on Plaid workers implicitly. Lua scripts are trusted process code; limited
+libraries/instruction hooks do not establish isolation. Cache failures, collection
+loss and script failures remain distinct in the API/report. See
+`prolific/DESIGN.md` and `prolific/README.md`.

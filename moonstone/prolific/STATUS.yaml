@@ -1,0 +1,41 @@
+schema: moonstone.prolific.status/1
+release: instrumentation-baseline-1
+features:
+  - name: bounded_thread_safe_event_recorder
+    status: implemented
+    tests: [moonstone.prolific_recorder]
+  - name: nested_inclusive_exclusive_timings_and_sample_statistics
+    status: implemented
+    tests: [moonstone.prolific_recorder, moonstone.prolific_cli]
+  - name: source_and_ir_identity_preservation
+    status: implemented_for_host_supplied_locations
+    tests: [moonstone.prolific_recorder, moonstone.prolific_lua, moonstone.prolific_c_api]
+  - name: lmdbxx_durable_atomic_cache_and_offline_replay
+    status: implemented
+    tests: [moonstone.prolific_cache, moonstone.prolific_cli]
+  - name: strict_versioned_binary_cache_codec
+    status: implemented
+    tests: [moonstone.prolific_recorder, moonstone.prolific_cache]
+  - name: native_kaguya_lua_lprofcc_and_lprofvm
+    status: implemented_for_trusted_replay_scripts
+    tests: [moonstone.prolific_lua, moonstone.prolific_cli]
+  - name: machine_readable_json_report_and_cli
+    status: implemented
+    tests: [moonstone.prolific_cli, moonstone.prolific_c_api]
+  - name: versioned_c11_embedding_abi
+    status: implemented
+    tests: [moonstone.prolific_c_api]
+  - name: linux_preload_function_instrumentation
+    status: implemented_for_gcc_clang_instrumented_hosts
+    tests: [moonstone.prolific_injection]
+unsupported:
+  - arbitrary_uninstrumented_binary_attachment_or_rewriting
+  - semantic_error_proofs_or_automatic_optimization
+  - async_migrating_spans
+  - signal_safe_or_crash_safe_recording
+  - fork_without_exec
+  - symbolization_or_inferred_source_locations
+  - automatic_memory_interposition_or_sampling
+  - untrusted_lua_sandbox_or_hard_memory_limits
+  - automatic_lmdb_map_growth_or_cache_migration
+  - complete_installed_cmake_package_exports
