@@ -1,0 +1,13 @@
+novostone 2 1 1
+block 1
+instr 5 param 0 0 0
+instr 6 branch 0 1 5 2 2 3
+block 2
+instr 7 const 42 0 0
+instr 8 jump 0 0 1 4
+block 3
+instr 9 const 42 0 0
+instr 10 jump 0 0 1 4
+block 4
+instr 11 phi 0 2 7 9 2 2 3
+instr 12 return 0 1 11 0

@@ -1,0 +1,6 @@
+novostone 1 0 1
+block 1
+instr 2 const 4294967295 0 0
+instr 3 const 1 0 0
+instr 4 add 0 2 2 3 0
+instr 5 return 0 1 4 0

@@ -10,7 +10,7 @@ option(LIBSTONE_BUILD_YELLOWSTONE "Build Yellowstone when present in the active 
 if(LIBSTONE_BUILD_YELLOWSTONE AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/yellowstone/CMakeLists.txt")
   message(FATAL_ERROR "Yellowstone is not present in the active source tree")
 endif()
-foreach(component IN ITEMS blackstone firestone limestone sandstone yellowstone tourchstone flintstone)
+foreach(component IN ITEMS blackstone firestone limestone sandstone yellowstone tourchstone flintstone novostone)
   string(TOUPPER "${component}" key)
   option(LIBSTONE_BUILD_${key} "Build ${component}" ON)
   if(LIBSTONE_BUILD_${key})
