@@ -1,0 +1,30 @@
+local xbind = require("lxbind")
+
+-- Jiterati exposes C++ APIs, not a stable C ABI. Keep the real JIT/DocIR/DSL/
+-- SIMD/native/disassembly header inventory without inventing extern-C symbols.
+-- No binding emitter may report this inventory as an executable C binding.
+return xbind.library {
+  name = "jiterati",
+  version = "0.1.0",
+  features = { "inventory-only", "cxx-headers" },
+  headers = {
+    "include/Jiterati.hpp", "include/Jiterati-JIT.hpp",
+    "include/Jiterati-DocIR.hpp", "include/Jiterati-DSL.hpp",
+    "include/Jiterati-SIMD.hpp", "include/Jiterati-Native.hpp",
+    "include/Jiterati-Disasm.hpp", "include/Jiterati-Bytecode.hpp",
+  },
+  stdlib = { "typedef", "sexp", "json" },
+  targets = {
+    xbind.target("D", { module = "jiterati" }),
+    xbind.target("Go", { package = "jiterati" }),
+    xbind.target("Java", { package = "stone.jiterati", class = "Jiterati" }),
+    xbind.target("Lua", { module = "jiterati" }),
+    xbind.target("NodeJS", { addon = "jiterati" }),
+    xbind.target("OCaml", { library = "jiterati" }),
+    xbind.target("Python", { module = "jiterati" }),
+    xbind.target("Ruby", { extension = "jiterati" }),
+    xbind.target("Rust", { crate = "jiterati_sys" }),
+  },
+  typedefs = {},
+  functions = {},
+}

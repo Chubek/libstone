@@ -1,0 +1,255 @@
+# Termscript Standard Library
+
+Current restructuring status: see [implementation status](../IMPLEMENTATION.md),
+[additional modules](new-modules.md), and [MANIFEST.yaml](MANIFEST.yaml).
+The application examples target richer APIs than the existing modules expose.
+
+Hybrid libraries. Each one is two halves:
+
+- **Native module** (`<name>/<name>.c`, with C++ adapters for `shell` and HTTP fetch, module `std.<name>`) — owns
+  storage, parsing, syscalls and handles, written against
+  `termscript.h` plus `common/ts_std_common.h`.
+- **Termscript companion** (`<name>/<name>.tsc`) — loaded with
+  `G:import("<name>")`, binds the module once (`<name>_m`) and spells
+  shared idioms as plain Termscript.
+
+**Runnable:**
+
+```termscript
+G:import("json");
+const J = json_m;
+const doc = J:parse("{\"a\": [1, 2]}") or G:die("bad json");
+const second = J:get(doc, "a.1");
+G:puts(second);
+```
+
+## Module index
+
+`std.utf8.terminal_safe(text)` is a display-boundary helper: it replaces invalid
+UTF-8 and removes C0 controls except LF/TAB, DEL/C1, directional marks and bidi
+embedding/override/isolate controls. It returns an owned string and shares the
+1 MiB input limit and serialization policy of `sanitize`. It does not interpret
+or generate ANSI escapes and is not a general Unicode spoofing defense.
+
+| Companion | Native module | Contents |
+|---|---|---|
+| `array` | `std.array` | dense int64 vectors: new/push/get/set/len/sum/fill |
+| `buffer` | `std.buffer` | editable byte buffers with gap storage and read-only mapped files |
+| `edit_history` | `std.edit_history` | bounded snapshot undo/redo for editor documents |
+| `termcap` | `std.termcap` | terminfo/termcap capability aliases and simple entry encoding |
+| `text_search` | `std.text_search` | forward/backward literal search by byte offset |
+| `word_motion` | `std.word_motion` | next/previous ASCII word boundaries |
+| `x11` | `std.x11` | Xlib windows, events, rectangles and RGB image upload ([API](emulator-backends.md)) |
+| `autocomp` | `std.autocomp` | prefix completion: complete/common/rank over joined strings |
+| `codec` | `std.codec` | base64/hex/url codecs, crc32, case/trim/replace, predicates, split |
+| `color` | `std.color` | named ANSI colors, rgb, attributes, wrap |
+| `compositor` | `std.compositor` | committed ARGB surfaces, stacking, focus, headless/X11 composition ([API](compositor/README.md)) |
+| `csv` | `std.csv` | double-quote dialect parse/parse_line/field/join |
+| `crdt` | `std.crdt` | native Unicode RGA, concurrent edits, delta/state merge and versioned snapshots ([API](crdt/README.md)) |
+| `draw` | `std.draw` | hline/box/bar/progress/center string builders |
+| `drm` | `std.drm` | bundled libdrm device/capability/connector discovery ([API](emulator-backends.md)) |
+| `env` | `std.env` | getenv/setenv/unset, environ list, home, pid |
+| `index` | `std.index` | bounded ordered key/value index and prefix snapshots ([contracts](infrastructure-modules.md)) |
+| `multiplex` | `std.multiplex` | POSIX readiness sets with timeout and fd cancellation ([contracts](infrastructure-modules.md)) |
+| `protocols` | `std.protocols` | incremental versioned binary framing, explicit hex script boundary ([contracts](infrastructure-modules.md)) |
+| `evdev` | `std.evdev` | Linux nonblocking native event streams and device queries ([contracts](device-modules.md)) |
+| `uvdev` | `std.uvdev` | explicit Linux uinput keyboard injection ([contracts](device-modules.md)) |
+| `wayland` | `std.wayland` | optional Wayland connection/registry discovery and poll-loop primitives ([contracts](device-modules.md)) |
+| `emulator` | `std.emulator` | PTY + VT + font-rendered compositor surfaces and terminal event loops ([API](emulator/README.md)) |
+| `exec` | `std.exec` | system/capture/ok, shell quoting |
+| `expect` | `std.expect` | spawn + deadline substring matching over pipes |
+| `fsm` | `std.fsm` | table-driven finite state machines |
+| `glob` | `std.glob` | fnmatch matching, directory glob, quoting |
+| `grammar` | `std.grammar` | bounded scannerless GLR descriptor builder, explicit ambiguity policy ([contracts](parser-modules.md)) |
+| `http` | `std.http` | bounded HTTP(S) fetch and WHATWG URL resolution; legacy HTTP-only calls ([contracts](http/README.md)) |
+| `input` | `std.input` | bounded incremental terminal key/mouse/paste framing ([contracts](new-modules.md#incremental-input-and-font-shaping)) |
+| `font_shape` | `std.font_shape` | shared font handles and HarfBuzz glyph shaping ([contracts](new-modules.md#incremental-input-and-font-shaping)) |
+| `io` | `std.io` | whole-file read/write/append, exists/size/remove/rename/mkdir/lines |
+| `ipc` | `std.ipc` | flock file locks, FIFOs |
+| `json` | `std.json` | strict JSON documents as handles |
+| `key` | `std.key` | input sequence names (arrows, F-keys, C0 controls) + encode |
+| `list` | `std.list` | ordered value sequences over the shared list store |
+| `log` | `std.log` | leveled file/stderr logging with timestamps |
+| `map` | `std.map` | insertion-ordered string tables with defaults |
+| `mqueue` | `std.mqueue` | bounded nonblocking POSIX message queues ([contracts](new-modules.md#posix-shared-memory-and-message-queues)) |
+| `menu` | `std.menu` | numbered menus: format/pick/confirm/select |
+| `notify` | `std.notify` | bell/title/flash strings, notify-send toast |
+| `panel` | `std.panel` | titled boxes, side-by-side columns |
+| `peg` | `std.peg` | byte-oriented PEG compiler, ordered choice/lookahead, bounded backtracking and owned trees ([contracts](parser-modules.md)) |
+| `pipe` | `std.pipe` | popen streams as handles |
+| `poll` | `std.poll` | bounded multi-fd readiness sets and deadline-aware waits ([API](emulator-backends.md)) |
+| `pty` | `std.pty` | standalone minipty: spawn/read/write/wait/close |
+| `procfs` | `std.procfs` | bounded read-only filesystem views, default `/proc` ([API](new-modules.md#read-only-procfssysfs-views)) |
+| `prompt` | `std.prompt` | reusable primary/continuation prompts and visible width |
+| `readline` | `std.readline` | line input (isocline when built in, getline fallback) + history |
+| `regex` | `std.regex` | POSIX ERE: search/full/find/count/replace with `\1`..`\9` and `&` |
+| `rules` | `std.rules` | horizontal and vertical text rules |
+| `sched` | `std.sched` | monotonic/wall clocks, sleep_ms, elapsed |
+| `screen` | `std.screen` | in-memory character grids |
+| `shell` | `std.shell` | LibShell runtime: shell state, typed commands/pipelines, parsing, redirection and bounded capture ([API](shell/README.md)) |
+| `shm` | `std.shm` | bounded POSIX named shared memory ([contracts](new-modules.md#posix-shared-memory-and-message-queues)) |
+| `signal` | `std.signal` | signal numbers/names/delivery (no handlers: no callbacks by design) |
+| `socket` | `std.socket` | blocking TCP connect/send/recv/listen/accept/close |
+| `stream` | `std.stream` | append-only buffers with consuming getline |
+| `style` | `std.style` | SGR composition, escape stripping, visible width, padding |
+| `syntax` | `std.syntax` | naive keyword highlighting for c/termscript/sh |
+| `sysfs` | `std.sysfs` | bounded read-only filesystem views, default `/sys` ([API](new-modules.md#read-only-procfssysfs-views)) |
+| `table` | `std.table` | ruled separator-delimited text tables |
+| `terminfo` | `std.tinfo` | curated xterm strings + cup + live winsize (the full database is Termlib's `std.terminfo`) |
+| `test` | `std.test` | counting checks: new/check/eq/summary/done |
+| `theme` | `std.theme` | named palettes over role names |
+| `toml` | `std.toml` | TOML via vendored tomlc99, same surface as json |
+| `verbatim` | `std.verbatim` | line-numbered source listings, optionally syntax-coloured |
+| `vterm` | `std.vterm` | small VT parser (CSI CUP/ED/EL/SGR/IL/DL…) over a grid |
+| `widget` | `std.widget` | aligned tables, progress/gauge meters, spinner frames |
+| `yaml` | `std.yaml` | block-subset YAML (indent maps/lists, scalars, comments) |
+
+Lookups miss as `nil` (so `or` fallbacks work); arity/type errors
+are `TS_ERR_INVAL`; malformed documents parse to `nil`.
+
+`std.env` provides `get(key, fallback?)`, `set(key, value)`,
+`unset(key)`, `has(key)`, `list(separator?)`, `home()`, and `pid()`.
+Set/unset return booleans; missing values return nil or the supplied
+fallback. Returned strings are copies owned by Termscript. Environment
+changes affect the entire host process: callers must serialize access
+with other threads that read or modify the process environment.
+The `env/` source directory is explicitly exempt from the repository's
+Python virtual-environment ignore rule so it is included in checkouts.
+
+## Language mechanism (no grammar change)
+
+`G:import` / `G:import_path` are ordinary C builtins in the `G`
+module (`ts_runtime.c`); `ts_vm_import` / `ts_vm_add_search_path`
+are new public API in `termscript.h`. Imports execute in the
+caller's scope (bindings persist — that is the export mechanism),
+share output and the step budget, resolve through VM search paths
+plus `TERMSCRIPT_PATH`, and reject cycles. The NovoParse grammar
+(`Termscript.ng`) remains backend-independent.
+
+## Built with
+
+- **domqlib Q** (`domlibs/domqlib`, `q/tsvec.q`): the growable
+  vectors behind the list store (`gen/ts_valvec.h`) and string
+  helpers (`gen/ts_strvec.h`). Regenerate with `q/run_qc.py`
+  (needs the Q bytecode + tkinter); the CMake build renews them
+  only when all three are present, otherwise the committed
+  outputs are used. One genuine Tcl lesson is documented in
+  `q/tsvec.q`'s history: always write `${VAR}(` — bare `$VAR(`
+  parses as a Tcl array index where `[...]` still evaluates.
+- **third_party**: `tomlc99/toml.c` (compiled in, behind
+  `std.toml`), `isocline/src/isocline.c` (umbrella, behind
+   `std.readline`), LibShell's C++20 runtime/POSIX executor and parser
+   (`std.shell`), `stb/stb_ds.h` reserved for future maps.
+- **Termlib core**: untouched except `dt_termscript.c`, which
+  auto-registers the stdlib on every `DT_TermVM` and reserves the
+  `std.` prefix for it.
+
+## Embedding
+
+```c
+#include <termscript/stdlib/ts_stdlib.h>
+ts_stdlib_register_all (vm, &err);   /* native halves */
+ts_stdlib_search_path (vm, &err);    /* install + build-tree .tsc */
+ts_vm_run_string (vm, "G:import(\"json\");", &out, &err);
+```
+
+`pkg-config --libs termscript_stdlib` links it;
+`TERMSCRIPT_STDLIB_DIR` / `TERMSCRIPT_STDLIB_SRC` bake the search
+paths at build time.
+
+## Adding a module
+
+Native module ABI version 2 is size-tagged and counted. Rebuild ABI-v1 modules
+and handle or explicitly reject the new finite `TS_FLOAT` value tag. Use
+`TS_MODULE_INIT("std.name", funcs)` for a static array or
+`ts_module_init(&module, name, funcs, count)` for a dynamic descriptor.
+Remove the old `{NULL, NULL, NULL}` sentinel and rebuild native extensions.
+Registration validates the ABI, reserved fields, table bounds, callbacks and
+duplicate function names. `ts_module_find_func` provides counted lookup;
+do not scan until a NULL name. Callback signatures and userdata are unchanged.
+See [the C API contract](../../../manual/18-termscript-vm.md#native-module-abi).
+
+1. Create `stdlib/<name>/` with `<name>.c` (a `TS_Module`
+   named `std.<name>`), `<name>.h` (`extern const TS_Module
+   ts_std_<name>_module;`), and `<name>.tsc` (bind `<name>_m`,
+   parenthesized arguments, including nested expressions).
+2. Add `<name>` to `TS_STDLIB_MODULES` in `stdlib/CMakeLists.txt`,
+   the registry table in `ts_stdlib.c`, the includes in
+   `ts_stdlib.h`, and update `TS_STDLIB_NMODULES`. Add behavioral tests as
+   needed. `tests/test_termscript_stdlib.c` imports every registered companion
+   through the registry automatically.
+3. Handles need a file-static tag object, a destructor, value
+   copy on push/set, and `nil` (not errors) for misses.
+
+## Text editing modules
+
+`std.buffer` provides `new(kind, text?)`, `map_file(path)`, `insert(buffer,
+byte_offset, text)`, `replace(buffer, byte_offset, byte_count, text)`,
+`delete(buffer, byte_offset, byte_count)`, `slice(buffer, byte_offset,
+byte_count)`, `line(buffer, zero_based_line)`, `len(buffer)`, and
+`contents(buffer)`. The six editable kinds use distinct backends:
+
+| Kind | Storage |
+|---|---|
+| `rope` | linked chunks of at most 1024 bytes |
+| `gap` | contiguous bytes with a movable gap |
+| `piece_table` | immutable original, append-only additions, linked piece descriptors |
+| `linked_lines` | linked nodes of lines including their newline |
+| `array_lines` | array of individually allocated lines |
+| `indexed_gap` | movable gap and line-start index |
+| `mmap` (`map_file`) | read-only file mapping |
+
+Rope and line-based kinds rebuild their backing structure on edits;
+this is correct but can take linear time per edit. The piece table
+preserves its original and append-only addition storage across edits.
+`mmap` is read-only. Offsets and string lengths count bytes, not Unicode
+graphemes; embedded NUL bytes are not supported by Termscript strings.
+A missing line returns nil.
+
+`std.edit_history` stores complete snapshots (`new`, `record`/`add`,
+`undo`/`previous`, `redo`/`next`, `current`, `position`, `len`, `at`,
+`limit`, `clear`). Recording after undo discards the redo branch; `limit`
+retains the newest snapshots.
+Snapshots use ordinary heap allocation and are freed with the Termscript
+handle. `std.prompt:new(primary, continuation?)` creates a reusable prompt;
+`render(prompt, continuation?)` selects its primary or continuation form and
+`width(text)` ignores SGR escapes plus Readline `\001`/`\002` non-printing
+markers. `std.verbatim:render(source, language?, first_line?)` is the standard
+code-listing surface and delegates known languages to `std.syntax`.
+`std.table:render(headers, rows, column_separator?, row_separator?)` renders
+one header row and separator-delimited data with borders supplied by
+`std.rules`; it does not parse CSV quoting. `std.text_search` uses `find`/`rfind` (optional byte
+start for `find`, inclusive upper bound for `rfind`); `std.word_motion`
+uses `next`/`previous` with ASCII letters, digits, and `_` as word
+characters.
+
+`std.termcap` maps common capability names (`to_termcap_name`,
+`to_terminfo_name`) and translates string entries
+(`to_termcap_entry`, `to_terminfo_entry`). Its parameter translator
+handles the shared `%i`, decimal/character and two/three-digit fields,
+parameter reversal (`%r`), and literal `%%`. It returns an error for
+parameter expressions that cannot be represented in the destination
+language, including terminfo conditionals and arithmetic. As described
+in the ncurses `infocmp(1m)` documentation, arbitrary terminfo strings
+cannot always be converted to equivalent termcap programs.
+
+**DomMEMTk integration:** Buffer allocations use a C allocator hook in
+`buffer/allocator.h`. A C++ host can construct
+`termscript::DomMEMTkBufferArena` from `buffer/dommemtk_adapter.hpp`,
+install its callbacks with `ts_std_buffer_set_allocator`, and retain
+the arena until every VM using those buffers has been freed. The adapter
+uses DomMEMTk's nonmoving free-list allocator; Termscript handle
+payloads remain owned by their handle destructors. Install or reset
+the process-wide allocator before creating VMs, while no other thread
+is creating buffers. The standard library links the C++ runtime for
+`std.shell`; the standalone Termscript runtime remains C-only.
+## Terminal art
+
+[`std.termart`](termart/README.md) creates block-letter logos, multiline frames,
+centered art and explicit truecolor strings. Runnable `.ta` samples are in
+`../examples/MyApp.ta` and `../examples/Welcome.ta`.
+# OpenAI API
+
+`std.openai` wraps the vendored openaipp client for Responses, tool-call agent
+workflows, Chat Completions, and model listing. See [openai/README.md](openai/README.md)
+for configuration, ownership, error handling, and offline test instructions.

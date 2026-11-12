@@ -1,0 +1,12 @@
+{
+  "name": "qscript-lsp",
+  "version": "1.0.0",
+  "description": "Dependency-free Language Server Protocol server for QScript (MetaChain)",
+  "private": true,
+  "license": "MIT",
+  "bin": {"qscript-lsp": "server/index.js"},
+  "main": "server/index.js",
+  "files": ["server/"],
+  "scripts": {"test": "node test/test.js"},
+  "engines": {"node": ">=18"}
+}

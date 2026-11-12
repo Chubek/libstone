@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/MemTKXTargets.cmake")
+
+# Components: "C" is always available; "Cpp" when the wrapper was installed.
+set(MemTKX_C_FOUND TRUE)
+if(TARGET MemTKX::MemTKXCpp)
+  set(MemTKX_Cpp_FOUND TRUE)
+endif()
+
+check_required_components(MemTKX)

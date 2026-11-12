@@ -1,0 +1,139 @@
+name: meson tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  meson-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - name: Checkout pkgconf
+        uses: actions/checkout@v7
+        with:
+          path: pkgconf
+
+      - name: Checkout meson
+        uses: actions/checkout@v7
+        with:
+          repository: mesonbuild/meson
+          path: meson
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build cmake libglib2.0-dev pkg-config
+
+      # We need to uninstall swift because of: https://github.com/mesonbuild/meson/issues/16057
+      - name: Uninstall swift (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          SWIFT_BIN="$(command -v swift || true)"
+          sudo rm -rf /usr/share/swift "$SWIFT_BIN"
+          hash -r
+
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          install: >-
+            base-devel
+            git
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-toolchain
+
+      - name: Install meson
+        working-directory: meson
+        run: pip install .
+
+      - name: Install meson dependencies (MSYS2)
+        if: runner.os == 'Windows'
+        run: python3 -m pip --disable-pip-version-check install pefile
+
+      - name: Configure pkgconf
+        working-directory: pkgconf
+        run: |
+          pkg_config_path="$(pkg-config --variable=pc_path pkg-config)"
+          pc_system_libdirs="$(pkg-config --variable=pc_system_libdirs pkg-config)"
+          pc_system_includedirs="$(pkg-config --variable=pc_system_includedirs pkg-config)"
+
+          # on MSYS2, /mingw64 is already on PATH, so there's no need for a
+          # separate user prefix like on Linux
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            prefix=/mingw64
+          else
+            prefix="$HOME/.local"
+          fi
+
+          meson setup _build --prefix="$prefix" --libdir=lib \
+              -Dwith-pkg-config-dir="$pkg_config_path" -Dwith-system-libdir="$pc_system_libdirs" \
+              -Dwith-system-includedir="$pc_system_includedirs"
+
+      # use dpkg directly so that we do not remove glib-2.0 module with pkg-config
+      - name: Uninstall preinstalled pkgconf (Linux)
+        if: runner.os == 'Linux'
+        run: sudo dpkg --remove --force-depends pkg-config pkgconf pkgconf-bin
+
+      # skip dependency checks so we do not remove the mingw-w64-x86_64-glib2 package
+      - name: Uninstall preinstalled pkgconf (Windows)
+        if: runner.os == 'Windows'
+        run: pacman -Rdd --noconfirm mingw-w64-x86_64-pkgconf
+
+      - name: Verify preinstalled pkgconf is uninstalled
+        run: |
+          found=0
+          for name in pkg-config pkgconf; do
+            path="$(command -v "$name" 2>/dev/null || true)"
+            if [ -n "$path" ]; then
+              echo "$name is still installed at: $path" >&2
+              ls -la "$path" >&2 || true
+              found=1
+            fi
+          done
+          if [ "$found" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Install pkgconf
+        working-directory: pkgconf
+        run: meson install -C _build
+
+      - name: Add pkgconf to PATH (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+
+      - name: Symlink pkg-config to pkgconf
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "/mingw64/bin/pkgconf.exe" "/mingw64/bin/pkg-config.exe"
+          else
+            ln -s "$HOME/.local/bin/pkgconf" "$HOME/.local/bin/pkg-config"
+          fi
+
+      - name: Print pkgconf environment
+        run: pkg-config --dump-personality
+
+      - name: Run meson tests
+        working-directory: meson
+        env:
+          MESON_CI_JOBNAME: thirdparty
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export MSYSTEM=
+          fi
+          python3 ./run_tests.py

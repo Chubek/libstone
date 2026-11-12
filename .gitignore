@@ -7,9 +7,6 @@
 # Binutils
 binutils/
 
-# Third-party
-third_party
-
 # Prerequisites
 *.d
 

@@ -1,0 +1,16 @@
+// Client configuration for the Sublime Text "LSP" package.
+// Copy the "qscript" entry into Preferences > Package Settings > LSP > Settings
+// under "clients", or save this file as Packages/User/LSP-qscript.sublime-settings.
+{
+    "clients": {
+        "qscript": {
+            "enabled": true,
+            "command": ["node", "/path/to/qscript-editor/lsp/server/index.js"],
+            "selector": "source.qscript",
+            "initializationOptions": {
+                "executable": "qscript",
+                "libraryPaths": []
+            }
+        }
+    }
+}

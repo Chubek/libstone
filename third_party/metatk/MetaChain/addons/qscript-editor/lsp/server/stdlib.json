@@ -1,0 +1,3261 @@
+{
+ "keywords": {
+  "and": "a and b - synonym for &&",
+  "assert": "assert EXPR; - trap with 'assertion failed' when EXPR is 0",
+  "break": "break; - leave the innermost loop",
+  "const": "const NAME = EXPR; - compile-time constant (costs no register)",
+  "continue": "continue; - next iteration (runs the for step)",
+  "do": "do { ... } while (COND); / do { ... } until (COND); - body runs at least once",
+  "else": "else STMT",
+  "elsif": "elsif (COND) STMT - else-if branch",
+  "exit": "exit [EXPR]; - end the whole program from anywhere",
+  "false": "false - the integer 0",
+  "fn": "fn NAME(params) { ... } - define a function (0..16 integer parameters, returns an integer)",
+  "for": "for (INIT; COND; STEP) STMT - each part optional; a let in INIT is loop-scoped",
+  "if": "if (COND) STMT [elsif (COND) STMT]... [else STMT]; also a statement modifier: STMT if COND;",
+  "last": "last; - synonym for break",
+  "let": "let NAME = EXPR; - declare a block-scoped variable",
+  "loop": "loop { ... } - infinite loop (while (1))",
+  "my": "my NAME = EXPR; - synonym for let",
+  "next": "next; - synonym for continue",
+  "not": "not a - synonym for !",
+  "or": "a or b - synonym for ||",
+  "print": "print EXPR, ...; - output each value on its own line",
+  "return": "return [EXPR]; - return from a function; at top level, end the program with EXPR as result",
+  "say": "say EXPR, ...; - synonym for print",
+  "sub": "sub NAME(params) { ... } - synonym for fn",
+  "true": "true - the integer 1",
+  "unless": "unless (COND) STMT [else STMT] - if (!COND); also a modifier: STMT unless COND;",
+  "until": "until (COND) STMT - while (!COND)",
+  "use": "use LIB, ...; - import a library (its public fn and const become visible, also as LIB::name)",
+  "while": "while (COND) STMT"
+ },
+ "libraries": {
+  "ascii": {
+   "constants": {},
+   "doc": "ascii: character classification and conversion on ASCII codes.\n\n     use ascii;\n     print is_digit('7'), to_upper('q'), digit_value('9'), hex_value('F'), rot13('a');\n\nCharacters are integers (QScript 'x' literals). Codes outside 0..127 are\nnever letters, digits or punctuation.",
+   "functions": {
+    "base36_value": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "c"
+     ],
+     "summary": "0..35 for 0-9a-zA-Z, else -1"
+    },
+    "caesar": {
+     "doc": "",
+     "line": 34,
+     "params": [
+      "c",
+      "k"
+     ],
+     "summary": "rotate letters by k (any sign), others unchanged"
+    },
+    "digit_value": {
+     "doc": "Value of a decimal / hexadecimal / base-36 digit, or -1.",
+     "line": 22,
+     "params": [
+      "c"
+     ],
+     "summary": "c - '0' for digits, else -1"
+    },
+    "hex_value": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "c"
+     ],
+     "summary": "0..15 for hex digits, else -1"
+    },
+    "is_alnum": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "c"
+     ],
+     "summary": "letter tests"
+    },
+    "is_alpha": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "c"
+     ],
+     "summary": "letter tests"
+    },
+    "is_cntrl": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "c"
+     ],
+     "summary": "printable 32..126 / control / printable non-alphanumeric non-space"
+    },
+    "is_digit": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "c"
+     ],
+     "summary": "'0'..'9'"
+    },
+    "is_lower": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "c"
+     ],
+     "summary": "letter tests"
+    },
+    "is_print": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "c"
+     ],
+     "summary": "printable 32..126 / control / printable non-alphanumeric non-space"
+    },
+    "is_punct": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "c"
+     ],
+     "summary": "printable 32..126 / control / printable non-alphanumeric non-space"
+    },
+    "is_space": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "c"
+     ],
+     "summary": "space, \\t \\n \\v \\f \\r"
+    },
+    "is_upper": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "c"
+     ],
+     "summary": "letter tests"
+    },
+    "is_vowel": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "c"
+     ],
+     "summary": "aeiou, either case"
+    },
+    "is_xdigit": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "c"
+     ],
+     "summary": "hexadecimal digit"
+    },
+    "rot13": {
+     "doc": "",
+     "line": 41,
+     "params": [
+      "c"
+     ],
+     "summary": "caesar(c, 13)"
+    },
+    "to_digit": {
+     "doc": "The character for digit d in 0..35 ('0'..'9', 'a'..'z').",
+     "line": 33,
+     "params": [
+      "d"
+     ],
+     "summary": "'0'..'9','a'..'z' for 0..35 (asserts range)"
+    },
+    "to_lower": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "c"
+     ],
+     "summary": "case conversion; other codes unchanged"
+    },
+    "to_upper": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "c"
+     ],
+     "summary": "case conversion; other codes unchanged"
+    }
+   },
+   "summary": "character classification and conversion on ASCII codes.",
+   "uses": []
+  },
+  "bits": {
+   "constants": {},
+   "doc": "bits: bit manipulation on 64-bit words.\n\n     use bits;\n     print popcount(0xff), clz(1), rotl(1, 65), extract(0xabcd, 4, 8);\n\nBit 0 is the least significant. `>>` in QScript is a logical shift; use\nsar() for an arithmetic (sign-propagating) shift. Shift counts must be in\n0..63; rotl/rotr reduce theirs modulo 64.",
+   "functions": {
+    "bit": {
+     "doc": "",
+     "line": 41,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "bit i (0 or 1)"
+    },
+    "bit_length": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "x"
+     ],
+     "summary": "64 - clz(x)"
+    },
+    "bswap16": {
+     "doc": "",
+     "line": 58,
+     "params": [
+      "x"
+     ],
+     "summary": "byte swaps of the low 16/32/64 bits"
+    },
+    "bswap32": {
+     "doc": "",
+     "line": 59,
+     "params": [
+      "x"
+     ],
+     "summary": "byte swaps of the low 16/32/64 bits"
+    },
+    "bswap64": {
+     "doc": "",
+     "line": 60,
+     "params": [
+      "x"
+     ],
+     "summary": "byte swaps of the low 16/32/64 bits"
+    },
+    "clear_bit": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "single-bit updates"
+    },
+    "clz": {
+     "doc": "Leading / trailing zero counts; 64 for zero.",
+     "line": 16,
+     "params": [
+      "x"
+     ],
+     "summary": "leading / trailing zero bits; 64 for 0"
+    },
+    "ctz": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "x"
+     ],
+     "summary": "leading / trailing zero bits; 64 for 0"
+    },
+    "extract": {
+     "doc": "",
+     "line": 45,
+     "params": [
+      "x",
+      "offset",
+      "width"
+     ],
+     "summary": "bit field"
+    },
+    "insert": {
+     "doc": "",
+     "line": 46,
+     "params": [
+      "x",
+      "value",
+      "offset",
+      "width"
+     ],
+     "summary": "x with the field replaced by value"
+    },
+    "is_pow2": {
+     "doc": "",
+     "line": 51,
+     "params": [
+      "x"
+     ],
+     "summary": "x > 0 and a power of two"
+    },
+    "lowbit": {
+     "doc": "",
+     "line": 50,
+     "params": [
+      "x"
+     ],
+     "summary": "lowest set bit (x & -x)"
+    },
+    "mask": {
+     "doc": "",
+     "line": 40,
+     "params": [
+      "width"
+     ],
+     "summary": "low width bits set; -1 for width >= 64"
+    },
+    "next_pow2": {
+     "doc": "",
+     "line": 52,
+     "params": [
+      "x"
+     ],
+     "summary": "smallest power of two >= x (x <= 2**62)"
+    },
+    "parity": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "x"
+     ],
+     "summary": "popcount(x) & 1"
+    },
+    "popcount": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "x"
+     ],
+     "summary": "number of set bits"
+    },
+    "reverse": {
+     "doc": "",
+     "line": 61,
+     "params": [
+      "x"
+     ],
+     "summary": "all 64 bits reversed"
+    },
+    "rotl": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "x",
+      "n"
+     ],
+     "summary": "rotate; n taken modulo 64"
+    },
+    "rotr": {
+     "doc": "",
+     "line": 34,
+     "params": [
+      "x",
+      "n"
+     ],
+     "summary": "rotate; n taken modulo 64"
+    },
+    "sar": {
+     "doc": "",
+     "line": 39,
+     "params": [
+      "x",
+      "n"
+     ],
+     "summary": "arithmetic shift right (n in 0..63)"
+    },
+    "set_bit": {
+     "doc": "",
+     "line": 42,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "single-bit updates"
+    },
+    "toggle_bit": {
+     "doc": "",
+     "line": 44,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "single-bit updates"
+    }
+   },
+   "summary": "bit manipulation on 64-bit words.",
+   "uses": []
+  },
+  "checked": {
+   "constants": {
+    "INT_MAX": {
+     "doc": "",
+     "line": 11,
+     "value": "9223372036854775807"
+    },
+    "INT_MIN": {
+     "doc": "",
+     "line": 12,
+     "value": "-9223372036854775808"
+    }
+   },
+   "doc": "checked: overflow detection, saturating and trapping arithmetic.\n\n     use checked;\n     let a = 3037000500;\n     print mul_ok(a, a);                // 0: a * a overflows\n     print add_sat(INT_MAX, 1);         // INT_MAX\n     print add_checked(a, 1);           // traps if the sum overflows\n\n*_ok return 1 when the operation is exact, *_sat clamp to the int64\nrange, *_checked assert exactness.",
+   "functions": {
+    "abs_sat": {
+     "doc": "",
+     "line": 38,
+     "params": [
+      "a"
+     ],
+     "summary": "-INT_MIN and abs(INT_MIN) give INT_MAX"
+    },
+    "add_checked": {
+     "doc": "",
+     "line": 40,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "exact result, or trap"
+    },
+    "add_ok": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "1 if the operation does not overflow"
+    },
+    "add_sat": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "result clamped to INT_MIN..INT_MAX"
+    },
+    "div_checked": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "exact result, or trap"
+    },
+    "div_ok": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "b != 0 and not INT_MIN / -1"
+    },
+    "mul_checked": {
+     "doc": "",
+     "line": 42,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "exact result, or trap"
+    },
+    "mul_ok": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "1 if the operation does not overflow"
+    },
+    "mul_sat": {
+     "doc": "",
+     "line": 33,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "result clamped to INT_MIN..INT_MAX"
+    },
+    "neg_ok": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "a"
+     ],
+     "summary": "a != INT_MIN"
+    },
+    "neg_sat": {
+     "doc": "",
+     "line": 37,
+     "params": [
+      "a"
+     ],
+     "summary": "-INT_MIN and abs(INT_MIN) give INT_MAX"
+    },
+    "sub_checked": {
+     "doc": "",
+     "line": 41,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "exact result, or trap"
+    },
+    "sub_ok": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "1 if the operation does not overflow"
+    },
+    "sub_sat": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "result clamped to INT_MIN..INT_MAX"
+    }
+   },
+   "summary": "overflow detection, saturating and trapping arithmetic.",
+   "uses": []
+  },
+  "checksum": {
+   "constants": {
+    "ADLER32_INIT": {
+     "doc": "",
+     "line": 10,
+     "value": "1"
+    },
+    "CRC32_INIT": {
+     "doc": "",
+     "line": 9,
+     "value": "0xffffffff"
+    }
+   },
+   "doc": "checksum: error-detecting codes over byte streams and digit strings.\n\n     use checksum;\n     let c = CRC32_INIT;\n     c = crc32_byte(c, '1'); c = crc32_byte(c, '2'); c = crc32_byte(c, '3');\n     print crc32_final(c), luhn_valid(79927398713), luhn_digit(7992739871);\n\nStreams are folded one byte at a time, threading the state.",
+   "functions": {
+    "adler32_byte": {
+     "doc": "Adler-32: state is (b << 16) | a.",
+     "line": 26,
+     "params": [
+      "state",
+      "byte"
+     ],
+     "summary": "Adler-32; start from ADLER32_INIT; the state is the checksum"
+    },
+    "crc32_byte": {
+     "doc": "CRC-32 (IEEE 802.3, reflected, as used by zip and PNG).",
+     "line": 13,
+     "params": [
+      "crc",
+      "byte"
+     ],
+     "summary": "CRC-32 (IEEE, reflected, as in zip/PNG); start from CRC32_INIT"
+    },
+    "crc32_final": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "crc"
+     ],
+     "summary": "final CRC-32 value (\"123456789\" gives 3421780262)"
+    },
+    "crc8_byte": {
+     "doc": "CRC-8 (polynomial 0x07, initial value 0).",
+     "line": 20,
+     "params": [
+      "crc",
+      "byte"
+     ],
+     "summary": "CRC-8, polynomial 0x07, start from 0"
+    },
+    "fletcher16_byte": {
+     "doc": "Fletcher-16: state is (sum2 << 8) | sum1, start at 0.",
+     "line": 34,
+     "params": [
+      "state",
+      "byte"
+     ],
+     "summary": "Fletcher-16; start from 0"
+    },
+    "luhn_digit": {
+     "doc": "The digit to append to n to make it Luhn-valid.",
+     "line": 56,
+     "params": [
+      "n"
+     ],
+     "summary": "the check digit to append to n"
+    },
+    "luhn_valid": {
+     "doc": "Luhn (credit-card) check over the decimal digits of n.",
+     "line": 54,
+     "params": [
+      "n"
+     ],
+     "summary": "Luhn check over the decimal digits of n"
+    },
+    "mod97_valid": {
+     "doc": "ISO 7064 mod 97-10 (IBAN style): valid when n % 97 == 1.",
+     "line": 58,
+     "params": [
+      "n"
+     ],
+     "summary": "ISO 7064 mod 97-10: n % 97 == 1"
+    }
+   },
+   "summary": "error-detecting codes over byte streams and digit strings.",
+   "uses": []
+  },
+  "codec": {
+   "constants": {},
+   "doc": "codec: integer encodings.\n\n     use codec;\n     print zigzag(-3), unzigzag(5), gray(6), ungray(5), bcd(1234) == 0x1234, varint_size(300);\n     // 5 -3 5 6 1 2",
+   "functions": {
+    "bcd": {
+     "doc": "Binary-coded decimal (n >= 0, up to 16 digits).",
+     "line": 15,
+     "params": [
+      "n"
+     ],
+     "summary": "binary-coded decimal (n >= 0, up to 16 digits)"
+    },
+    "gray": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "x"
+     ],
+     "summary": "binary reflected Gray code"
+    },
+    "morton": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "x",
+      "y"
+     ],
+     "summary": "interleave the low 32 bits of x and y (Z-order)"
+    },
+    "morton_x": {
+     "doc": "",
+     "line": 44,
+     "params": [
+      "m"
+     ],
+     "summary": "de-interleave"
+    },
+    "morton_y": {
+     "doc": "",
+     "line": 45,
+     "params": [
+      "m"
+     ],
+     "summary": "de-interleave"
+    },
+    "unbcd": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "b"
+     ],
+     "summary": "binary-coded decimal (n >= 0, up to 16 digits)"
+    },
+    "ungray": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "g"
+     ],
+     "summary": "binary reflected Gray code"
+    },
+    "unzigzag": {
+     "doc": "",
+     "line": 7,
+     "params": [
+      "z"
+     ],
+     "summary": "protobuf zigzag encoding of signed integers"
+    },
+    "varint_size": {
+     "doc": "Bytes in the unsigned LEB128 encoding of x (treated as unsigned).",
+     "line": 27,
+     "params": [
+      "x"
+     ],
+     "summary": "bytes in the unsigned LEB128 encoding of x"
+    },
+    "zigzag": {
+     "doc": "",
+     "line": 6,
+     "params": [
+      "x"
+     ],
+     "summary": "protobuf zigzag encoding of signed integers"
+    }
+   },
+   "summary": "integer encodings.",
+   "uses": []
+  },
+  "color": {
+   "constants": {
+    "BLACK": {
+     "doc": "",
+     "line": 8,
+     "value": "0x000000"
+    },
+    "WHITE": {
+     "doc": "",
+     "line": 9,
+     "value": "0xffffff"
+    }
+   },
+   "doc": "color: 24-bit RGB colors packed as 0xRRGGBB.\n\n     use color;\n     let orange = rgb(255, 165, 0);\n     print red(orange), luminance(orange), mix(orange, WHITE, 128) == rgb(255, 210, 128);\n\nChannels are 0..255; mix() weights run 0 (all a) .. 255 (all b).",
+   "functions": {
+    "alpha": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "c"
+     ],
+     "summary": "0xRRGGBBAA packing"
+    },
+    "blue": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "c"
+     ],
+     "summary": "channels"
+    },
+    "clamp_channel": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "v"
+     ],
+     "summary": "clamp to 0..255"
+    },
+    "darken": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "c",
+      "amount"
+     ],
+     "summary": "add / subtract from every channel"
+    },
+    "distance2": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "squared RGB distance"
+    },
+    "gray": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "c"
+     ],
+     "summary": "rgb(l, l, l) with l the luminance"
+    },
+    "green": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "c"
+     ],
+     "summary": "channels"
+    },
+    "invert": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "c"
+     ],
+     "summary": "complement of every channel"
+    },
+    "lighten": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "c",
+      "amount"
+     ],
+     "summary": "add / subtract from every channel"
+    },
+    "luminance": {
+     "doc": "Rec. 601 luma, 0..255.",
+     "line": 20,
+     "params": [
+      "c"
+     ],
+     "summary": "Rec. 601 luma, 0..255"
+    },
+    "mix": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "a",
+      "b",
+      "t"
+     ],
+     "summary": "blend; t = 0 gives a, 255 gives b"
+    },
+    "red": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "c"
+     ],
+     "summary": "channels"
+    },
+    "rgb": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "r",
+      "g",
+      "b"
+     ],
+     "summary": "packed color; channels clamped to 0..255"
+    },
+    "rgba": {
+     "doc": "0xRRGGBBAA.",
+     "line": 17,
+     "params": [
+      "r",
+      "g",
+      "b",
+      "a"
+     ],
+     "summary": "0xRRGGBBAA packing"
+    }
+   },
+   "summary": "24-bit RGB colors packed as 0xRRGGBB.",
+   "uses": []
+  },
+  "combin": {
+   "constants": {},
+   "doc": "combin: combinatorics and classic integer sequences.\n\n     use combin;\n     print factorial(10), binomial(52, 5), catalan(10), fibonacci(90);\n\nResults wrap past int64: factorial is exact up to 20, fibonacci up to 92,\nbinomial while every intermediate C(n-k+i, i) * (n-k+i+1) fits.",
+   "functions": {
+    "binomial": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "n",
+      "k"
+     ],
+     "summary": "C(n, k); 0 outside 0 <= k <= n"
+    },
+    "catalan": {
+     "doc": "",
+     "line": 39,
+     "params": [
+      "n"
+     ],
+     "summary": "Catalan number"
+    },
+    "derangements": {
+     "doc": "",
+     "line": 52,
+     "params": [
+      "n"
+     ],
+     "summary": "permutations with no fixed point"
+    },
+    "double_factorial": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "n"
+     ],
+     "summary": "n!!"
+    },
+    "factorial": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "n"
+     ],
+     "summary": "n! (exact up to n = 20)"
+    },
+    "fibonacci": {
+     "doc": "",
+     "line": 40,
+     "params": [
+      "n"
+     ],
+     "summary": "F(n) (exact up to 92), L(n)"
+    },
+    "lucas": {
+     "doc": "",
+     "line": 46,
+     "params": [
+      "n"
+     ],
+     "summary": "F(n) (exact up to 92), L(n)"
+    },
+    "multichoose": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "n",
+      "k"
+     ],
+     "summary": "C(n + k - 1, k)"
+    },
+    "permutations": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "n",
+      "k"
+     ],
+     "summary": "n! / (n - k)!"
+    },
+    "rising": {
+     "doc": "",
+     "line": 34,
+     "params": [
+      "x",
+      "k"
+     ],
+     "summary": "x (x+1) ... (x+k-1)"
+    },
+    "stirling2": {
+     "doc": "Stirling numbers of the second kind via the row recurrence, k <= 16.",
+     "line": 59,
+     "params": [
+      "n",
+      "k"
+     ],
+     "summary": "Stirling numbers of the second kind (recursive; small n)"
+    }
+   },
+   "summary": "combinatorics and classic integer sequences.",
+   "uses": []
+  },
+  "date": {
+   "constants": {},
+   "doc": "date: proleptic Gregorian calendar arithmetic.\n\n     use date;\n     let d = days_from_civil(2024, 2, 29);        // days since 1970-01-01\n     print day_of_week(2024, 2, 29), civil(d + 1), easter(2025);\n\nDates are passed as (year, month, day) with months 1..12, or packed as\nthe integer YYYYMMDD (20240301) by civil(), pack() and add_days().\nWeekdays are 0 = Sunday .. 6 = Saturday.",
+   "functions": {
+    "add_days": {
+     "doc": "",
+     "line": 46,
+     "params": [
+      "p",
+      "n"
+     ],
+     "summary": "arithmetic on packed dates"
+    },
+    "civil": {
+     "doc": "The date `days` after 1970-01-01, packed as YYYYMMDD (years >= 0).",
+     "line": 29,
+     "params": [
+      "days"
+     ],
+     "summary": "packed date for a day number (years >= 0)"
+    },
+    "day": {
+     "doc": "",
+     "line": 44,
+     "params": [
+      "p"
+     ],
+     "summary": "packing"
+    },
+    "day_of_week": {
+     "doc": "",
+     "line": 48,
+     "params": [
+      "y",
+      "m",
+      "d"
+     ],
+     "summary": "weekday 0..6, ordinal 1..366"
+    },
+    "day_of_year": {
+     "doc": "",
+     "line": 52,
+     "params": [
+      "y",
+      "m",
+      "d"
+     ],
+     "summary": "weekday 0..6, ordinal 1..366"
+    },
+    "days_from_civil": {
+     "doc": "Days since 1970-01-01 (negative before), after Howard Hinnant.",
+     "line": 20,
+     "params": [
+      "y",
+      "m",
+      "d"
+     ],
+     "summary": "days since 1970-01-01 (negative before)"
+    },
+    "days_in_month": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "y",
+      "m"
+     ],
+     "summary": "calendar facts"
+    },
+    "days_in_year": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "y"
+     ],
+     "summary": "calendar facts"
+    },
+    "diff_days": {
+     "doc": "",
+     "line": 47,
+     "params": [
+      "p1",
+      "p2"
+     ],
+     "summary": "arithmetic on packed dates"
+    },
+    "easter": {
+     "doc": "Western (Gregorian) Easter Sunday, packed (anonymous Gregorian algorithm).",
+     "line": 54,
+     "params": [
+      "y"
+     ],
+     "summary": "Western Easter Sunday, packed"
+    },
+    "is_leap": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "y"
+     ],
+     "summary": "calendar facts"
+    },
+    "is_valid": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "y",
+      "m",
+      "d"
+     ],
+     "summary": "whether the date exists"
+    },
+    "month": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "p"
+     ],
+     "summary": "packing"
+    },
+    "pack": {
+     "doc": "",
+     "line": 41,
+     "params": [
+      "y",
+      "m",
+      "d"
+     ],
+     "summary": "packing"
+    },
+    "to_days": {
+     "doc": "",
+     "line": 45,
+     "params": [
+      "p"
+     ],
+     "summary": "day number of a packed date"
+    },
+    "year": {
+     "doc": "",
+     "line": 42,
+     "params": [
+      "p"
+     ],
+     "summary": "packing"
+    }
+   },
+   "summary": "proleptic Gregorian calendar arithmetic.",
+   "uses": []
+  },
+  "digits": {
+   "constants": {},
+   "doc": "digits: decimal digits of integers.\n\n     use digits;\n     print count(12345), sum(999), reverse(1230), is_palindrome(12321), digit(9876, 2);\n\nFunctions work on the absolute value unless noted; reverse keeps the sign.",
+   "functions": {
+    "concat": {
+     "doc": "Digits of b appended to a (both non-negative).",
+     "line": 48,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "digits of b appended to a (a, b >= 0)"
+    },
+    "count": {
+     "doc": "",
+     "line": 7,
+     "params": [
+      "n"
+     ],
+     "summary": "number of digits (1 for 0)"
+    },
+    "count_base": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "n",
+      "base"
+     ],
+     "summary": "number of digits (1 for 0)"
+    },
+    "digit": {
+     "doc": "The i-th decimal digit counting from the right, starting at 0.",
+     "line": 38,
+     "params": [
+      "n",
+      "i"
+     ],
+     "summary": "i-th digit from the right, starting at 0"
+    },
+    "digital_root": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "n"
+     ],
+     "summary": "repeated digit sum (n >= 0)"
+    },
+    "is_armstrong": {
+     "doc": "",
+     "line": 54,
+     "params": [
+      "n"
+     ],
+     "summary": "narcissistic / divisible by digit sum"
+    },
+    "is_harshad": {
+     "doc": "",
+     "line": 62,
+     "params": [
+      "n"
+     ],
+     "summary": "narcissistic / divisible by digit sum"
+    },
+    "is_palindrome": {
+     "doc": "",
+     "line": 36,
+     "params": [
+      "n"
+     ],
+     "summary": "n >= 0 and equal to its reverse"
+    },
+    "product": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "n"
+     ],
+     "summary": "digit sum / product"
+    },
+    "reverse": {
+     "doc": "",
+     "line": 31,
+     "params": [
+      "n"
+     ],
+     "summary": "digits reversed, sign kept"
+    },
+    "sum": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "n"
+     ],
+     "summary": "digit sum / product"
+    }
+   },
+   "summary": "decimal digits of integers.",
+   "uses": []
+  },
+  "fixed": {
+   "constants": {
+    "HALF": {
+     "doc": "",
+     "line": 14,
+     "value": "32768"
+    },
+    "ONE": {
+     "doc": "",
+     "line": 13,
+     "value": "65536"
+    },
+    "SHIFT": {
+     "doc": "",
+     "line": 12,
+     "value": "16"
+    }
+   },
+   "doc": "fixed: Q16.16 fixed-point arithmetic in a 64-bit integer.\n\n     use fixed;\n     let r = from_ratio(3, 2);                  // 1.5\n     print to_milli(mul(r, r)), to_milli(sqrt(from_int(2)));   // 2250 1414\n\nA value v represents v / 65536. Products are exact up to about 2**47 in\nmagnitude; mul/div truncate toward zero; floor/ceil/round return fixed\nvalues.",
+   "functions": {
+    "ceil": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "x"
+     ],
+     "summary": "rounding, result in fixed point"
+    },
+    "div": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "arithmetic, truncating"
+    },
+    "floor": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "x"
+     ],
+     "summary": "rounding, result in fixed point"
+    },
+    "frac": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "x"
+     ],
+     "summary": "x - floor(x)"
+    },
+    "from_int": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "n"
+     ],
+     "summary": "conversion (to_int truncates toward zero)"
+    },
+    "from_milli": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "m"
+     ],
+     "summary": "thousandths, convenient for printing"
+    },
+    "from_ratio": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "n",
+      "d"
+     ],
+     "summary": "n/d as fixed point"
+    },
+    "lerp": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "a",
+      "b",
+      "t"
+     ],
+     "summary": "a + (b - a) t"
+    },
+    "mul": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "arithmetic, truncating"
+    },
+    "recip": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "x"
+     ],
+     "summary": "arithmetic, truncating"
+    },
+    "round": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "x"
+     ],
+     "summary": "rounding, result in fixed point"
+    },
+    "sqrt": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "x"
+     ],
+     "summary": "square root (x >= 0)"
+    },
+    "to_int": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "x"
+     ],
+     "summary": "conversion (to_int truncates toward zero)"
+    },
+    "to_milli": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "x"
+     ],
+     "summary": "thousandths, convenient for printing"
+    }
+   },
+   "summary": "Q16.16 fixed-point arithmetic in a 64-bit integer.",
+   "uses": [
+    "math"
+   ]
+  },
+  "geom": {
+   "constants": {},
+   "doc": "geom: integer 2-D geometry on separate x, y coordinates.\n\n     use geom;\n     print manhattan(0, 0, 3, 4), dist(0, 0, 3, 4), orient(0, 0, 1, 0, 0, 1);  // 7 5 1\n\nExact integer predicates (orientation, intersection) are robust; dist()\nis the floor of the Euclidean distance.",
+   "functions": {
+    "area2": {
+     "doc": "Twice the area of triangle abc.",
+     "line": 19,
+     "params": [
+      "ax",
+      "ay",
+      "bx",
+      "by",
+      "cx",
+      "cy"
+     ],
+     "summary": "twice the triangle area"
+    },
+    "chebyshev": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "summary": "L1 / L-infinity distance"
+    },
+    "cross": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "ax",
+      "ay",
+      "bx",
+      "by"
+     ],
+     "summary": "vector products"
+    },
+    "dist": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "summary": "squared distance / floor of the distance"
+    },
+    "dist2": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "summary": "squared distance / floor of the distance"
+    },
+    "dot": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "ax",
+      "ay",
+      "bx",
+      "by"
+     ],
+     "summary": "vector products"
+    },
+    "in_circle": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "x",
+      "y",
+      "cx",
+      "cy",
+      "r"
+     ],
+     "summary": "point in closed disc"
+    },
+    "in_rect": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "x",
+      "y",
+      "x0",
+      "y0",
+      "x1",
+      "y1"
+     ],
+     "summary": "point in closed rectangle (corners in any order)"
+    },
+    "lattice_points": {
+     "doc": "Lattice points on the closed segment from (x1, y1) to (x2, y2).",
+     "line": 23,
+     "params": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "summary": "integer points on the closed segment"
+    },
+    "manhattan": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "summary": "L1 / L-infinity distance"
+    },
+    "orient": {
+     "doc": "1 if a, b, c turn counter-clockwise, -1 if clockwise, 0 if collinear.",
+     "line": 17,
+     "params": [
+      "ax",
+      "ay",
+      "bx",
+      "by",
+      "cx",
+      "cy"
+     ],
+     "summary": "1 counter-clockwise, -1 clockwise, 0 collinear"
+    },
+    "segments_intersect": {
+     "doc": "Do closed segments ab and cd intersect?",
+     "line": 25,
+     "params": [
+      "ax",
+      "ay",
+      "bx",
+      "by",
+      "cx",
+      "cy",
+      "dx",
+      "dy"
+     ],
+     "summary": "closed segments ab and cd intersect"
+    }
+   },
+   "summary": "integer 2-D geometry on separate x, y coordinates.",
+   "uses": [
+    "math"
+   ]
+  },
+  "hash": {
+   "constants": {
+    "DJB2_INIT": {
+     "doc": "",
+     "line": 12,
+     "value": "5381"
+    },
+    "FNV_OFFSET": {
+     "doc": "0xcbf29ce484222325",
+     "line": 10,
+     "value": "-3750763034362895579"
+    },
+    "FNV_PRIME": {
+     "doc": "",
+     "line": 11,
+     "value": "1099511628211"
+    }
+   },
+   "doc": "hash: non-cryptographic hashing of integers and byte streams.\n\n     use hash;\n     let h = FNV_OFFSET;\n     h = fnv1a_byte(h, 'h'); h = fnv1a_byte(h, 'i');\n     print h, mix64(42), combine(hash_int(1), 2), bucket(h, 16);\n\n*_byte functions fold one byte (the low 8 bits) into a running state, so\nstreams are hashed by threading the state through calls.",
+   "functions": {
+    "bucket": {
+     "doc": "Map a hash to [0, n).",
+     "line": 49,
+     "params": [
+      "h",
+      "n"
+     ],
+     "summary": "map a hash to 0..n-1"
+    },
+    "combine": {
+     "doc": "",
+     "line": 32,
+     "params": [
+      "seed",
+      "v"
+     ],
+     "summary": "fold v into a hash (boost style)"
+    },
+    "djb2_byte": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "h",
+      "byte"
+     ],
+     "summary": "djb2 step; start from DJB2_INIT"
+    },
+    "fnv1a": {
+     "doc": "FNV-1a of the 8 little-endian bytes of x.",
+     "line": 17,
+     "params": [
+      "x"
+     ],
+     "summary": "FNV-1a of the 8 little-endian bytes of x"
+    },
+    "fnv1a_byte": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "h",
+      "byte"
+     ],
+     "summary": "FNV-1a 64 step; start from FNV_OFFSET"
+    },
+    "hash2": {
+     "doc": "",
+     "line": 35,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "order-sensitive tuple hashes"
+    },
+    "hash3": {
+     "doc": "",
+     "line": 36,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "order-sensitive tuple hashes"
+    },
+    "hash_int": {
+     "doc": "",
+     "line": 31,
+     "params": [
+      "x"
+     ],
+     "summary": "MurmurHash3 64-bit finalizer"
+    },
+    "jenkins_byte": {
+     "doc": "Jenkins one-at-a-time, 32-bit.",
+     "line": 38,
+     "params": [
+      "h",
+      "byte"
+     ],
+     "summary": "Jenkins one-at-a-time, 32-bit"
+    },
+    "jenkins_final": {
+     "doc": "",
+     "line": 43,
+     "params": [
+      "h"
+     ],
+     "summary": "Jenkins one-at-a-time, 32-bit"
+    },
+    "mix64": {
+     "doc": "MurmurHash3 64-bit finalizer.",
+     "line": 24,
+     "params": [
+      "x"
+     ],
+     "summary": "MurmurHash3 64-bit finalizer"
+    }
+   },
+   "summary": "non-cryptographic hashing of integers and byte streams.",
+   "uses": []
+  },
+  "logic": {
+   "constants": {},
+   "doc": "logic: boolean helpers. Any non-zero integer is true; results are 0 or 1.\n\n     use logic;\n     print xor(2, 0), implies(0, 5), majority(1, 0, 1), cmp(3, 7), select(1, 10, 20);\n\n(`and`, `or` and `not` are operators, so they are not functions here.)",
+   "functions": {
+    "all3": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "quantifiers over three values"
+    },
+    "any3": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "quantifiers over three values"
+    },
+    "cmp": {
+     "doc": "Three-way comparison: -1, 0 or 1.",
+     "line": 21,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "-1, 0 or 1"
+    },
+    "count3": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "at least two true / number true"
+    },
+    "iff": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    },
+    "implies": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    },
+    "majority": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "at least two true / number true"
+    },
+    "nand": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    },
+    "none3": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "quantifiers over three values"
+    },
+    "nor": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    },
+    "select": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "c",
+      "a",
+      "b"
+     ],
+     "summary": "c ? a : b (both arguments are evaluated)"
+    },
+    "truthy": {
+     "doc": "",
+     "line": 7,
+     "params": [
+      "x"
+     ],
+     "summary": "x != 0"
+    },
+    "xnor": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    },
+    "xor": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "boolean connectives"
+    }
+   },
+   "summary": "boolean helpers. Any non-zero integer is true; results are 0 or 1.",
+   "uses": []
+  },
+  "math": {
+   "constants": {
+    "INT_MAX": {
+     "doc": "",
+     "line": 9,
+     "value": "9223372036854775807"
+    },
+    "INT_MIN": {
+     "doc": "",
+     "line": 10,
+     "value": "-9223372036854775808"
+    }
+   },
+   "doc": "math: integer arithmetic.\n\n     use math;\n     print gcd(84, 36), isqrt(1000), clamp(42, 0, 10);   // 12 31 10\n\nAll arithmetic is signed 64-bit and wraps on overflow, so abs(INT_MIN)\nis INT_MIN. Functions that need a precondition (isqrt of a negative\nnumber, ilog2 of zero) assert it.",
+   "functions": {
+    "abs": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "x"
+     ],
+     "summary": "absolute value (wraps for INT_MIN), -1/0/1"
+    },
+    "average": {
+     "doc": "floor((a + b) / 2) without overflow.",
+     "line": 88,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "floor((a + b) / 2) without overflow"
+    },
+    "clamp": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "x",
+      "lo",
+      "hi"
+     ],
+     "summary": "x limited to lo..hi"
+    },
+    "cube": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "x"
+     ],
+     "summary": "powers (pow is **)"
+    },
+    "dist": {
+     "doc": "|a - b| without overflow for operands of the same sign.",
+     "line": 24,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "|a - b|"
+    },
+    "div_ceil": {
+     "doc": "",
+     "line": 76,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "division rounding down / up"
+    },
+    "div_floor": {
+     "doc": "Division rounding toward negative infinity / positive infinity.",
+     "line": 71,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "division rounding down / up"
+    },
+    "gcd": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "non-negative gcd; lcm (0 if either is 0)"
+    },
+    "icbrt": {
+     "doc": "Integer cube root, rounded toward zero (binary search).",
+     "line": 47,
+     "params": [
+      "n"
+     ],
+     "summary": "cube root rounded toward zero"
+    },
+    "ilog10": {
+     "doc": "",
+     "line": 64,
+     "params": [
+      "n"
+     ],
+     "summary": "floor of the logarithm, n > 0"
+    },
+    "ilog2": {
+     "doc": "",
+     "line": 58,
+     "params": [
+      "n"
+     ],
+     "summary": "floor of the logarithm, n > 0"
+    },
+    "is_even": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "x"
+     ],
+     "summary": "parity"
+    },
+    "is_odd": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "x"
+     ],
+     "summary": "parity"
+    },
+    "isqrt": {
+     "doc": "Floor of the square root (Newton's method, no overflow).",
+     "line": 38,
+     "params": [
+      "n"
+     ],
+     "summary": "floor(sqrt(n)), n >= 0, exact for all int64"
+    },
+    "lcm": {
+     "doc": "",
+     "line": 31,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "non-negative gcd; lcm (0 if either is 0)"
+    },
+    "max": {
+     "doc": "",
+     "line": 15,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "extrema"
+    },
+    "max3": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "extrema"
+    },
+    "min": {
+     "doc": "",
+     "line": 14,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "extrema"
+    },
+    "min3": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b",
+      "c"
+     ],
+     "summary": "extrema"
+    },
+    "mod_floor": {
+     "doc": "Remainder with the sign of the divisor (Python's %).",
+     "line": 82,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "remainder with the sign of b"
+    },
+    "pow": {
+     "doc": "",
+     "line": 35,
+     "params": [
+      "base",
+      "exp"
+     ],
+     "summary": "powers (pow is **)"
+    },
+    "sign": {
+     "doc": "",
+     "line": 13,
+     "params": [
+      "x"
+     ],
+     "summary": "absolute value (wraps for INT_MIN), -1/0/1"
+    },
+    "square": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "x"
+     ],
+     "summary": "powers (pow is **)"
+    }
+   },
+   "summary": "integer arithmetic.",
+   "uses": []
+  },
+  "ntheory": {
+   "constants": {},
+   "doc": "ntheory: modular arithmetic and number theory, overflow-safe.\n\n     use ntheory;\n     print mod_pow(2, 100, 1000000007), mod_inv(3, 11), is_probable_prime(2305843009213693951);\n\nModuli are positive. mod_add/mod_mul never overflow, so any modulus up to\nINT_MAX works. is_probable_prime is a deterministic Miller-Rabin test,\nexact for every int64.",
+   "functions": {
+    "crt": {
+     "doc": "x with x = a1 (mod m1) and x = a2 (mod m2) for coprime m1, m2, in [0, m1*m2); -1 if the moduli are not coprime.",
+     "line": 56,
+     "params": [
+      "a1",
+      "m1",
+      "a2",
+      "m2"
+     ],
+     "summary": "x = a1 (mod m1), x = a2 (mod m2), coprime moduli; -1 otherwise"
+    },
+    "is_coprime": {
+     "doc": "",
+     "line": 53,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "gcd is 1"
+    },
+    "is_probable_prime": {
+     "doc": "",
+     "line": 87,
+     "params": [
+      "n"
+     ],
+     "summary": "deterministic Miller-Rabin; exact for every int64"
+    },
+    "jacobi": {
+     "doc": "Jacobi symbol (a/n) for odd n > 0: -1, 0 or 1.",
+     "line": 62,
+     "params": [
+      "a",
+      "n"
+     ],
+     "summary": "Jacobi symbol for odd n > 0"
+    },
+    "mod": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "a",
+      "m"
+     ],
+     "summary": "a mod m in 0..m-1"
+    },
+    "mod_add": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "a",
+      "b",
+      "m"
+     ],
+     "summary": "modular arithmetic"
+    },
+    "mod_inv": {
+     "doc": "Inverse of a modulo m, or 0 when gcd(a, m) != 1.",
+     "line": 42,
+     "params": [
+      "a",
+      "m"
+     ],
+     "summary": "inverse of a mod m, or 0 if none"
+    },
+    "mod_mul": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "a",
+      "b",
+      "m"
+     ],
+     "summary": "modular arithmetic"
+    },
+    "mod_pow": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "base",
+      "exp",
+      "m"
+     ],
+     "summary": "base**exp mod m, exp >= 0"
+    },
+    "mod_sub": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b",
+      "m"
+     ],
+     "summary": "modular arithmetic"
+    }
+   },
+   "summary": "modular arithmetic and number theory, overflow-safe.",
+   "uses": [
+    "math"
+   ]
+  },
+  "pack": {
+   "constants": {},
+   "doc": "pack: packing several small integers into one 64-bit word.\n\n     use pack;\n     let p = pack32(-5, 7);\n     print hi32(p), lo32(p), byte(0x1234, 1), sign_extend(0xff, 8);   // -5 7 18 -1\n\nQScript has no arrays or structs; packing is how libraries return or\nstore several values at once (see date::civil, color::rgb).",
+   "functions": {
+    "byte": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "byte i (0 = lowest)"
+    },
+    "field16": {
+     "doc": "Field i (0 = lowest) of four unsigned 16-bit fields.",
+     "line": 29,
+     "params": [
+      "x",
+      "i"
+     ],
+     "summary": "four unsigned 16-bit fields (a highest; field 0 lowest)"
+    },
+    "hi32": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "x"
+     ],
+     "summary": "two signed 32-bit halves"
+    },
+    "i16": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "i32": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "i8": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "lo32": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "x"
+     ],
+     "summary": "two signed 32-bit halves"
+    },
+    "pack16": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "summary": "four unsigned 16-bit fields (a highest; field 0 lowest)"
+    },
+    "pack32": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "hi",
+      "lo"
+     ],
+     "summary": "two signed 32-bit halves"
+    },
+    "pack_bytes": {
+     "doc": "",
+     "line": 30,
+     "params": [
+      "b7",
+      "b6",
+      "b5",
+      "b4",
+      "b3",
+      "b2",
+      "b1",
+      "b0"
+     ],
+     "summary": "eight bytes, most significant first"
+    },
+    "sign_extend": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "x",
+      "bits"
+     ],
+     "summary": "widen the low bits bits"
+    },
+    "u16": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "u32": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "u8": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "x"
+     ],
+     "summary": "truncate to a width, unsigned / signed"
+    },
+    "with_byte": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "x",
+      "i",
+      "b"
+     ],
+     "summary": "byte i (0 = lowest)"
+    },
+    "zero_extend": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "x",
+      "bits"
+     ],
+     "summary": "widen the low bits bits"
+    }
+   },
+   "summary": "packing several small integers into one 64-bit word.",
+   "uses": []
+  },
+  "prelude": {
+   "constants": {
+    "FALSE": {
+     "doc": "",
+     "line": 9,
+     "value": "0"
+    },
+    "INT_MAX": {
+     "doc": "",
+     "line": 10,
+     "value": "9223372036854775807"
+    },
+    "INT_MIN": {
+     "doc": "",
+     "line": 11,
+     "value": "-9223372036854775808"
+    },
+    "MASK16": {
+     "doc": "",
+     "line": 14,
+     "value": "0xffff"
+    },
+    "MASK32": {
+     "doc": "",
+     "line": 15,
+     "value": "0xffffffff"
+    },
+    "MASK8": {
+     "doc": "",
+     "line": 13,
+     "value": "0xff"
+    },
+    "NEG_ONE": {
+     "doc": "",
+     "line": 12,
+     "value": "-1"
+    },
+    "TRUE": {
+     "doc": "",
+     "line": 8,
+     "value": "1"
+    }
+   },
+   "doc": "prelude: shared integer constants.\n\n     use prelude;\n     return INT_MAX;\n\nConstants cost nothing at run time: they are folded into the code that\nuses them and occupy none of the 16 variable registers.",
+   "functions": {},
+   "summary": "shared integer constants.",
+   "uses": []
+  },
+  "prime": {
+   "constants": {},
+   "doc": "prime: primality and factorization by trial division.\n\n     use prime;\n     print is_prime(97), next_prime(100), nth_prime(10), totient(36);\n\nTrial division is exact for every int64 but slows down for large\nprimes; ntheory::is_probable_prime is the fast deterministic test.",
+   "functions": {
+    "bigomega": {
+     "doc": "",
+     "line": 67,
+     "params": [
+      "n"
+     ],
+     "summary": "distinct / total prime factors"
+    },
+    "is_prime": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "n"
+     ],
+     "summary": "primality"
+    },
+    "largest_factor": {
+     "doc": "",
+     "line": 48,
+     "params": [
+      "n"
+     ],
+     "summary": "prime factors, n >= 2"
+    },
+    "next_prime": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "n"
+     ],
+     "summary": "nearest prime above / below (prev needs n > 2)"
+    },
+    "nth_prime": {
+     "doc": "The k-th prime, 1-based: nth_prime(1) == 2.",
+     "line": 30,
+     "params": [
+      "k"
+     ],
+     "summary": "k-th prime, nth_prime(1) == 2"
+    },
+    "omega": {
+     "doc": "Number of distinct prime factors, and with multiplicity.",
+     "line": 58,
+     "params": [
+      "n"
+     ],
+     "summary": "distinct / total prime factors"
+    },
+    "prev_prime": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "n"
+     ],
+     "summary": "nearest prime above / below (prev needs n > 2)"
+    },
+    "prime_count": {
+     "doc": "Number of primes <= n.",
+     "line": 37,
+     "params": [
+      "n"
+     ],
+     "summary": "number of primes <= n"
+    },
+    "smallest_factor": {
+     "doc": "",
+     "line": 42,
+     "params": [
+      "n"
+     ],
+     "summary": "prime factors, n >= 2"
+    },
+    "totient": {
+     "doc": "Euler's phi.",
+     "line": 73,
+     "params": [
+      "n"
+     ],
+     "summary": "Euler's phi"
+    }
+   },
+   "summary": "primality and factorization by trial division.",
+   "uses": []
+  },
+  "random": {
+   "constants": {
+    "GOLDEN": {
+     "doc": "0x9E3779B97F4A7C15",
+     "line": 11,
+     "value": "-7046029254386353131"
+    }
+   },
+   "doc": "random: deterministic pseudo-random numbers with explicit state.\n\n     use random;\n     let s = seed(2024);\n     for (let i = 0; i < 3; i++) { s = step(s); print range(s, 1, 6); }\n\nQScript has no global variables, so generators are pure functions: step()\nadvances a state, and value()/below()/range() derive outputs from a state\nwithout changing it. The default generator is SplitMix64; xorshift and\nlcg are provided as raw step functions. Not for cryptography.",
+   "functions": {
+    "below": {
+     "doc": "Uniform in [0, n) for n > 0 (tiny modulo bias for huge n).",
+     "line": 23,
+     "params": [
+      "state",
+      "n"
+     ],
+     "summary": "uniform in 0..n-1"
+    },
+    "coin": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "state"
+     ],
+     "summary": "0 or 1"
+    },
+    "fraction": {
+     "doc": "Q16.16 fraction in [0, 1).",
+     "line": 30,
+     "params": [
+      "state"
+     ],
+     "summary": "Q16.16 value in [0, 1)"
+    },
+    "lcg": {
+     "doc": "Knuth's MMIX linear congruential generator.",
+     "line": 38,
+     "params": [
+      "x"
+     ],
+     "summary": "Knuth MMIX LCG step"
+    },
+    "mix": {
+     "doc": "The SplitMix64 output function (also a good 64-bit integer hash).",
+     "line": 14,
+     "params": [
+      "z"
+     ],
+     "summary": "64-bit output / the SplitMix64 mixing function"
+    },
+    "range": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "state",
+      "lo",
+      "hi"
+     ],
+     "summary": "uniform in lo..hi"
+    },
+    "seed": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "s"
+     ],
+     "summary": "initial state from any integer"
+    },
+    "step": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "state"
+     ],
+     "summary": "next SplitMix64 state"
+    },
+    "value": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "state"
+     ],
+     "summary": "64-bit output / the SplitMix64 mixing function"
+    },
+    "xorshift": {
+     "doc": "Marsaglia xorshift64 (13, 7, 17); state must be non-zero.",
+     "line": 32,
+     "params": [
+      "x"
+     ],
+     "summary": "Marsaglia xorshift64 step (x != 0)"
+    }
+   },
+   "summary": "deterministic pseudo-random numbers with explicit state.",
+   "uses": []
+  },
+  "range": {
+   "constants": {},
+   "doc": "range: closed integer intervals [lo, hi].\n\n     use range;\n     print contains(5, 1, 10), overlap(1, 5, 4, 9), wrap(13, 0, 9), sum(1, 100);  // 1 2 3 5050",
+   "functions": {
+    "contains": {
+     "doc": "",
+     "line": 7,
+     "params": [
+      "x",
+      "lo",
+      "hi"
+     ],
+     "summary": "membership, size (0 if empty)"
+    },
+    "count_multiples": {
+     "doc": "Multiples of k in [a, b].",
+     "line": 24,
+     "params": [
+      "a",
+      "b",
+      "k"
+     ],
+     "summary": "multiples of k in the interval"
+    },
+    "length": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "lo",
+      "hi"
+     ],
+     "summary": "membership, size (0 if empty)"
+    },
+    "lerp": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b",
+      "t",
+      "scale"
+     ],
+     "summary": "a + (b - a) t / scale"
+    },
+    "map": {
+     "doc": "Linear map of x from [a0, a1] onto [b0, b1], truncating.",
+     "line": 15,
+     "params": [
+      "x",
+      "a0",
+      "a1",
+      "b0",
+      "b1"
+     ],
+     "summary": "linear map between intervals"
+    },
+    "overlap": {
+     "doc": "Number of integers in both intervals.",
+     "line": 11,
+     "params": [
+      "a0",
+      "a1",
+      "b0",
+      "b1"
+     ],
+     "summary": "intersect? / size of the intersection"
+    },
+    "overlaps": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "a0",
+      "a1",
+      "b0",
+      "b1"
+     ],
+     "summary": "intersect? / size of the intersection"
+    },
+    "steps": {
+     "doc": "Iterations of for (i = start; i < stop; i += step), step > 0.",
+     "line": 30,
+     "params": [
+      "start",
+      "stop",
+      "step"
+     ],
+     "summary": "iterations of for (i = start; i < stop; i += step)"
+    },
+    "sum": {
+     "doc": "Sum of the integers a..b.",
+     "line": 18,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "a + (a+1) + ... + b"
+    },
+    "wrap": {
+     "doc": "x folded into [lo, hi] cyclically.",
+     "line": 13,
+     "params": [
+      "x",
+      "lo",
+      "hi"
+     ],
+     "summary": "x folded cyclically into the interval"
+    }
+   },
+   "summary": "closed integer intervals [lo, hi].",
+   "uses": [
+    "math"
+   ]
+  },
+  "round": {
+   "constants": {},
+   "doc": "round: rounding division and rounding to multiples.\n\n     use round;\n     print round_div(7, 2), round_half_even(5, 2), round_to(1234, 100), percent(1, 3);  // 4 2 1200 33\n\nDivisors and multiples must be non-zero. \"half\" cases round away from\nzero unless the name says otherwise.",
+   "functions": {
+    "ceil_to": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "x",
+      "m"
+     ],
+     "summary": "to a multiple of m"
+    },
+    "floor_to": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "x",
+      "m"
+     ],
+     "summary": "to a multiple of m"
+    },
+    "percent": {
+     "doc": "part as a rounded percentage / per-mille of whole.",
+     "line": 30,
+     "params": [
+      "part",
+      "whole"
+     ],
+     "summary": "rounded ratio"
+    },
+    "permille": {
+     "doc": "",
+     "line": 31,
+     "params": [
+      "part",
+      "whole"
+     ],
+     "summary": "rounded ratio"
+    },
+    "round_div": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "a / b rounded, halves away from zero"
+    },
+    "round_half_even": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "a / b rounded, halves to even"
+    },
+    "round_to": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "x",
+      "m"
+     ],
+     "summary": "to a multiple of m"
+    },
+    "scale": {
+     "doc": "x * num / den, rounded, with the multiplication done first.",
+     "line": 33,
+     "params": [
+      "x",
+      "num",
+      "den"
+     ],
+     "summary": "x * num / den, rounded"
+    },
+    "trunc_div": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "a / b"
+    },
+    "trunc_to": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "x",
+      "m"
+     ],
+     "summary": "to a multiple of m"
+    }
+   },
+   "summary": "rounding division and rounding to multiples.",
+   "uses": [
+    "math"
+   ]
+  },
+  "seq": {
+   "constants": {},
+   "doc": "seq: figurate numbers and integer sequences.\n\n     use seq;\n     print triangular(10), is_square(144), collatz_steps(27), sigma(28), is_perfect(28);",
+   "functions": {
+    "aliquot": {
+     "doc": "",
+     "line": 45,
+     "params": [
+      "n"
+     ],
+     "summary": "sum of divisors / of proper divisors"
+    },
+    "arithmetic": {
+     "doc": "",
+     "line": 48,
+     "params": [
+      "a",
+      "d",
+      "n"
+     ],
+     "summary": "n-th term (0-based) / sum of n terms"
+    },
+    "arithmetic_sum": {
+     "doc": "",
+     "line": 49,
+     "params": [
+      "a",
+      "d",
+      "n"
+     ],
+     "summary": "n-th term (0-based) / sum of n terms"
+    },
+    "collatz_steps": {
+     "doc": "Steps for n to reach 1 under the Collatz map.",
+     "line": 30,
+     "params": [
+      "n"
+     ],
+     "summary": "steps to reach 1"
+    },
+    "geometric": {
+     "doc": "",
+     "line": 50,
+     "params": [
+      "a",
+      "r",
+      "n"
+     ],
+     "summary": "the same for geometric sequences"
+    },
+    "geometric_sum": {
+     "doc": "",
+     "line": 51,
+     "params": [
+      "a",
+      "r",
+      "n"
+     ],
+     "summary": "the same for geometric sequences"
+    },
+    "hexagonal": {
+     "doc": "",
+     "line": 9,
+     "params": [
+      "n"
+     ],
+     "summary": "figurate numbers"
+    },
+    "is_abundant": {
+     "doc": "",
+     "line": 47,
+     "params": [
+      "n"
+     ],
+     "summary": "classification"
+    },
+    "is_fibonacci": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "x"
+     ],
+     "summary": "membership"
+    },
+    "is_happy": {
+     "doc": "",
+     "line": 56,
+     "params": [
+      "n"
+     ],
+     "summary": "happy number test"
+    },
+    "is_perfect": {
+     "doc": "",
+     "line": 46,
+     "params": [
+      "n"
+     ],
+     "summary": "classification"
+    },
+    "is_square": {
+     "doc": "",
+     "line": 10,
+     "params": [
+      "x"
+     ],
+     "summary": "membership"
+    },
+    "is_triangular": {
+     "doc": "",
+     "line": 11,
+     "params": [
+      "x"
+     ],
+     "summary": "membership"
+    },
+    "pell": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "n"
+     ],
+     "summary": "sequences (T(2) = 1, P(1) = 1)"
+    },
+    "pentagonal": {
+     "doc": "",
+     "line": 8,
+     "params": [
+      "n"
+     ],
+     "summary": "figurate numbers"
+    },
+    "sigma": {
+     "doc": "Sum of all positive divisors.",
+     "line": 37,
+     "params": [
+      "n"
+     ],
+     "summary": "sum of divisors / of proper divisors"
+    },
+    "triangular": {
+     "doc": "",
+     "line": 7,
+     "params": [
+      "n"
+     ],
+     "summary": "figurate numbers"
+    },
+    "tribonacci": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "n"
+     ],
+     "summary": "sequences (T(2) = 1, P(1) = 1)"
+    }
+   },
+   "summary": "figurate numbers and integer sequences.",
+   "uses": [
+    "math"
+   ]
+  },
+  "testing": {
+   "constants": {},
+   "doc": "testing: assertion helpers for QScript test programs.\n\n     use testing, prime;\n     equal(2 + 2, 4);\n     between(next_prime(10), 11, 13);\n     let passed = check(0, is_prime(9) == 0, 1);   // counts passes, prints failure code 1\n\nequal/not_equal/less/between/is_true/is_false print the offending values\nand then trap with \"assertion failed\" (the failing line is reported).\ncheck() is non-fatal: it prints `code` on failure and returns passed + 1\non success, so a program can count results.",
+   "functions": {
+    "between": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "x",
+      "lo",
+      "hi"
+     ],
+     "summary": "ordering checks"
+    },
+    "check": {
+     "doc": "",
+     "line": 30,
+     "params": [
+      "passed",
+      "condition",
+      "code"
+     ],
+     "summary": "non-fatal: returns passed + 1, or prints code and returns passed"
+    },
+    "equal": {
+     "doc": "",
+     "line": 12,
+     "params": [
+      "actual",
+      "expected"
+     ],
+     "summary": "equality checks"
+    },
+    "is_false": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "x"
+     ],
+     "summary": "truth checks"
+    },
+    "is_true": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "x"
+     ],
+     "summary": "truth checks"
+    },
+    "less": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "ordering checks"
+    },
+    "not_equal": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "a",
+      "b"
+     ],
+     "summary": "equality checks"
+    }
+   },
+   "summary": "assertion helpers for QScript test programs.",
+   "uses": []
+  },
+  "time": {
+   "constants": {
+    "DAY": {
+     "doc": "",
+     "line": 13,
+     "value": "86400"
+    },
+    "HOUR": {
+     "doc": "",
+     "line": 12,
+     "value": "3600"
+    },
+    "MINUTE": {
+     "doc": "",
+     "line": 11,
+     "value": "60"
+    },
+    "WEEK": {
+     "doc": "",
+     "line": 14,
+     "value": "604800"
+    }
+   },
+   "doc": "time: seconds, clocks and Unix timestamps.\n\n     use time;\n     let t = unix(2000, 1, 1, 12, 30, 0);\n     print t, clock(time_of_day(t)), weekday(t);   // 946729800 123000 6\n\nTimestamps are seconds since 1970-01-01 00:00:00 UTC; clocks pack a time\nof day as HHMMSS.",
+   "functions": {
+    "clock": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "secs"
+     ],
+     "summary": "time of day packed as HHMMSS"
+    },
+    "from_ms": {
+     "doc": "",
+     "line": 30,
+     "params": [
+      "ms"
+     ],
+     "summary": "milliseconds"
+    },
+    "hms": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "h",
+      "m",
+      "s"
+     ],
+     "summary": "seconds"
+    },
+    "hour12": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "h"
+     ],
+     "summary": "12-hour clock"
+    },
+    "hours": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "secs"
+     ],
+     "summary": "components (minutes and seconds 0..59)"
+    },
+    "is_pm": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "h"
+     ],
+     "summary": "12-hour clock"
+    },
+    "minutes": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "secs"
+     ],
+     "summary": "components (minutes and seconds 0..59)"
+    },
+    "seconds": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "secs"
+     ],
+     "summary": "components (minutes and seconds 0..59)"
+    },
+    "time_of_day": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "t"
+     ],
+     "summary": "day number and second of day (floor)"
+    },
+    "to_ms": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "s"
+     ],
+     "summary": "milliseconds"
+    },
+    "unix": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "y",
+      "mo",
+      "d",
+      "h",
+      "mi",
+      "s"
+     ],
+     "summary": "timestamp of a UTC date and time"
+    },
+    "unix_date": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "t"
+     ],
+     "summary": "packed date, weekday 0..6"
+    },
+    "unix_days": {
+     "doc": "Day number and second of the day, rounding toward negative infinity.",
+     "line": 23,
+     "params": [
+      "t"
+     ],
+     "summary": "day number and second of day (floor)"
+    },
+    "weekday": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "t"
+     ],
+     "summary": "packed date, weekday 0..6"
+    }
+   },
+   "summary": "seconds, clocks and Unix timestamps.",
+   "uses": [
+    "date"
+   ]
+  },
+  "units": {
+   "constants": {
+    "GB": {
+     "doc": "",
+     "line": 11,
+     "value": "1000000000"
+    },
+    "GIB": {
+     "doc": "",
+     "line": 14,
+     "value": "1073741824"
+    },
+    "KB": {
+     "doc": "",
+     "line": 9,
+     "value": "1000"
+    },
+    "KIB": {
+     "doc": "",
+     "line": 12,
+     "value": "1024"
+    },
+    "MB": {
+     "doc": "",
+     "line": 10,
+     "value": "1000000"
+    },
+    "MIB": {
+     "doc": "",
+     "line": 13,
+     "value": "1048576"
+    }
+   },
+   "doc": "units: unit conversions in scaled integers.\n\n     use units;\n     print c_to_f(37000), miles_to_m(26), kib(64), deg_to_mrad(180);   // 98600 41842 65536 3141\n\nTemperatures are in thousandths of a degree (37000 = 37.000 C), lengths\nin metres or millimetres, masses in grams, angles in degrees or\nmilliradians, data sizes in bytes. Conversions truncate toward zero.",
+   "functions": {
+    "c_to_f": {
+     "doc": "",
+     "line": 16,
+     "params": [
+      "mc"
+     ],
+     "summary": "milli-degrees (37000 = 37.000 \u00b0C)"
+    },
+    "c_to_k": {
+     "doc": "",
+     "line": 18,
+     "params": [
+      "mc"
+     ],
+     "summary": "milli-degrees (37000 = 37.000 \u00b0C)"
+    },
+    "deg_to_mrad": {
+     "doc": "",
+     "line": 29,
+     "params": [
+      "d"
+     ],
+     "summary": "degrees / milliradians"
+    },
+    "f_to_c": {
+     "doc": "",
+     "line": 17,
+     "params": [
+      "mf"
+     ],
+     "summary": "milli-degrees (37000 = 37.000 \u00b0C)"
+    },
+    "feet_to_mm": {
+     "doc": "",
+     "line": 21,
+     "params": [
+      "f"
+     ],
+     "summary": "inches / feet / mm"
+    },
+    "g_to_pounds": {
+     "doc": "",
+     "line": 27,
+     "params": [
+      "g"
+     ],
+     "summary": "pounds / ounces / grams"
+    },
+    "gib": {
+     "doc": "",
+     "line": 33,
+     "params": [
+      "n"
+     ],
+     "summary": "binary sizes to bytes"
+    },
+    "inches_to_mm": {
+     "doc": "",
+     "line": 20,
+     "params": [
+      "i"
+     ],
+     "summary": "inches / feet / mm"
+    },
+    "k_to_c": {
+     "doc": "",
+     "line": 19,
+     "params": [
+      "mk"
+     ],
+     "summary": "milli-degrees (37000 = 37.000 \u00b0C)"
+    },
+    "kib": {
+     "doc": "",
+     "line": 31,
+     "params": [
+      "n"
+     ],
+     "summary": "binary sizes to bytes"
+    },
+    "km_to_m": {
+     "doc": "",
+     "line": 25,
+     "params": [
+      "km"
+     ],
+     "summary": "miles / metres / km"
+    },
+    "m_to_miles": {
+     "doc": "",
+     "line": 24,
+     "params": [
+      "m"
+     ],
+     "summary": "miles / metres / km"
+    },
+    "mib": {
+     "doc": "",
+     "line": 32,
+     "params": [
+      "n"
+     ],
+     "summary": "binary sizes to bytes"
+    },
+    "miles_to_m": {
+     "doc": "",
+     "line": 23,
+     "params": [
+      "mi"
+     ],
+     "summary": "miles / metres / km"
+    },
+    "mm_to_inches": {
+     "doc": "",
+     "line": 22,
+     "params": [
+      "mm"
+     ],
+     "summary": "inches / feet / mm"
+    },
+    "mrad_to_deg": {
+     "doc": "",
+     "line": 30,
+     "params": [
+      "mr"
+     ],
+     "summary": "degrees / milliradians"
+    },
+    "ounces_to_g": {
+     "doc": "",
+     "line": 28,
+     "params": [
+      "oz"
+     ],
+     "summary": "pounds / ounces / grams"
+    },
+    "pounds_to_g": {
+     "doc": "",
+     "line": 26,
+     "params": [
+      "lb"
+     ],
+     "summary": "pounds / ounces / grams"
+    },
+    "to_kib": {
+     "doc": "Bytes to whole KiB / MiB, rounding up.",
+     "line": 35,
+     "params": [
+      "bytes"
+     ],
+     "summary": "bytes to KiB / MiB, rounding up"
+    },
+    "to_mib": {
+     "doc": "",
+     "line": 36,
+     "params": [
+      "bytes"
+     ],
+     "summary": "bytes to KiB / MiB, rounding up"
+    }
+   },
+   "summary": "unit conversions in scaled integers.",
+   "uses": []
+  }
+ }
+}

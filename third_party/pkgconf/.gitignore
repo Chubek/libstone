@@ -1,0 +1,32 @@
+*.o
+*.og
+*.op
+*.gcno
+*.gcda
+*.gcov
+core
+.gdb_history
+
+*.exe
+*.dep
+*.diff
+*.orig
+*.patch
+*.rej
+
+# programs
+/bomtool
+/pccritic
+/pkgconf
+/pkgconf-gcov
+/pkgconf-profile
+/spdxtool
+/test-*
+
+# Makefile.lite output
+/libpkgconf/config.h
+
+# tests
+/test-api-buffer
+/test-path-utils
+/test-runner

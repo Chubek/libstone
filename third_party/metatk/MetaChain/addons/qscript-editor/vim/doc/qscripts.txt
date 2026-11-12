@@ -1,0 +1,330 @@
+*qscripts.txt*	QScript support for Vim and Neovim		*qscript*
+
+			QScript editor support
+
+1. Introduction				|qscript-intro|
+2. Installation				|qscript-install|
+3. Filetype detection			|qscript-ftdetect|
+4. Syntax highlighting			|qscript-syntax|
+5. Indentation				|qscript-indent|
+6. Filetype plugin: commands, maps	|qscript-ftplugin|
+7. Language server (QScript-LSP)	|qscript-lsp|
+8. Neovim Lua module			|qscript-lua|
+9. Language quick reference		|qscript-language|
+10. Standard library			|qscript-stdlib|
+11. Options summary			|qscript-options|
+
+==============================================================================
+1. Introduction						*qscript-intro*
+
+QScript is the signed 64-bit integer scripting language of MetaChain. Its
+parser is a Raku-style scannerless grammar on ParseTk; programs compile to
+MetaIL and run on the MetaVM interpreter, MetaJIT, or as static x86-64 Linux
+executables. Files use the extension `.qs`.
+
+This package provides syntax highlighting, indentation, a filetype plugin
+that drives the `qscript` command, a language server (QScript-LSP) with
+compiler diagnostics, completion, hover, signature help and go-to-definition,
+and a Lua module that wires everything up in Neovim.
+
+The full language manual is in `manual/qscript/` of the MetaChain sources.
+
+==============================================================================
+2. Installation						*qscript-install*
+
+Vim 8+ or Neovim: copy the runtime files into a directory on 'runtimepath',
+or add the directory itself: >
+
+	" ~/.vim/vimrc or init.vim
+	set runtimepath+=~/src/qscript-editor/vim
+	filetype plugin indent on
+	syntax on
+<
+Or install as a package: >
+
+	mkdir -p ~/.vim/pack/qscript/start
+	cp -r qscript-editor/vim ~/.vim/pack/qscript/start/qscript
+<
+Then generate the help tags once: >
+
+	:helptags ~/.vim/pack/qscript/start/qscript/doc
+<
+Files:
+	ftdetect/qscript.vim		filetype detection
+	syntax/qscript.vim		highlighting
+	syntax/qscript_stdlib.vim	generated standard-library names
+	indent/qscript.vim		indentation
+	ftplugin/qscript.vim		options, commands, mappings
+	lua/qscript.lua			Neovim module (LSP, commands)
+	doc/qscripts.txt		this file
+
+The commands need the `qscript` driver (built with MetaChain) on $PATH or
+named by |g:qscript_executable|.
+
+==============================================================================
+3. Filetype detection					*qscript-ftdetect*
+
+The filetype is `qscript` for:
+- files ending in `.qs` or `.qscript`;
+- files whose first line is a `#!` line that runs `qscript`, e.g. >
+	#!/usr/bin/env qscript
+<
+To use the filetype for another extension: >
+	autocmd BufNewFile,BufRead *.script setlocal filetype=qscript
+<
+==============================================================================
+4. Syntax highlighting					*qscript-syntax*
+
+Highlighted: keywords (`fn sub const let my if elsif else unless while until
+do for loop break last continue next return exit print say assert use`), word
+operators (`and or not`), `true`/`false`, numbers in all four bases with `_`
+separators, character literals and their escapes, `//`, `#` and `/* */`
+comments with TODO markers, function names after `fn`, library names after
+`use`, qualified names (`math::gcd`), ALL_CAPS constants, and calls of
+standard-library functions.
+
+Shown as errors: malformed numbers (`12ab`, `0b102`), multi-character
+character literals (`'ab'`), double-quoted strings (QScript has none),
+unmatched `}`.
+
+					*g:qscript_highlight_stdlib*
+Set to 0 to stop highlighting standard-library function calls (default 1): >
+	let g:qscript_highlight_stdlib = 0
+<
+					*g:qscript_highlight_operators*
+Set to 1 to highlight operators (default 0).
+
+					*g:qscript_no_fold*
+Set to 1 to disable syntax folding of `{ }` blocks. Folding is available with
+'foldmethod' set to "syntax": >
+	autocmd FileType qscript setlocal foldmethod=syntax foldlevel=99
+<
+The highlight groups are `qscriptKeyword`-style names linked to the standard
+groups, e.g. qscriptDefine -> Keyword, qscriptStdlibFunction -> Function,
+qscriptQualifier -> Type. Override with |:hi-link|.
+
+==============================================================================
+5. Indentation						*qscript-indent*
+
+The indent script handles:
+- `{ }`, `( )` and `[ ]` nesting, with closers aligned to their opener line;
+- brace-less control bodies: the line after `if (...)`, `elsif (...)`,
+  `else`, `while (...)`, `until (...)`, `for (...)`, `unless (...)` or `do`
+  is indented once, and the next line returns;
+- `else` and `elsif` lined up with their `if`;
+- continuation lines of an expression that ends in an operator or comma;
+- ` *` continuation lines in block comments.
+
+It uses 'shiftwidth'. Re-indent a whole file with `gg=G`.
+
+				*g:qscript_indent_continuation*
+Extra indent for continuation lines (default: 'shiftwidth'): >
+	let g:qscript_indent_continuation = 8
+<
+==============================================================================
+6. Filetype plugin					*qscript-ftplugin*
+
+Options set for QScript buffers: 'comments' and 'commentstring' (`// %s`),
+'formatoptions' (comment formatting), 'suffixesadd' (`.qs`), 'include' and
+'includeexpr' so that |gf| and |[i| follow `use` lines (`use text::ascii;`
+opens text/ascii.qs on 'path'), 'define', 'makeprg' and 'errorformat' for
+|:make|, and 'keywordprg' so that |K| shows documentation.
+
+With matchit (|matchit|), `%` jumps between `if`/`elsif`/`else` and between
+`do` and its `while`/`until`.
+
+Commands (buffer-local):
+
+						*:QScriptRun*
+:QScriptRun [args]	Save and run the file; output in a scratch window.
+						*:QScriptCheck*
+:QScriptCheck		Parse and check the file.
+						*:QScriptAst*
+:QScriptAst		Show the AST.
+						*:QScriptTree*
+:QScriptTree		Show the grammar match tree.
+						*:QScriptIR*
+:QScriptIR		Show the generated MetaIL.
+						*:QScriptCall*
+:QScriptCall {fn} [args]
+			Call one function of the file, e.g. `:QScriptCall fib 30`.
+						*:QScriptBuild*
+:QScriptBuild {out}	Build a native executable.
+						*:QScriptLib*
+:QScriptLib {name}	Show a standard library's source (completes names).
+						*:QScriptDoc*
+:QScriptDoc [name]	Document a library, function (`gcd`, `math::gcd`) or
+			constant; defaults to the word under the cursor. This
+			is what |K| runs.
+
+|:make| runs `qscript check` on the file and fills the quickfix list.
+
+Mappings (unless |g:qscript_no_mappings| is set):
+	<LocalLeader>r	|:QScriptRun|
+	<LocalLeader>c	|:QScriptCheck|
+	<LocalLeader>a	|:QScriptAst|
+	<LocalLeader>i	|:QScriptIR|
+	<LocalLeader>d	|:QScriptDoc|
+
+						*g:qscript_executable*
+The driver to run (default "qscript"): >
+	let g:qscript_executable = expand('~/src/MetaChain/build/qscript')
+<
+						*g:qscript_library_paths*
+Directories passed to the driver as `-L` for `use` lookups: >
+	let g:qscript_library_paths = ['~/qslib']
+<
+						*g:qscript_no_mappings*
+Set to 1 to skip the <LocalLeader> mappings.
+
+==============================================================================
+7. Language server (QScript-LSP)			*qscript-lsp*
+
+QScript-LSP (the `lsp/` directory of this package) is a dependency-free
+Node.js 18+ server speaking LSP over stdio. Start it with >
+	node lsp/server/index.js
+or install the `qscript-lsp` command with `npm install -g ./lsp`.
+
+Features:
+- diagnostics from the real compiler (`qscript check -`), positioned on the
+  offending token; errors inside a library are shown on its `use` line;
+  without the driver, basic bracket and library-name checks are used;
+- completion: keywords and snippets, local functions, constants and
+  variables in scope, functions and constants of used libraries, library
+  names after `use`, members after `lib::`;
+- hover: signatures and documentation for standard-library and local
+  functions, constant values, library summaries, keyword help, the value of
+  numeric and character literals;
+- signature help, go to definition (local names, user libraries, and
+  standard-library sources fetched with `qscript lib`), references, document
+  symbols, folding ranges, and formatting (indentation only).
+
+Settings, as initializationOptions or under the "qscript" key of
+workspace/didChangeConfiguration:
+	executable	the driver (default $QSCRIPT_EXECUTABLE or "qscript")
+	libraryPaths	extra -L directories; the file's directory is always added
+	checkOnChange	check while typing (default true)
+	debounceMs	delay before checking (default 250)
+
+Neovim: see |qscript-lua|. Vim with a plugin such as vim-lsp: >
+	if executable('node')
+	  autocmd User lsp_setup call lsp#register_server({
+	    \ 'name': 'qscript',
+	    \ 'cmd': ['node', expand('~/src/qscript-editor/lsp/server/index.js')],
+	    \ 'allowlist': ['qscript'],
+	    \ 'initialization_options': {'executable': 'qscript'},
+	    \ })
+	endif
+<
+==============================================================================
+8. Neovim Lua module					*qscript-lua*
+
+Requires Neovim 0.10 or later. In init.lua: >lua
+	require('qscript').setup({
+	  executable = 'qscript',
+	  library_paths = { '~/qslib' },
+	  lsp = {
+	    cmd = nil,             -- default: qscript-lsp, else the bundled server
+	    check_on_change = true,
+	    debounce_ms = 250,
+	    on_attach = function(client, bufnr) end,
+	    capabilities = nil,
+	  },
+	  output = 'split',        -- or 'notify'
+	  mappings = true,
+	})
+<
+setup() registers the filetype with |vim.filetype.add()|, starts the language
+server for every qscript buffer with |vim.lsp.start()|, and defines the
+buffer commands :QScriptRun, :QScriptCheck, :QScriptAst, :QScriptTree,
+:QScriptIR, :QScriptCall, :QScriptBuild, :QScriptLib and
+*:QScriptLspRestart* . Pass `lsp = false` to use only the commands.
+
+When `lsp.cmd` is not given, `qscript-lsp` on $PATH is used; otherwise the
+server shipped in this package (`../lsp/server/index.js` relative to the
+runtime directory) is started with `node`.
+
+Functions:
+	require('qscript').run(subcommand, args)	run the driver on the buffer
+	require('qscript').command(subcommand, ...)	the command line as a list
+	require('qscript').start_lsp(bufnr)		start/attach the server
+	require('qscript').attach(bufnr)		commands + maps + server
+
+==============================================================================
+9. Language quick reference				*qscript-language*
+
+Values are signed 64-bit integers; arithmetic wraps; `/` truncates; `>>` is a
+logical shift. Division by zero, bad shift counts and failed `assert` trap.
+>
+	use math, prime;                 # libraries
+	const LIMIT = 2 ** 10;           # compile-time constant
+	fn gcd2(a, b) {                  # function (also: sub)
+	    while (b) { let t = a % b; a = b; b = t; }
+	    return a;
+	}
+	my total = 0;                    # variable (also: let)
+	for (my i = 1; i <= 10; i++) {
+	    next if i % 2;               # statement modifier
+	    total += i * i;
+	}
+	unless (total > 0) say 0; else say total;
+	loop { total--; last if total < 100; }
+	do { total++; } until (total % 7 == 0);
+	assert is_prime(next_prime(total));
+	return gcd2(total, LIMIT);
+<
+Comments: `//`, `#`, `/* */`. Literals: `42`, `1_000`, `0xff`, `0b1010`,
+`0o17`, `'a'`, `'\n'`, `'\x41'`, `true`, `false`.
+
+Operators, loosest first: `?:`, `|| or`, `&& and`, `|`, `^`, `&`, `== !=`,
+`< <= > >=`, `<< >>`, `+ -`, `* / %`, unary `- + ! not ~`, `**` (right
+associative, so `-2 ** 2` is -4).
+
+At most 16 variables may be live at once in one function. Functions see
+their parameters, locals, constants and functions, but not the top-level
+program's variables.
+
+==============================================================================
+10. Standard library					*qscript-stdlib*
+
+Import with `use NAME;` and call functions plainly or as `NAME::f`.
+|K| or |:QScriptDoc| on a name shows its documentation.
+
+	ascii		character classes and case conversion
+	bits		popcount, clz/ctz, rotations, bit fields, byte swaps
+	checked		overflow tests, saturating and trapping arithmetic
+	checksum	CRC-32, CRC-8, Adler-32, Fletcher-16, Luhn, mod 97
+	codec		zigzag, Gray, BCD, LEB128 size, Morton codes
+	color		packed 0xRRGGBB colors
+	combin		factorial, binomial, Catalan, Fibonacci, ...
+	date		Gregorian calendar, weekdays, Easter
+	digits		decimal digit operations
+	fixed		Q16.16 fixed point
+	geom		integer 2-D geometry
+	hash		FNV-1a, djb2, Jenkins, Murmur3 finalizer
+	logic		boolean helpers, three-way compare
+	math		abs, min/max, gcd/lcm, isqrt, floor division, ...
+	ntheory		modular arithmetic, Miller-Rabin
+	pack		several small integers in one word
+	prelude		TRUE, FALSE, INT_MAX, INT_MIN, masks
+	prime		primality, factors, totient
+	random		SplitMix64 with explicit state
+	range		closed integer intervals
+	round		rounding division, multiples, percentages
+	seq		figurate numbers, Collatz, divisor sums
+	testing		assertion helpers
+	time		seconds, clocks, Unix timestamps
+	units		unit conversions in scaled integers
+
+==============================================================================
+11. Options summary					*qscript-options*
+
+	|g:qscript_executable|		driver command ("qscript")
+	|g:qscript_library_paths|	-L directories ([])
+	|g:qscript_no_mappings|		skip <LocalLeader> maps (0)
+	|g:qscript_highlight_stdlib|	highlight stdlib calls (1)
+	|g:qscript_highlight_operators|	highlight operators (0)
+	|g:qscript_no_fold|		no syntax folding (0)
+	|g:qscript_indent_continuation|	continuation indent ('shiftwidth')
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
