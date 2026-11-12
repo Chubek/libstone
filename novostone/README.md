@@ -1,7 +1,7 @@
 # Novostone
 
 Executable compiler-method libraries based on
-`.info/dossier-on-modern-cc-design`. The six components form a small, testable
+`/mnt/aleph/dossier-on-modern-cc-design/` as the design source of truth. The six components form a small, testable
 compiler substrate with relational analysis, transactional optimization,
 speculation/recovery, and learned profitability decisions.
 
@@ -354,6 +354,22 @@ The CLI `validate BEFORE AFTER [SEED]` exposes the same finite-domain check (exi
 0 passed, 1 mismatch, 2 inconclusive); `run FILE [I32...]` executes with empty
 initial memory. No finite-domain result is a universal proof.
 
+On a mismatch, the CLI also prints a reduced reproduction. The library API
+`query::minimize(before, after, input, ReductionOptions)` first rechecks the input,
+then removes memory suffixes and simplifies argument and memory-cell bit patterns.
+Surviving cells keep their addresses. Each accepted reduction must still produce
+a completed mismatch in return value, trap, memory, or ordered writes. A trial
+that exhausts its execution budget is counted as inconclusive and discarded.
+The mismatch category may change during reduction.
+
+`ReductionOptions::evaluations` caps paired executions (default 256, including
+the required initial check); `step_budget` caps each execution (default 100000).
+Exhaustion returns the last reproduced witness with `budget_exhausted = true`.
+An initially matching or inconclusive input, zero evaluation budget, or wrong
+argument count is rejected. `Reduction::explain()` includes the input, outcomes,
+work counters, and stopping status. Reduction is deterministic and greedy; it
+does not claim a globally minimal input or minimize the programs themselves.
+
 ## Speculation and recovery
 
 ```cpp
@@ -371,9 +387,14 @@ The supported refinement is a parameter instruction replaced by a constant, with
 a guard immediately before that instruction checking the actual argument and
 assumption epoch. `Assumption`, `Guard`, `Frame`, and `Binding` are stored CCDB
 relations. Guards and frames have version-local IDs; assumptions have
-registry-local IDs. Each frame records the baseline block/offset and all preceding
-SSA value bindings. Structural refinement verification checks that every change
-is guarded and every recovery binding is available and complete.
+registry-local IDs. Each frame records the baseline block/offset and the SSA values
+live immediately before its parameter. Liveness comes from the baseline body and
+includes future phi-edge uses; dead preceding temporaries need no binding.
+Structural refinement verification independently recomputes these requirements,
+checks that every required value is present, and rejects unavailable bindings.
+Older conservative frames containing additional available values remain valid.
+Liveness uses the standard Datalog analysis limits; failure to finish analysis
+rejects specialization before publication.
 
 Execute a speculative artifact through `Version::execute`, which interprets its
 guard metadata. The core `ir::load` projection alone represents only its body.
@@ -404,12 +425,24 @@ Samples must have finite nonnegative features and positive measured latency.
 
 The calibration score is `1 / (1 + RMS relative error)` on held-out samples. It is
 an empirical ranking confidence score, not a statistical correctness guarantee.
+Predictions also carry an empirical latency envelope using the largest absolute
+held-out residual: `[max(0, prediction - error), prediction + error]`. Calibration
+evidence records both sample counts and distinct workload counts for training and
+calibration, so repeated observations are not presented as distinct workloads.
+These ranges describe observed error; they are not statistical confidence
+intervals and give no coverage guarantee for future measurements.
+
 Unseen contexts, feature values outside training ranges, invalid predictions, or
 confidence below the threshold trigger a deterministic weighted-count heuristic
-for the entire candidate set. No shipped model claims hardware speedups.
+for the entire candidate set. Missing calibration evidence also triggers fallback.
+For multiple candidates, the predicted winner's upper envelope must be strictly
+below every alternative's lower envelope. Overlap or a tie falls back to the
+heuristic, even with a high aggregate confidence score. No shipped model claims
+hardware speedups.
 
 `Ranker::choose` logs context, model version, source revision, candidate features,
-predictions, confidence, selected candidate, and selection reason. `observe`
+predictions, confidence, calibration counts, error envelopes, selected candidate,
+and selection reason. `observe`
 attaches measured latency and flags excessive relative prediction error. Drift
 quarantines the active model after a model-selected decision; subsequent choices
 use the heuristic even for in-range targets. `replace_model` requires a fresh
@@ -417,10 +450,24 @@ version identity before restoring model use. Feedback for retired models cannot
 quarantine a replacement. No feedback silently retrains models or changes legality.
 
 `Model::serialize` / `Model::parse` preserve version, context, full-precision
-coefficients, feature ranges and calibration confidence in a bounded, versioned,
+coefficients, feature ranges, calibration confidence and evidence in a bounded, versioned,
 locale-independent format. Invalid ranges, non-finite coefficients and truncated
-or trailing artifacts are rejected. Persisted models contain no authority to
+or trailing artifacts are rejected. Format version 2 adds calibration evidence;
+version 1 remains readable, but its missing evidence makes ranking fall back.
+Re-serializing an older model preserves the absence of evidence. Persisted models contain no authority to
 create or publish unchecked candidates.
+
+### Dossier traceability for these extensions
+
+Paths below are relative to the source-of-truth directory named above. The
+dossier describes proposed architectures; these implementations cover the
+following bounded portions of those proposals.
+
+| Source | Implemented contract | Regression suite |
+| --- | --- | --- |
+| `chapters/04-deoptimization-as-an-ir-operation.md`, sections 1, 3–4 | Live recovery bindings, independent completeness/availability checks, preserved effects and resume budget | `novostone-recovery` |
+| `chapters/11-compiler-with-a-learned-cost-model.md`; `chapters/27-compiler-with-explicit-uncertainty.md`, sections 1–4 | Held-out residual evidence, workload counts, uncertainty-aware ranking and conservative fallback | `novostone-uncertainty` |
+| `chapters/39-semantic-fingerprints-and-metamorphic-compiler-testing.md`, section 3 | Reproducible input reduction using outputs, traps and effect traces under explicit budgets | `novostone-reduction` |
 
 ## Verification scope and current boundaries
 
@@ -439,6 +486,10 @@ independent worklist liveness, and abstract constants against observed execution
 It covers nonlinear/mutual recursion, cyclic deletion, dependency rebasing, write
 skew, ABA and negative reads, replayed validators, executable-edge widening,
 generated effectful CFGs, dead phi groups, and irreducible/nested loop boundaries.
+The dossier suites cover compact and empty recovery frames, future phi-edge uses,
+forced failure with prior stores, uncertainty overlap despite high confidence,
+model-format migration, malformed calibration evidence, deterministic witness
+reduction, and inconclusive or exhausted reduction trials.
 
 This implements the dossier's executable reference and bounded vertical-slice
 approach. Verification is structural plus semantic differential testing, not an

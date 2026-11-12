@@ -18,6 +18,21 @@ struct Validation {
 // Resource exhaustion is inconclusive, never evidence of equivalence.
 Validation validate(const ir::Function& before, const ir::Function& after,
                     const std::vector<Input>& inputs, std::size_t step_budget = 100000);
+struct ReductionOptions {
+  std::size_t evaluations = 256; // Paired executions, including the initial witness.
+  std::size_t step_budget = 100000; // Per execution, not a wall-clock deadline.
+};
+struct Reduction {
+  Counterexample counterexample;
+  std::size_t evaluations = 0;
+  std::size_t inconclusive = 0;
+  bool budget_exhausted = false;
+  std::string explain() const;
+};
+// Rechecks the input, then greedily shrinks its memory suffix and integer values.
+// Only completed mismatches are retained. No global minimality is claimed.
+Reduction minimize(const ir::Function& before, const ir::Function& after,
+                   Input input, ReductionOptions options = {});
 std::vector<Input> corpus(std::uint32_t arity, std::uint32_t seed, std::size_t samples = 128,
                           std::size_t max_memory = 8);
 struct Rewrite {

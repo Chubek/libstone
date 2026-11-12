@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <random>
 #include <sstream>
+#include <locale>
 
 namespace novostone::query {
 Validation validate(const ir::Function& before, const ir::Function& after,
@@ -50,7 +51,7 @@ ccdb::Snapshot apply_checked(ccdb::Database& database, const Candidate& candidat
   return apply(database, candidate);
 }
 std::string Validation::explain() const {
-  std::ostringstream out;
+  std::ostringstream out; out.imbue(std::locale::classic());
   out << "bounded differential validation: " << (verdict == Verdict::Passed ? "passed" : verdict == Verdict::Mismatch ? "mismatch" : "inconclusive")
       << "; matched " << matched << "; resource-limited " << inconclusive << "; scope: supplied finite inputs, i32 and ordered memory effects";
   if (counterexample) {

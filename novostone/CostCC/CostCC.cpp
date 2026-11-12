@@ -58,8 +58,10 @@ Model Model::train(std::string version, const std::vector<Sample>& training,
       model.maximum_[i] = std::max(model.maximum_[i], sample.features[i]);
     }
   }
+  std::set<std::string> calibration_workloads;
   for (const auto& sample : calibration) {
     check(sample);
+    calibration_workloads.insert(sample.workload);
     if (workloads.count(sample.workload)) throw std::invalid_argument("calibration workload leaks into training");
     for (std::size_t i = 0; i < 4; ++i)
       if (sample.features[i] < model.minimum_[i] || sample.features[i] > model.maximum_[i])
@@ -93,14 +95,18 @@ Model Model::train(std::string version, const std::vector<Sample>& training,
     model.weights_[i] = normal[i][5];
     if (!std::isfinite(model.weights_[i])) throw std::invalid_argument("non-finite model weights");
   }
-  double relative_error = 0;
+  double relative_error = 0, max_absolute_error = 0;
   for (const auto& sample : calibration) {
     auto estimate = model.estimate(sample.features);
     if (!std::isfinite(estimate) || estimate <= 0) { relative_error = std::numeric_limits<double>::infinity(); break; }
     auto error = (estimate - sample.latency) / sample.latency;
     relative_error = std::hypot(relative_error, error);
+    max_absolute_error = std::max(max_absolute_error, std::abs(estimate - sample.latency));
   }
   model.confidence_ = 1 / (1 + relative_error / std::sqrt(static_cast<double>(calibration.size())));
+  if (std::isfinite(relative_error))
+    model.calibration_ = Calibration{training.size(), calibration.size(), workloads.size(),
+                                     calibration_workloads.size(), max_absolute_error};
   return model;
 }
 std::optional<Prediction> Model::predict(const Context& context, const Features& f) const {
@@ -109,14 +115,24 @@ std::optional<Prediction> Model::predict(const Context& context, const Features&
   for (std::size_t i = 0; i < 4; ++i) if (f[i] < minimum_[i] || f[i] > maximum_[i]) return {};
   auto value = estimate(f);
   if (!std::isfinite(value) || value <= 0) return {};
-  return Prediction{value, confidence_};
+  Prediction prediction{value, confidence_};
+  if (calibration_) {
+    auto upper = value + calibration_->max_absolute_error;
+    if (!std::isfinite(upper)) return {};
+    prediction.interval = Interval{std::max(0.0, value - calibration_->max_absolute_error), upper};
+  }
+  return prediction;
 }
 std::string Model::serialize() const {
   std::ostringstream out; out.imbue(std::locale::classic());
   out << std::setprecision(std::numeric_limits<double>::max_digits10)
-      << "novostone-cost 1\n" << std::quoted(version_) << '\n'
+      << "novostone-cost 2\n" << std::quoted(version_) << '\n'
       << std::quoted(context_.target) << ' ' << std::quoted(context_.isa) << ' ' << std::quoted(context_.cache)
       << ' ' << std::quoted(context_.optimization) << ' ' << context_.profile_epoch << '\n' << confidence_ << '\n';
+  if (calibration_) out << "evidence " << calibration_->training_samples << ' ' << calibration_->calibration_samples
+      << ' ' << calibration_->training_workloads << ' ' << calibration_->calibration_workloads
+      << ' ' << calibration_->max_absolute_error << '\n';
+  else out << "no-evidence\n";
   for (auto value : minimum_) out << value << ' ';
   out << '\n';
   for (auto value : maximum_) out << value << ' ';
@@ -129,13 +145,32 @@ Model Model::parse(const std::string& text) {
   if (text.size() > 1024 * 1024) throw std::invalid_argument("cost model byte limit exceeded");
   std::istringstream in(text); in.imbue(std::locale::classic());
   Model model; std::string token, epoch; int version;
-  if (!(in >> token >> version) || token != "novostone-cost" || version != 1 ||
+  if (!(in >> token >> version) || token != "novostone-cost" || (version != 1 && version != 2) ||
       !(in >> std::quoted(model.version_) >> std::quoted(model.context_.target) >> std::quoted(model.context_.isa)
            >> std::quoted(model.context_.cache) >> std::quoted(model.context_.optimization) >> epoch >> model.confidence_) ||
       model.version_.empty() || model.context_.target.empty() || !std::isfinite(model.confidence_) || model.confidence_ < 0 || model.confidence_ > 1)
     throw std::invalid_argument("invalid cost model header");
   auto parsed_epoch = std::from_chars(epoch.data(), epoch.data() + epoch.size(), model.context_.profile_epoch);
   if (parsed_epoch.ec != std::errc{} || parsed_epoch.ptr != epoch.data() + epoch.size()) throw std::invalid_argument("invalid model epoch");
+  if (version == 2) {
+    if (!(in >> token)) throw std::invalid_argument("missing calibration evidence");
+    if (token == "evidence") {
+      Calibration evidence{};
+      for (auto* count : {&evidence.training_samples, &evidence.calibration_samples,
+                          &evidence.training_workloads, &evidence.calibration_workloads}) {
+        if (!(in >> token)) throw std::invalid_argument("missing calibration count");
+        auto parsed = std::from_chars(token.data(), token.data() + token.size(), *count);
+        if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
+          throw std::invalid_argument("invalid calibration count");
+      }
+      if (!(in >> evidence.max_absolute_error) || !std::isfinite(evidence.max_absolute_error) ||
+          evidence.max_absolute_error < 0 || evidence.training_samples < 5 || evidence.calibration_samples < 2 ||
+          evidence.training_workloads == 0 || evidence.training_workloads > evidence.training_samples ||
+          evidence.calibration_workloads == 0 || evidence.calibration_workloads > evidence.calibration_samples)
+        throw std::invalid_argument("invalid calibration evidence");
+      model.calibration_ = evidence;
+    } else if (token != "no-evidence") throw std::invalid_argument("invalid calibration record");
+  }
   for (auto& value : model.minimum_) if (!(in >> value)) throw std::invalid_argument("invalid model minimum");
   for (auto& value : model.maximum_) if (!(in >> value)) throw std::invalid_argument("invalid model maximum");
   validate(model.minimum_); validate(model.maximum_);
@@ -150,18 +185,34 @@ Ranker::Ranker(std::optional<Model> model, double threshold) : model_(std::move(
 Decision Ranker::choose(const std::vector<query::Candidate>& candidates, const Context& context) {
   if (candidates.empty() || context.target.empty()) throw std::invalid_argument("ranking requires candidates and target");
   Decision decision{candidates.front().base().revision(), context, model_ ? model_->version() : "heuristic",
-    {}, 0, model_.has_value() && !quarantined_, {}, {}, false};
+    {}, 0, model_.has_value() && !quarantined_, {}, {}, false, model_ ? model_->calibration() : std::nullopt};
   for (const auto& candidate : candidates) {
     if (!candidate.base().same_revision(candidates.front().base())) throw std::invalid_argument("candidates have different semantic roots");
     auto f = features(candidate.result());
     auto prediction = model_ ? model_->predict(context, f) : std::nullopt;
-    if (!prediction || prediction->confidence < threshold_) decision.used_model = false;
+    if (!prediction || prediction->confidence < threshold_ || !prediction->interval) decision.used_model = false;
     decision.candidates.push_back({f, heuristic(f), prediction});
   }
-  auto score = [&](std::size_t i) { return decision.used_model ? decision.candidates[i].prediction->latency : decision.candidates[i].baseline_cost; };
-  for (std::size_t i = 1; i < candidates.size(); ++i) if (score(i) < score(decision.selected)) decision.selected = i;
-  decision.reason = decision.used_model ? "calibrated in-range model" :
-    quarantined_ ? "model quarantined after measurement drift; heuristic fallback" : "deterministic heuristic fallback";
+  decision.reason = quarantined_ ? "model quarantined after measurement drift; heuristic fallback" :
+    model_ && !model_->calibration() ? "missing calibration evidence; heuristic fallback" : "deterministic heuristic fallback";
+  if (decision.used_model) {
+    for (std::size_t i = 1; i < candidates.size(); ++i)
+      if (decision.candidates[i].prediction->latency < decision.candidates[decision.selected].prediction->latency)
+        decision.selected = i;
+    auto upper = decision.candidates[decision.selected].prediction->interval->upper;
+    for (std::size_t i = 0; i < candidates.size(); ++i) if (i != decision.selected &&
+        upper >= decision.candidates[i].prediction->interval->lower) {
+      decision.used_model = false;
+      decision.reason = "overlapping empirical cost envelopes; heuristic fallback";
+      break;
+    }
+    if (decision.used_model) decision.reason = "calibrated in-range model with separated empirical cost envelopes";
+  }
+  if (!decision.used_model) {
+    decision.selected = 0;
+    for (std::size_t i = 1; i < candidates.size(); ++i)
+      if (decision.candidates[i].baseline_cost < decision.candidates[decision.selected].baseline_cost) decision.selected = i;
+  }
   log_.push_back(decision);
   return decision;
 }
@@ -181,16 +232,21 @@ void Ranker::replace_model(Model model) {
   model_ = std::move(model); quarantined_ = false;
 }
 std::string Decision::explain() const {
-  std::ostringstream out;
+  std::ostringstream out; out.imbue(std::locale::classic());
   out << "revision " << revision << " target " << std::quoted(context.target) << " isa " << std::quoted(context.isa)
       << " cache " << std::quoted(context.cache) << " context " << std::quoted(context.optimization)
       << " epoch " << context.profile_epoch << " model " << std::quoted(model_version)
       << " selected " << selected << " (" << reason << ")\n";
+  if (calibration) out << "calibration training_samples " << calibration->training_samples
+      << " held_out_samples " << calibration->calibration_samples << " training_workloads " << calibration->training_workloads
+      << " held_out_workloads " << calibration->calibration_workloads << " max_absolute_error " << calibration->max_absolute_error << '\n';
   for (std::size_t i = 0; i < candidates.size(); ++i) {
     out << i << " features";
     for (auto feature : candidates[i].features) out << ' ' << feature;
     out << " heuristic " << candidates[i].baseline_cost;
     if (candidates[i].prediction) out << " predicted " << candidates[i].prediction->latency << " confidence " << candidates[i].prediction->confidence;
+    if (candidates[i].prediction && candidates[i].prediction->interval)
+      out << " empirical_envelope [" << candidates[i].prediction->interval->lower << ", " << candidates[i].prediction->interval->upper << ']';
     out << '\n';
   }
   if (observed_latency) out << "observed " << *observed_latency << " drift " << drift << '\n';

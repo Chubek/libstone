@@ -222,7 +222,13 @@ void liveness() {
   auto retained = frame.emit(frame_block, ir::Op::Const, {}, 17), parameter = frame.emit(frame_block, ir::Op::Param);
   frame.emit(frame_block, ir::Op::Return, {parameter}); auto baseline = frame.finish();
   auto guarded = speculative::Version::specialize(baseline, registry, {{parameter, 3, assumption}});
-  check(ir::liveness(guarded.snapshot()).before.at(parameter).count(retained), "recovery bindings remain live even without ordinary SSA users");
+  check(!ir::liveness(guarded.snapshot()).before.at(parameter).count(retained), "new frames omit dead preceding values");
+  // Conservative imported frames can still explicitly retain an available local.
+  ccdb::Database retained_db(ir::program()); auto retained_tx = retained_db.begin();
+  for (const auto& [name, rows] : guarded.snapshot().facts()) for (const auto& row : rows) retained_tx.insert(name, row);
+  retained_tx.insert("Binding", {guarded.guards().front().frame.id, retained});
+  auto retained_snapshot = retained_tx.commit("conservative recovery frame", [&](const auto& snapshot) { speculative::verify(baseline, snapshot); });
+  check(ir::liveness(retained_snapshot).before.at(parameter).count(retained), "explicit recovery bindings remain live even without ordinary SSA users");
 
   ir::Function irreducible{1, 1, {
     {1, {1, {{6, ir::Op::Param, 0, {}, {}}, {7, ir::Op::Branch, 0, {6}, {2, 3}}}}},

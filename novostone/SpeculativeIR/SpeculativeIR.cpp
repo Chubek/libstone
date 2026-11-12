@@ -50,6 +50,9 @@ void verify(const ccdb::Snapshot& baseline, const ccdb::Snapshot& specialized) {
   ir::verify(baseline); ir::verify(specialized);
   auto original = ir::load(baseline), expected = original;
   auto guards = decode(specialized);
+  // Derive recovery requirements from the baseline body, never from the
+  // supplied Binding facts (which would make completeness self-justifying).
+  auto live = ir::liveness(original);
   std::set<ir::Id> found;
   for (auto& [block_id, block] : expected.blocks) {
     std::vector<ir::Id> available;
@@ -62,7 +65,10 @@ void verify(const ccdb::Snapshot& baseline, const ccdb::Snapshot& specialized) {
         auto locals = it->frame.locals;
         auto sorted = available;
         std::sort(sorted.begin(), sorted.end());
-        if (locals != sorted) throw std::invalid_argument("incomplete or unavailable frame bindings");
+        const auto& required = live.before.at(i.id);
+        if (!std::includes(sorted.begin(), sorted.end(), locals.begin(), locals.end()) ||
+            !std::includes(locals.begin(), locals.end(), required.begin(), required.end()))
+          throw std::invalid_argument("incomplete or unavailable frame bindings");
         i.op = ir::Op::Const; i.immediate = it->expected;
         found.insert(i.id);
       }
@@ -79,6 +85,7 @@ Version Version::specialize(const ccdb::Snapshot& baseline, std::shared_ptr<Assu
   for (const auto& name : {"Guard", "Frame", "Binding", "Assumption"})
     if (!baseline.relation(name).empty()) throw std::invalid_argument("baseline is already speculative");
   auto f = ir::load(baseline);
+  auto live = ir::liveness(f);
   std::shared_lock lock(assumptions->mutex_);
   ccdb::Database db(ir::program());
   auto tx = db.begin();
@@ -90,7 +97,6 @@ Version Version::specialize(const ccdb::Snapshot& baseline, std::shared_ptr<Assu
     if (!assumption.valid) throw std::invalid_argument("invalidated assumption");
     bool found = false;
     for (auto& [block_id, block] : f.blocks) {
-      std::vector<ir::Id> locals;
       for (std::size_t pos = 0; pos < block.instructions.size(); ++pos) {
         auto& i = block.instructions[pos];
         if (i.id == spec.parameter) {
@@ -98,12 +104,11 @@ Version Version::specialize(const ccdb::Snapshot& baseline, std::shared_ptr<Assu
           auto guard = next++, frame = next++;
           tx.insert("Guard", {guard, i.id, static_cast<std::int64_t>(i.immediate), static_cast<std::int64_t>(spec.expected), spec.assumption, frame});
           tx.insert("Frame", {frame, block_id, static_cast<std::int64_t>(pos)});
-          for (auto value : locals) tx.insert("Binding", {frame, value});
+          for (auto value : live.before.at(i.id)) tx.insert("Binding", {frame, value});
           tx.insert("Assumption", {spec.assumption, assumption.epoch, assumption.description});
           i.op = ir::Op::Const; i.immediate = spec.expected;
           found = true;
         }
-        if (ir::produces_value(i.op)) locals.push_back(i.id);
       }
     }
     if (!found) throw std::invalid_argument("missing specialization parameter");

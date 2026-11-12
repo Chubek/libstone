@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
       auto seed = argc == 5 ? integer(argv[4]) : 728u;
       auto report = query::validate(before, after, query::corpus(before.arity, seed));
       std::cout << "seed " << seed << '\n' << report.explain() << '\n';
+      if (report.counterexample)
+        std::cout << query::minimize(before, after, report.counterexample->input).explain() << '\n';
       return report.verdict == query::Verdict::Passed ? 0 : report.verdict == query::Verdict::Mismatch ? 1 : 2;
     }
     if (argc == 3 && std::string(argv[1]) == "optimize") {

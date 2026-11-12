@@ -14,7 +14,14 @@ struct Context {
   bool operator==(const Context&) const = default;
 };
 struct Sample { Context context; std::string workload; Features features; double latency; };
-struct Prediction { double latency; double confidence; };
+// An empirical residual envelope, not a statistical coverage guarantee.
+struct Interval { double lower; double upper; };
+struct Calibration {
+  std::uint64_t training_samples, calibration_samples;
+  std::uint64_t training_workloads, calibration_workloads;
+  double max_absolute_error;
+};
+struct Prediction { double latency; double confidence; std::optional<Interval> interval = {}; };
 Features features(const ccdb::Snapshot& snapshot);
 double heuristic(const Features& features);
 class Model {
@@ -23,6 +30,7 @@ public:
                      const std::vector<Sample>& calibration, double ridge = 1e-6);
   std::optional<Prediction> predict(const Context& context, const Features& features) const;
   const std::string& version() const { return version_; }
+  const std::optional<Calibration>& calibration() const { return calibration_; }
   std::string serialize() const;
   static Model parse(const std::string& text);
 private:
@@ -31,6 +39,7 @@ private:
   Features minimum_{}, maximum_{};
   std::array<double, 5> weights_{};
   double confidence_ = 0;
+  std::optional<Calibration> calibration_;
   double estimate(const Features& features) const;
 };
 struct Ranked {
@@ -48,6 +57,7 @@ struct Decision {
   std::string reason;
   std::optional<double> observed_latency;
   bool drift = false;
+  std::optional<Calibration> calibration;
   std::string explain() const;
 };
 class Ranker {
