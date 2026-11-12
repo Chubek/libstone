@@ -64,3 +64,11 @@ not on Plaid workers implicitly. Lua scripts are trusted process code; limited
 libraries/instruction hooks do not establish isolation. Cache failures, collection
 loss and script failures remain distinct in the API/report. See
 `prolific/DESIGN.md` and `prolific/README.md`.
+
+Structured `observe`/`prolific_observe` events preserve the v1 cache format.
+`Speculation.hpp` aggregates type/branch/value/call/interoperation/system/cost/
+lowering and other explicit host observations into declarative Lua SpecIR.
+`lspecir.translator` dispatches validated instructions to user handlers. The
+library emits guard requirements, not installed checks or semantic proofs;
+target legality, boundary ABI and effect obligations remain with the translator.
+See `prolific/SPECIR.md` for the schema and evidence-quality policy.

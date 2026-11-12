@@ -22,7 +22,7 @@ if(UNIX)
   target_link_libraries(moonstone_prolific_lua_vendor PUBLIC m ${CMAKE_DL_LIBS})
 endif()
 
-add_library(moonstone_prolific SHARED Prolific.cpp Codec.cpp Cache.cpp CAPI.cpp)
+add_library(moonstone_prolific SHARED Prolific.cpp Codec.cpp Cache.cpp CAPI.cpp Speculation.cpp)
 add_library(Moonstone::Prolific ALIAS moonstone_prolific)
 target_link_libraries(moonstone_prolific PUBLIC moonstone_core PRIVATE Threads::Threads "${PROLIFIC_LMDB_LIBRARY}")
 target_include_directories(moonstone_prolific SYSTEM PRIVATE
@@ -74,10 +74,15 @@ foreach(target IN LISTS prolific_targets)
 endforeach()
 
 if(MOONSTONE_BUILD_TOOLS)
+  add_executable(prolific-lua "${MOONSTONE_VENDOR_ROOT}/lua/lua.c")
+  target_link_libraries(prolific-lua PRIVATE moonstone_prolific_lua_vendor)
+  install(TARGETS prolific-lua RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   add_executable(prolific tools/prolific.cpp)
   target_link_libraries(prolific PRIVATE moonstone_prolific_lua)
   add_executable(prolific-host examples/host.cpp)
   target_link_libraries(prolific-host PRIVATE moonstone_prolific_lua)
+  add_executable(prolific-speculation examples/speculation.cpp)
+  target_link_libraries(prolific-speculation PRIVATE moonstone_prolific)
   install(TARGETS prolific RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -101,11 +106,12 @@ install(TARGETS moonstone_prolific moonstone_prolific_lua
 if(TARGET moonstone_prolific_inject)
   install(TARGETS moonstone_prolific_inject LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
-install(FILES Prolific.hpp Cache.hpp LuaProfiler.hpp prolific.h
+install(FILES Prolific.hpp Cache.hpp LuaProfiler.hpp Speculation.hpp prolific.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/moonstone/prolific)
+install(FILES lua/lspecir.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/moonstone/prolific/lua)
 
 if(MOONSTONE_BUILD_TESTS)
-  foreach(feature IN ITEMS recorder cache lua)
+  foreach(feature IN ITEMS recorder cache lua speculation)
     moonstone_test(prolific_${feature} "${CMAKE_CURRENT_SOURCE_DIR}/tests/${feature}.cpp" moonstone_prolific_lua)
     set_tests_properties(moonstone.prolific_${feature} PROPERTIES TIMEOUT 30)
   endforeach()
@@ -118,7 +124,7 @@ if(MOONSTONE_BUILD_TESTS)
   set_target_properties(moonstone_test_prolific_c_api PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
   set(header_sources)
-  foreach(header IN ITEMS Prolific.hpp Cache.hpp LuaProfiler.hpp prolific.h)
+  foreach(header IN ITEMS Prolific.hpp Cache.hpp LuaProfiler.hpp Speculation.hpp prolific.h)
     string(MAKE_C_IDENTIFIER "${header}" id)
     set(source "${CMAKE_CURRENT_BINARY_DIR}/header-${id}.cpp")
     file(GENERATE OUTPUT "${source}" CONTENT "#include \"prolific/${header}\"\n")
@@ -152,6 +158,11 @@ if(MOONSTONE_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli.py" "$<TARGET_FILE:prolific>"
         "$<TARGET_FILE:prolific-host>" "${CMAKE_CURRENT_BINARY_DIR}")
       set_tests_properties(moonstone.prolific_cli PROPERTIES TIMEOUT 30)
+      add_test(NAME moonstone.prolific_specir COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/specir_cli.py" "$<TARGET_FILE:moonstone_test_prolific_speculation>"
+        "$<TARGET_FILE:prolific>" "$<TARGET_FILE:prolific-lua>" "${CMAKE_CURRENT_SOURCE_DIR}/lua"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/specir.lua" "${CMAKE_CURRENT_BINARY_DIR}")
+      set_tests_properties(moonstone.prolific_specir PROPERTIES TIMEOUT 60)
     endif()
   endif()
 endif()

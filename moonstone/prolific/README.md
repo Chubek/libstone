@@ -1,5 +1,11 @@
 # Prolific — compiler and interpreter profiling
 
+**Profile-driven speculation:** record type, branch, value, call, interoperation,
+system, cost, lowering, allocation, exception and custom observations; generate
+Lua SpecIR with `prolific speculate CACHE RUN`. Its `lspecir` library validates
+`profile`, `guard`, `advice` and `warning` instructions and dispatches user-defined
+translators. See [SPECIR.md](SPECIR.md) for the full contract and runnable examples.
+
 Admission checks payload budgets before copying/scanning event text. Over-budget
 inputs leave span state unchanged and count as collection loss. Serialization
 checks its wire budget before every append and rejects findings attached to

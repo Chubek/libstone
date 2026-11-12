@@ -9,7 +9,7 @@ intended to be overlaid at `libstone/moonstone/`. It now comprises **six** subsy
 | Syren | S-expression diagnostic rules, stderr/SARIF, repair callback, runtime recorder | Complete error catalog, independent repair verification pipeline |
 | Supersonic | Bounded integer-expression synthesis, CEGIS callback, Lua SynthGram module | Fully typed general synthesis, native Satie/e-graph solver integration |
 | ExoML | Restricted DSL interpreter and declaration-model validation | Complete ExoML grammar, hatching, real header parsing, binding generation |
-| **Prolific** | Bounded compiler/VM event profiling, C/C++ embedding, Linux instrumented-host injection, LMDB cache, JSON reports, native Lua `lprofcc`/`lprofvm` replay | Arbitrary uninstrumented binary injection, semantic error proofs, automatic optimization, untrusted-script sandbox |
+| **Prolific** | Bounded compiler/VM event profiling, C/C++ embedding, Linux instrumented-host injection, LMDB cache, JSON reports, native Lua `lprofcc`/`lprofvm` replay, profile-driven speculation and Lua `lspecir` advice/warnings/guards with user translators | Arbitrary uninstrumented binary injection, semantic error proofs, automatic optimization, untrusted-script sandbox |
 | **Plaid** | One-shot continuations, explicit pure CPS machine, synchronous effect handlers, coroutine-frame liveness, C++20 manual coroutine, cooperative scheduling, work-stealing pool, structured task scope, bounded/rendezvous channels, buffered-channel select, serialized local actors, parallel loop/reduce, lane mapping, bounded affine-dependence checking, trace-based races and lock order, C runtime ABI | Arbitrary Scheme call/cc, delimited stack capture, multi-shot resource-safe continuations, compiler async lowering/codegen, stackful fibers, async I/O, full atomic Go select, native SIMD vectorizer, GPU lowering, instrumenting race detector |
 
 **Status:** working, tested implementation baseline. It must not be represented as a
@@ -30,9 +30,9 @@ build-moonstone/plaid-continuations
 build-moonstone/plaid-csp-actor
 ```
 
-The tree has **26 CTest tests** when Prolific's Linux injection and optional
+The tree has **28 CTest tests** when Prolific's Linux injection and optional
 Python CLI checks are available: fourteen Plaid tests, six original Moonstone
-tests and six Prolific checks. Public Plaid and Prolific headers compile in isolation
+tests and eight Prolific checks. Public Plaid and Prolific headers compile in isolation
 with warnings as errors, and the C ABI consumer uses strict C11. For current
 sanitizer and stress validation see `plaid/manual/06-runtime-hardening.md`;
 `docs/PROVENANCE.md` describes the original snapshot's verification scope.

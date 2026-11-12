@@ -1,5 +1,6 @@
 #include "LuaProfiler.hpp"
 #include "Internal.hpp"
+#include "Speculation.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -94,6 +95,17 @@ kaguya::LuaTable event_table(kaguya::State &state, const Event &e) {
     loc["line"] = e.location.line;
     loc["column"] = e.location.column;
     table["location"] = loc;
+    if (auto profile = profile_observation(e)) {
+        auto p = state.newTable();
+        p["category"] = name(profile->kind);
+        p["site"] = profile->site;
+        p["context"] = profile->context;
+        p["dimension"] = profile->dimension;
+        p["outcome"] = profile->outcome;
+        p["unit"] = profile->unit;
+        p["value"] = std::to_string(profile->value);
+        table["profile"] = p;
+    }
     return table;
 }
 } // namespace

@@ -48,6 +48,27 @@ typedef struct prolific_location {
     uint32_t line, column;
 } prolific_location;
 
+typedef enum prolific_profile_kind {
+    PROLIFIC_PROFILE_TYPE = 0,
+    PROLIFIC_PROFILE_BRANCH = 1,
+    PROLIFIC_PROFILE_VALUE = 2,
+    PROLIFIC_PROFILE_CALL = 3,
+    PROLIFIC_PROFILE_INTEROPERATION = 4,
+    PROLIFIC_PROFILE_SYSTEM = 5,
+    PROLIFIC_PROFILE_COST = 6,
+    PROLIFIC_PROFILE_LOWERING = 7,
+    PROLIFIC_PROFILE_ALLOCATION = 8,
+    PROLIFIC_PROFILE_EXCEPTION = 9,
+    PROLIFIC_PROFILE_CUSTOM = 10
+} prolific_profile_kind;
+typedef struct prolific_observation {
+    uint32_t abi_version;
+    prolific_profile_kind kind;
+    const char *site, *context, *dimension;
+    const char *outcome, *unit;
+    int64_t value;
+} prolific_observation;
+
 /* Null config uses defaults; non-null config requires all nonzero limits,
  * max_events <= 1,000,000 and max_text <= 1 MiB (v1 report limits).
  * All strings must be valid UTF-8, NUL-terminated and valid for the call.
@@ -64,6 +85,16 @@ PROLIFIC_API prolific_status prolific_begin(prolific_session *session, prolific_
 PROLIFIC_API prolific_status prolific_end(prolific_session *session, uint64_t span);
 /* Account for an observation dropped inside a host adapter before admission. */
 PROLIFIC_API prolific_status prolific_record_loss(prolific_session *session);
+/* Numeric kinds: VALUE, COST, ALLOCATION; require a unit, NULL/empty outcome.
+ * Categorical kinds: require outcome, NULL/empty unit and zero value.
+ * Branch outcomes are "true"/"false". Context identifies build/target/workload.
+ * Invalid observations count as collection loss. All strings are copied.
+ */
+PROLIFIC_API prolific_status prolific_observe(prolific_session *session, prolific_domain domain,
+                                              const prolific_observation *observation,
+                                              const prolific_location *location);
+/* Generate Lua SpecIR with default policy. Free via prolific_free_string. */
+PROLIFIC_API prolific_status prolific_speculate(prolific_session *session, char **lua);
 PROLIFIC_API prolific_status prolific_emit(prolific_session *session, prolific_domain domain,
                                            prolific_kind kind, const char *name, int64_t value,
                                            const char *detail, const prolific_location *location);

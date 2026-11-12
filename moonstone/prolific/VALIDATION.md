@@ -3,26 +3,34 @@
 Verified on Linux x86-64, GCC 16.2.1 / Clang 22.1.8, system LMDB 0.9.35 and the
 checked-in Lua 5.5 / Kaguya / lmdbxx trees. No vendor sources were modified.
 
-- Standalone Moonstone: build and **26/26 CTest checks** pass, including the
+- Standalone Moonstone: build and **28/28 CTest checks** pass, including the
   preexisting twenty tests. Public Prolific headers compile individually with
   warnings as errors; the C embedding consumer compiles as C11.
   A Linux host exporting a conflicting Lua state-construction symbol confirms
   that replay uses its private vendored VM rather than the host's Lua ABI.
 - Clang Debug with `-fsanitize=address,undefined` on both C and C++:
-  **26/26 checks** pass, including Lua finalization and actual preloading.
+  **28/28 checks** pass, including Lua finalization and actual preloading.
 - Separate Clang Debug with `-fsanitize=thread`: recorder, cache and
   multithreaded preload checks pass (**3/3 selected tests**). The preload host
   joins four pthread workers and the cache validates all sixty function events.
 - Root CMake with Moonstone enabled and the other LibStone components disabled:
-  build and **26/26 checks** pass. This is root-registration smoke coverage, not
+  build and **28/28 checks** pass. This is root-registration smoke coverage, not
   verification of the full LibStone dependency graph.
 - Prolific disabled, tests/tools disabled, nonexistent vendor root: configuration
   and remaining library build pass; disabled profiling does not require vendors.
-- Clang static analyzer on all six Prolific implementation files reports no
+- Clang static analyzer on the original six Prolific implementation files and
+  the new speculation implementation reports no
   diagnostics. `clang-format` was run on added native sources/headers.
 - Installation to a separate prefix succeeds. The installed CLI passes the JSON,
   caching and Lua replay regression without `LD_LIBRARY_PATH`; an independently
   compiled C11 consumer links and executes against installed headers/libraries.
+- Profile-driven speculation: all eleven categories, exact signed extremes,
+  minimum/dominance thresholds, context/dimension/unit/location isolation,
+  incomplete collection, malformed/future observations, histogram truncation
+  and global budgets have native regressions. The CLI test caches profiles,
+  generates Lua IR and dispatches it through the actual vendored Lua VM and
+  `lspecir.translator`; it checks escaped control/Unicode/injection-shaped text,
+  schema/reference rejection, missing-handler preflight and callback failures.
 
 Main reproduction commands:
 

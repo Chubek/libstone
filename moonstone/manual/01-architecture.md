@@ -30,3 +30,9 @@ native Kaguya-backed Lua `lprofcc`/`lprofvm` callbacks. Analysis findings are
 heuristics, not proofs or verified repairs. Linux preload injection observes
 `-finstrument-functions` hosts only; arbitrary binary attachment is unsupported.
 See `prolific/README.md` for the v1 C ABI, failure/completeness semantics and limits.
+
+`prolific/Speculation.hpp` adds typed observations over existing events and a
+bounded speculation pass. Its output is a Lua `lspecir` module containing
+evidence profiles, heuristic advice, warnings and unenforced guards. A user
+`lspecir.translator` handles those instructions; no compiler lowering is implied.
+Incomplete/insufficient/truncated profiles cannot produce speculative candidates.

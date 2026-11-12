@@ -1,5 +1,6 @@
 #include "prolific/Cache.hpp"
 #include "prolific/LuaProfiler.hpp"
+#include "prolific/Speculation.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -11,7 +12,7 @@ int main(int argc, char **argv) {
     try {
         if (argc < 3)
             throw std::invalid_argument("usage: prolific list CACHE | report CACHE RUN | analyze "
-                                        "CACHE RUN SCRIPT [OUTPUT_RUN]");
+                                        "CACHE RUN SCRIPT [OUTPUT_RUN] | speculate CACHE RUN");
         const std::string command = argv[1];
         if (command == "list" && argc == 3) {
             Cache cache(argv[2], true);
@@ -23,6 +24,12 @@ int main(int argc, char **argv) {
             if (!json)
                 throw std::runtime_error("Prolific run not found");
             std::cout << *json << '\n';
+        } else if (command == "speculate" && argc == 4) {
+            Cache cache(argv[2], true);
+            auto report = cache.load(argv[3]);
+            if (!report)
+                throw std::runtime_error("Prolific run not found");
+            std::cout << speculate(report->data);
         } else if (command == "analyze" && (argc == 5 || argc == 6)) {
             Cache cache(argv[2], argc != 6);
             auto report = cache.load(argv[3]);

@@ -1,4 +1,5 @@
 #include "Cache.hpp"
+#include "Speculation.hpp"
 #include "prolific.h"
 
 #include <cstdio>
@@ -54,6 +55,13 @@ Location location(const prolific_location *loc) {
     if (!loc)
         return {};
     return {loc->file ? loc->file : "", loc->ir_id ? loc->ir_id : "", loc->line, loc->column};
+}
+char *copy_string(const std::string &text) {
+    auto *copy = static_cast<char *>(std::malloc(text.size() + 1));
+    if (!copy)
+        throw std::bad_alloc();
+    std::memcpy(copy, text.c_str(), text.size() + 1);
+    return copy;
 }
 } // namespace
 
@@ -118,11 +126,34 @@ prolific_status prolific_report(prolific_session *session, char **json) {
         Report report;
         report.data = session->recorder.snapshot();
         const auto text = report.json();
-        auto *copy = static_cast<char *>(std::malloc(text.size() + 1));
-        if (!copy)
-            throw std::bad_alloc();
-        std::memcpy(copy, text.c_str(), text.size() + 1);
-        *json = copy;
+        *json = copy_string(text);
+        return PROLIFIC_OK;
+    });
+}
+prolific_status prolific_observe(prolific_session *session, prolific_domain domain,
+                                 const prolific_observation *o, const prolific_location *loc) {
+    return call([&] {
+        check(session, o && o->abi_version == PROLIFIC_ABI_VERSION && o->site && o->context &&
+                           o->dimension && o->kind >= PROLIFIC_PROFILE_TYPE &&
+                           o->kind <= PROLIFIC_PROFILE_CUSTOM && domain >= PROLIFIC_COMPILER &&
+                           domain <= PROLIFIC_RUNTIME);
+        Observation sample{static_cast<ProfileKind>(o->kind),
+                           o->site,
+                           o->context,
+                           o->dimension,
+                           o->outcome ? o->outcome : "",
+                           o->unit ? o->unit : "",
+                           o->value};
+        return status(
+            observe(session->recorder, static_cast<Domain>(domain), sample, location(loc)));
+    });
+}
+prolific_status prolific_speculate(prolific_session *session, char **lua) {
+    if (lua)
+        *lua = nullptr;
+    return call([&] {
+        check(session, lua != nullptr);
+        *lua = copy_string(speculate(session->recorder.snapshot()));
         return PROLIFIC_OK;
     });
 }

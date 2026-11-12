@@ -4,6 +4,25 @@
 #include <string.h>
 
 int main(void) {
+    prolific_session *profiled = NULL;
+    assert(prolific_create(NULL, &profiled) == PROLIFIC_OK);
+    prolific_observation observed = {PROLIFIC_ABI_VERSION,
+                                     PROLIFIC_PROFILE_TYPE,
+                                     "call:1",
+                                     "build:1",
+                                     "receiver",
+                                     "Integer",
+                                     NULL,
+                                     0};
+    for (int i = 0; i < 32; ++i)
+        assert(prolific_observe(profiled, PROLIFIC_VM, &observed, NULL) == PROLIFIC_OK);
+    char *specir = NULL;
+    assert(prolific_speculate(profiled, &specir) == PROLIFIC_OK);
+    assert(strstr(specir, "ir.guard") && strstr(specir, "type_is"));
+    prolific_free_string(specir);
+    observed.kind = (prolific_profile_kind)256;
+    assert(prolific_observe(profiled, PROLIFIC_VM, &observed, NULL) == PROLIFIC_INVALID_INPUT);
+    prolific_destroy(profiled);
     prolific_session *session = NULL;
     uint64_t span = 0;
     char *json = NULL;

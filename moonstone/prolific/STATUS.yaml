@@ -1,6 +1,12 @@
 schema: moonstone.prolific.status/1
 release: instrumentation-baseline-1
 features:
+  - name: structured_profile_driven_speculation
+    status: implemented_observational_heuristics
+    tests: [moonstone.prolific_speculation, moonstone.prolific_c_api, moonstone.prolific_specir]
+  - name: lua_specir_and_user_translators
+    status: implemented_declarative_ir_no_automatic_lowering
+    tests: [moonstone.prolific_specir]
   - name: bounded_thread_safe_event_recorder
     status: implemented
     tests: [moonstone.prolific_recorder]
