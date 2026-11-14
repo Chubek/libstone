@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+if(@EXOTRACT_PACKAGE_EXOML@)
+  find_dependency(MoonstoneExoMLExtract CONFIG)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/MoonstoneExotractTargets.cmake")
+check_required_components(MoonstoneExotract)

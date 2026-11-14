@@ -4,6 +4,13 @@
 #include <stdexcept>
 
 namespace moonstone::exoml::contract::detail {
+JsonValue::JsonValue() = default;
+JsonValue::~JsonValue() = default;
+JsonValue::JsonValue(const JsonValue &) = default;
+JsonValue::JsonValue(JsonValue &&) noexcept = default;
+JsonValue &JsonValue::operator=(const JsonValue &) = default;
+JsonValue &JsonValue::operator=(JsonValue &&) noexcept = default;
+
 namespace {
 
 struct Parser {

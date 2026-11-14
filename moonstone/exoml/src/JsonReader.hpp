@@ -10,6 +10,16 @@ namespace moonstone::exoml::contract::detail {
 enum class JsonType { Null, Bool, Int, Double, String, Array, Object };
 
 struct JsonValue {
+    // Define special members after JsonValue is complete: instantiating the
+    // vector<pair<string, JsonValue>> cleanup while pair's second type is still
+    // incomplete is rejected by Clang with recent libstdc++.
+    JsonValue();
+    ~JsonValue();
+    JsonValue(const JsonValue &);
+    JsonValue(JsonValue &&) noexcept;
+    JsonValue &operator=(const JsonValue &);
+    JsonValue &operator=(JsonValue &&) noexcept;
+
     JsonType type = JsonType::Null;
     bool bool_value = false;
     std::int64_t int_value = 0;

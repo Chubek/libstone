@@ -30,6 +30,11 @@ operations. No code is dynamically loaded during declaration evaluation.
 
 ## Reuse and boundaries
 
+The internal recursive JSON value defines its special members out of line,
+after the value type is complete. This avoids premature instantiation of
+`vector<pair<string, JsonValue>>` cleanup in Clang/libstdc++ while preserving
+the existing ordered object representation and sidecar serialization.
+
 Keep Moonstone's `OwnershipContract`, diagnostics, declaration types and service
 registry. Use repository Aurocks/ASDL generators rather than a second DSL parser.
 XBind's manifest is suitable for an explicit optional export adapter; unknown

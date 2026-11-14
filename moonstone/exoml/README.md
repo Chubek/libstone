@@ -15,6 +15,11 @@ declarations. Contracts are validated against the CDecl IR (Gate B) and
 serialized deterministically. See
 [semantic contracts](manual/semantic-contracts.md).
 
+Exotract's optional header-only pipeline reuses this extractor and contract
+validator; see [its integration report](../exotract/STATUS.md). The shared
+JSON reader supports Clang with recent libstdc++ through out-of-line recursive
+value special members; no contract or declaration schema is changed.
+
 ## Build
 
 ```sh

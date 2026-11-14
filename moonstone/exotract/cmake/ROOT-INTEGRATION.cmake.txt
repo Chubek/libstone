@@ -1,0 +1,9 @@
+# Add to moonstone/CMakeLists.txt AFTER add_subdirectory(exoml), if used:
+# option(MOONSTONE_BUILD_EXOTRACT "Build Exotract C11 single-header contracts" ON)
+# if(MOONSTONE_BUILD_EXOTRACT)
+#   add_subdirectory(exotract)
+# endif()
+#
+# If Moonstone is built as an aggregate tree, ensure ExoML extraction has been
+# configured first (Moonstone::ExoMLExtract must exist to activate direct CDecl).
+# Or use the standalone --exoml-bind executable flag, with the ExoML extractor ON.

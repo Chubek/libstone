@@ -52,6 +52,15 @@ workstream or Moonstone's production-safety acceptance plan.
 
 ## Local verification
 
+### Exotract integration portability fix
+
+Clang 22 with libstdc++ 16 rejected the internal recursive JSON value's implicit
+special-member instantiation. Moving those definitions after the complete type
+fixes the reproduced `clang++ -std=c++20 -fsyntax-only src/JsonReader.cpp`
+failure without changing the JSON representation or public APIs. Current
+integrated build and sanitizer results are recorded in
+[Exotract STATUS](../exotract/STATUS.md).
+
 ### C11 discovery increment
 
 GCC 16.2.1 Debug and Release: **33/33** standalone tests each. Clang 22.1.8
