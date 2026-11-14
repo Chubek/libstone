@@ -9,7 +9,7 @@ speculation/recovery, and learned profitability decisions.
 
 | CMake target / directory | Implementation | Dossier basis |
 | --- | --- | --- |
-| `Novostone::Datalog` / `Datalog` | Typed relations, indexed delta joins, semi-naive recursive fixed points, stratified negation, dependencies, budgets and counters | Chapter 07's relational analysis substrate |
+| `Novostone::Datalog` / `Datalog` | Aurocks/ASDL source frontend, typed relations, indexed delta joins, semi-naive recursive fixed points, stratified negation, dependencies, budgets and counters | Chapter 07's relational analysis substrate |
 | `Novostone::CCDB` / `CCDB` | Stable IDs, immutable snapshots, serializable transactions, tracked disjoint rebasing, dependency-aware caches, checkpoints and audit log | Chapters 07, 20, 22, 30 |
 | `Novostone::DatabaseBasedIR` / `DatabaseBasedIR` | Relational SSA, edge-checked phis, dominance, liveness, natural loops, local memory chains, reference evaluator | Chapters 07, 16, 17; system blueprint |
 | `Novostone::QueryBasedIR` / `QueryBasedIR` | Declarative rewrites, conditional constant propagation, rooted DCE, CFG simplification, CSE, forwarding, differential validation | Chapters 09, 39 |
@@ -39,11 +39,17 @@ build-novostone/novostone run novostone/examples/sum-loop.nir 10
 build-novostone/novostone analyze novostone/examples/sum-loop.nir
 build-novostone/novostone optimize novostone/examples/equal-phi.nir
 build-novostone/novostone validate novostone/examples/wrapping.nir novostone/examples/wrapping.nir 728
+build-novostone/novostone datalog novostone/examples/reachability.dl Reach
+build-novostone/novostone format-datalog novostone/examples/reachability.dl
 ```
 
 The aggregate build enables Novostone through `LIBSTONE_BUILD_NOVOSTONE`.
 Standalone options are `NOVOSTONE_BUILD_TESTS` and `NOVOSTONE_BUILD_TOOLS`,
-defaulting to the shared Libstone options. C++20 and CMake 3.20 are required.
+defaulting to the shared Libstone options. C11, C++20, CMake 3.20 and Perl 5.14+
+are required to build. `scripts/aurocks.pl` generates the parser from
+`Datalog/Datalog.g`; `scripts/asdl.pl` generates its owned syntax tree from
+`Datalog/Datalog.asdl`. Generated files live in the build directory. Installed
+libraries need neither Perl nor the source tree; no string-pool file is used.
 `BUILD_SHARED_LIBS=ON` builds shared libraries; Unix installations use relative
 runtime paths so the CLI and transitive libraries resolve within the prefix.
 
@@ -51,6 +57,9 @@ Installation exports a relocatable CMake package:
 
 ```sh
 cmake --install build-novostone --prefix /your/prefix
+cmake -S novostone/tests/consumer -B build-novostone-consumer -DCMAKE_PREFIX_PATH=/your/prefix
+cmake --build build-novostone-consumer --parallel
+ctest --test-dir build-novostone-consumer --output-on-failure
 ```
 
 ```cmake
@@ -84,6 +93,8 @@ auto result = ir::evaluate(ir::load(optimized), {42});
 can be allocated before emitting branches. `ir::store` writes a complete verified
 function into an open transaction. `ir::publish` also checks the expected source
 snapshot. Imported block/instruction IDs are reserved against future allocation.
+Replacing an existing guarded body with `ir::store` is rejected before staging
+edits, because core-function replacement cannot repair its recovery metadata.
 
 ## Semantic contract
 
@@ -175,6 +186,63 @@ for speculative versions or cost models.
 
 ## Datalog and CCDB contracts
 
+### Source frontend
+
+The same typed engine accepts C++ rules and parsed source:
+
+```cpp
+auto module = datalog::parse(R"(
+  .decl Edge(from: integer, to: integer).
+  .decl Reach(integer, integer) derived.
+  Edge(1, 2). Edge(2, 3).
+  Reach(X, Y) :- Edge(X, Y).
+  Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+)", "example.dl");
+ccdb::Database database(module.program);
+auto transaction = database.begin();
+transaction.insert(module.facts);
+auto source = transaction.commit("load source");
+auto reachable = source.query("Reach");
+auto normalized_source = datalog::dump(module);
+```
+
+Every declaration and statement ends with `.`. Column labels are optional;
+`integer` means signed 64-bit, and `symbol` means a byte string. A relation is
+base by default; `derived` explicitly permits rule heads and forbids imported
+facts. Declarations may follow uses. Bare identifiers in terms are variables,
+`_` is an anonymous wildcard, and strings are double-quoted constants.
+`!Relation(...)` is negation. A constant-only seed rule can have an empty body,
+for example `Ready() :- .`. Comments start with `//` or `#` and end at newline.
+
+String escapes are `\"`, `\\`, `\n`, `\r`, `\t`, `\0` and `\xHH` (exactly two
+hexadecimal digits). Quoted relation names and `?"quoted variable"` preserve
+arbitrary C++ API names during round trips. Column labels and comments are syntax
+only; normalization preserves schemas, rule order and facts, not formatting.
+Duplicate facts retain set semantics. No include, import, shell, foreign call,
+arithmetic functor or aggregate directive is executed or supported.
+
+`ParseError` reports the source name, byte offset and one-based line/byte column.
+Whole-program stratification errors point to the beginning of the source.
+`ParseLimits` defaults to 1 MiB of source and 10,000 statements. The source
+frontend caps relation/atom arity and rule bodies at 256. Parsed statements and
+abandoned alternatives share an ASDL arena that is freed on success or failure;
+the public parser serializes Aurocks global state for concurrent callers.
+Semantic validation uses the same `Program::validate_rule`, type checks and
+stratification checks as the C++ API. Failed parsing returns no partial module.
+
+`DatabaseBasedIR/Analysis.dl` is the authoritative source of the built-in IR
+schemas and rules, including reachability, edge-aware liveness, dead groups and
+rewrite candidates. CMake embeds it into the library, and `ir::program()` parses
+and validates it once. Editing this file triggers regeneration; no second C++
+rule database is maintained. The migration preserves the previous exact rule
+signature, including ordering, so existing CCDB checkpoints remain compatible.
+
+`Transaction::insert(Facts)` validates a whole source fact set before staging it.
+An invalid batch leaves both facts and write dependencies unchanged. Publication,
+cache invalidation, deletion and tracked rebasing use the ordinary CCDB paths.
+
+### Evaluation
+
 Declare integer/symbol columns and mark derived relations explicitly. Rules use
 `Term::var`, `Term::constant`, and `Term::any`. Every head or negated variable must
 occur in a positive body atom. Anonymous wildcards in negation are existential
@@ -194,8 +262,8 @@ engineering counters, not measured wall-clock speedups. Fact and work
 budgets throw `datalog::BudgetExceeded` on exhaustion. Fact validation and index
 construction consume work too; joins are capped at 256 body atoms to bound native
 recursion depth. Malformed public term/type discriminants are rejected. This is
-a function-free engine with a C++ rule API; the dossier's illustrative `.decl`
-syntax is not a parser grammar.
+a function-free engine with both C++ and source APIs. Its grammar is the explicit
+subset above, rather than the dossier's illustrative nominal type notation.
 
 CCDB starts at an empty bootstrap revision. A snapshot owns its data and remains
 usable after later commits or database destruction. Transactions stage a private
@@ -446,7 +514,8 @@ and selection reason. `observe`
 attaches measured latency and flags excessive relative prediction error. Drift
 quarantines the active model after a model-selected decision; subsequent choices
 use the heuristic even for in-range targets. `replace_model` requires a fresh
-version identity before restoring model use. Feedback for retired models cannot
+version identity before restoring model use, even if the retired model never
+produced a ranking decision. Feedback for retired models cannot
 quarantine a replacement. No feedback silently retrains models or changes legality.
 
 `Model::serialize` / `Model::parse` preserve version, context, full-precision

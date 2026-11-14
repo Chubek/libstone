@@ -50,42 +50,48 @@ std::map<std::string, std::size_t> Program::strata() const {
   }
   throw std::invalid_argument("Datalog recursion through negation");
 }
-void Program::validate() const {
-  for (const auto& rule : rules_) {
-    if (rule.head.negated || !schemas_.at(rule.head.relation).derived)
-      throw std::invalid_argument("rule head must be a positive derived relation");
-    std::map<std::string, Type> variables;
-    std::set<std::string> bound;
-    auto check = [&](const Atom& atom, bool head) {
-      const auto& schema = schemas_.at(atom.relation);
-      if (schema.columns.size() != atom.terms.size()) throw std::invalid_argument("rule arity mismatch");
-      for (std::size_t i = 0; i < atom.terms.size(); ++i) {
-        const auto& t = atom.terms[i];
-        if (t.kind != Term::Kind::Variable && t.kind != Term::Kind::Constant && t.kind != Term::Kind::Wildcard)
-          throw std::invalid_argument("invalid term kind");
-        if (t.kind == Term::Kind::Wildcard && head) throw std::invalid_argument("wildcard in rule head");
-        if (t.kind == Term::Kind::Constant && type(t.value) != schema.columns[i])
-          throw std::invalid_argument("rule constant type mismatch");
-        if (t.kind == Term::Kind::Variable) {
-          if (!std::holds_alternative<std::string>(t.value) || std::get<std::string>(t.value).empty())
-            throw std::invalid_argument("invalid variable name");
-          const auto& name = std::get<std::string>(t.value);
-          auto [it, inserted] = variables.emplace(name, schema.columns[i]);
-          if (!inserted && it->second != schema.columns[i]) throw std::invalid_argument("variable type mismatch");
-          if (!head && !atom.negated) bound.insert(name);
-        }
+void Program::validate_rule(const Rule& rule) const {
+  auto schema_for = [&](const std::string& name) -> const Schema& {
+    auto it = schemas_.find(name);
+    if (it == schemas_.end()) throw std::invalid_argument("undeclared relation: " + name);
+    return it->second;
+  };
+  if (rule.head.negated || !schema_for(rule.head.relation).derived)
+    throw std::invalid_argument("rule head must be a positive derived relation");
+  std::map<std::string, Type> variables;
+  std::set<std::string> bound;
+  auto check = [&](const Atom& atom, bool head) {
+    const auto& schema = schema_for(atom.relation);
+    if (schema.columns.size() != atom.terms.size()) throw std::invalid_argument("rule arity mismatch");
+    for (std::size_t i = 0; i < atom.terms.size(); ++i) {
+      const auto& t = atom.terms[i];
+      if (t.kind != Term::Kind::Variable && t.kind != Term::Kind::Constant && t.kind != Term::Kind::Wildcard)
+        throw std::invalid_argument("invalid term kind");
+      if (t.kind == Term::Kind::Wildcard && head) throw std::invalid_argument("wildcard in rule head");
+      if (t.kind == Term::Kind::Constant && type(t.value) != schema.columns[i])
+        throw std::invalid_argument("rule constant type mismatch");
+      if (t.kind == Term::Kind::Variable) {
+        if (!std::holds_alternative<std::string>(t.value) || std::get<std::string>(t.value).empty())
+          throw std::invalid_argument("invalid variable name");
+        const auto& name = std::get<std::string>(t.value);
+        auto [it, inserted] = variables.emplace(name, schema.columns[i]);
+        if (!inserted && it->second != schema.columns[i]) throw std::invalid_argument("variable type mismatch");
+        if (!head && !atom.negated) bound.insert(name);
       }
-    };
-    check(rule.head, true);
-    for (const auto& atom : rule.body) check(atom, false);
-    auto safe = [&](const Atom& atom) {
-      for (const auto& t : atom.terms)
-        if (t.kind == Term::Kind::Variable && !bound.count(std::get<std::string>(t.value)))
-          throw std::invalid_argument("unbound variable in head or negation");
-    };
-    safe(rule.head);
-    for (const auto& atom : rule.body) if (atom.negated) safe(atom);
-  }
+    }
+  };
+  check(rule.head, true);
+  for (const auto& atom : rule.body) check(atom, false);
+  auto safe = [&](const Atom& atom) {
+    for (const auto& t : atom.terms)
+      if (t.kind == Term::Kind::Variable && !bound.count(std::get<std::string>(t.value)))
+        throw std::invalid_argument("unbound variable in head or negation");
+  };
+  safe(rule.head);
+  for (const auto& atom : rule.body) if (atom.negated) safe(atom);
+}
+void Program::validate() const {
+  for (const auto& rule : rules_) validate_rule(rule);
   (void)strata();
 }
 std::string Program::signature() const {
@@ -116,7 +122,9 @@ std::string Program::signature() const {
   return out.str();
 }
 void Program::validate_fact(const std::string& name, const Tuple& row) const {
-  const auto& schema = schemas_.at(name);
+  auto found = schemas_.find(name);
+  if (found == schemas_.end()) throw std::invalid_argument("undeclared relation: " + name);
+  const auto& schema = found->second;
   if (schema.derived) throw std::invalid_argument("cannot write derived relation: " + name);
   if (row.size() != schema.columns.size()) throw std::invalid_argument("fact arity mismatch: " + name);
   for (std::size_t i = 0; i < row.size(); ++i)
@@ -266,6 +274,7 @@ Result Program::evaluate(const Facts& facts, const std::string& goal, Limits lim
 }
 std::string dump(const Relation& rows) {
   std::ostringstream out;
+  out.imbue(std::locale::classic());
   for (const auto& row : rows) {
     out << '(';
     for (std::size_t i = 0; i < row.size(); ++i) {

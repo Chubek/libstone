@@ -73,6 +73,7 @@ private:
   std::optional<Model> model_;
   double threshold_;
   std::vector<Decision> log_;
+  std::set<std::string> model_versions_;
   bool quarantined_ = false;
 };
 } // namespace novostone::cost

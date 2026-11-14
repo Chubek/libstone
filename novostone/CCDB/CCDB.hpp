@@ -43,6 +43,9 @@ public:
   Transaction(Transaction&&) noexcept = default;
   Transaction& operator=(Transaction&&) noexcept = default;
   void insert(const std::string& relation, datalog::Tuple tuple);
+  // Validate and stage an entire parsed fact set atomically. Invalid batches
+  // leave this transaction's facts and write dependencies unchanged.
+  void insert(const datalog::Facts& facts);
   void erase(const std::string& relation, const datalog::Tuple& tuple);
   const datalog::Relation& relation(const std::string& name);
   QueryResult query(const std::string& name, datalog::Limits limits = {});

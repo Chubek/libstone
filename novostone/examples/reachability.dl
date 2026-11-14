@@ -1,0 +1,16 @@
+// Base facts and derived relations are explicitly distinguished.
+.decl Edge(from: integer, to: integer).
+.decl Node(integer).
+.decl Reach(integer, integer) derived.
+.decl Sink(integer) derived.
+
+Reach(X, Y) :- Edge(X, Y).
+Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+Sink(X) :- Node(X), !Edge(X, _).
+
+Edge(1, 2).
+Edge(2, 3).
+Node(1).
+Node(2).
+Node(3).
+Node(4).

@@ -156,6 +156,24 @@ void Transaction::insert(const std::string& name, datalog::Tuple row) {
   writes_.insert(name);
   facts_.at(name).insert(std::move(row));
 }
+void Transaction::insert(const datalog::Facts& facts) {
+  active();
+  const auto& program = *base_.state_->program;
+  for (const auto& [name, rows] : facts) {
+    auto schema = program.schemas().find(name);
+    if (schema == program.schemas().end() || schema->second.derived)
+      throw std::invalid_argument("batch import requires a declared base relation: " + name);
+    for (const auto& row : rows) program.validate_fact(name, row);
+  }
+  auto staged = facts_;
+  auto writes = writes_;
+  for (const auto& [name, rows] : facts) if (!rows.empty()) {
+    staged.at(name).insert(rows.begin(), rows.end());
+    writes.insert(name);
+  }
+  facts_.swap(staged);
+  writes_.swap(writes);
+}
 void Transaction::erase(const std::string& name, const datalog::Tuple& row) {
   active();
   base_.state_->program->validate_fact(name, row);

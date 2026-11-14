@@ -1,0 +1,17 @@
+-- Source syntax. Integer and string spellings are checked during elaboration;
+-- offsets are byte offsets in the caller's input, including on semantic errors.
+%prefix novo_dl
+%option no-builtins
+%%
+document = (statement* statements)
+statement = Decl(string name, column* columns, bool derived)
+          | Fact(atom value)
+          | Rule(atom head, atom* body)
+          attributes (usize offset)
+column = (string name, string type)
+atom = (string name, term* terms, bool negated, usize offset)
+term = Variable(string spelling)
+     | Integer(string spelling)
+     | Symbol(string spelling)
+     | Wildcard
+     attributes (usize offset)

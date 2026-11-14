@@ -31,7 +31,12 @@ Features features(const ccdb::Snapshot& snapshot) {
   }
   return result;
 }
-double heuristic(const Features& f) { validate(f); return f[0] + 4 * f[1] + 4 * f[2] + 2 * f[3]; }
+double heuristic(const Features& f) {
+  validate(f);
+  auto value = f[0] + 4 * f[1] + 4 * f[2] + 2 * f[3];
+  if (!std::isfinite(value)) throw std::invalid_argument("cost heuristic overflow");
+  return value;
+}
 double Model::estimate(const Features& f) const {
   double value = weights_[0];
   for (std::size_t i = 0; i < f.size(); ++i)
@@ -181,6 +186,7 @@ Model Model::parse(const std::string& text) {
 }
 Ranker::Ranker(std::optional<Model> model, double threshold) : model_(std::move(model)), threshold_(threshold) {
   if (!std::isfinite(threshold) || threshold < 0 || threshold > 1) throw std::invalid_argument("invalid confidence threshold");
+  if (model_) model_versions_.insert(model_->version());
 }
 Decision Ranker::choose(const std::vector<query::Candidate>& candidates, const Context& context) {
   if (candidates.empty() || context.target.empty()) throw std::invalid_argument("ranking requires candidates and target");
@@ -226,8 +232,7 @@ void Ranker::observe(std::size_t index, double latency, double threshold) {
 }
 void Ranker::replace_model(Model model) {
   if (model.version().empty()) throw std::invalid_argument("replacement model needs a version");
-  if ((model_ && model_->version() == model.version()) ||
-      std::any_of(log_.begin(), log_.end(), [&](const auto& decision) { return decision.model_version == model.version(); }))
+  if (!model_versions_.insert(model.version()).second)
     throw std::invalid_argument("replacement requires a fresh model version");
   model_ = std::move(model); quarantined_ = false;
 }

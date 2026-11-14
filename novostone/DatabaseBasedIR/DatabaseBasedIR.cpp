@@ -1,4 +1,5 @@
 #include "novostone/DatabaseBasedIR/DatabaseBasedIR.hpp"
+#include "AnalysisSource.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -12,6 +13,9 @@ namespace novostone::ir {
 namespace {
 const std::vector<std::string> names{"param", "const", "copy", "add", "sub", "mul", "eq", "ult",
                                       "select", "load", "store", "jump", "branch", "return", "phi"};
+void valid_opcode(Op op) {
+  if (op < Op::Param || op > Op::Phi) throw std::invalid_argument("invalid IR opcode");
+}
 std::int64_t integer(const datalog::Value& value) { return std::get<std::int64_t>(value); }
 std::uint32_t word(const datalog::Value& value) {
   auto v = integer(value);
@@ -35,119 +39,18 @@ bool unsigned_integer(std::istream& in, std::uint64_t& value) {
   return result.ec == std::errc{} && result.ptr == token.data() + token.size();
 }
 }
-std::string name(Op op) { return names.at(static_cast<std::size_t>(op)); }
+std::string name(Op op) { valid_opcode(op); return names.at(static_cast<std::size_t>(op)); }
 Op opcode(const std::string& text) {
   auto it = std::find(names.begin(), names.end(), text);
   if (it == names.end()) throw std::invalid_argument("unknown opcode: " + text);
   return static_cast<Op>(it - names.begin());
 }
-bool pure(Op op) { return op <= Op::Select || op == Op::Phi; }
-bool produces_value(Op op) { return op <= Op::Load || op == Op::Phi; }
-Effects effects(Op op) { return {op == Op::Load, op == Op::Store, op == Op::Load || op == Op::Store}; }
+bool pure(Op op) { valid_opcode(op); return op <= Op::Select || op == Op::Phi; }
+bool produces_value(Op op) { valid_opcode(op); return op <= Op::Load || op == Op::Phi; }
+Effects effects(Op op) { valid_opcode(op); return {op == Op::Load, op == Op::Store, op == Op::Load || op == Op::Store}; }
 datalog::Program program() {
-  using namespace datalog;
-  auto I = Type::Integer; auto S = Type::Symbol;
-  Program p;
-  p.declare("Signature", {I}); p.declare("Block", {I}); p.declare("Entry", {I});
-  p.declare("Instr", {I, I, I, S, I});
-  p.declare("Operand", {I, I, I}); p.declare("Target", {I, I, I});
-  p.declare("Guard", {I, I, I, I, I, I});
-  p.declare("Assumption", {I, I, S});
-  p.declare("Frame", {I, I, I}); p.declare("Binding", {I, I});
-  p.declare("Uses", {I, I}, true); p.declare("Used", {I}, true);
-  p.declare("Pure", {I}, true); p.declare("Dead", {I}, true);
-  p.declare("Edge", {I, I}, true); p.declare("Reach", {I, I}, true);
-  p.declare("Constant", {I, I}, true); p.declare("Binary", {I, S, I, I}, true);
-  p.declare("Fold", {I, S, I, I}, true);
-  p.declare("CopyCandidate", {I, S, I}, true); p.declare("ConstCandidate", {I, S, I}, true);
-  p.declare("SelectValue", {I, I, I, I}, true); p.declare("CopyValue", {I, I}, true);
-  p.declare("BranchValue", {I, I, I, I}, true);
-  p.declare("Effect", {I, S}, true);
-  p.declare("Needed", {I}, true); p.declare("DeadGroup", {I}, true);
-  p.declare("Phi", {I}, true); p.declare("BlockDef", {I, I}, true);
-  p.declare("UseAt", {I, I}, true); p.declare("LocalUse", {I, I}, true);
-  p.declare("PhiUse", {I, I, I}, true);
-  p.declare("LiveIn", {I, I}, true); p.declare("LiveOut", {I, I}, true);
-  p.declare("LiveEdge", {I, I, I}, true);
-  auto v = Term::var; auto c = Term::constant; auto a = Term::any;
-  p.add({{"Uses", {v("u"), v("v")}}, {{"Operand", {v("u"), a(), v("v")}}}});
-  p.add({{"Used", {v("v")}}, {{"Uses", {a(), v("v")}}}});
-  p.add({{"Used", {v("v")}}, {{"Binding", {a(), v("v")}}}});
-  for (int op = 0; op <= static_cast<int>(Op::Select); ++op)
-    p.add({{"Pure", {v("i")}}, {{"Instr", {v("i"), a(), a(), c(name(static_cast<Op>(op))), a()}}}});
-  p.add({{"Pure", {v("i")}}, {{"Instr", {v("i"), a(), a(), c(std::string("phi")), a()}}}});
-  p.add({{"Dead", {v("i")}}, {{"Pure", {v("i")}}, {"Used", {v("i")}, true}}});
-  p.add({{"Needed", {v("v")}}, {{"Binding", {a(), v("v")}}}});
-  p.add({{"Needed", {v("v")}}, {{"Instr", {v("i"), a(), a(), a(), a()}}, {"Pure", {v("i")}, true}, {"Uses", {v("i"), v("v")}}}});
-  p.add({{"Needed", {v("v")}}, {{"Needed", {v("i")}}, {"Uses", {v("i"), v("v")}}}});
-  p.add({{"DeadGroup", {v("i")}}, {{"Pure", {v("i")}}, {"Needed", {v("i")}, true}}});
-  p.add({{"Phi", {v("i")}}, {{"Instr", {v("i"), a(), a(), c(std::string("phi")), a()}}}});
-  for (int op = 0; op <= static_cast<int>(Op::Phi); ++op) if (produces_value(static_cast<Op>(op)))
-    p.add({{"BlockDef", {v("b"), v("i")}}, {{"Instr", {v("i"), v("b"), a(), c(name(static_cast<Op>(op))), a()}}}});
-  p.add({{"UseAt", {v("i"), v("v")}}, {{"Operand", {v("i"), a(), v("v")}}, {"Phi", {v("i")}, true}}});
-  p.add({{"UseAt", {v("i"), v("v")}}, {{"Guard", {a(), v("i"), a(), a(), a(), v("f")}}, {"Binding", {v("f"), v("v")}}}});
-  p.add({{"LocalUse", {v("b"), v("v")}}, {{"Instr", {v("i"), v("b"), a(), a(), a()}}, {"UseAt", {v("i"), v("v")}},
-    {"BlockDef", {v("b"), v("v")}, true}}});
-  p.add({{"PhiUse", {v("pred"), v("b"), v("v")}},
-    {{"Instr", {v("i"), v("b"), a(), c(std::string("phi")), a()}}, {"Operand", {v("i"), v("slot"), v("v")}},
-     {"Target", {v("i"), v("slot"), v("pred")}}}});
-  p.add({{"LiveIn", {v("b"), v("v")}}, {{"LocalUse", {v("b"), v("v")}}}});
-  p.add({{"LiveIn", {v("b"), v("v")}}, {{"LiveOut", {v("b"), v("v")}}, {"BlockDef", {v("b"), v("v")}, true}}});
-  p.add({{"LiveEdge", {v("b"), v("s"), v("v")}}, {{"Edge", {v("b"), v("s")}}, {"LiveIn", {v("s"), v("v")}}}});
-  p.add({{"LiveEdge", {v("b"), v("s"), v("v")}}, {{"Edge", {v("b"), v("s")}}, {"PhiUse", {v("b"), v("s"), v("v")}}}});
-  p.add({{"LiveOut", {v("b"), v("v")}}, {{"LiveEdge", {v("b"), a(), v("v")}}}});
-  for (auto op : {Op::Jump, Op::Branch})
-    p.add({{"Edge", {v("b"), v("t")}}, {{"Instr", {v("i"), v("b"), a(), c(name(op)), a()}}, {"Target", {v("i"), a(), v("t")}}}});
-  for (auto op : {Op::Load, Op::Store}) {
-    p.add({{"Effect", {v("i"), c(std::string("trap"))}}, {{"Instr", {v("i"), a(), a(), c(name(op)), a()}}}});
-    p.add({{"Effect", {v("i"), c(std::string(op == Op::Load ? "read" : "write"))}},
-      {{"Instr", {v("i"), a(), a(), c(name(op)), a()}}}});
-  }
-  p.add({{"Reach", {v("a"), v("b")}}, {{"Edge", {v("a"), v("b")}}}});
-  p.add({{"Reach", {v("a"), v("c")}}, {{"Reach", {v("a"), v("b")}}, {"Edge", {v("b"), v("c")}}}});
-  p.add({{"Constant", {v("i"), v("c")}}, {{"Instr", {v("i"), a(), a(), c(std::string("const")), v("c")}}}});
-  for (auto op : {Op::Add, Op::Sub, Op::Mul, Op::Eq, Op::Ult})
-    p.add({{"Binary", {v("i"), c(name(op)), v("l"), v("r")}},
-      {{"Instr", {v("i"), a(), a(), c(name(op)), a()}},
-       {"Operand", {v("i"), c(std::int64_t{0}), v("l")}}, {"Operand", {v("i"), c(std::int64_t{1}), v("r")}}}});
-  p.add({{"Fold", {v("i"), v("op"), v("a"), v("b")}},
-    {{"Binary", {v("i"), v("op"), v("l"), v("r")}},
-     {"Constant", {v("l"), v("a")}}, {"Constant", {v("r"), v("b")}}}});
-  // Pattern, precondition and replacement relations keep policy in the query
-  // layer. The rewrite executor only materializes these typed opportunities.
-  for (const auto& [op, rule, identity] : std::vector<std::tuple<Op, std::string, std::int64_t>>{
-         {Op::Add, "add_zero", 0}, {Op::Sub, "sub_zero", 0}, {Op::Mul, "mul_one", 1}}) {
-    p.add({{"CopyCandidate", {v("i"), c(rule), v("l")}},
-      {{"Binary", {v("i"), c(name(op)), v("l"), v("r")}}, {"Constant", {v("r"), c(identity)}}}});
-    if (op != Op::Sub) p.add({{"CopyCandidate", {v("i"), c(rule), v("r")}},
-      {{"Binary", {v("i"), c(name(op)), v("l"), v("r")}}, {"Constant", {v("l"), c(identity)}}}});
-  }
-  for (const auto& [op, rule, result] : std::vector<std::tuple<Op, std::string, std::int64_t>>{
-         {Op::Sub, "sub_self", 0}, {Op::Eq, "eq_self", 1}, {Op::Ult, "ult_self", 0}})
-    p.add({{"ConstCandidate", {v("i"), c(rule), c(result)}}, {{"Binary", {v("i"), c(name(op)), v("x"), v("x")}}}});
-  for (const auto& side : {std::string("l"), std::string("r")})
-    p.add({{"ConstCandidate", {v("i"), c(std::string("mul_zero")), c(std::int64_t{0})}},
-      {{"Binary", {v("i"), c(std::string("mul")), v("l"), v("r")}}, {"Constant", {v(side), c(std::int64_t{0})}}}});
-  p.add({{"SelectValue", {v("i"), v("condition"), v("yes"), v("no")}},
-    {{"Instr", {v("i"), a(), a(), c(std::string("select")), a()}},
-     {"Operand", {v("i"), c(std::int64_t{0}), v("condition")}},
-     {"Operand", {v("i"), c(std::int64_t{1}), v("yes")}},
-     {"Operand", {v("i"), c(std::int64_t{2}), v("no")}}}});
-  p.add({{"CopyCandidate", {v("i"), c(std::string("select_value")), v("value")}},
-    {{"SelectValue", {v("i"), a(), v("value"), v("value")}}}});
-  p.add({{"CopyCandidate", {v("i"), c(std::string("select_value")), v("no")}},
-    {{"SelectValue", {v("i"), v("condition"), a(), v("no")}}, {"Constant", {v("condition"), c(std::int64_t{0})}}}});
-  p.add({{"CopyCandidate", {v("i"), c(std::string("select_value")), v("yes")}},
-    {{"SelectValue", {v("i"), v("condition"), v("yes"), a()}}, {"Constant", {v("condition"), a()}},
-     {"Constant", {v("condition"), c(std::int64_t{0})}, true}}});
-  p.add({{"CopyValue", {v("i"), v("value")}},
-    {{"Instr", {v("i"), a(), a(), c(std::string("copy")), a()}}, {"Operand", {v("i"), c(std::int64_t{0}), v("value")}}}});
-  p.add({{"BranchValue", {v("i"), v("condition"), v("yes"), v("no")}},
-    {{"Instr", {v("i"), a(), a(), c(std::string("branch")), a()}},
-     {"Operand", {v("i"), c(std::int64_t{0}), v("condition")}},
-     {"Target", {v("i"), c(std::int64_t{0}), v("yes")}},
-     {"Target", {v("i"), c(std::int64_t{1}), v("no")}}}});
-  return p;
+  static const auto analysis = datalog::parse(novostone_analysis_source, "Analysis.dl").program;
+  return analysis;
 }
 Function load(const ccdb::Snapshot& snapshot) {
   Function f;
@@ -286,6 +189,10 @@ std::vector<MemoryDependency> memory_dependencies(const Function& f) {
 void store(ccdb::Transaction& transaction, const Function& f) {
   verify(f);
   auto before = transaction.preview();
+  if (!before.relation("Instr").empty())
+    for (const auto& relation : {"Guard", "Frame", "Binding", "Assumption"})
+      if (!before.relation(relation).empty())
+        throw std::invalid_argument("replacing guarded IR requires recovery-aware publication");
   for (const auto& relation : base_relations) for (const auto& row : before.relation(relation)) transaction.erase(relation, row);
   transaction.insert("Signature", {static_cast<std::int64_t>(f.arity)});
   transaction.insert("Entry", {f.entry});

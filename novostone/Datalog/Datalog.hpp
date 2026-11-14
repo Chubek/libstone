@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -51,8 +52,10 @@ public:
   void declare(std::string name, std::vector<Type> columns, bool derived = false);
   void add(Rule rule);
   void validate() const;
+  void validate_rule(const Rule& rule) const;
   void validate_fact(const std::string& relation, const Tuple& tuple) const;
   const std::map<std::string, Schema>& schemas() const { return schemas_; }
+  const std::vector<Rule>& rules() const { return rules_; }
   // Canonical complete schema/rule identity, not a hash or an executable parser.
   std::string signature() const;
   std::set<std::string> dependencies(const std::string& goal) const;
@@ -64,4 +67,18 @@ private:
   std::vector<Rule> rules_;
 };
 std::string dump(const Relation& relation);
+
+struct Module { Program program; Facts facts; };
+struct ParseLimits { std::size_t bytes = 1024 * 1024; std::size_t statements = 10000; };
+class ParseError : public std::invalid_argument {
+public:
+  ParseError(std::string source, std::string_view text, std::size_t offset, const std::string& message);
+  std::string source;
+  std::size_t offset, line, column; // One-based line/column; zero-based byte offset.
+};
+// Aurocks syntax -> ASDL tree -> validated typed rules/facts. No file I/O or
+// executable directives. Concurrent calls are safe; parsing itself is serialized.
+Module parse(std::string_view text, std::string source = "<datalog>", ParseLimits limits = {});
+// Deterministic source, preserving rule order and all C++ names/symbol bytes.
+std::string dump(const Module& module);
 } // namespace novostone::datalog

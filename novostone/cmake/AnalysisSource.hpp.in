@@ -1,0 +1,4 @@
+#pragma once
+// Build-time embedding: installed libraries never depend on the source tree.
+// Escape every byte so even string delimiters in the source remain data.
+inline constexpr char novostone_analysis_source[] = "@NOVOSTONE_ANALYSIS@";

@@ -10,9 +10,10 @@ Validation validate(const ir::Function& before, const ir::Function& after,
                     const std::vector<Input>& inputs, std::size_t budget) {
   ir::verify(before); ir::verify(after);
   if (inputs.empty()) throw std::invalid_argument("validation needs a nonempty input domain");
+  for (const auto& input : inputs)
+    if (input.arguments.size() != before.arity) throw std::invalid_argument("validation corpus arity mismatch");
   Validation report;
   for (const auto& input : inputs) {
-    if (input.arguments.size() != before.arity) throw std::invalid_argument("validation corpus arity mismatch");
     auto reference = ir::evaluate(before, input.arguments, input.memory, budget);
     auto candidate = ir::evaluate(after, input.arguments, input.memory, budget);
     if (reference.trap == "step budget" || candidate.trap == "step budget") { ++report.inconclusive; continue; }

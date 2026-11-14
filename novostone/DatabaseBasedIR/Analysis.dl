@@ -1,0 +1,116 @@
+// Canonical IR schemas and analyses. Loaded by ir::program() through the
+// Aurocks/ASDL frontend; base relations are persisted, derived ones are cached.
+.decl Assumption(integer, integer, symbol).
+.decl Binary(integer, symbol, integer, integer) derived.
+.decl Binding(integer, integer).
+.decl Block(integer).
+.decl BlockDef(integer, integer) derived.
+.decl BranchValue(integer, integer, integer, integer) derived.
+.decl ConstCandidate(integer, symbol, integer) derived.
+.decl Constant(integer, integer) derived.
+.decl CopyCandidate(integer, symbol, integer) derived.
+.decl CopyValue(integer, integer) derived.
+.decl Dead(integer) derived.
+.decl DeadGroup(integer) derived.
+.decl Edge(integer, integer) derived.
+.decl Effect(integer, symbol) derived.
+.decl Entry(integer).
+.decl Fold(integer, symbol, integer, integer) derived.
+.decl Frame(integer, integer, integer).
+.decl Guard(integer, integer, integer, integer, integer, integer).
+.decl Instr(integer, integer, integer, symbol, integer).
+.decl LiveEdge(integer, integer, integer) derived.
+.decl LiveIn(integer, integer) derived.
+.decl LiveOut(integer, integer) derived.
+.decl LocalUse(integer, integer) derived.
+.decl Needed(integer) derived.
+.decl Operand(integer, integer, integer).
+.decl Phi(integer) derived.
+.decl PhiUse(integer, integer, integer) derived.
+.decl Pure(integer) derived.
+.decl Reach(integer, integer) derived.
+.decl SelectValue(integer, integer, integer, integer) derived.
+.decl Signature(integer).
+.decl Target(integer, integer, integer).
+.decl UseAt(integer, integer) derived.
+.decl Used(integer) derived.
+.decl Uses(integer, integer) derived.
+
+// Use-def dependencies and rooted dead-code analysis.
+Uses(u, v) :- Operand(u, _, v).
+Used(v) :- Uses(_, v).
+Used(v) :- Binding(_, v).
+Pure(i) :- Instr(i, _, _, "param", _).
+Pure(i) :- Instr(i, _, _, "const", _).
+Pure(i) :- Instr(i, _, _, "copy", _).
+Pure(i) :- Instr(i, _, _, "add", _).
+Pure(i) :- Instr(i, _, _, "sub", _).
+Pure(i) :- Instr(i, _, _, "mul", _).
+Pure(i) :- Instr(i, _, _, "eq", _).
+Pure(i) :- Instr(i, _, _, "ult", _).
+Pure(i) :- Instr(i, _, _, "select", _).
+Pure(i) :- Instr(i, _, _, "phi", _).
+Dead(i) :- Pure(i), !Used(i).
+Needed(v) :- Binding(_, v).
+Needed(v) :- Instr(i, _, _, _, _), !Pure(i), Uses(i, v).
+Needed(v) :- Needed(i), Uses(i, v).
+DeadGroup(i) :- Pure(i), !Needed(i).
+
+// Phi operands are live on incoming edges, not in the destination block.
+Phi(i) :- Instr(i, _, _, "phi", _).
+BlockDef(b, i) :- Instr(i, b, _, "param", _).
+BlockDef(b, i) :- Instr(i, b, _, "const", _).
+BlockDef(b, i) :- Instr(i, b, _, "copy", _).
+BlockDef(b, i) :- Instr(i, b, _, "add", _).
+BlockDef(b, i) :- Instr(i, b, _, "sub", _).
+BlockDef(b, i) :- Instr(i, b, _, "mul", _).
+BlockDef(b, i) :- Instr(i, b, _, "eq", _).
+BlockDef(b, i) :- Instr(i, b, _, "ult", _).
+BlockDef(b, i) :- Instr(i, b, _, "select", _).
+BlockDef(b, i) :- Instr(i, b, _, "load", _).
+BlockDef(b, i) :- Instr(i, b, _, "phi", _).
+UseAt(i, v) :- Operand(i, _, v), !Phi(i).
+UseAt(i, v) :- Guard(_, i, _, _, _, f), Binding(f, v).
+LocalUse(b, v) :- Instr(i, b, _, _, _), UseAt(i, v), !BlockDef(b, v).
+PhiUse(pred, b, v) :- Instr(i, b, _, "phi", _), Operand(i, slot, v), Target(i, slot, pred).
+LiveIn(b, v) :- LocalUse(b, v).
+LiveIn(b, v) :- LiveOut(b, v), !BlockDef(b, v).
+LiveEdge(b, s, v) :- Edge(b, s), LiveIn(s, v).
+LiveEdge(b, s, v) :- Edge(b, s), PhiUse(b, s, v).
+LiveOut(b, v) :- LiveEdge(b, _, v).
+
+// CFG and ordered/trapping memory effects.
+Edge(b, t) :- Instr(i, b, _, "jump", _), Target(i, _, t).
+Edge(b, t) :- Instr(i, b, _, "branch", _), Target(i, _, t).
+Effect(i, "trap") :- Instr(i, _, _, "load", _).
+Effect(i, "read") :- Instr(i, _, _, "load", _).
+Effect(i, "trap") :- Instr(i, _, _, "store", _).
+Effect(i, "write") :- Instr(i, _, _, "store", _).
+Reach(a, b) :- Edge(a, b).
+Reach(a, c) :- Reach(a, b), Edge(b, c).
+
+// Typed rewrite opportunities. Arithmetic execution remains in the checked
+// i32 rewrite engine; these rules discover candidates, not new semantics.
+Constant(i, c) :- Instr(i, _, _, "const", c).
+Binary(i, "add", l, r) :- Instr(i, _, _, "add", _), Operand(i, 0, l), Operand(i, 1, r).
+Binary(i, "sub", l, r) :- Instr(i, _, _, "sub", _), Operand(i, 0, l), Operand(i, 1, r).
+Binary(i, "mul", l, r) :- Instr(i, _, _, "mul", _), Operand(i, 0, l), Operand(i, 1, r).
+Binary(i, "eq", l, r) :- Instr(i, _, _, "eq", _), Operand(i, 0, l), Operand(i, 1, r).
+Binary(i, "ult", l, r) :- Instr(i, _, _, "ult", _), Operand(i, 0, l), Operand(i, 1, r).
+Fold(i, op, a, b) :- Binary(i, op, l, r), Constant(l, a), Constant(r, b).
+CopyCandidate(i, "add_zero", l) :- Binary(i, "add", l, r), Constant(r, 0).
+CopyCandidate(i, "add_zero", r) :- Binary(i, "add", l, r), Constant(l, 0).
+CopyCandidate(i, "sub_zero", l) :- Binary(i, "sub", l, r), Constant(r, 0).
+CopyCandidate(i, "mul_one", l) :- Binary(i, "mul", l, r), Constant(r, 1).
+CopyCandidate(i, "mul_one", r) :- Binary(i, "mul", l, r), Constant(l, 1).
+ConstCandidate(i, "sub_self", 0) :- Binary(i, "sub", x, x).
+ConstCandidate(i, "eq_self", 1) :- Binary(i, "eq", x, x).
+ConstCandidate(i, "ult_self", 0) :- Binary(i, "ult", x, x).
+ConstCandidate(i, "mul_zero", 0) :- Binary(i, "mul", l, r), Constant(l, 0).
+ConstCandidate(i, "mul_zero", 0) :- Binary(i, "mul", l, r), Constant(r, 0).
+SelectValue(i, condition, yes, no) :- Instr(i, _, _, "select", _), Operand(i, 0, condition), Operand(i, 1, yes), Operand(i, 2, no).
+CopyCandidate(i, "select_value", value) :- SelectValue(i, _, value, value).
+CopyCandidate(i, "select_value", no) :- SelectValue(i, condition, _, no), Constant(condition, 0).
+CopyCandidate(i, "select_value", yes) :- SelectValue(i, condition, yes, _), Constant(condition, _), !Constant(condition, 0).
+CopyValue(i, value) :- Instr(i, _, _, "copy", _), Operand(i, 0, value).
+BranchValue(i, condition, yes, no) :- Instr(i, _, _, "branch", _), Operand(i, 0, condition), Target(i, 0, yes), Target(i, 1, no).

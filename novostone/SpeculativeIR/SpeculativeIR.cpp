@@ -48,6 +48,8 @@ void Assumptions::invalidate(ir::Id id) {
 }
 void verify(const ccdb::Snapshot& baseline, const ccdb::Snapshot& specialized) {
   ir::verify(baseline); ir::verify(specialized);
+  for (const auto& name : {"Guard", "Frame", "Binding", "Assumption"})
+    if (!baseline.relation(name).empty()) throw std::invalid_argument("refinement requires an unguarded baseline");
   auto original = ir::load(baseline), expected = original;
   auto guards = decode(specialized);
   // Derive recovery requirements from the baseline body, never from the

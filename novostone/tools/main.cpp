@@ -8,12 +8,20 @@
 
 using namespace novostone;
 namespace {
-ir::Function read_function(const std::string& path) {
+std::string read_text(const std::string& path, std::size_t limit = 16 * 1024 * 1024) {
   std::ifstream input(path);
-  if (!input) throw std::runtime_error("cannot open input IR: " + path);
-  std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-  return ir::parse(text);
+  if (!input) throw std::runtime_error("cannot open input: " + path);
+  std::string text;
+  char buffer[4096];
+  while (input.read(buffer, sizeof(buffer)) || input.gcount()) {
+    auto count = static_cast<std::size_t>(input.gcount());
+    if (count > limit - text.size()) throw std::invalid_argument("input byte limit exceeded: " + path);
+    text.append(buffer, count);
+  }
+  if (!input.eof()) throw std::runtime_error("cannot read input: " + path);
+  return text;
 }
+ir::Function read_function(const std::string& path) { return ir::parse(read_text(path)); }
 std::uint32_t integer(const std::string& text) {
   std::uint32_t value;
   auto result = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -23,6 +31,16 @@ std::uint32_t integer(const std::string& text) {
 }
 int main(int argc, char** argv) {
   try {
+    if ((argc == 4 && std::string(argv[1]) == "datalog") ||
+        (argc == 3 && std::string(argv[1]) == "format-datalog")) {
+      auto module = datalog::parse(read_text(argv[2], datalog::ParseLimits{}.bytes), argv[2]);
+      if (argc == 3) { std::cout << datalog::dump(module); return 0; }
+      ccdb::Database database(module.program);
+      auto transaction = database.begin(); transaction.insert(module.facts);
+      auto snapshot = transaction.commit("load Datalog source");
+      std::cout << datalog::dump(snapshot.query(argv[3]).rows);
+      return 0;
+    }
     ccdb::Database db(ir::program(), [](const auto& s) { ir::verify(s); });
     if (argc == 3 && std::string(argv[1]) == "analyze") {
       auto function = read_function(argv[2]);
@@ -63,7 +81,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     if (argc != 1 && !(argc == 2 && std::string(argv[1]) == "demo")) {
-      std::cerr << "usage: novostone [demo | analyze FILE | optimize FILE | run FILE [I32...] | validate BEFORE AFTER [SEED]]\n";
+      std::cerr << "usage: novostone [demo | analyze FILE | optimize FILE | run FILE [I32...] | validate BEFORE AFTER [SEED] | datalog FILE RELATION | format-datalog FILE]\n";
       return 2;
     }
     ir::Builder builder(db, 1);
