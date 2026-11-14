@@ -38,7 +38,64 @@ separate backend. The inspected ExolangTk `ffi_call` returns `FFI_ENOSYS` and
 cannot implement static calls. The inspected CParser fixes integer widths in
 its AST and documents incomplete preprocessed-input support; it is not an ABI
 authority. Full C11 extraction, dynamic loading, Python/Ruby emitters and
-process isolation remain separate, explicitly documented workstreams.
+process isolation remain separate, explicitly documented workstreams. An opt-in
+libclang extractor now supplies the first C11 discovery slice described below.
+
+## C11 declaration discovery (initial P0.1 / gate A)
+
+`cdecl::TranslationUnit` is an owned typed graph, separate from the legacy
+`BindingModule`'s lossy spelling fields. Type IDs retain canonical identity and
+source spelling; typedef/elaborated edges, qualifiers, recursive records,
+fields/bitfields, arrays, enums and callback signatures are explicit. Source
+locations, diagnostics, target/compiler identity and SHA-256 input provenance
+travel with the unit. JSON is a deterministic interchange projection, not the
+internal analysis interface. This discovery schema version 1 is **not** old
+binding-reflection version 1 and confers no semantic-contract trust.
+
+The libclang driver is isolated in optional `Moonstone::ExoMLExtract`; no Clang
+or OpenSSL dependency reaches `Moonstone::ExoML`. It parses the requested header
+directly, with a restricted option vocabulary, without executing a shell or any
+discovered code. Only declarations originating in that header are exported;
+referenced dependency types and all parsed include fingerprints remain in the
+graph/evidence. Compiler errors and budget failures preserve partial evidence
+and force `complete=false`. An unsupported construct remains recorded rather
+than becoming a guessed signature. The initial gate for pinned vec/JSON/parsec is
+implemented and tested; generalized compiler/extension/platform coverage,
+semantic verification and generator consumption remain separate work.
+
+Discovery schema 2 adds `CompilationContext` and `Preprocessing` to the same
+owned IR. Strict bounded JSON ingestion never runs compilation commands and
+rejects unclassified flags instead of losing ABI input. Source directory/driver,
+original/ignored arguments and database fingerprints remain reviewable. Actual
+compiler/target/options scope type IDs; callers also retain the unit fingerprint
+when comparing source revisions. Source tokens preserve lexical declaration and
+parameter spelling alongside normalized compiler types.
+
+Compiler-reported macro definitions, source expansion links, includes and skipped
+ranges accompany a final defined-state snapshot obtained with read-only compiler
+probes. No arbitrary replacement is evaluated by the probe, and no missing
+definition ID is guessed. Nested replacement traces remain explicitly outside
+libclang's exposed API; unavailable/unsupported evidence stays unknown or fails
+with diagnostics. Both compiler passes and reread input fingerprints guard
+against mixed source/compile-database/provenance inputs. The internal cache codec
+is versioned with these additive fields and round-trips all of them.
+
+The optional Linux normalization cache reparses before every lookup and binds
+its content key to a freshly serialized compiler AST, parsed file/provenance
+hashes, target/options, limits and build-source identity. This handles negative
+include probes and new shadow headers without a guessed dependency manifest.
+An internal bounded binary codec traverses the same typed model in both
+directions; it is not a second signature database or native-object dump.
+Private no-follow file access and atomic publication protect local cache I/O.
+Cache activity lives in `CacheReport`, outside deterministic reflection. Native
+AST bytes are temporary hash material only and are never loaded from cache.
+This is not parse-free TU caching (not required for the initial gate); see
+[discovery-cache.md](manual/discovery-cache.md) and the
+[gate-A closeout](manual/discovery-gate-a.md).
+
+See [the feature design](manual/c11-discovery.md) for security boundaries and
+failure semantics, and [the report](manual/c11-discovery-report.md) for executed
+tests and pinned MuLIB coverage.
 
 ## Failure semantics and verification
 

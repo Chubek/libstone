@@ -8,7 +8,7 @@ intended to be overlaid at `libstone/moonstone/`. It now comprises **six** subsy
 | Chisel | Small CFG ownership analysis, explicit loans/regions, demonstration rooted GC | Rust-like NLL/Polonius, proven memory safety, production MemTKX integration |
 | Syren | S-expression diagnostic rules, stderr/SARIF, repair callback, runtime recorder | Complete error catalog, independent repair verification pipeline |
 | Supersonic | Bounded integer-expression synthesis, CEGIS callback, Lua SynthGram module | Fully typed general synthesis, native Satie/e-graph solver integration |
-| ExoML | Generated DSL frontend, typed auto-binding, static wrapper generation, ABI probes/checks, reflection, StaticFFI services and CLI/line REPL | Full language, C11 header extraction, dynamic FFI, process-isolated plugins, Python/Ruby emitters |
+| ExoML | Generated DSL frontend, typed auto-binding, static wrapper generation, ABI probes/checks, reflection, StaticFFI services, CLI/line REPL and opt-in compiler-context C11 discovery with validated caching | Full language, semantic contracts, direct AOT adapters, dynamic FFI, process-isolated plugins, Python/Ruby emitters |
 | **Prolific** | Bounded compiler/VM event profiling, C/C++ embedding, Linux instrumented-host injection, LMDB cache, JSON reports, native Lua `lprofcc`/`lprofvm` replay, profile-driven speculation and Lua `lspecir` advice/warnings/guards with user translators | Arbitrary uninstrumented binary injection, semantic error proofs, automatic optimization, untrusted-script sandbox |
 | **Plaid** | One-shot continuations, explicit pure CPS machine, synchronous effect handlers, coroutine-frame liveness, C++20 manual coroutine, cooperative scheduling, work-stealing pool, structured task scope, bounded/rendezvous channels, buffered-channel select, serialized local actors, parallel loop/reduce, lane mapping, bounded affine-dependence checking, trace-based races and lock order, C runtime ABI | Arbitrary Scheme call/cc, delimited stack capture, multi-shot resource-safe continuations, compiler async lowering/codegen, stackful fibers, async I/O, full atomic Go select, native SIMD vectorizer, GPU lowering, instrumenting race detector |
 
@@ -34,7 +34,10 @@ The tree has **36 CTest tests** when tools, Prolific's Linux injection and optio
 Python checks are available: fourteen Plaid tests, six original Moonstone
 tests, eight additional ExoML checks and eight Prolific checks. Public ExoML, Plaid and Prolific headers compile in isolation
 with warnings as errors, and the C ABI consumer uses strict C11. For current
-sanitizer and stress validation see `plaid/manual/06-runtime-hardening.md`;
+sanitizer and stress validation see `plaid/manual/06-runtime-hardening.md`.
+Opt-in `MOONSTONE_EXOML_EXTRACT` adds five discovery/cache checks on Linux; see
+[`exoml/manual/c11-discovery-report.md`](exoml/manual/c11-discovery-report.md)
+for pinned MuLIB coverage and the executed extraction ON/OFF matrix.
 `docs/PROVENANCE.md` describes the original snapshot's verification scope.
 The package is also designed to build standalone with CMake >=3.20, C++20 and
 OS threads. CI across architectures, sanitizer runs and integration with the

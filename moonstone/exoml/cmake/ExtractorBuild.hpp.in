@@ -1,0 +1,2 @@
+#pragma once
+#define EXOML_EXTRACT_BUILD_ID "@exoml_extract_build_id@"

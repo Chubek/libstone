@@ -6,6 +6,7 @@ function(run)
 endfunction()
 run("${CMAKE_COMMAND}" --install "${BUILD}" --prefix "${WORK}/prefix" --component ExoML --config "${CONFIG}")
 run("${CMAKE_COMMAND}" -S "${SOURCE}" -B "${WORK}/consumer"
-  "-DCMAKE_PREFIX_PATH=${WORK}/prefix" "-DCMAKE_CXX_COMPILER=${CXX}" "-DCMAKE_CXX_FLAGS=${FLAGS}")
+  "-DCMAKE_PREFIX_PATH=${WORK}/prefix" "-DCMAKE_CXX_COMPILER=${CXX}" "-DCMAKE_CXX_FLAGS=${FLAGS}"
+  "-DTEST_EXTRACT=${EXTRACT}")
 run("${CMAKE_COMMAND}" --build "${WORK}/consumer" --config "${CONFIG}")
 run("${CMAKE_CTEST_COMMAND}" --test-dir "${WORK}/consumer" -C "${CONFIG}" --output-on-failure)

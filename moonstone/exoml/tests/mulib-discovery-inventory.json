@@ -1,0 +1,23 @@
+{
+  "revision": "f6f2eea234f1baa3fe73b8eb49194e7362b76278",
+  "headers": {
+    "vec": {
+      "sha256": "b2576214db977f01ef73d07059c2877082b57bcb14e5773fb7bc98af591e2a0e",
+      "typedef": ["mulib_vec_t"],
+      "record": ["mulib_vec"],
+      "enum": []
+    },
+    "json": {
+      "sha256": "e9e233759cfa04eed6f5d05e98ca619118c42b6dc71e1f94a1d0aa882a5585e0",
+      "typedef": ["mulib_json_type", "mulib_json_t", "mulib_json_error_t"],
+      "record": ["mulib_json", "mulib_json_error"],
+      "enum": ["mulib_json_type"]
+    },
+    "parsec": {
+      "sha256": "f697a7723bf797241a069a98f47d8adcc4f7d4742eb5c75713ed4b3d7dd40d42",
+      "typedef": ["mulib_parsec_parser_t", "mulib_parsec_predicate_fn", "mulib_parsec_kind", "mulib_parsec_error_code", "mulib_parsec_error_t", "mulib_parsec_capture_t", "mulib_parsec_options_t", "mulib_parsec_result_t", "mulib_parser_t", "mulib_parser_error_code_t", "mulib_parser_error_t"],
+      "record": ["mulib_parsec_parser", "mulib_parsec_parser", "mulib_parsec_error", "mulib_parsec_capture", "mulib_parsec_options", "mulib_parsec_result", "mulib_parser", "mulib_parser_error"],
+      "enum": ["mulib_parsec_kind", "mulib_parsec_error_code", "mulib_parser_error_code"]
+    }
+  }
+}

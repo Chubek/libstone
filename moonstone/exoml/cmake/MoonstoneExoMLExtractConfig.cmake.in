@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(MoonstoneExoML CONFIG)
+find_dependency(OpenSSL COMPONENTS Crypto)
+find_library(MOONSTONE_EXOML_LIBCLANG_LIBRARY NAMES clang libclang REQUIRED)
+if(NOT TARGET Moonstone::ExoMLClang)
+  add_library(Moonstone::ExoMLClang UNKNOWN IMPORTED)
+  set_target_properties(Moonstone::ExoMLClang PROPERTIES
+    IMPORTED_LOCATION "${MOONSTONE_EXOML_LIBCLANG_LIBRARY}")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/MoonstoneExoMLExtractTargets.cmake")

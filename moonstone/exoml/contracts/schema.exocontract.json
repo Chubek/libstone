@@ -1,0 +1,110 @@
+{
+  "$comment": "ExoML semantic contract sidecar schema v2. Reference documentation; not loaded at runtime.",
+  "schema_version": 2,
+  "library": "<library-name>",
+  "headers": ["<header-file.h>"],
+  "state": "discovered | annotated | validated | reviewed | usage_checked",
+  "bundle_provenance": {
+    "header": "<header-file.h>",
+    "revision": "<source-revision>",
+    "source_location": {"file": "", "line": 0, "column": 0, "end_line": 0, "end_column": 0},
+    "author": "<person-or-generator>",
+    "review_status": "unreviewed | auto_inferred | reviewed | verified",
+    "evidence_method": "manual | source_audit | dynamic_test",
+    "toolchain_fingerprint": "<compiler-version-target>"
+  },
+  "functions": [
+    {
+      "c_name": "<exact-C-symbol>",
+      "return": {
+        "kind": "value | borrow | owned | nullable | tagged_error",
+        "nullable": false,
+        "lifetime": {"origin": "parameter | receiver | returned_owner | global_static | caller_buffer | callback_registration | explicit_region", "parameter_index": 0, "region_name": ""},
+        "destroy_with": "<native-release-function>",
+        "allocation_source": "<allocator>",
+        "deallocator_family": "<allocator-family>",
+        "nullable_means_success": false,
+        "alias_of": "<parameter-name>"
+      },
+      "parameters": [
+        {
+          "index": 0,
+          "name": "<parameter-name>",
+          "nullable": false,
+          "ownership": "scalar | borrowed_immutable | borrowed_mutable | owned_unique | shared | consumed | out | inout | opaque_unsafe | retained_callback | transferred",
+          "lifetime": {"origin": "parameter", "parameter_index": 0, "region_name": ""},
+          "length_parameter": null,
+          "count_parameter": null,
+          "encoding": "",
+          "alignment": null,
+          "transfer_branch": "success | failure | unconditional | conditional",
+          "transfer_predicate": ""
+        }
+      ],
+      "errors": {
+        "kind": "none | sentinel | null_on_failure | boolean_return | int_code | errno | out_error | custom_classifier",
+        "sentinel_value": "",
+        "out_valid_on_failure": false,
+        "cleanup_required_on_failure": false,
+        "error_parameter": ""
+      },
+      "effects": {
+        "effects": ["read | write | allocate | free | escape | io | thread | suspend | foreign_call"],
+        "unknown": false
+      },
+      "concurrency": {
+        "thread_safety": "single_thread | thread_safe | thread_affine | signal_safe",
+        "registration_thread_affine": false,
+        "signal_safe": false,
+        "callback_origin": "",
+        "blocking_behavior": "",
+        "suspension_safe": false
+      },
+      "callbacks": [
+        {
+          "signature": "<C-function-pointer-type>",
+          "mode": "synchronous | retained",
+          "user_data_parameter": null,
+          "lifetime": {"origin": "parameter", "parameter_index": 0, "region_name": ""},
+          "unregister_function": "<required-for-retained>",
+          "reentrant": false,
+          "may_throw": false
+        }
+      ],
+      "destructors": [
+        {
+          "function_name": "<native-release-function>",
+          "context_parameter": null,
+          "allocator_family": "",
+          "idempotent": false,
+          "null_safe": false,
+          "thread_affine": false,
+          "may_fail": false
+        }
+      ],
+      "transfers": [
+        {
+          "branch": "success | failure | unconditional | conditional",
+          "from_owner": "<parameter-or-return>",
+          "to_owner": "<parameter-or-callee>",
+          "predicate": ""
+        }
+      ],
+      "invalidations": [
+        {
+          "kind": "owner_drop | owner_move | mutation | reallocation | registration_destruction | next_call | explicit_operation | concurrency_dependent",
+          "description": ""
+        }
+      ],
+      "provenance": {
+        "header": "",
+        "revision": "",
+        "source_location": {"file": "", "line": 0, "column": 0, "end_line": 0, "end_column": 0},
+        "author": "",
+        "review_status": "unreviewed | auto_inferred | reviewed | verified",
+        "evidence_method": "",
+        "toolchain_fingerprint": ""
+      }
+    }
+  ]
+}

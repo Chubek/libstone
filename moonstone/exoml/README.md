@@ -4,6 +4,17 @@ ExoML provides **compiler-checked native auto-binding**, generated C++ wrappers,
 ABI checks/probes, declaration reflection, a generated DSL frontend, and an
 in-memory StaticFFI standard library. See [STATUS.md](STATUS.md) for remaining work.
 
+An **opt-in C11 discovery** library/tool now preserves compiler-derived type
+graphs and target evidence. It does not infer ownership or generate safe APIs.
+See [C11 discovery](manual/c11-discovery.md) and the
+[verification report](manual/c11-discovery-report.md).
+
+A **versioned semantic contract** model attaches ownership, lifetime, error,
+effect, callback, destructor and concurrency obligations to discovered
+declarations. Contracts are validated against the CDecl IR (Gate B) and
+serialized deterministically. See
+[semantic contracts](manual/semantic-contracts.md).
+
 ## Build
 
 ```sh
@@ -123,6 +134,135 @@ unsupported typedef targets fail C++ template compilation. ABI checks/probes can
 inspect records; fields must be addressable and records standard-layout.
 Bitfields fail compilation. Expected layouts become evidence only after an
 independent target compilation. JSON reflection is not a manifest-input parser.
+
+## C11 discovery (developer option)
+
+Requires installed libclang headers/library and OpenSSL Crypto, only when enabled.
+Compilation-database JSON uses the existing vendored nlohmann 3.10.5 header under
+`third_party/metatk/third_party/tomlplusplus/vendor`; no dependency is downloaded.
+Set `MOONSTONE_EXOML_JSON_INCLUDE_DIR` if that header is provided elsewhere.
+Neither the JSON header nor libclang is needed by ordinary runtime consumers.
+No vendor trees or runtime dependencies are downloaded or changed.
+
+```sh
+cmake -S moonstone -B build-discovery -DCMAKE_BUILD_TYPE=Debug \
+  -DMOONSTONE_BUILD_PROLIFIC=OFF -DMOONSTONE_EXOML_EXTRACT=ON
+cmake --build build-discovery --parallel 4
+ctest --test-dir build-discovery --output-on-failure
+build-discovery/exoml/exoml-bind extract \
+  --header moonstone/exoml/tests/discovery.h \
+  --resource-dir "$(clang -print-resource-dir)" --out discovery.cdecl.json
+```
+
+`--include`, `--define`, `--undefine`, `--target`, `--revision` and
+`--provenance` record explicit discovery configuration. Specify a resource
+directory compatible with libclang for standard headers; cross targets also
+need appropriate target include directories. `--help` lists the exact interface.
+Only `extract` and `validate` are implemented: invalid CLI syntax exits 2,
+source/options/budget failures exit 3 (partial JSON with `complete=false`),
+validation failures exit 3, output failures exit 7. Default output is stdout.
+No compiler plugins, response files or arbitrary compiler flags are accepted.
+Active `MULIB_IMPL_*` definitions are rejected.
+
+C++ clients use `<exoml/Extract.hpp>`, `cdecl::ExtractOptions`, and
+`cdecl::extract_c11`, linking `Moonstone::ExoMLExtract`. Installed SDK users request
+`find_package(MoonstoneExoMLExtract CONFIG REQUIRED)` separately. The owned model
+and deterministic `describe_translation_unit` are in `<exoml/CDecl.hpp>` and
+available through the ordinary runtime without libclang/OpenSSL.
+
+`--revision` is caller-supplied provenance, not a checkout-verification claim.
+The opt-in MuLIB test verifies an exact pinned clean checkout independently;
+enable it with `-DMOONSTONE_EXOML_MULIB_ROOT=/path/to/canonical/mulib` (pin in the
+verification report). Normal builds require neither MuLIB nor the extractor.
+Fingerprint changes are tested for headers, includes, macro and target options.
+The initial pinned MuLIB gate-A discovery milestone is verified; see
+[the closeout report](manual/discovery-gate-a.md). Metadata is now discovery
+schema **2**, preserving prior fields and adding compilation context, source
+tokens and compiler-reported preprocessing evidence. This is not semantic-contract
+schema v2 and never promotes an old reflection object into a safe contract.
+
+### Compilation context and macro evidence
+
+```sh
+cmake -S moonstone -B build-discovery -DMOONSTONE_BUILD_PROLIFIC=OFF \
+  -DMOONSTONE_EXOML_EXTRACT=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build-discovery --parallel 4
+build-discovery/exoml/exoml-bind extract \
+  --header moonstone/exoml/tests/fixture.h \
+  --compile-commands build-discovery/compile_commands.json \
+  --compile-file moonstone/exoml/tests/fixture.c \
+  --resource-dir "$(clang -print-resource-dir)" --out fixture.cdecl.json
+```
+
+An exact source entry, matching header entry, or sole entry is required;
+ambiguous databases fail. `arguments` arrays and restricted POSIX-quoted `command`
+strings are supported, but no database driver, wrapper or shell ever runs.
+Only flags configuring C11 preprocessing/ABI are forwarded; output/dependency
+actions are stripped **and recorded**. Unknown flags, plugins, response files,
+shell expansion, and non-C11 modes fail with diagnostics. The recorded driver is
+not an ABI authority: the actual compiler remains the recorded libclang target.
+This applies a source entry's flags to the requested header, not source-file
+statements preceding that header's inclusion.
+
+`--compile-arg ARG` adds restricted tokenized flags, including `-m32`/`-m64`,
+`-fshort-enums`, `-fsigned-char`/`-funsigned-char`, `-fpack-struct=N`, target/CPU/ABI,
+sysroot and include options. Database flags come first, then compile arguments,
+include directories, defines, undefines and explicit target/resource overrides.
+No arbitrary flag passthrough is available; see the closeout report for the list.
+SDK equivalents are `ExtractOptions::{compile_commands,compile_file,compiler_arguments}`.
+
+Preprocessing metadata records definitions, source-level expansion/definition
+links, includes, skipped ranges and final defined states for observed/CLI names
+and standard dynamic builtins. Compiler `#ifdef` probes account for `#undef` and
+push/pop; unavailable restored/dynamic definition IDs carry explicit reasons.
+Libclang does not expose nested replacement-token trees: these are not claimed
+complete or fabricated. Unsupported probes fail the complete-evidence gate while
+preserving partial graph/diagnostics. Files must remain stable during discovery.
+
+### Persistent normalization cache (Linux)
+
+```sh
+build-discovery/exoml/exoml-bind extract \
+  --header moonstone/exoml/tests/discovery.h \
+  --resource-dir "$(clang -print-resource-dir)" \
+  --cache-dir /tmp/opencode/exoml-discovery-cache --cache-report --out discovery.cdecl.json
+# Repeat: stderr reports a hit; declaration JSON is byte-identical.
+```
+
+The parent directory must exist; the cache creates a private 0700 leaf directory
+and rejects nonprivate/user-foreign roots and symlinks. `--cache-report` adds one
+JSON activity line to stderr (separate from deterministic declaration metadata).
+Every hit still parses and validates with Clang; only graph normalization is
+cached, using fresh AST/input/tool fingerprints. Native cached code is never
+loaded. Corrupt entries rebuild atomically; requested cache/storage failures exit
+3 with `complete=false`. Cache capacity is not automatically evicted or bounded
+across entries; callers manage the directory. The cache assumes a trusted local
+user and Linux `/proc`; it is not a shared untrusted artifact store or a sandbox.
+
+`ExtractOptions::cache_directory` and the two-argument
+`extract_c11(options, CacheReport&)` expose the same behavior to SDK users.
+The old one-argument function remains available. `--max-types`,
+`--max-declarations`, `--max-depth`, `--max-input-bytes`, `--max-entries`, and
+`--max-cache-bytes` expose extraction budgets. See the
+[cache design and verification](manual/discovery-cache.md) for exact guarantees
+and remaining P0.1 work. No parse-time or performance improvement is claimed.
+
+### Semantic contract validation
+
+```sh
+build-discovery/exoml/exoml-bind validate \
+  --decl discovery.cdecl.json \
+  --contract example.exocontract.json
+# Exit 0: valid; exit 3: validation failures (diagnostics on stderr).
+```
+
+The `validate` subcommand reads a discovery JSON (output of `extract`) and a
+`*.exocontract.json` sidecar, validates the contract against the CDecl IR, and
+reports Gate B violations. `--out FILE` writes deterministic normalized
+contract JSON. The contract model, sidecar format and validation rules are in
+[semantic contracts](manual/semantic-contracts.md). C++ clients use
+`<exoml/Contract.hpp>`: `parse_contract_sidecar`, `validate_contract`,
+`serialize_contract`, `project_to_ownership` and `is_safe_for_export`.
 
 ## Language and CLI
 
