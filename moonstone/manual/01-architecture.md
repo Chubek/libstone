@@ -18,7 +18,15 @@ Create `Problem{Grammar,examples,budget,predicate}`, call `solve`; the finite re
 
 ## ExoML
 
-`Parser` recognizes `NAME ~setconst! Service:Name(args);`, `~setvar!`, `~get!`, and `~hatch!`. `Interpreter::register_service` supplies callbacks. `enable_hatch` plus `allow_service` and `~hatch!` are required for privileged services. This explicitly limits accidental calls but does not isolate native code in a process sandbox. The separate `StaticFFI.hpp` provides a declaration model and validation only.
+`Parser` uses generated Aurocks/ASDL code for `NAME ~setconst! Service:Name(args);`,
+`~setvar!`, `~get!`, and `~hatch!`, preserving source locations and enforcing input
+budgets. `register_service` supplies generic callbacks; `bind_native` deduces
+supported C/C++ signatures with checked conversions. `StaticLibrary` installs
+selected/renamed exports atomically. Privileged services require `enable_hatch`,
+`allow_service` and `~hatch!`; this is not process isolation. `StaticFFI.hpp`
+validates declarations and emits compiler-checked bindings, ABI checks/probes
+and reflection JSON. `install_static_ffi` exposes an in-memory workspace.
+Link `Moonstone::ExoML`; see `exoml/README.md` and `exoml/STATUS.md`.
 
 ## Prolific
 

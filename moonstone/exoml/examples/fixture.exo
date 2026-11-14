@@ -1,0 +1,14 @@
+-- A complete declaration-to-wrapper example. No compiler or file access in DSL.
+M ~setconst! StaticFFI:Module("Script");
+H ~get! StaticFFI:Header($M, "fixture.h");
+F ~get! StaticFFI:Function($M, "exoml_add", "int", ["int", "int"]);
+R ~get! StaticFFI:Rename($M, "exoml_add", "Add");
+P ~get! StaticFFI:Policy($M, "exoml_add", false, false, false);
+C ~get! StaticFFI:Constant($M, "Answer", 42);
+L ~get! StaticFFI:Layout($M, "struct exoml_pair");
+T ~get! StaticFFI:Field($M, "struct exoml_pair", "tag");
+V ~get! StaticFFI:Field($M, "struct exoml_pair", "value");
+Source ~get! StaticFFI:Generate($M);
+Check ~get! StaticFFI:Check($M);
+Probe ~get! StaticFFI:Probe($M);
+Manifest ~get! StaticFFI:Describe($M);

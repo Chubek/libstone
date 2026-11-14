@@ -1,25 +1,74 @@
 #pragma once
-#if __has_include("../../../core/SafetyEffects.hpp")
-#include "../../../core/SafetyEffects.hpp"
-#else
-#include <moonstone/core/SafetyEffects.hpp>
-#endif
-#include <regex>
+#include "AutoBind.hpp"
+
 namespace moonstone::exoml {
-// A typed FFI declaration *model*, not a C parser or calling-convention engine.
-// Feed validated declarations from cparser-iso11/ucpp via an external adapter.
-struct CParameter {std::string name,c_type;};
-struct CFunction {std::string name,return_type;std::vector<CParameter> parameters;OwnershipContract ownership;bool variadic=false;};
-struct BindingModule {std::string name;std::vector<std::string> headers;std::vector<CFunction> functions;};
-inline std::vector<std::string> validate_binding(const BindingModule& m){
- std::vector<std::string> errors;auto identifier=[](const std::string& s){return !s.empty()&&(std::isalpha((unsigned char)s[0])||s[0]=='_')&&std::all_of(s.begin()+1,s.end(),[](unsigned char c){return std::isalnum(c)||c=='_';});};
- if(!identifier(m.name))errors.push_back("invalid module name");std::set<std::string> names;
- for(auto& f:m.functions){if(!identifier(f.name)||!names.insert(f.name).second)errors.push_back("invalid or duplicate function: "+f.name);if(f.return_type.empty())errors.push_back("missing return type: "+f.name);
-  std::set<std::string> params;for(auto& p:f.parameters){if(!identifier(p.name)||!params.insert(p.name).second||p.c_type.empty())errors.push_back("invalid parameter in "+f.name);}
-  for(auto i:f.ownership.consumed_arguments)if(i>=f.parameters.size())errors.push_back("consumed index out of range: "+f.name);
-  for(auto i:f.ownership.borrowed_arguments)if(i>=f.parameters.size())errors.push_back("borrowed index out of range: "+f.name);
-  for(auto i:f.ownership.consumed_arguments)if(f.ownership.borrowed_arguments.count(i))errors.push_back("argument both consumed and borrowed: "+f.name);
- }
- return errors;
-}
-}
+// Validated declarations, not a lexical C parser or ABI-layout inference engine.
+struct CParameter {
+    std::string name, c_type;
+};
+struct CFunction {
+    std::string name, return_type;
+    std::vector<CParameter> parameters;
+    OwnershipContract ownership;
+    bool variadic = false;
+    std::string exported_name;
+    bool privileged = true;
+    bool thread_affine = false;
+    bool c_strings = false;
+    std::string documentation;
+    SourceSpan source;
+};
+struct BindingConstant {
+    std::string name;
+    Value value;
+};
+struct FieldLayout {
+    std::string name;
+    std::optional<std::size_t> offset;
+};
+struct RecordLayout {
+    std::string c_type;
+    std::optional<std::size_t> size, alignment;
+    std::vector<FieldLayout> fields;
+};
+struct BindingModule {
+    std::string name;
+    std::vector<std::string> headers;
+    std::vector<CFunction> functions;
+    std::vector<BindingConstant> constants;
+    std::vector<RecordLayout> layouts;
+};
+
+struct BindingLimits {
+    std::size_t functions = 4096;
+    std::size_t parameters = 128;
+    std::size_t text_bytes = 1024 * 1024;
+};
+Diagnostics binding_diagnostics(const BindingModule &module, BindingLimits limits = {});
+std::vector<std::string> validate_binding(const BindingModule &module);
+// Deterministic JSON preserving ownership/effects and target expectations.
+std::string describe_binding(const BindingModule &module);
+// C++20 header exposing exoml_generated::bind_<module>(Interpreter&).
+// Includes the real headers, asserts signatures/layout expectations, and
+// installs the whole module atomically. Variadic/escaping bindings are rejected.
+std::string generate_bindings(const BindingModule &module);
+// Standalone C++20 translation unit: compile to verify signatures/layouts.
+std::string generate_abi_checks(const BindingModule &module);
+// Standalone C++20 program printing compiler-measured layout JSON.
+std::string generate_abi_probe(const BindingModule &module);
+
+// Shared state is retained by installed callbacks; builders need external
+// synchronization. Services return declarations/source text, never execute it.
+class StaticFFI {
+    std::map<std::string, BindingModule> modules_;
+
+  public:
+    void add(BindingModule module);
+    const BindingModule &module(const std::string &name) const;
+    std::vector<std::string> modules() const;
+    void install(Interpreter &interpreter) const;
+};
+// Installs an owned declaration workspace and pure Types/Reflection utilities.
+// See stdlib/README.md for exact service signatures.
+void install_static_ffi(Interpreter &interpreter);
+} // namespace moonstone::exoml

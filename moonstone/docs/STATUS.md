@@ -86,8 +86,11 @@ under `/tmp/opencode` in the implementation session for detailed logs.
   independently compiler-validated generated repairs. Basic SARIF currently
   lacks comprehensive multiline/related/fix data; SourceManager byte columns
   must not be mistaken for SARIF UTF-16 columns on non-ASCII text.
-- Generated ExoML grammar/ASDL frontend, full stdlib, C11 preprocessing/parsing,
-  target ABI probes, real FFI, REPL, native bindings and process-isolated plugins.
+- ExoML's remaining language/stdlib, C11 preprocessing/parsing, dynamic FFI and
+  process-isolated plugins. A subsequent static-binding increment implements
+  generated grammar/ASDL parsing, typed native auto-binding, generated wrappers,
+  ABI checks/probes, declaration services and CLI/line REPL; see
+  `../exoml/STATUS.md` for its separate verification inventory.
 - Full cross-platform/root acceptance, vendor revision locking, fuzz corpus,
   benchmarks, generated API documentation and independent security audit.
 

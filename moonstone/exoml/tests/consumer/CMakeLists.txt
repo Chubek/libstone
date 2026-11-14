@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(ExoMLInstalledConsumer LANGUAGES CXX)
+find_package(MoonstoneExoML CONFIG REQUIRED)
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE Moonstone::ExoML)
+enable_testing()
+add_test(NAME installed_consumer COMMAND consumer)

@@ -1,0 +1,11 @@
+function(run)
+  execute_process(COMMAND ${ARGV} RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Package test command failed: ${ARGV}\n${output}\n${error}")
+  endif()
+endfunction()
+run("${CMAKE_COMMAND}" --install "${BUILD}" --prefix "${WORK}/prefix" --component ExoML --config "${CONFIG}")
+run("${CMAKE_COMMAND}" -S "${SOURCE}" -B "${WORK}/consumer"
+  "-DCMAKE_PREFIX_PATH=${WORK}/prefix" "-DCMAKE_CXX_COMPILER=${CXX}" "-DCMAKE_CXX_FLAGS=${FLAGS}")
+run("${CMAKE_COMMAND}" --build "${WORK}/consumer" --config "${CONFIG}")
+run("${CMAKE_CTEST_COMMAND}" --test-dir "${WORK}/consumer" -C "${CONFIG}" --output-on-failure)

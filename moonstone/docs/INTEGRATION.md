@@ -51,6 +51,17 @@ recv-only cases; one-shot continuations are callbacks, not actual call/cc;
 and `weaver` identifies spill slots but does not generate native async frames.
 Read `plaid/AGENTS.md` before extending these semantics.
 
+## ExoML static integration
+
+`Moonstone::ExoML` links the compiled interpreter, generated Aurocks/ASDL
+frontend, typed StaticFFI wrappers and declaration services. The generators
+run offline from `scripts/`; their helper symbols are prefixed to coexist with
+other generated parsers. Native calls use actual compiler function types.
+Generated-code tests link a C11 fixture and independently compile ABI probes
+and intentional signature/layout mismatches. This path does not depend on
+ExolangTk's unimplemented `ffi_call`, infer C layouts, or parse C headers.
+See `exoml/README.md` and `exoml/STATUS.md` for exact contracts and open adapters.
+
 ## Prolific integration
 
 `MOONSTONE_BUILD_PROLIFIC` enables `Moonstone::Prolific` and
