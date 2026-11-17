@@ -12,6 +12,8 @@
 #include <fstream>
 #include <stdexcept>
 #include <limits>
+#include <sstream>
+#include <iomanip>
 
 namespace qld::detail {
 
@@ -63,6 +65,25 @@ bool fileMatches(const std::string& pattern, const std::string& label) {
     return true;
   // Suffix match for patterns like "*crt*.o".
   return false;
+}
+
+// GNU attributes select an unassigned section if any positive flag matches
+// and no flag following '!' matches. They are selectors, not CPU permissions.
+bool regionMatches(const std::string& attrs, uint32_t flags, bool noload) {
+  if (attrs.empty()) return false;
+  bool negative = false, positive = false, matched = false;
+  for (unsigned char ch : attrs) {
+    char c = char(std::tolower(ch));
+    if (c == '!') { negative = true; continue; }
+    bool hit = c == 'r' ? !(flags & qbfd::sec::Writable) :
+               c == 'w' ? bool(flags & qbfd::sec::Writable) :
+               c == 'x' ? bool(flags & (qbfd::sec::Code | qbfd::sec::Exec)) :
+               c == 'a' ? bool(flags & qbfd::sec::Alloc) :
+               (c == 'i' || c == 'l') ? !noload && !(flags & qbfd::sec::Bss) : false;
+    if (negative && hit) return false;
+    if (!negative) { positive = true; matched |= hit; }
+  }
+  return !positive || matched;
 }
 
 struct EvalCtx {
@@ -395,6 +416,13 @@ bool runScript(LinkState& state, std::string& error) try {
   // MEMORY regions.
   std::map<std::string, std::pair<uint64_t, uint64_t>> mem;  // name->(org,len)
   std::map<std::string, uint64_t> memCursor;
+  std::map<std::string, std::string> aliases;
+  auto regionName = [&](const std::string& name) -> std::string {
+    auto alias = aliases.find(name);
+    std::string canonical = alias == aliases.end() ? name : alias->second;
+    if (!mem.count(canonical)) throw std::runtime_error("unknown MEMORY region: " + name);
+    return canonical;
+  };
   {
     EvalCtx ctx;
     ctx.syms = &state.symAddr;
@@ -407,7 +435,27 @@ bool runScript(LinkState& state, std::string& error) try {
       mem[m.name] = {org, len};
       memCursor[m.name] = org;
     }
+    for (const auto& [alias, target] : sf.regionAliases) {
+      if (alias.empty() || mem.count(alias) || aliases.count(alias))
+        throw std::runtime_error("duplicate MEMORY region/alias: " + alias);
+      aliases[alias] = regionName(target);
+      mem[alias] = mem.at(aliases.at(alias)); // ORIGIN/LENGTH aliases, same placement cursor.
+    }
   }
+  auto automaticRegion = [&](uint32_t flags, bool noload) -> std::string {
+    if (!(flags & qbfd::sec::Alloc)) return {};
+    for (const auto& m : sf.memory)
+      if (regionMatches(m.attrs, flags, noload)) return m.name;
+    return {};
+  };
+  auto commitRegion = [&](const OutputSection& out) {
+    if (out.region.empty()) return;
+    const auto [origin, length] = mem.at(out.region);
+    if (out.vma < origin || out.size > length || out.vma - origin > length - out.size)
+      throw std::runtime_error("MEMORY region overflow: " + out.region);
+    // Explicit addresses must not rewind placement of later sections.
+    memCursor[out.region] = std::max(memCursor[out.region], out.vma + out.size);
+  };
 
   bool relocatable = state.options.mode == Mode::Relocatable;
   uint64_t base = state.options.hasBase
@@ -462,6 +510,7 @@ bool runScript(LinkState& state, std::string& error) try {
   ctx.dot = dot;
 
   uint32_t nextIndex = 1;
+  std::set<std::string> placedCommons;
   for (const auto& st : sf.sectionsBody) {
     if (auto* a = dynamic_cast<script::AssignStmt*>(st.get())) {
       ctx.dot = dot;
@@ -524,6 +573,8 @@ bool runScript(LinkState& state, std::string& error) try {
     if (sec.lma || !sec.lmaRegion.empty()) throw std::runtime_error("AT/LMA layouts are unsupported by the ELF segment writer");
     if (sec.name == "/DISCARD/") {
       for (const auto& pat : sec.inputs) {
+        if (pat.action != script::SectionPattern::Action::Input || pat.section == "COMMON")
+          throw std::runtime_error("unsupported directive/COMMON selector in /DISCARD/");
         for (size_t hit : takeMatches(pat)) {
           consumed[hit] = true;
           state.inputSections[hit].kept = false;
@@ -531,14 +582,34 @@ bool runScript(LinkState& state, std::string& error) try {
       }
       continue;
     }
+    uint32_t inputFlags = 0;
+    bool commonInput = false;
+    for (const auto& pat : sec.inputs) if (pat.action == script::SectionPattern::Action::Input) {
+      for (auto hit : takeMatches(pat)) inputFlags |= state.inputSections[hit].section.flags;
+      if (pat.section == "COMMON") {
+        if (!pat.file.empty() && pat.file != "*")
+          throw std::runtime_error("file-selective COMMON allocation is unsupported; use *(COMMON)");
+        for (const auto& [name, d] : state.defs) if (d.common && !placedCommons.count(name)) commonInput = true;
+      }
+    }
+    if (commonInput) inputFlags |= qbfd::sec::Alloc | qbfd::sec::Writable | qbfd::sec::Bss;
+    // Script-created bytes are allocated even without input contributions.
+    if (!inputFlags) {
+      inputFlags = qbfd::sec::Alloc;
+      if (sec.name.starts_with(".data") || sec.name.starts_with(".bss")) inputFlags |= qbfd::sec::Writable;
+      if (sec.name.starts_with(".bss")) inputFlags |= qbfd::sec::Bss;
+      if (sec.name.starts_with(".text")) inputFlags |= qbfd::sec::Code | qbfd::sec::Exec;
+    }
+    std::string region = sec.region.empty() ?
+        (sec.address ? "" : automaticRegion(inputFlags, sec.type == "NOLOAD")) : regionName(sec.region);
     // Address: explicit expression, region cursor, or current dot.
     uint64_t vma = dot;
     ctx.dot = dot;
     if (sec.address) vma = evalExpr(sec.address.get(), ctx);
-    if (!sec.region.empty()) {
-      auto it = memCursor.find(sec.region);
+    if (!region.empty()) {
+      auto it = memCursor.find(region);
       if (it == memCursor.end()) {
-        error = "unknown memory region `" + sec.region + "'";
+        error = "unknown MEMORY region: " + region;
         return false;
       }
       if (!sec.address) vma = it->second;
@@ -550,11 +621,19 @@ bool runScript(LinkState& state, std::string& error) try {
     uint64_t requiredAlignment = 1;
     for (const auto &pat : sec.inputs) if (pat.action == script::SectionPattern::Action::Input)
       for (auto hit : takeMatches(pat)) requiredAlignment = std::max(requiredAlignment, state.inputSections[hit].section.alignment);
+    if (commonInput) for (const auto& [name, d] : state.defs)
+      if (d.common && !placedCommons.count(name)) requiredAlignment = std::max(requiredAlignment, d.commonAlign);
+    if (sec.alignExpr) {
+      uint64_t alignment = evalExpr(sec.alignExpr.get(), ctx);
+      if (!alignment || (alignment & (alignment - 1))) throw std::runtime_error("section ALIGN must be a power of two");
+      requiredAlignment = std::max(requiredAlignment, alignment);
+    }
     if (!sec.address) vma = alignUp(vma, requiredAlignment);
     else if (vma % requiredAlignment) throw std::runtime_error("output section address violates input alignment: " + sec.name);
     // Gather members.
     OutputSection out;
     out.name = sec.name;
+    out.region = region;
     out.index = nextIndex++;
     out.alignment = requiredAlignment;
     // Type NOLOAD: BSS-like, occupies VMA but no file bytes.
@@ -607,6 +686,19 @@ bool runScript(LinkState& state, std::string& error) try {
         }
         continue;
       }
+      if (pat.section == "COMMON") {
+        for (auto& [name, d] : state.defs) {
+          if (!d.common || placedCommons.count(name)) continue;
+          off = alignUp(off, std::max<uint64_t>(d.commonAlign, 1));
+          if (d.commonSize > UINT64_MAX - off || off > UINT64_MAX - vma)
+            throw std::runtime_error("COMMON section overflow");
+          state.symAddr[name] = vma + off;
+          d.commonOutputSection = out.index;
+          off += d.commonSize;
+          placedCommons.insert(name);
+          out.flags |= qbfd::sec::Alloc | qbfd::sec::Writable | qbfd::sec::Bss;
+        }
+      }
       for (size_t hit : takeMatches(pat)) {
         consumed[hit] = true;
         auto& in = state.inputSections[hit];
@@ -631,7 +723,7 @@ bool runScript(LinkState& state, std::string& error) try {
         break;
       }
     }
-    out.bss = noload || (!scriptBytes && !out.inputs.empty() && !anyFile);
+    out.bss = noload || (!scriptBytes && (!out.inputs.empty() || commonInput) && !anyFile);
     // Empty script sections (no inputs) still exist with size 0 at dot.
     out.vma = vma;
     out.alloc = true;  // script sections are alloc by default
@@ -658,11 +750,7 @@ bool runScript(LinkState& state, std::string& error) try {
     secAlignment[out.name] = out.alignment;
     if (out.size > UINT64_MAX - vma) throw std::runtime_error("section address overflow");
     dot = vma + out.size;
-    if (!sec.region.empty()) {
-      auto [origin, length] = mem.at(sec.region);
-      if (vma < origin || dot > origin + length) throw std::runtime_error("MEMORY region overflow: " + sec.region);
-      memCursor[sec.region] = dot;
-    }
+    commitRegion(out);
     for (const auto &[name, d] : state.defs) if (d.symbol.section) {
       for (size_t idx : out.inputs) {
         const auto &in = state.inputSections[idx];
@@ -715,8 +803,6 @@ bool runScript(LinkState& state, std::string& error) try {
         }
       }
       out.bss = !anyFile && !out.inputs.empty();
-      out.vma = alignUp(dot, out.alignment);
-      dot = out.vma + out.size;
       out.fileSize = out.bss ? 0 : out.size;
       out.alloc = (out.flags & qbfd::sec::Alloc) != 0;
       if (out.inputs.empty()) out.alloc = false;
@@ -724,6 +810,11 @@ bool runScript(LinkState& state, std::string& error) try {
         out.alloc = false;
       out.executable = (out.flags & (qbfd::sec::Code | qbfd::sec::Exec)) != 0;
       out.writable = (out.flags & qbfd::sec::Writable) != 0;
+      out.region = automaticRegion(out.flags, out.bss);
+      out.vma = alignUp(out.region.empty() ? dot : memCursor.at(out.region), out.alignment);
+      if (out.size > UINT64_MAX - out.vma) throw std::runtime_error("orphan section address overflow");
+      if (out.alloc) dot = out.vma + out.size;
+      commitRegion(out);
       secAddr[out.name] = {out.vma, out.size};
       state.outSections.push_back(std::move(out));
     }
@@ -815,7 +906,7 @@ bool runScript(LinkState& state, std::string& error) try {
   {
     bool need = false;
     for (const auto& [n, d] : state.defs)
-      if (d.common) need = true;
+      if (d.common && !placedCommons.count(n)) need = true;
     if (need && !secAddr.count(".bss")) {
       OutputSection b;
       b.name = ".bss";
@@ -826,7 +917,10 @@ bool runScript(LinkState& state, std::string& error) try {
       b.alignment = 8;
       b.alloc = true;
       b.bss = true;
-      b.vma = dot;
+      for (const auto& [name, d] : state.defs)
+        if (d.common && !placedCommons.count(name)) b.alignment = std::max(b.alignment, d.commonAlign);
+      b.region = automaticRegion(b.flags, true);
+      b.vma = alignUp(b.region.empty() ? dot : memCursor.at(b.region), b.alignment);
       b.fileSize = 0;
       b.size = 0;
       state.outSections.push_back(std::move(b));
@@ -836,12 +930,17 @@ bool runScript(LinkState& state, std::string& error) try {
       if (o.name != ".bss") continue;
       uint64_t tail = o.size;
       for (auto& [name, d] : state.defs) {
-        if (!d.common) continue;
+        if (!d.common || placedCommons.count(name)) continue;
         tail = alignUp(tail, d.commonAlign ? d.commonAlign : 1);
+        if (tail > UINT64_MAX - o.vma || d.commonSize > UINT64_MAX - tail)
+          throw std::runtime_error("COMMON section overflow");
         state.symAddr[name] = o.vma + tail;
+        d.commonOutputSection = o.index;
         tail += d.commonSize;
+        placedCommons.insert(name);
       }
       o.size = tail;
+      commitRegion(o);
       secAddr[".bss"] = {o.vma, o.size};
       break;
     }
@@ -862,6 +961,25 @@ bool runScript(LinkState& state, std::string& error) try {
   {
     auto it = state.symAddr.find(state.options.entry);
     state.entryAddr = it == state.symAddr.end() ? 0 : it->second;
+  }
+  if (!state.options.mapFile.empty()) {
+    std::ostringstream map;
+    map << "Memory Configuration\n\nName Origin Length\n" << std::hex << std::showbase;
+    for (const auto& m : sf.memory)
+      map << m.name << ' ' << mem.at(m.name).first << ' ' << mem.at(m.name).second << ' ' << m.attrs << '\n';
+    for (const auto& [alias, target] : aliases) map << alias << " -> " << target << '\n';
+    map << "\nSection Mapping\n\nName Address Size FileOffset Region\n";
+    for (const auto& o : state.outSections) {
+      map << o.name << ' ' << o.vma << ' ' << o.size << ' ' << o.fileOffset << ' ' << o.region << '\n';
+      for (auto idx : o.inputs) {
+        const auto& in = state.inputSections[idx];
+        map << "  " << state.objects[in.objectIndex].label << '(' << in.section.name << ") "
+            << o.vma + in.outOffset << ' ' << in.section.size << '\n';
+      }
+    }
+    map << "\nSymbols\n";
+    for (const auto& [name, address] : state.symAddr) map << name << ' ' << address << '\n';
+    state.mapText = map.str();
   }
   return true;
 } catch (const std::exception &e) {

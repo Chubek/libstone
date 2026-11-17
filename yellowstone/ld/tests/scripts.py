@@ -109,6 +109,97 @@ alternate: mov $9, %edi
     run(ld, '-T', str(script), '-o', str(exe))
     run(str(exe), expected=13)
     obj = original_obj
+    # Attribute-selected regions and aliases share canonical allocation cursors.
+    script.write_text('''
+ENTRY(_start)
+MEMORY {
+ ROM (rx) : ORIGIN = 0x401000, LENGTH = 4K
+ RAM (rw!x) : ORIGIN = 0x405000, LENGTH = 4K
+}
+REGION_ALIAS("CODE", ROM)
+SECTIONS {
+ .text : { *(.text) } >CODE
+ .meta : ALIGN(32) { LONG((1 + 2 * 3 << 2) == 28 ? 42 : 0) }
+ .data : { *(.data) }
+}
+ASSERT(ADDR(.data) == ORIGIN(RAM), "automatic region mapping")
+ASSERT(ORIGIN(CODE) == ORIGIN(ROM), "region alias query")
+ASSERT(ADDR(.meta) % 32 == 0, "section alignment")
+''')
+    mapfile = root / 'layout.map'
+    run(ld, '-T', str(script), str(obj), '--Map', str(mapfile), '-o', str(exe))
+    run(str(exe), expected=7)
+    assert section(exe, '.data')[1] == 0x405000
+    assert section(exe, '.meta')[0] == b'\x2a\0\0\0'
+    assert 'Memory Configuration' in mapfile.read_text() and 'RAM' in mapfile.read_text()
+    # Native partial links must preserve script-emitted bytes, not just inputs.
+    partial = root / 'script-partial.o'
+    run(ld, '-r', '--script-text', 'SECTIONS { .text : { *(.text) } .meta : { LONG(42) } }',
+        str(obj), '-o', str(partial))
+    assert section(partial, '.meta')[0] == b'\x2a\0\0\0'
+    run(ld, str(partial), '-o', str(exe))
+    run(str(exe), expected=7)
+    # COMMONs map into the requested NOLOAD section, with alignment, symbol
+    # section identity, and the same memory-region overflow checks as inputs.
+    common_src, common_obj = root / 'common.s', root / 'common.o'
+    common_src.write_text('''
+.comm shared,64,64
+.text
+.global _start
+_start: mov shared(%rip), %rdi
+    add $19, %rdi
+    mov $60, %eax
+    syscall
+''')
+    run(cc, '-c', str(common_src), '-o', str(common_obj))
+    common_layout = '''ENTRY(_start)
+MEMORY { ROM (rx) : ORIGIN = 0x401000, LENGTH = 4K
+         RAM (rw!x) : ORIGIN = 0x405000, LENGTH = 4K }
+SECTIONS { .text : { *(.text) }
+           .arena (NOLOAD) : { *(COMMON) } >RAM }
+'''
+    run(ld, '--script-text', common_layout, str(common_obj), '-o', str(exe))
+    run(str(exe), expected=19)
+    assert section(exe, '.arena')[1] % 64 == 0
+    symtab, _ = section(exe, '.symtab')
+    strings, _ = section(exe, '.strtab')
+    common_symbols = []
+    for off in range(0, len(symtab), 24):
+        name, info, other, shndx, value, size = struct.unpack_from('<IBBHQQ', symtab, off)
+        if strings[name:].split(b'\0')[0] == b'shared':
+            common_symbols.append((shndx, value, size))
+    assert common_symbols == [(2, section(exe, '.arena')[1], 64)], common_symbols
+    p = subprocess.run([ld, '--script-text', common_layout.replace('LENGTH = 4K }', 'LENGTH = 32 }'),
+                        str(common_obj), '-o', str(exe)], capture_output=True, text=True)
+    assert p.returncode and 'MEMORY region overflow' in p.stderr, p.stderr
+    common_src.write_text('''
+.text
+.global _start
+_start: mov $60, %eax; mov $0, %edi; syscall
+.section .payload.a,"a"
+.byte 1
+.section .payload.b,"a"
+.byte 2
+.section .extra.a,"a"
+.byte 3
+''')
+    run(cc, '-c', str(common_src), '-o', str(common_obj))
+    run(ld, '--script-text', 'SECTIONS { .text : { *(.text) } .picked : { *(.payload.? .extra*) } }',
+        str(common_obj), '-o', str(exe))
+    run(str(exe))
+    assert section(exe, '.picked')[0] == b'\x01\x02\x03'
+    lua.write_text('''
+qld.entry('_start')
+qld.memory('ROM', '0x401000', '4K', 'rx')
+qld.memory('RAM', '0x405000', '4K', 'rw!x')
+qld.region_alias('CODE', 'ROM')
+qld.section('.text', {patterns={'.text', '.text.*'}, region='CODE', keep=true})
+qld.section('.data', {patterns={'.data'}, alignment=32, region='RAM'})
+qld.section('.bss', {patterns={'.bss'}, region='RAM', noload=true})
+''')
+    run(ld, '-T', str(lua), str(obj), '-o', str(exe))
+    run(str(exe), expected=7)
+    assert section(exe, '.data')[1] == 0x405000
     for text, diagnostic in [
         ('SECTIONS { .text : { *(.text) } x = MYSTERY(3); }', 'unknown linker expression'),
         ('SECTIONS { .text : { *(.text) } x = 1 / 0; }', 'division by zero'),
@@ -121,7 +212,19 @@ alternate: mov $9, %edi
         ('MEMORY { tiny : ORIGIN = 0x401000, LENGTH = 1 } SECTIONS { .text : { *(.text) } >tiny }', 'MEMORY region overflow'),
         ('SECTIONS { .text 0x10 : { *(.text) } }', 'overlaps ELF headers'),
         ('--!lua\nerror("lua-error-marker")', 'lua-error-marker'),
+        ('MEMORY { RAM : ORIGIN = 0x401000, LENGTH = 4K } REGION_ALIAS("CODE", missing) SECTIONS { .text : { *(.text) } >CODE }', 'unknown MEMORY region'),
+        ('MEMORY { RAM : ORIGIN = 0x401000, LENGTH = 4K } REGION_ALIAS("RAM", RAM) SECTIONS { .text : { *(.text) } }', 'duplicate MEMORY'),
+        ('MEMORY { RAM : ORIGIN = 1, ORIGIN = 2 }', 'duplicate MEMORY'),
+        ('MEMORY { RAM (q) : ORIGIN = 1, LENGTH = 2 }', 'invalid MEMORY attributes'),
+        ('MEMORY { RAM : ORIGIN = 0x401000, LENGTH = 2 } REGION_ALIAS("A", RAM) SECTIONS { .text : { *(.text) } >A }', 'MEMORY region overflow'),
+        ('SECTIONS { .text : { *(.text) } .bss : { some.o(COMMON) } }', 'file-selective COMMON'),
+        ('SECTIONS { .text : { *(.text) } /DISCARD/ : { *(COMMON) } }', 'COMMON selector'),
     ]:
         p = subprocess.run([ld, '--script-text', text, str(obj), '-o', str(exe)], capture_output=True, text=True)
         assert p.returncode and diagnostic in p.stderr, (text, p.returncode, p.stderr)
+    examples = pathlib.Path(__file__).resolve().parents[1] / 'examples'
+    run(cc, '-c', str(examples / 'memory.s'), '-o', str(obj))
+    for name in ['memory.ld', 'memory.lua']:
+        run(ld, '-T', str(examples / name), str(obj), '-o', str(exe))
+        run(str(exe), expected=42)
 print('linker Lua/layout/relocation executable regressions passed')

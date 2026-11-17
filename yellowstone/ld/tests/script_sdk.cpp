@@ -23,6 +23,23 @@ qld.code('.text')
 )");
     check(lua.find("answer = 42;") != std::string::npos, "Lua SDK callback");
     check(bool(qld::checkScript(lua)), "Lua generated script parsing");
+    auto mapped = sdk.lua(R"(
+qld.memory('ROM', '0x401000', '4K', 'rx')
+qld.region_alias('CODE', 'ROM')
+qld.section('.text', {patterns={'.text', '.text.*'}, region='CODE', sort='name', keep=true})
+qld.section('.scratch', {patterns={'.bss'}, address='0x405000', noload=true})
+)");
+    check(bool(qld::checkScript(mapped)), "table section options parsing");
+    for (const char *bad : {
+        "qld.section('.text', {patterns={'.text'}, unknown=true})",
+        "qld.section('.text', 'x) } SECTIONS { .injected : { BYTE(7)')",
+        "qld.region_alias('bad) alias', 'RAM')",
+        "qld.memory('RAM', 0, 4096, 'rw)')",
+    }) {
+        bool rejected = false;
+        try { sdk.lua(bad); } catch (const std::runtime_error&) { rejected = true; }
+        check(rejected, "invalid Lua mapping builder accepted");
+    }
     for (const char *bad : {"@unknown\n", "@symbol one\n"}) {
         bool failed = false; try { sdk.preprocess(bad); } catch (const std::runtime_error &) { failed = true; }
         check(failed, "invalid SDK invocation accepted");

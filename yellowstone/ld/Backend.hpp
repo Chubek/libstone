@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+namespace qld { class ScriptSDK; }
 namespace qld::detail {
 struct LinkOptions;
 struct LinkState;
@@ -16,6 +17,9 @@ Backend selectBackend(const LinkOptions&);
 Backend invocationBackend(const std::vector<std::string>& arguments);
 const char *defaultPeLinker();
 const char *defaultMachOLinker();
+const char *defaultElfLinker();
+bool needsElfBackend(const LinkOptions&);
+bool linkElf(LinkState&, std::vector<uint8_t>&, std::string&, const ScriptSDK&);
 bool linkPe(LinkState&, std::vector<uint8_t>&, std::string&);
 bool linkMachO(LinkState&, std::vector<uint8_t>&, std::string&);
 

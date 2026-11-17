@@ -1,0 +1,8 @@
+qld.entry('_start')
+qld.memory('ROM', '0x401000', '4K', 'rx')
+qld.memory('RAM', '0x405000', '4K', 'rw!x')
+qld.region_alias('CODE', 'ROM')
+qld.section('.text', {patterns={'.text', '.text.*'}, region='CODE'})
+qld.section('.rodata', {patterns={'.rodata', '.rodata.*'}, region='ROM'})
+qld.section('.data', {patterns={'.data', '.data.*'}, region='RAM', alignment=16})
+qld.section('.bss', {patterns={'.bss', '.bss.*', 'COMMON'}, region='RAM', noload=true})

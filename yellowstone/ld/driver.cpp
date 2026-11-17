@@ -9,6 +9,7 @@
 #include "ScriptSDK.hpp"
 
 #include <fstream>
+#include <exception>
 
 namespace qld::detail {
 
@@ -30,7 +31,10 @@ static bool writeFile(const std::string& path, const std::vector<uint8_t>& b,
 }
 
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
-                 std::string& error) {
+                  std::string& error) {
+  try {
+    toolchain::checkDestinations(state.options.output, {state.options.mapFile});
+  } catch (const std::exception& e) { error = e.what(); return false; }
   switch (selectBackend(state.options)) {
     case Backend::ELF: return linkElf(state, out, error, ScriptSDK{});
     case Backend::PE: return linkPe(state, out, error);
@@ -77,7 +81,8 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
     std::vector<uint8_t> mb(m.begin(), m.end());
     std::string werr;
     if (!writeFile(state.options.mapFile, mb, werr)) {
-      state.warnings.push_back(werr);
+      error = werr;
+      return false;
     }
   }
   return true;

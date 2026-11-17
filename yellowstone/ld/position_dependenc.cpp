@@ -20,10 +20,6 @@ uint64_t alignUp(uint64_t v, uint64_t a) {
   return (v + m) & ~m;
 }
 
-bool isBssName(const std::string& n) {
-  return n == ".bss" || n == ".tbss" || n == ".sbss" || n == ".bss.rel.ro";
-}
-
 bool isTextName(const std::string& n) {
   return n == ".text" || n.starts_with(".text.") || n == ".init" ||
          n == ".fini" || n.starts_with(".init") || n.starts_with(".fini");
@@ -446,6 +442,7 @@ bool assignAddresses(LinkState& state, std::string& error) {
         if (!d.common) continue;
         tail = alignUp(tail, d.commonAlign ? d.commonAlign : 1);
         state.symAddr[name] = bss.vma + tail;
+        d.commonOutputSection = bss.index;
         tail += d.commonSize;
       }
       uint64_t added = tail - bss.size;

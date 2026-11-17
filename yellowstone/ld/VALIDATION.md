@@ -1,0 +1,150 @@
+# Linker validation — 2026-11-17/18
+
+Base LibStone revision: `803c23ca521d6c0ceb493450406fbcf185461a27`.
+Local changes in `novostone/ActionSemantics` and `third_party/libuv` were present
+before this work and were not changed by this linker pass.
+
+## Implemented slice
+
+- ELF now implements the shared `Backend.hpp` toolchain contract. Its duplicate
+  POSIX workspace/process/response implementation was removed; native argument
+  order, extension expansion and the C/C++ APIs remain intact.
+- ELF checks output kind, explicitly static dependencies/interpreter, ignored
+  options and image/map destination collisions before publishing results.
+- Aurocks expression grammar and ASDL arena AST are generated during the build.
+  The existing section/directive parser consumes the translated expression AST.
+  Failed/speculative parsing is arena-owned; concurrent parser entry is
+  serialized. The grammar was factored after the deep-invalid-input regression
+  exposed excessive backtracking.
+- MEMORY attributes select unassigned sections; REGION_ALIAS shares canonical
+  cursors and ORIGIN/LENGTH queries. Section ALIGN, COMMON/NOLOAD placement,
+  region overflow and input/output map reporting are exercised.
+- Lua/Kaguya builders expose the same mapping operations with ordered pattern
+  lists, alignment, NOLOAD, KEEP and sorting options.
+- Native partial links preserve script-emitted bytes. Empty file-backed
+  sections no longer mis-anchor BSS-only LOADs. Script-allocated COMMON symbol
+  section identities are preserved. Section wildcard assembly respects token
+  adjacency, including `?` and separate wildcard patterns.
+- No public C option structure layout changes; no vendor changes.
+
+## Environment and dependency identity
+
+Linux `x86_64-pc-linux-gnu`; GCC 16.2.1, Clang 22.1.8,
+GNU binutils/ld.bfd 2.47, Perl 5.42.2, Python 3.14.7.
+Lua is bundled 5.5.0; Kaguya uses the existing compatibility header.
+These dependencies are ordinary tracked source trees, not git submodules:
+
+| Directory | Git tree at base revision |
+| --- | --- |
+| `third_party/lua` | `65275619e7829b569bfb18dea624358aa17dbc91` |
+| `third_party/kaguya` | `fc814bd5d7f214240bd7abd03249dc4f87c48263` |
+| `third_party/metatk` | `706f36de28c3d1ea5191a7493f6d5ed61fc3e7d4` |
+
+Generator SHA-256:
+
+```text
+882d5c1ed69e46ef84488c86485bbec47f1237878d47c4bb58d1d039065f6396  scripts/aurocks.pl
+1d04c59d3c8f90565eefa0d661a9d4650ac56e8968eedba3e12fd1fadab4d0c1  scripts/asdl.pl
+```
+
+## Commands and results
+
+All commands run from the repository root. No root/superbuild or non-Linux host
+build is claimed.
+
+Baseline used the same Debug configuration with `QOBJFILE_WERROR=OFF`:
+**17 passed, 1 skipped**. The initial strict build found three pre-existing
+unused-function/parameter warnings in `position_dependenc.cpp` and `symbol.cpp`;
+this pass removes the dead private helpers and marks the unused parameter.
+The new wrong-ELF-kind test failed against the original backend (which accepted
+an ET_REL object as successful shared output).
+
+```sh
+cmake -S yellowstone -B /tmp/opencode/qld-debug \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-debug --parallel 5
+ctest --test-dir /tmp/opencode/qld-debug --output-on-failure
+
+cmake -S yellowstone -B /tmp/opencode/qld-release \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-release --parallel 5
+ctest --test-dir /tmp/opencode/qld-release --output-on-failure
+
+cmake -S yellowstone -B /tmp/opencode/qld-sanitize \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_C_FLAGS=-fsanitize=address,undefined \
+  -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-sanitize --parallel 5
+env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir /tmp/opencode/qld-sanitize --output-on-failure
+
+cmake -S yellowstone -B /tmp/opencode/qld-no-backends \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DYELLOWSTONE_ENABLE_ELF_BACKEND=OFF \
+  -DYELLOWSTONE_ENABLE_PE_BACKEND=OFF -DYELLOWSTONE_ENABLE_MACHO_BACKEND=OFF \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-no-backends --parallel 5
+ctest --test-dir /tmp/opencode/qld-no-backends --output-on-failure
+```
+
+| Configuration | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| GCC Debug, warnings as errors | 19 | 0 | 1 |
+| Clang Release, warnings as errors | 19 | 0 | 1 |
+| Clang ASan/UBSan + leak detection | 19 | 0 | 1 |
+| GCC Release, all three toolchain backends OFF | 17 | 0 | 1 |
+
+The skip is the existing `qbfd_source_notes` test: its local binutils source
+snapshot is unavailable.
+CTest logs are in each build's `Testing/Temporary/LastTest.log`. Sanitizers cover
+the built linker, Lua runtime and SDK tests; freestanding assembly fixtures and
+ordinary runtime-loader fixture DSOs are executed, not sanitizer-instrumented.
+
+The retained dynamic regression executes compiler-driver links, symbol
+versioning, TLS models/thread isolation, IFUNC, dlopen/dlclose, interposition,
+PLT binding, copy relocations, archive groups, ordered as-needed and Lua
+expansion. Existing PE/Mach-O tests cross-link and independently inspect
+outputs; this is not Windows/dyld runtime validation.
+
+`examples/memory.s` is assembled with each configured C compiler, linked with
+both `memory.ld` and `memory.lua`, and executed (exit 42) by `tests/scripts.py`.
+
+An installed C11 SDK consumer was also compiled, linked and executed:
+
+```sh
+cmake --install /tmp/opencode/qld-debug --prefix /tmp/opencode/qld-install
+cc -std=c11 -Wall -Wextra -Werror -pedantic \
+  -I/tmp/opencode/qld-install/include -c yellowstone/ld/examples/linker-sdk.c \
+  -o /tmp/opencode/qld-install/example.o
+c++ /tmp/opencode/qld-install/example.o -L/tmp/opencode/qld-install/lib \
+  -lqld -llibstone_script_lua -ldl -lm -pthread -o /tmp/opencode/qld-install/example
+/tmp/opencode/qld-install/example /tmp/opencode/qld-install/program
+/tmp/opencode/qld-install/program # expected exit 7; observed 7
+```
+
+## Remaining limits
+
+- This is not GNU ld parity or a new in-process dynamic-loader implementation.
+  ELF dynamic functionality remains a GNU-compatible toolchain dependency.
+- Only the expression part of the native script frontend is generated.
+  PHDRS, AT/LMA, VERSION, INSERT and other documented native-subset limitations
+  remain explicit diagnostics; GNU toolchain scripts have broader semantics.
+- Forward aliases, file-selective/discarded COMMON allocation and lazy
+  forward symbol/section evaluation are unsupported.
+- The static emitter's mapping is still a small fixed ELF segment model.
+  Memory attributes are selectors, not a protection/sandbox or general
+  embedded ROM/RAM load-address model. Shared code/data pages may require RWX.
+- The native partial linker is not a replacement for the toolchain's complete
+  COMDAT/TLS/architecture relocation support.
+- ELF kind checking distinguishes ET_EXEC/ET_DYN/ET_REL; it is not a separate
+  full PIE-versus-DSO structural verifier.
+- Auxiliary-file publication is not a multi-file atomic transaction.
+- No Windows-host, Darwin-host, fuzzing campaign or full repository build was
+  performed for this change set.

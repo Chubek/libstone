@@ -5,7 +5,23 @@
 # as C++ (LANGUAGE CXX) so it can use the header-only readers in ../qbfd/.
 # ld.hpp is the C++ wrapper over that C API.
 
+find_package(Perl REQUIRED)
+find_package(Threads REQUIRED)
+set(_qld_generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_command(
+  OUTPUT "${_qld_generated}/ldscript_expression.c" "${_qld_generated}/ldscript_ast.h"
+  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
+    "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/../../scripts"
+    "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUT=${_qld_generated}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateFrontend.cmake"
+  DEPENDS ldscript.g ldscript.asdl GenerateFrontend.cmake
+    ../../scripts/aurocks.pl ../../scripts/asdl.pl VERBATIM)
+add_custom_target(qld-frontend DEPENDS "${_qld_generated}/ldscript_expression.c"
+  "${_qld_generated}/ldscript_ast.h")
+
 add_library(qld STATIC
+  Expression.c
+  Expression.cpp
   archive.cpp
   binarizer.cpp
   discover_symbols.cpp
@@ -27,6 +43,9 @@ add_library(qld STATIC
   ScriptSDK.cpp
 )
 add_library(qobjld::qobjld ALIAS qld)
+add_dependencies(qld qld-frontend)
+target_include_directories(qld PRIVATE "${_qld_generated}")
+target_compile_features(qld PRIVATE c_std_11)
 
 set_source_files_properties(ld.c PROPERTIES LANGUAGE CXX)
 
@@ -57,6 +76,7 @@ target_include_directories(qld PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../qbfd
 )
 target_link_libraries(qld PUBLIC qbfd::qbfd)
+target_link_libraries(qld PRIVATE Threads::Threads)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/LibstoneLua.cmake")
 target_link_libraries(qld PRIVATE libstone_kaguya)
 install(FILES ScriptSDK.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qobjld)
@@ -69,6 +89,10 @@ if(QOBJFILE_WERROR)
 endif()
 
 if(YELLOWSTONE_BUILD_TESTS)
+  add_executable(qld-frontend-test tests/frontend.cpp)
+  target_link_libraries(qld-frontend-test PRIVATE qld Threads::Threads)
+  add_test(NAME qld-frontend COMMAND qld-frontend-test)
+  set_tests_properties(qld-frontend PROPERTIES TIMEOUT 30)
   if(YELLOWSTONE_BUILD_TOOLS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(qld-formats-api-test tests/formats_api.cpp)
@@ -92,6 +116,8 @@ if(YELLOWSTONE_BUILD_TESTS)
     add_test(NAME qld-script-executable COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
     if(YELLOWSTONE_ENABLE_ELF_BACKEND)
+      add_test(NAME qld-backend-hardening COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/backend_hardening.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
       add_executable(qld-elf-api-test tests/elf_api.cpp)
       target_link_libraries(qld-elf-api-test PRIVATE qld)
       add_executable(qld-elf-c-example examples/dynamic-sdk.c)

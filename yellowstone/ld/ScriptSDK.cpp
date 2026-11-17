@@ -124,13 +124,40 @@ function qld.input(s) qld.emit('INPUT(' .. quote(s) .. ')') end
 function qld.search_dir(s) qld.emit('SEARCH_DIR(' .. quote(s) .. ')') end
 function qld.define(s, value) qld.emit(name(s) .. ' = ' .. expr(value) .. ';') end
 function qld.provide(s, value) qld.emit('PROVIDE(' .. name(s) .. ' = ' .. expr(value) .. ');') end
-function qld.memory(s, origin, length)
-  qld.emit('MEMORY { ' .. name(s) .. ' : ORIGIN = ' .. expr(origin) .. ', LENGTH = ' .. expr(length) .. ' }')
+function qld.memory(s, origin, length, attributes)
+  assert(attributes == nil or (type(attributes) == 'string' and
+    attributes:match('^[rRwWxXaAiIlL!]+$')), 'invalid memory attributes')
+  qld.emit('MEMORY { ' .. name(s) .. (attributes and ' (' .. attributes .. ')' or '') ..
+    ' : ORIGIN = ' .. expr(origin) .. ', LENGTH = ' .. expr(length) .. ' }')
+end
+function qld.region_alias(alias, region)
+  qld.emit('REGION_ALIAS(' .. quote(name(alias)) .. ', ' .. name(region) .. ')')
 end
 function qld.section(s, pattern, address, region)
-  assert(type(pattern) == 'string' and not pattern:find('[{};%z]'), 'invalid section pattern')
+  local options = {}
+  if type(pattern) == 'table' then
+    assert(address == nil and region == nil, 'table section options cannot have positional options')
+    options = pattern
+    for key in pairs(options) do
+      assert(key == 'patterns' or key == 'address' or key == 'region' or key == 'alignment' or
+        key == 'noload' or key == 'keep' or key == 'sort', 'unknown section option: ' .. tostring(key))
+    end
+    address, region = options.address, options.region
+    assert(type(options.patterns) == 'table' and #options.patterns > 0, 'expected section patterns')
+    pattern = table.concat(options.patterns, ' ')
+  end
+  assert(type(pattern) == 'string' and #pattern > 0 and
+    pattern:match('^[%w_%.%*%?%$ %-]+$'), 'invalid section pattern')
+  local selector = '*(' .. pattern .. ')'
+  if options.sort then
+    assert(options.sort == 'name' or options.sort == 'alignment', 'invalid section sort')
+    selector = '*(SORT_BY_' .. string.upper(options.sort) .. '(' .. pattern .. '))'
+  end
+  if options.keep then selector = 'KEEP(' .. selector .. ')' end
   qld.emit('SECTIONS { ' .. name(s) .. ' ' .. (address and expr(address) or '') ..
-    ' : { *(' .. pattern .. ') } ' .. (region and '>' .. name(region) or '') .. ' }')
+    (options.noload and ' (NOLOAD)' or '') .. ' : ' ..
+    (options.alignment and 'ALIGN(' .. expr(options.alignment) .. ') ' or '') ..
+    '{ ' .. selector .. ' } ' .. (region and '>' .. name(region) or '') .. ' }')
 end
 function qld.assertion(condition, message)
   qld.emit('ASSERT(' .. expr(condition) .. ', ' .. quote(message) .. ');')

@@ -15,12 +15,6 @@ bool isCommon(const qbfd::Symbol& s) {
   return s.kind == qbfd::SymbolKind::Common;
 }
 
-bool isDefined(const qbfd::Symbol& s) {
-  if (s.flags & qbfd::sym::Undefined) return false;
-  if (isCommon(s)) return true;  // COMMON counts as defined for extraction
-  return true;
-}
-
 bool isGlobal(const qbfd::Symbol& s) {
   if (s.name.empty()) return false;
   if (s.kind == qbfd::SymbolKind::File ||
@@ -148,6 +142,7 @@ void addObjectSymbols(LinkState& state, size_t objectIndex,
 }
 
 bool resolveCommons(LinkState& state, std::string& error) {
+  (void)state;
   (void)error;
   // COMMONs are materialised as BSS contributions during layout
   // (position_dependenc.cpp); nothing to do here beyond keeping the table.

@@ -128,9 +128,6 @@ bool emitExecutable(const LinkState& state,
   };
   std::vector<OutSym> syms;
   syms.push_back({});
-  // Map output section name -> index (1-based incl. NULL).
-  std::map<std::string, uint32_t> secIndex;
-  for (const auto& o : state.outSections) secIndex[o.name] = o.index;
   // Deterministic order: sorted by name (defs is already sorted as std::map).
   for (const auto& [name, d] : state.defs) {
     OutSym s;
@@ -152,8 +149,7 @@ bool emitExecutable(const LinkState& state,
     if (d.symbol.flags & qbfd::sym::Absolute) {
       s.shndx = 0xfff1;  // SHN_ABS
     } else if (d.common) {
-      auto b = secIndex.find(".bss");
-      s.shndx = b == secIndex.end() ? 0 : b->second;
+      s.shndx = d.commonOutputSection.value_or(0);
     } else if (d.symbol.section) {
       // Find the output section containing that input section.
       uint32_t found = 0;
@@ -267,7 +263,7 @@ bool emitExecutable(const LinkState& state,
   Seg re{5, 0, 0, 0, 0, 0x1000}, rw{6, 0, 0, 0, 0, 0x1000};
   bool haveRe = false, haveRw = false;
   for (const auto& o : state.outSections) {
-    if (!o.alloc) continue;
+    if (!o.alloc || !o.size) continue;
     if (o.writable) {
       if (!haveRw) {
         rw.vaddr = o.vma;
@@ -293,12 +289,12 @@ bool emitExecutable(const LinkState& state,
     // Find min/max among matching sections.
     uint64_t loV = UINT64_MAX, hiV = 0, loF = UINT64_MAX, hiF = 0;
     for (const auto& o : state.outSections) {
-      if (!o.alloc) continue;
+      if (!o.alloc || !o.size) continue;
       bool match = writable ? o.writable : !o.writable;
       if (!match) continue;
       loV = std::min(loV, o.vma);
       hiV = std::max(hiV, o.vma + o.size);
-      if (!o.bss) {
+      if (!o.bss && o.fileSize) {
         loF = std::min(loF, o.fileOffset);
         hiF = std::max(hiF, o.fileOffset + o.fileSize);
       }
@@ -310,7 +306,9 @@ bool emitExecutable(const LinkState& state,
     s.vaddr = loV;
     s.memsz = hiV - loV;
     if (loF == UINT64_MAX) {
-      s.offset = loV;  // BSS-only (should not happen for RW-only check)
+      // A BSS-only LOAD needs congruence, not an offset at/after the end of
+      // the image. Zero-sized PROGBITS must not anchor its file mapping.
+      s.offset = loV % s.align;
       s.filesz = 0;
     } else {
       s.offset = loF;
@@ -494,7 +492,8 @@ bool emitRelocatable(const LinkState& state, std::vector<uint8_t>& out,
   for (size_t o = 0; o < state.outSections.size(); ++o) {
     const auto& sec = state.outSections[o];
     if (sec.bss) continue;
-    std::vector<uint8_t> buf(size_t(sec.size), 0);
+    std::vector<uint8_t> buf = sec.scriptData;
+    buf.resize(size_t(sec.size), 0);
     for (size_t idx : sec.inputs) {
       const auto& in = state.inputSections[idx];
       size_t n = in.contents.size();

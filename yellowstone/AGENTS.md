@@ -60,7 +60,15 @@ Use typed section actions and recorded input offsets for data/relocation layout.
 Keep unsupported linker-script semantics explicit rather than silently skipping
 them. Public behavior and examples are in `manual/19-scripts.md` and
 `manual/26-extension.md`; the current component Debug/Release/sanitizer report is
-`../sandstone/docs/assembler-linker-validation.md`.
+`ld/VALIDATION.md` (earlier assembler interoperability evidence remains in
+`../sandstone/docs/assembler-linker-validation.md`).
+
+Expression parsing uses repository-level `scripts/aurocks.pl` and `scripts/asdl.pl`
+via `ld/ldscript.g` and `ld/ldscript.asdl`; section/directive syntax remains
+recursive descent. Keep the generated C runtime symbol-prefixed and serialize
+its global parse state. MEMORY aliases must share allocation cursors and COMMON
+allocation must participate in bounds checks. ELF also uses the shared
+`Backend.hpp` toolchain helpers; preserve output-kind/static-output validation.
 
 ## PE/COFF and Mach-O linker backends
 

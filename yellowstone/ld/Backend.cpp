@@ -298,7 +298,13 @@ unsigned optionArity(const std::string& arg) {
     "-max_relative_cache_size_lto", "-mcpu", "-mllvm", "-non_global_symbols_no_strip_list",
     "-non_global_symbols_strip_list", "-prune_after_lto", "-prune_interval_lto",
     "-sub_library", "-sub_umbrella", "-umbrella", "-allowable_client", "-dylib_file",
-    "-seg_addr_table", "-segalign"
+    "-seg_addr_table", "-segalign",
+    "-h", "-I", "--dynamic-list", "--retain-symbols-file", "--export-dynamic-symbol-list",
+    "--export-dynamic-symbol", "--hash-style", "--exclude-libs", "--plugin", "--plugin-opt",
+    "--undefined", "--require-defined", "-defsym", "--section-start", "-Ttext", "-Tdata",
+    "-Tbss", "-Ttext-segment", "--init", "-init", "--fini", "-fini", "--filter",
+    "--auxiliary", "-f", "--sort-section", "--orphan-handling", "--dependency-file",
+    "--compress-debug-sections", "--unresolved-symbols", "--audit", "--depaudit"
   };
   if (one.count(arg)) return 1;
   if (arg == "-platform_version" || arg == "-sectcreate" || arg == "-segcreate" ||

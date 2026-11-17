@@ -1,0 +1,11 @@
+-- The generated expression tree is arena-owned, including speculative parses.
+-- The C++ section parser translates it into parser.hpp's compatibility model.
+module qldexpr {
+  expr = Number(string spelling)
+       | Symbol(string name)
+       | Dot
+       | Unary(string op, expr operand)
+       | Binary(string op, expr left, expr right)
+       | Conditional(expr condition, expr yes, expr no)
+       | Call(string name, expr* arguments)
+}

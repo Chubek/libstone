@@ -189,6 +189,21 @@ Token Lexer::makeString(size_t line, size_t col) {
 
 Token Lexer::readNext() {
   skipSpaceAndComments();
+  size_t offset = pos_;
+  auto token = readToken();
+  token.offset = offset;
+  return token;
+}
+
+void Lexer::seek(size_t offset) {
+  if (offset > text_.size()) throw std::runtime_error("expression offset outside source");
+  pushed_.reset();
+  if (offset < pos_) { pos_ = 0; line_ = col_ = 1; }
+  advance(offset - pos_);
+}
+
+Token Lexer::readToken() {
+  skipSpaceAndComments();
   size_t line = line_, col = col_;
   char c = cur();
   if (c == '\0') return Token{TokKind::Eof, {}, 0, line, col};
@@ -474,6 +489,20 @@ bool Parser::parseTopLevel(ScriptFile& out) {
       if (!parseGroup(out, false)) return false;
     } else if (kw == "MEMORY") {
       if (!parseMemory(out)) return false;
+    } else if (kw == "REGION_ALIAS") {
+      advance();
+      std::string err;
+      if (!expect(TokKind::LParen, err, "'('")) { fail(err); return false; }
+      auto regionName = [&]() {
+        if (cur_.kind != TokKind::String && cur_.kind != TokKind::Ident) return std::string();
+        std::string name = cur_.text; advance(); return name;
+      };
+      auto alias = regionName();
+      if (alias.empty() || !expect(TokKind::Comma, err, "','")) { fail("REGION_ALIAS expects alias, region"); return false; }
+      auto target = regionName();
+      if (target.empty() || !expect(TokKind::RParen, err, "')'")) { fail("REGION_ALIAS expects alias, region"); return false; }
+      out.regionAliases.emplace_back(std::move(alias), std::move(target));
+      accept(TokKind::Semicolon);
     } else if (kw == "SECTIONS") {
       if (!parseSections(out)) return false;
     } else if (kw == "PHDRS") {
@@ -548,7 +577,7 @@ bool Parser::parseTopLevel(ScriptFile& out) {
       st->provide = kind != "HIDDEN";
       st->hidden = (kind != "PROVIDE");
       out.sectionsBody.push_back(std::move(st));
-    } else if (kw == "KEEP" || kw == "NOCROSSREFS" || kw == "REGION_ALIAS" ||
+    } else if (kw == "KEEP" || kw == "NOCROSSREFS" ||
                kw == "INCLUDE") {
       fail("unsupported top-level directive: " + kw); return false;
     } else {
@@ -818,6 +847,10 @@ bool Parser::parseMemory(ScriptFile& out) {
         advance();
       }
       r.attrs = attrs;
+      if (attrs.empty() || attrs.find_first_not_of("rRwWxXaAiIlL!") != attrs.npos ||
+          std::count(attrs.begin(), attrs.end(), '!') > 1 || attrs.back() == '!') {
+        fail("invalid MEMORY attributes: " + attrs); return false;
+      }
       if (!expect(TokKind::RParen, err, "')'")) {
         fail(err);
         return false;
@@ -845,9 +878,9 @@ bool Parser::parseMemory(ScriptFile& out) {
         return false;
       }
       if (key == "ORIGIN" || key == "org" || key == "o")
-        r.origin = std::move(e);
+        { if (r.origin) { fail("duplicate MEMORY ORIGIN"); return false; } r.origin = std::move(e); }
       else if (key == "LENGTH" || key == "len" || key == "l")
-        r.length = std::move(e);
+        { if (r.length) { fail("duplicate MEMORY LENGTH"); return false; } r.length = std::move(e); }
       else {
         fail("MEMORY region expects ORIGIN/LENGTH, got '" + key + "'");
         return false;
@@ -855,6 +888,7 @@ bool Parser::parseMemory(ScriptFile& out) {
       if (accept(TokKind::Comma)) continue;
       break;
     }
+    if (!r.origin || !r.length) { fail("MEMORY requires ORIGIN and LENGTH"); return false; }
     out.memory.push_back(std::move(r));
   }
   if (!expect(TokKind::RBrace, err, "'}'")) {
@@ -1054,38 +1088,29 @@ std::unique_ptr<Stmt> Parser::parseSectionsStmt() {
   // already consumed; reconstruct: optional address/type already? Handle:
   //   name [addr] [(type)] : [AT(...)] { ... } [>region] [AT>region] [:phdr]
   OutputSection sec;
-  sec.name = (name == "OVERLAY") ? name : name;
+  sec.name = name;
   // Optional address expression before the colon: `name addr :`.
   if (cur_.kind != TokKind::Colon) {
-    // Could be `(type)` or an address. Try parsing an expression; if the
-    // next token after it is a colon, it was the address.
+    auto isType = [&]() {
+      if (cur_.kind != TokKind::LParen) return false;
+      auto token = lex_.peek();
+      return token.kind == TokKind::Ident &&
+        (token.text == "NOLOAD" || token.text == "COPY" || token.text == "DSECT" ||
+         token.text == "INFO" || token.text == "OVERLAY");
+    };
+    if (!isType()) {
+      sec.address = parseExpr();
+      if (!sec.address) return nullptr;
+    }
     if (cur_.kind == TokKind::LParen) {
-      // Section type `(NOLOAD)` etc.
       advance();
-      std::string ty;
-      if (cur_.kind == TokKind::Ident) {
-        ty = cur_.text;
-        advance();
-      }
+      if (cur_.kind != TokKind::Ident) { fail("expected output section type"); return nullptr; }
+      sec.type = cur_.text;
+      advance();
       std::string err;
       if (!expect(TokKind::RParen, err, "')'")) {
         fail(err);
         return nullptr;
-      }
-      sec.type = ty;
-    } else if (cur_.kind == TokKind::Number || cur_.kind == TokKind::Ident ||
-               cur_.kind == TokKind::Dot || cur_.kind == TokKind::LParen) {
-      // Attempt address parse with lexer pushback on failure: parse an
-      // expression, then require a colon.
-      Lexer backup = lex_;
-      Token curBackup = cur_;
-      ExprPtr addr = parseExpr();
-      if (addr && cur_.kind == TokKind::Colon) {
-        sec.address = std::move(addr);
-      } else {
-        // Not an address; restore and continue (e.g. OVERLAY).
-        lex_ = backup;
-        cur_ = curBackup;
       }
     }
   }
@@ -1153,6 +1178,13 @@ bool Parser::parseOutputSection(OutputSection& section) {
       fail(err);
       return false;
     }
+  }
+  if (cur_.kind == TokKind::Ident && cur_.text == "ALIGN") {
+    advance();
+    if (!expect(TokKind::LParen, err, "'('")) { fail(err); return false; }
+    section.alignExpr = parseExpr();
+    if (!section.alignExpr || !expect(TokKind::RParen, err, "')'")) { fail("invalid section ALIGN"); return false; }
+    section.hasAlign = true;
   }
   if (!expect(TokKind::LBrace, err, "'{'")) {
     fail(err);
@@ -1301,7 +1333,7 @@ bool Parser::parseInputPatterns(OutputSection& section) {
       fail("unsupported section directive: " + word); return false;
     }
     // `file ( sections )` or `*( sections )`.
-    if (cur_.kind == TokKind::Ident || cur_.kind == TokKind::Star ||
+    if (cur_.kind == TokKind::Ident || cur_.kind == TokKind::Star || cur_.kind == TokKind::Question ||
         cur_.kind == TokKind::LParen) {
       std::string file;
       if (cur_.kind == TokKind::Ident) {
@@ -1314,7 +1346,7 @@ bool Parser::parseInputPatterns(OutputSection& section) {
           accept(TokKind::Semicolon); section.inputs.push_back(std::move(p)); continue;
         }
         // Suffix wildcards: `file*.o` lexes as Ident + Star pieces.
-        while (cur_.kind == TokKind::Star) {
+        while (cur_.kind == TokKind::Star || cur_.kind == TokKind::Question) {
           file += cur_.text;
           advance();
           if (cur_.kind == TokKind::Ident) {
@@ -1322,14 +1354,14 @@ bool Parser::parseInputPatterns(OutputSection& section) {
             advance();
           }
         }
-      } else if (cur_.kind == TokKind::Star) {
-        file = "*";
+      } else if (cur_.kind == TokKind::Star || cur_.kind == TokKind::Question) {
+        file = cur_.text;
         advance();
         // `*.o` / `*crt.o`: reassemble the file pattern.
         while (cur_.kind == TokKind::Ident) {
           file += cur_.text;
           advance();
-          if (cur_.kind == TokKind::Star) {
+          if (cur_.kind == TokKind::Star || cur_.kind == TokKind::Question) {
             file += cur_.text;
             advance();
           }
@@ -1376,12 +1408,18 @@ bool Parser::parseInputPatterns(OutputSection& section) {
             while (cur_.kind != TokKind::RParen &&
                    cur_.kind != TokKind::Eof) {
               if (cur_.kind == TokKind::Ident ||
-                  cur_.kind == TokKind::Star) {
+                  cur_.kind == TokKind::Star || cur_.kind == TokKind::Question) {
                 SectionPattern p;
                 p.file = file;
                 p.section = cur_.text;
+                size_t end = cur_.offset + cur_.text.size();
                 advance();
-                while (cur_.kind == TokKind::Star) { p.section += '*'; advance(); }
+                while (cur_.offset == end && (cur_.kind == TokKind::Star || cur_.kind == TokKind::Question)) {
+                  p.section += cur_.text; end += cur_.text.size(); advance();
+                  if (cur_.offset == end && cur_.kind == TokKind::Ident) {
+                    p.section += cur_.text; end += cur_.text.size(); advance();
+                  }
+                }
                 p.sort = wrap;
                 if (wrap == "KEEP") p.keep = true;
                 section.inputs.push_back(std::move(p));
@@ -1400,18 +1438,21 @@ bool Parser::parseInputPatterns(OutputSection& section) {
           }
           continue;
         }
-        if (cur_.kind == TokKind::Ident || cur_.kind == TokKind::Star) {
+        if (cur_.kind == TokKind::Ident || cur_.kind == TokKind::Star || cur_.kind == TokKind::Question) {
           std::string sec = cur_.text;
+          size_t end = cur_.offset + cur_.text.size();
           advance();
           // Reassemble split wildcards: `.bss*` lexes as Ident + Star,
           // `*` alone stays as-is.
-          for (int k = 0; k < 4; ++k) {
-            if (cur_.kind == TokKind::Star) {
+          for (;;) {
+            if (cur_.offset == end && (cur_.kind == TokKind::Star || cur_.kind == TokKind::Question)) {
               sec += cur_.text;
+              end += cur_.text.size();
               advance();
-            } else if (cur_.kind == TokKind::Ident &&
-                       (sec.ends_with("*") || sec == "*")) {
+            } else if (cur_.offset == end && cur_.kind == TokKind::Ident &&
+                       (sec.ends_with("*") || sec.ends_with("?"))) {
               sec += cur_.text;
+              end += cur_.text.size();
               advance();
             } else {
               break;
@@ -1441,226 +1482,17 @@ bool Parser::parseInputPatterns(OutputSection& section) {
 
 // --- Expressions -----------------------------------------------------------
 
-ExprPtr Parser::parseExpr() { return parseTernary(); }
-
-ExprPtr Parser::parseTernary() {
-  ExprPtr c = parseOrOr();
-  if (!c) return nullptr;
-  if (accept(TokKind::Question)) {
-    ExprPtr y = parseExpr();
-    if (!y) return nullptr;
-    std::string err;
-    if (!expect(TokKind::Colon, err, "':'")) {
-      fail(err);
-      return nullptr;
-    }
-    ExprPtr n = parseTernary();
-    if (!n) return nullptr;
-    return std::make_unique<TernaryExpr>(std::move(c), std::move(y),
-                                         std::move(n));
-  }
-  return c;
-}
-
-ExprPtr Parser::parseOrOr() {
-  ExprPtr l = parseAndAnd();
-  while (cur_.kind == TokKind::OrOr) {
+ExprPtr Parser::parseExpr() {
+  try {
+    size_t consumed = 0;
+    auto expression = parseExpression(lex_.sourceAt(cur_.offset), consumed);
+    lex_.seek(cur_.offset + consumed);
     advance();
-    ExprPtr r = parseAndAnd();
-    l = std::make_unique<BinaryExpr>("||", std::move(l), std::move(r));
+    return expression;
+  } catch (const std::exception& e) {
+    fail("line " + std::to_string(cur_.line) + ":" + std::to_string(cur_.col) + ": " + e.what());
+    return nullptr;
   }
-  return l;
-}
-
-ExprPtr Parser::parseAndAnd() {
-  ExprPtr l = parseOr();
-  while (cur_.kind == TokKind::AndAnd) {
-    advance();
-    ExprPtr r = parseOr();
-    l = std::make_unique<BinaryExpr>("&&", std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseOr() {
-  ExprPtr l = parseXor();
-  while (cur_.kind == TokKind::Or) {
-    advance();
-    ExprPtr r = parseXor();
-    l = std::make_unique<BinaryExpr>("|", std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseXor() {
-  ExprPtr l = parseAnd();
-  while (cur_.kind == TokKind::Caret) {
-    advance();
-    ExprPtr r = parseAnd();
-    l = std::make_unique<BinaryExpr>("^", std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseAnd() {
-  ExprPtr l = parseEquality();
-  while (cur_.kind == TokKind::And) {
-    advance();
-    ExprPtr r = parseEquality();
-    l = std::make_unique<BinaryExpr>("&", std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseEquality() {
-  ExprPtr l = parseRelational();
-  while (cur_.kind == TokKind::Eq || cur_.kind == TokKind::Ne) {
-    std::string op = cur_.kind == TokKind::Eq ? "==" : "!=";
-    advance();
-    ExprPtr r = parseRelational();
-    l = std::make_unique<BinaryExpr>(op, std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseRelational() {
-  ExprPtr l = parseShift();
-  while (cur_.kind == TokKind::Lt || cur_.kind == TokKind::Gt ||
-         cur_.kind == TokKind::Le || cur_.kind == TokKind::Ge ||
-         cur_.kind == TokKind::Greater) {
-    std::string op;
-    if (cur_.kind == TokKind::Lt) op = "<";
-    else if (cur_.kind == TokKind::Greater || cur_.kind == TokKind::Gt) op = ">";
-    else if (cur_.kind == TokKind::Le) op = "<=";
-    else op = ">=";
-    advance();
-    ExprPtr r = parseShift();
-    l = std::make_unique<BinaryExpr>(op, std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseShift() {
-  ExprPtr l = parseAdd();
-  while (cur_.kind == TokKind::Shl || cur_.kind == TokKind::Shr) {
-    std::string op = cur_.kind == TokKind::Shl ? "<<" : ">>";
-    advance();
-    ExprPtr r = parseAdd();
-    l = std::make_unique<BinaryExpr>(op, std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseAdd() {
-  ExprPtr l = parseMul();
-  while (cur_.kind == TokKind::Plus || cur_.kind == TokKind::Minus) {
-    std::string op = cur_.kind == TokKind::Plus ? "+" : "-";
-    advance();
-    ExprPtr r = parseMul();
-    l = std::make_unique<BinaryExpr>(op, std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseMul() {
-  ExprPtr l = parseUnary();
-  while (cur_.kind == TokKind::Star || cur_.kind == TokKind::Slash ||
-         cur_.kind == TokKind::Percent) {
-    std::string op = cur_.kind == TokKind::Star ? "*"
-                     : cur_.kind == TokKind::Slash ? "/" : "%";
-    advance();
-    ExprPtr r = parseUnary();
-    l = std::make_unique<BinaryExpr>(op, std::move(l), std::move(r));
-  }
-  return l;
-}
-
-ExprPtr Parser::parseUnary() {
-  if (cur_.kind == TokKind::Minus) {
-    advance();
-    return std::make_unique<UnaryExpr>("-", parseUnary());
-  }
-  if (cur_.kind == TokKind::Plus) {
-    advance();
-    return parseUnary();
-  }
-  if (cur_.kind == TokKind::Bang) {
-    advance();
-    return std::make_unique<UnaryExpr>("!", parseUnary());
-  }
-  if (cur_.kind == TokKind::Tilde) {
-    advance();
-    return std::make_unique<UnaryExpr>("~", parseUnary());
-  }
-  return parsePrimary();
-}
-
-ExprPtr Parser::parsePrimary() {
-  if (cur_.kind == TokKind::Number) {
-    uint64_t v = cur_.number;
-    advance();
-    return std::make_unique<NumberExpr>(v);
-  }
-  if (cur_.kind == TokKind::Dot) {
-    advance();
-    return std::make_unique<DotExpr>();
-  }
-  if (cur_.kind == TokKind::LParen) {
-    advance();
-    ExprPtr e = parseExpr();
-    std::string err;
-    if (!expect(TokKind::RParen, err, "')'")) {
-      fail(err);
-      return nullptr;
-    }
-    return e;
-  }
-  if (cur_.kind == TokKind::Ident) {
-    std::string name = cur_.text;
-    advance();
-    if (cur_.kind == TokKind::LParen) {
-      advance();
-      std::vector<ExprPtr> args;
-      while (cur_.kind != TokKind::RParen && cur_.kind != TokKind::Eof) {
-        if (cur_.kind == TokKind::Comma) {
-          advance();
-          continue;
-        }
-        // String args (e.g. CONSTANT (MAXPAGESIZE)): keep as symbols.
-        if (cur_.kind == TokKind::String) {
-          args.push_back(
-              std::make_unique<SymbolExpr>(cur_.text));
-          advance();
-          continue;
-        }
-        ExprPtr a = parseExpr();
-        if (!a) return nullptr;
-        args.push_back(std::move(a));
-        if (cur_.kind == TokKind::Comma) advance();
-      }
-      std::string err;
-      if (!expect(TokKind::RParen, err, "')'")) {
-        fail(err);
-        return nullptr;
-      }
-      // PROVIDE/HIDDEN as expression-level wrappers.
-      if (name == "PROVIDE" || name == "HIDDEN" ||
-          name == "PROVIDE_HIDDEN" || name == "ABSOLUTE") {
-        if (args.size() == 1) return std::move(args[0]);
-        fail(name + " expects one argument");
-        return nullptr;
-      }
-      return std::make_unique<CallExpr>(name, std::move(args));
-    }
-    return std::make_unique<SymbolExpr>(name);
-  }
-  if (cur_.kind == TokKind::String) {
-    std::string s = cur_.text;
-    advance();
-    return std::make_unique<SymbolExpr>(s);
-  }
-  fail("line " + std::to_string(cur_.line) + ": expected expression, found '" + cur_.text + "'");
-  return nullptr;
 }
 
 std::string Parser::parseStringLiteral() {

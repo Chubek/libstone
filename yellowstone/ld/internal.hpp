@@ -104,11 +104,13 @@ struct Def {
   bool common = false;
   uint64_t commonSize = 0;
   uint64_t commonAlign = 1;
+  std::optional<uint32_t> commonOutputSection;
 };
 
 // Per-output-section accumulator.
 struct OutputSection {
   std::string name;
+  std::string region;                   // canonical MEMORY region, if placed
   uint32_t flags = 0;                   // sec::Flags union of contributors
   uint64_t alignment = 1;
   uint64_t vma = 0;

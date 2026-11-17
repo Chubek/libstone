@@ -1,25 +1,17 @@
 // parser.hpp - linker-script lexer and parser.
 //
-// Implements the GNU ld script language subset used by qobjld:
-//
-//   ENTRY(sym)  OUTPUT_FORMAT(..)  OUTPUT_ARCH(..)  SEARCH_DIR(..)
-//   GROUP(..) / INPUT(..)  MEMORY { .. }  PHDRS { .. }  SECTIONS { .. }
-//   VERSION { .. }  INSERT ...
-//
-// SECTIONS bodies support output-section descriptors, symbol assignments,
-// `. = expr`, PROVIDE/HIDDEN, ALIGN, ADDR/SIZEOF/LOADADDR, DEFINED, CONSTANT,
-// ORIGIN/LENGTH, SEGMENT_START, ABSOLUTE, MAX/MIN, DATA_SEGMENT_* and the
-// usual C-like expression operators with K/M/G suffixes.
-//
-// The parser produces a small AST (ScriptFile) consumed by ldscript.cpp.
-// It is a hand-rolled recursive-descent parser over qBFD-independent text;
-// it does not depend on fd/ headers.
+// GNU ld subset: ENTRY, INPUT/GROUP, SEARCH_DIR, MEMORY, REGION_ALIAS,
+// SECTIONS, assignments, PROVIDE and ASSERT. Unsupported directives fail.
+// Section syntax is recursive descent. Expressions use ldscript.g (Aurocks)
+// and ldscript.asdl; Expression.cpp translates the arena AST to this compatible
+// C++ model. No generated types or qBFD headers leak into this interface.
 #pragma once
 
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace qld::script {
@@ -77,6 +69,7 @@ struct Token {
   uint64_t number = 0;
   size_t line = 1;
   size_t col = 1;
+  size_t offset = 0;
 };
 
 std::string tokName(TokKind k);
@@ -91,9 +84,12 @@ class Lexer {
   Token next();
   Token peek();
   bool eof() const;
+  const char *sourceAt(size_t offset) const { return text_.c_str() + offset; }
+  void seek(size_t offset);
 
  private:
   Token readNext();
+  Token readToken();
   char cur() const;
   char peekChar(size_t ahead = 1) const;
   void advance(size_t n = 1);
@@ -235,6 +231,7 @@ struct ScriptFile {
   std::vector<std::string> searchDirs;
   std::vector<std::string> group;   // GROUP/INPUT file lists
   std::vector<MemoryRegion> memory;
+  std::vector<std::pair<std::string, std::string>> regionAliases;
   std::vector<std::unique_ptr<Stmt>> sectionsBody;  // inside SECTIONS {}
   bool hasSections = false;
   std::string dump() const;
@@ -280,24 +277,12 @@ class Parser {
   bool parseInputPatterns(OutputSection& section);
   // Expressions (C precedence, ?: lowest).
   ExprPtr parseExpr();
-  ExprPtr parseTernary();
-  ExprPtr parseOrOr();
-  ExprPtr parseAndAnd();
-  ExprPtr parseOr();
-  ExprPtr parseXor();
-  ExprPtr parseAnd();
-  ExprPtr parseEquality();
-  ExprPtr parseRelational();
-  ExprPtr parseShift();
-  ExprPtr parseAdd();
-  ExprPtr parseMul();
-  ExprPtr parseUnary();
-  ExprPtr parsePrimary();
   std::string parseStringLiteral();
 };
 
 // Convenience: parse text, returning true on success.
 bool parseText(const std::string& text, ScriptFile& out, std::string& error);
+ExprPtr parseExpression(const char *input, size_t& consumed);
 
 // Number with K/M/G (and k/m/g) suffixes, 0x hex, octal.
 bool parseScriptNumber(const std::string& text, uint64_t& value);
