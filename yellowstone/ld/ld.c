@@ -125,21 +125,9 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
   if (elf) state.options.elf = *elf;
   if (pe) state.options.pe = *pe;
   if (macho) state.options.macho = *macho;
-  auto backend = qld::detail::selectBackend(state.options);
-  if (backend == qld::detail::Backend::Auto && sdk && (state.options.scriptIsText || !state.options.script.empty())) {
-    std::string source = state.options.scriptText;
-    if (!state.options.scriptIsText) {
-      std::ifstream in(state.options.script, std::ios::binary);
-      if (!in) throw std::runtime_error("cannot open script " + state.options.script);
-      source.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    }
-    state.options.scriptText = sdk->preprocess(source, state.options.scriptIsText ? "<script>" : state.options.script);
-    state.options.scriptIsText = true;
-  }
   std::string error;
   std::vector<uint8_t> bytes;
-  bool linked = backend == qld::detail::Backend::ELF ? qld::detail::linkElf(state, bytes, error, sdk ? *sdk : qld::ScriptSDK{})
-                        : qld::detail::linkState(state, bytes, error);
+  bool linked = qld::detail::linkState(state, bytes, error, sdk);
   if (!linked) {
     setErr(errmsg, error.empty() ? "link failed" : error);
     return 1;

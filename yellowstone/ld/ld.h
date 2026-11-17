@@ -86,43 +86,50 @@ QLD_API int qld_link(const qld_options_t* opts, char** errmsg);
 QLD_API int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
                     size_t* out_size, char** errmsg);
 
-/* GNU-compatible ELF toolchain backend v1. qld_options_t keeps its original
- * ABI. Shared/PIE links and explicit library searches use this backend by
- * default; these entry points also select it for other modes.
+/* ELF backend v1. qld_options_t keeps its original ABI. A NULL linker uses
+ * Yellowstone's native static/partial linker, including -L/-l searches.
+ * Shared/PIE and dynamic imports are currently unsupported natively.
+ * A non-NULL linker explicitly selects the optional external compatibility
+ * bridge; merely selecting a format never invokes an external executable.
  * Arguments are individual argv tokens, appended after the structured options
  * in order (including position-dependent -l/--as-needed/--start-group flags).
  * Response files use GNU quoting. -o/--output overrides opts->output; absent
  * either, the result stays in memory. -T scripts use the ScriptSDK, including
  * Lua. All pointers are borrowed during a call, copied by qld_set_elf_options.
- * The backend is a build/runtime dependency, not an in-process ELF emitter. */
+ * External compatibility bridges are disabled by default at build time. */
 #define QLD_ELF_OPTIONS_VERSION 1
 typedef struct qld_elf_options {
   size_t struct_size;                  /* sizeof(qld_elf_options_t) */
-  const char *linker;                  /* executable, NULL = configured default */
+  const char *linker;                  /* NULL = native; executable = explicit external bridge */
   const char *const *arguments;
   size_t n_arguments;
   void (*diagnostic)(void *user, const char *text); /* successful-link warnings */
   void *user;
 } qld_elf_options_t;
 QLD_API void qld_elf_options_init(qld_elf_options_t *opts);
-/* NULL when this build disables the ELF backend. */
+/* Configured external executable, or NULL when that compatibility bridge is disabled.
+ * Native linking remains available in either case. */
 QLD_API const char *qld_elf_linker(void);
 QLD_API int qld_link_elf(const qld_options_t *, const qld_elf_options_t *, char **errmsg);
 QLD_API int qld_link_elf_bytes(const qld_options_t *, const qld_elf_options_t *,
     uint8_t **out_bytes, size_t *out_size, char **errmsg);
 
-/* PE/COFF (lld-link dialect) and Mach-O (ld64 dialect) toolchain backends v1.
+/* PE/COFF and Mach-O backends v1.
  * The original qld_options_t ABI is unchanged; qld_link[_bytes] auto-detects
  * these formats from object/archive contents. Explicit entry points also work
  * for library-only links and ordered native arguments.
  *
- * PE response files use Windows quoting; Mach-O uses GNU quoting. Native
+ * NULL linker selects native fixed-base static images (PE x86/x64, Mach-O
+ * x86-64). Unsupported semantics fail without external fallback. Explicit
+ * executable selection uses the optional lld-link/ld64 compatibility bridges.
+ * PE response files use Windows quoting; Mach-O uses GNU quoting. External
  * /out:, /implib:, /pdb:, /map: and Mach-O -o/-map are staged. Import libraries
  * default to <output-stem>.lib when exports exist. In-memory calls discard
  * auxiliary files unless explicit destination arguments are supplied.
  * Mach-O callers supply -arch and -platform_version (or toolchain equivalents).
  * GNU/Lua linker scripts are not supported by these two backends.
- * Backend executables are runtime dependencies, not in-process emitters.
+ * The following staging/auxiliary and platform-version rules describe the
+ * external bridges, not features of the limited native image emitter.
  * All pointer ownership and diagnostic rules match qld_elf_options_t. */
 #define QLD_PE_OPTIONS_VERSION 1
 #define QLD_MACHO_OPTIONS_VERSION 1
@@ -130,7 +137,8 @@ typedef qld_elf_options_t qld_pe_options_t;
 typedef qld_elf_options_t qld_macho_options_t;
 QLD_API void qld_pe_options_init(qld_pe_options_t *);
 QLD_API void qld_macho_options_init(qld_macho_options_t *);
-/* NULL when the corresponding backend is disabled at build time. */
+/* External executable or NULL when that bridge is disabled; not a test of
+ * native PE/Mach-O availability. */
 QLD_API const char *qld_pe_linker(void);
 QLD_API const char *qld_macho_linker(void);
 QLD_API int qld_link_pe(const qld_options_t *, const qld_pe_options_t *, char **errmsg);

@@ -17,6 +17,7 @@
 
 #include "qBFD.hpp"
 
+namespace qld { class ScriptSDK; }
 namespace qld::detail {
 
 // ---------------------------------------------------------------------------
@@ -128,6 +129,8 @@ struct OutputSection {
 
 struct LinkState {
   LinkOptions options;
+  qbfd::Format format = qbfd::Format::ELF;
+  bool geometrySet = false;
   std::vector<LoadedObject> objects;    // selected objects in link order
   std::vector<LoadedArchive> archives;  // archives seen (for -M reporting)
   std::vector<InputSection> inputSections;
@@ -198,7 +201,7 @@ bool loadScriptExtras(LinkState& state, std::string& error);
 
 // Top-level driver (driver.cpp).
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
-               std::string& error);
+               std::string& error, const qld::ScriptSDK *sdk = nullptr);
 
 // Output emission (binarizer.cpp).
 bool emitExecutable(const LinkState& state,

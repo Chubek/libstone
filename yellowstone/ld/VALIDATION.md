@@ -1,4 +1,114 @@
-# Linker validation — 2026-11-17/18
+# Native-default linker validation — 2026-11-18
+
+Base revision: `5d1721a422d6310f2727d6f04b1d6bac58904e07`; initial worktree clean.
+Linux x86-64, GCC 16.2.1, Clang 22.1.8, Python 3.14.7. No vendor changes or
+LLVM/LLD library dependency was introduced.
+
+## Native implementation and regression evidence
+
+- Backend format selection no longer selects an external process implicitly.
+  Static ELF `-l`, `--static`, explicit format APIs and response files use
+  native discovery/layout/relocation/emission.
+- `NativeImage.cpp` implements fixed-base PE x86/x64 and Mach-O x86-64 images
+  with shared archive/symbol discovery and format-specific relocation/output.
+  `NativeOptions.cpp` rejects unsupported options instead of forwarding them.
+- Archive-only links establish architecture/class/endian from the selected
+  member, rather than the default x86-64 geometry. Native library resolution
+  supports `-l:filename` and never substitutes a `.so` for a static archive.
+- All three external compatibility bridges default OFF. Even with them ON,
+  only an explicit executable/API linker or `--dynamic` opts into a subprocess.
+  Existing dynamic and cross-format bridge tests now explicitly request it.
+- The new regression failed against the baseline: `--static -lanswer` reached
+  `runProcess` and tripped its recursion guard. `qld-native` now tests CLI,
+  C11, C++, format-specific and incremental APIs with PATH empty and that guard
+  set, in both bridges-OFF and bridges-ON builds.
+- Independent Python image mapping executes freestanding PE/Mach-O x86-64
+  code, including calls, data/BSS, absolute pointers and local symbols.
+  SIGNED_1/_2/_4 regressions exposed and fixed double-counted Mach-O immediate
+  bias. ELF executables execute through Linux's actual loader; ELF partial
+  links are relinked and executed. ELF32 archive-only and PE32 images are
+  structurally checked, not executed.
+- Negative cases cover unsupported shared/PIE/partial modes, formats and
+  emulations, duplicate/undefined symbols, output collisions, TLS, COFF
+  directives/COMDAT, unsupported Mach-O GOT relocations and oversized images.
+  Failed links preserve the existing destination.
+
+This is a **limited native static slice**, not feature parity with the former
+automatic external backends. Native shared/PIE/dynamic imports are still
+unimplemented. PE COMDAT/weak/TLS/CRT, Mach-O ARM64/unwind/initializers/signing,
+and other unsupported relocations require further native work. The complete
+supported subset and compatibility opt-in are documented in `README.md`.
+No Windows/Darwin OS-loader execution, full root build or cross-host build is
+claimed. The independent mapping test is not a replacement for those runners.
+
+## Commands and results
+
+Baseline: `ctest --test-dir /tmp/opencode/qld-debug --output-on-failure`:
+**19 passed, 0 failed, 1 skipped**.
+
+```sh
+cmake -S yellowstone -B /tmp/opencode/qld-native-debug \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-native-debug --parallel 5
+ctest --test-dir /tmp/opencode/qld-native-debug --output-on-failure
+
+cmake -S yellowstone -B /tmp/opencode/qld-native-bridges \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON \
+  -DYELLOWSTONE_ENABLE_ELF_BACKEND=ON \
+  -DYELLOWSTONE_ENABLE_PE_BACKEND=ON -DYELLOWSTONE_ENABLE_MACHO_BACKEND=ON
+cmake --build /tmp/opencode/qld-native-bridges --parallel 5
+ctest --test-dir /tmp/opencode/qld-native-bridges --output-on-failure
+
+cmake -S yellowstone -B /tmp/opencode/qld-native-sanitize \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_C_FLAGS=-fsanitize=address,undefined \
+  -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON
+cmake --build /tmp/opencode/qld-native-sanitize --parallel 5
+env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir /tmp/opencode/qld-native-sanitize --output-on-failure
+```
+
+| Configuration | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| GCC Debug, native defaults, warnings as errors | 18 | 0 | 1 |
+| Clang Release, all explicit bridges ON, warnings as errors | 20 | 0 | 1 |
+| Clang ASan/UBSan/leak detection, native defaults | 18 | 0 | 1 |
+
+The existing `qbfd_source_notes` skip is due to its absent binutils source
+snapshot. Logs: each build's `Testing/Temporary/LastTest.log`. Sanitizers cover
+the linker/SDK, not the independently mapped freestanding machine code.
+
+Installed strict C11 consumer (compiled, linked, run; resulting program exits 7):
+
+```sh
+cmake --install /tmp/opencode/qld-native-debug --prefix /tmp/opencode/qld-native-install
+cc -std=c11 -Wall -Wextra -Werror -pedantic \
+  -I/tmp/opencode/qld-native-install/include/qobjld \
+  -c yellowstone/ld/examples/native-sdk.c -o /tmp/opencode/qld-native-install/native-sdk.o
+c++ /tmp/opencode/qld-native-install/native-sdk.o \
+  -L/tmp/opencode/qld-native-install/lib \
+  -lqld -llibstone_script_lua -ldl -lm -pthread \
+  -o /tmp/opencode/qld-native-install/native-sdk
+env PATH=/nonexistent QLD_TOOLCHAIN_BACKEND_ACTIVE=1 \
+  /tmp/opencode/qld-native-install/native-sdk _start \
+  /tmp/opencode/qld-native-install/program \
+  /tmp/opencode/qld-native-debug/ld-tests/main.o \
+  /tmp/opencode/qld-native-debug/ld-tests/add.o
+/tmp/opencode/qld-native-install/program # expected exit 7
+```
+
+---
+
+# Historical toolchain/script validation — 2026-11-17/18
+
+The following report predates native-default selection. Its automatic bridge
+selection and default build options have been superseded above.
 
 Base LibStone revision: `803c23ca521d6c0ceb493450406fbcf185461a27`.
 Local changes in `novostone/ActionSemantics` and `third_party/libuv` were present

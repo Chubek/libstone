@@ -4,8 +4,6 @@
 #include "internal.hpp"
 #include "ScriptSDK.hpp"
 
-#include <array>
-#include <fstream>
 #include <stdexcept>
 
 namespace qld::detail {
@@ -15,20 +13,6 @@ const char *defaultElfLinker() {
 #else
   return nullptr;
 #endif
-}
-
-bool needsElfBackend(const LinkOptions& o) {
-  if (o.elf.enabled || o.mode == Mode::Shared || o.pie ||
-      (!o.libs.empty() && defaultElfLinker())) return true;
-  for (const auto& path : o.inputs) {
-    std::ifstream in(path, std::ios::binary);
-    std::array<unsigned char, 18> h{};
-    if (in.read(reinterpret_cast<char *>(h.data()), h.size()) &&
-        h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F' &&
-        ((h[5] == 1 && h[16] == 3 && h[17] == 0) ||
-         (h[5] == 2 && h[16] == 0 && h[17] == 3))) return true;
-  }
-  return false;
 }
 
 #ifdef QLD_ENABLE_ELF_BACKEND

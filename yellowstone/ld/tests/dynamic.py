@@ -11,6 +11,8 @@ ld, cc, api, c_api = map(os.path.abspath, sys.argv[1:])
 
 
 def run(*args, expected=0, **kwargs):
+    if args[0] == ld:
+        args = (ld, "--dynamic", *args[1:])
     p = subprocess.run(list(map(str, args)), capture_output=True, text=True, **kwargs)
     assert p.returncode == expected, (args, p.returncode, p.stdout, p.stderr)
     return p
@@ -36,7 +38,10 @@ with tempfile.TemporaryDirectory(prefix="qld-dynamic-") as tmp:
     # passes startup files, libc's GROUP script, plugins and ordered arguments.
     tools = root / "tools"
     tools.mkdir()
-    (tools / "ld").symlink_to(ld)
+    bridge = tools / "ld"
+    bridge.write_text(f"#!{sys.executable}\nimport os,sys\n"
+                      f"os.execv({ld!r}, [{ld!r}, '--dynamic', *sys.argv[1:]])\n")
+    bridge.chmod(0o755)
     driver = "-B" + str(tools) + "/"
     src.write_text(r'''
 __thread int tls = 5;
@@ -200,7 +205,7 @@ qld.emit('SECTIONS {{ .sdk : {{ LONG(42) }} }} INSERT AFTER .data;')
 
     def fail(*args, contains):
         out.write_bytes(b"preserve-existing-output")
-        p = subprocess.run([ld, *map(str, args), "-o", str(out)], capture_output=True, text=True)
+        p = subprocess.run([ld, "--dynamic", *map(str, args), "-o", str(out)], capture_output=True, text=True)
         assert p.returncode and contains in p.stderr, (args, p.returncode, p.stderr)
         assert out.read_bytes() == b"preserve-existing-output"
 

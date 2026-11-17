@@ -1,16 +1,34 @@
 # qobjld link backends
 
-`qobjld` links ELF, PE/COFF and Mach-O objects and static archives. ELF's
-in-process static/partial linker and script SDK remain available. Full ELF
-toolchain links use GNU-compatible `ld.bfd`; PE uses `lld-link`'s command-line
-dialect; Mach-O uses `ld64.lld`'s Darwin dialect. These executables are runtime
-dependencies of the corresponding toolchain backends, not embedded libraries.
+`qobjld` defaults to its **own in-process linker**, not a toolchain subprocess.
+Static ELF executables/partial links, PE x86/x64 executables, and static Mach-O
+x86-64 executables can be built from objects and static archives without `ld`,
+LLD, LLVM libraries, a compiler, or any tools on `PATH` at link time.
+
+This is a bounded native implementation, **not full GNU ld/LLD parity**:
+
+| Native format | Implemented | Explicitly unsupported |
+| --- | --- | --- |
+| ELF | Existing static/partial emitter, scripts, `-L/-l`, exact `-l:filename`, archive extraction | Shared/PIE, DSOs, TLS, IFUNC, COMDAT; unsupported relocations |
+| PE/COFF | x86/x64 fixed-base console images, static archives, absolute/relative/RVA/section relocations, x64 `.pdata` ordering | DLLs/imports/exports, COMDAT, weak externals, TLS/CRT directives, ASLR, partial links, section GC |
+| Mach-O | x86-64 fixed-base `MH_EXECUTE`, `LC_UNIXTHREAD`, segments, symbols, static archives, unsigned/signed/branch relocations | Dylibs/imports, PIE, ARM64, GOT/TLV/subtractor relocations, unwind/initializers, code signing, partial links, section GC |
+
+Native PE/Mach-O images are limited to 256 MiB and section alignments up to
+64 KiB (PE up to 4 KiB). An executable entry must name code; the default is
+`_start`. Use `-e entry` for PE or `-e _entry` for Mach-O when appropriate.
+Unsupported requests fail before publishing the image; there is **no automatic
+external fallback**, even when compatibility bridges are built.
+
+The optional external bridges below preserve broader dynamic/toolchain
+functionality for callers that explicitly opt into that dependency. Native
+Windows/Darwin loader execution has not been validated; Linux tests independently
+map and execute freestanding x86-64 fixture code from both emitted formats.
 
 ## Selection and build
 
 Object **contents**, including archive members, select PE or Mach-O automatically.
-Use `--format=elf|pe|macho` for library-only links, LLVM bitcode-only inputs, or an
-explicit selection. Mixed object formats are errors. `--format=auto` uses input
+Use `--format=elf|pe|macho` for library-only links or explicit selection.
+LLVM bitcode is not a native input. Mixed object formats are errors. `--format=auto` uses input
 discovery. Library-only C/C++ calls should select the appropriate backend API.
 
 ```sh
@@ -23,15 +41,18 @@ ctest --test-dir build-yellowstone --output-on-failure
 
 | CMake option | Default |
 | --- | --- |
-| `YELLOWSTONE_ENABLE_ELF_BACKEND` | ON on POSIX |
-| `YELLOWSTONE_ENABLE_PE_BACKEND` | ON |
-| `YELLOWSTONE_ENABLE_MACHO_BACKEND` | ON |
+| `YELLOWSTONE_ENABLE_ELF_BACKEND` (external bridge) | OFF |
+| `YELLOWSTONE_ENABLE_PE_BACKEND` (external bridge) | OFF |
+| `YELLOWSTONE_ENABLE_MACHO_BACKEND` (external bridge) | OFF |
 | `YELLOWSTONE_ELF_LINKER` | `ld.bfd` |
 | `YELLOWSTONE_PE_LINKER` | `lld-link` |
 | `YELLOWSTONE_MACHO_LINKER` | `ld64.lld` |
 
-The runtime overrides are `--elf-linker`, `--pe-linker`, and `--macho-linker`.
-An unavailable executable or disabled backend produces an error. PE and Mach-O
+`--elf-linker`, `--pe-linker`, and `--macho-linker` explicitly request external
+execution. `--dynamic` explicitly requests the configured external linker for
+the selected format. Build the relevant `YELLOWSTONE_ENABLE_*_BACKEND=ON` first.
+Setting those CMake options alone does **not** change native defaults.
+An unavailable executable or disabled bridge produces an error. PE and Mach-O
 process launch uses POSIX spawning or Windows `CreateProcessW`, without a shell;
 the Windows host implementation has not yet been validated on a Windows runner.
 
@@ -41,9 +62,9 @@ arena-owned AST from `ldscript.g` and `ldscript.asdl`. These are build-time
 dependencies only. Lua 5.5 and Kaguya come from `third_party` through
 `cmake/LibstoneLua.cmake`, not a separately installed Lua ABI.
 
-## ELF and script mapping
+## Native ELF and script mapping
 
-`ElfBackend.cpp` implements the common contract in `Backend.hpp`; ELF, PE, and
+The optional `ElfBackend.cpp` implements the external contract in `Backend.hpp`; ELF, PE, and
 Mach-O share bounded response expansion, process execution, diagnostic handling,
 and auxiliary-output collision/publication helpers. `ElfBackend.hpp` remains a
 compatibility include. ELF validates the requested output kind after a successful
@@ -89,9 +110,32 @@ build-yellowstone/ld/qobjld -T yellowstone/ld/examples/memory.lua \
 Both example layouts are compiled, linked and executed by the script tests.
 See [the script manual](../manual/19-scripts.md) for placement rules and limits.
 
-## PE/COFF
+## Native C11 SDK example
 
-Supported through the native linker:
+`examples/native-sdk.c` links objects/archives using automatic format detection.
+It is compiled and executed by `qld-native` for all three formats, with `PATH`
+empty and subprocess invocation forbidden. For an installed SDK:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -pedantic \
+  -I/tmp/opencode/qld-native-install/include/qobjld \
+  -c yellowstone/ld/examples/native-sdk.c -o /tmp/opencode/native-sdk.o
+c++ /tmp/opencode/native-sdk.o -L/tmp/opencode/qld-native-install/lib \
+  -lqld -llibstone_script_lua -ldl -lm -pthread -o /tmp/opencode/native-sdk
+# Use the memory.o assembled in the earlier example:
+env PATH=/nonexistent /tmp/opencode/native-sdk _start \
+  /tmp/opencode/native-program /tmp/opencode/qld-memory.o
+/tmp/opencode/native-program # exits 42
+```
+
+For native cross-format C input, compile freestanding code with no runtime
+dependencies. Mach-O inputs must omit unwind tables (for example Clang's
+`-fno-asynchronous-unwind-tables`); otherwise qld rejects their unsupported
+unwind metadata. PE/Mach-O debug input sections are currently omitted.
+
+## Optional external PE/COFF bridge
+
+With the compatibility bridge enabled and explicitly selected:
 
 - Executables and DLLs; x86, x64 and ARM64 output are regression-tested.
 - Static `.lib`/`.a` archive extraction, COMDAT selection, relocation and base
@@ -121,14 +165,14 @@ cat > provider.c <<'EOF'
 __declspec(dllexport) int answer(void) { return 42; }
 EOF
 clang -target x86_64-pc-windows-msvc -c provider.c -o provider.obj
-build-yellowstone/ld/qobjld provider.obj --shared /noentry -o provider.dll
+build-yellowstone/ld/qobjld --pe-linker=lld-link provider.obj --shared /noentry -o provider.dll
 # Also creates provider.lib.
 cat > consumer.c <<'EOF'
 __declspec(dllimport) int answer(void);
 int entry(void) { return answer(); }
 EOF
 clang -target x86_64-pc-windows-msvc -c consumer.c -o consumer.obj
-build-yellowstone/ld/qobjld consumer.obj provider.lib \
+build-yellowstone/ld/qobjld --pe-linker=lld-link consumer.obj provider.lib \
   /entry:entry /subsystem:console /nodefaultlib -o consumer.exe
 llvm-readobj --coff-exports provider.dll
 llvm-readobj --coff-imports consumer.exe
@@ -138,7 +182,7 @@ llvm-readobj --coff-imports consumer.exe
 initialization. Partial COFF links (`-r`) are unsupported by `lld-link`; use
 `qobjar`/`llvm-ar` to create static libraries.
 
-## Mach-O
+## Optional external Mach-O bridge
 
 - Executables, dylibs and bundles; x86-64 and ARM64 cross-links are tested.
 - Static archive extraction and `-force_load`/`-all_load`, native library and
@@ -154,7 +198,7 @@ cat > answer.c <<'EOF'
 int answer(void) { return 42; }
 EOF
 clang -target x86_64-apple-macos11 -c answer.c -o answer.o
-build-yellowstone/ld/qobjld answer.o --shared -arch x86_64 \
+build-yellowstone/ld/qobjld --macho-linker=ld64.lld answer.o --shared -arch x86_64 \
   -platform_version macos 11.0 11.0 \
   -install_name @rpath/libanswer.dylib -o libanswer.dylib
 llvm-objdump --macho --private-headers libanswer.dylib
@@ -166,7 +210,7 @@ extern int answer(void);
 int main(void) { return answer(); }
 EOF
 clang -target x86_64-apple-macos11 -c main.c -o main.o
-build-yellowstone/ld/qobjld main.o libanswer.a -arch x86_64 \
+build-yellowstone/ld/qobjld --macho-linker=ld64.lld main.o libanswer.a -arch x86_64 \
   -platform_version macos 11.0 11.0 -o answer-macho
 llvm-nm answer-macho
 ```
@@ -190,7 +234,11 @@ The original `qld_options_t` ABI is unchanged. New C entry points mirror ELF:
   `qld_set_macho_options`, `qld_macho_linker`.
 
 The PE/Mach-O v1 option records have the same layout as `qld_elf_options_t`.
-Initialize them before use. Each contains an optional executable, an ordered
+Initialize them before use. A NULL executable selects native linking, including
+when calling `qld_link_elf`, `qld_link_pe`, or `qld_link_macho`. A non-NULL
+executable explicitly selects the corresponding external compatibility bridge.
+`qld_*_linker()` reports its configured external executable (NULL if disabled),
+**not** native format availability. Each record contains an executable, an ordered
 argv vector and a diagnostic callback. Structured options come first, then
 the argv vector. Setters copy strings; a successful setter replaces any
 previous backend selection. Passing NULL restores automatic selection.
@@ -204,7 +252,7 @@ backends in one `Options` is an error.
 `examples/formats-sdk.c` is a compiled, executed C11 example. C++ and
 incremental calls are exercised by `tests/formats_api.cpp`.
 
-Output bytes are read only after successful process exit and format/kind
+For external bridges, output bytes are read only after successful process exit and format/kind
 validation. Primary output, PE import libraries/PDBs/maps/manifests and
 Mach-O maps are staged in a private workspace. Requested auxiliary
 destinations are published after validation. A file-producing PE link

@@ -47,7 +47,7 @@ shutil.copyfile({str(obj)!r}, args[args.index('-o') + 1])
 
     fail("--shared", "--elf-linker=" + str(fake), obj, contains="output kind")
     fail("--format=elf", "--static", "--elf-linker=" + str(fake), obj, contains="output kind")
-    fail("--shared", obj, "-Map", image, contains="collide")
+    fail("--dynamic", "--shared", obj, "-Map", image, contains="collide")
     fake.write_text(f"#!{sys.executable}\nprint('warning: ignoring unknown argument: --imaginary')\n")
     fail("--shared", "--elf-linker=" + str(fake), obj, contains="ignored")
     print("ELF backend hardening regressions passed")

@@ -44,9 +44,16 @@ bool openCandidate(LinkState& state, ArchiveCandidate& cand,
     error = label + ": " + opened.error().message;
     return false;
   }
-  if (opened->object->format() != qbfd::Format::ELF) {
-    error = label + ": only ELF archive members are supported";
+  if (opened->object->format() != state.format ||
+      opened->object->fileType() != qbfd::FileType::Relocatable) {
+    error = label + ": archive member format/type mismatch; native linking requires relocatable objects";
     return false;
+  }
+  if (!state.geometrySet) {
+    state.wide = opened->object->is64Bit();
+    state.endian = opened->object->endian();
+    state.arch = opened->object->arch();
+    state.geometrySet = true;
   }
   if (opened->object->is64Bit() != state.wide ||
       opened->object->endian() != state.endian) {

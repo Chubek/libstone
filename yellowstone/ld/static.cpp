@@ -1,7 +1,6 @@
 // static.cpp - static executable link driver.
 //
-// Orchestrates layout, relocation and emission for ET_EXEC (and PIE, which
-// shares the emitter with a zero base).
+// Orchestrates layout, relocation and emission for static ET_EXEC.
 #include "internal.hpp"
 
 namespace qld::detail {

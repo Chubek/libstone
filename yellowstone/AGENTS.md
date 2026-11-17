@@ -82,3 +82,21 @@ kind and flags. Static archive linking is supported independently of those
 modes. Public behavior is in `ld/README.md`; cross-format/API regressions
 are in `ld/tests/formats.py` and `ld/tests/formats_api.cpp`.
 The current test/platform report is `ld/VALIDATION.md`.
+
+## Native-default linker follow-up
+
+Native linking is now the default for ELF, PE/COFF and Mach-O. Do not restore
+automatic subprocess selection for `--static`, `-l`, response files, format
+selection or shared/PIE requests. `NativeOptions.cpp` validates the supported
+native argument subset; `NativeImage.cpp` implements bounded PE x86/x64 and
+Mach-O x86-64 fixed-base images using qBFD plus shared archive/symbol discovery.
+Unsupported dynamic/COMDAT/TLS/unwind semantics must fail explicitly, not be
+copied into a fake successful image. See `ld/README.md` for the exact subset.
+
+External compatibility bridges are CMake-OFF by default and require explicit
+`--dynamic`, `--*-linker`, or a non-NULL API `linker`. A format-specific API
+with NULL `linker` still selects native linking. `tests/native.py` exercises
+CLI/C/C++/incremental paths with PATH empty and the subprocess recursion guard
+set; `tests/native_image.py` independently maps freestanding x86-64 output code.
+This is not evidence of Windows/Darwin loader compatibility. Retain the
+explicit-bridge regression suite in an all-bridges-ON configuration.

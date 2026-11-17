@@ -1,16 +1,16 @@
 // shared.cpp - shared-object / PIE / relocatable drivers.
 //
-// Shared/PIE output requires the ELF toolchain backend. -r uses the native
+// Shared/PIE output is not implemented natively. -r uses the native
 // relocatable emitter in binarizer.cpp.
 #include "internal.hpp"
-#include "ElfBackend.hpp"
-#include "ScriptSDK.hpp"
 
 namespace qld::detail {
 
 bool linkShared(LinkState& state, std::vector<uint8_t>& out,
                 std::string& error) {
-  return linkElf(state, out, error, ScriptSDK{});
+  (void)state; (void)out;
+  error = "native shared/PIE linking is not yet supported";
+  return false;
 }
 
 bool linkRelocatable(LinkState& state, std::vector<uint8_t>& out,

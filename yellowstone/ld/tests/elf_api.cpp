@@ -20,11 +20,13 @@ int main(int argc, char **argv) try {
   uint8_t *bytes = nullptr;
   size_t size = 0;
   char *error = nullptr;
-  // The original C ABI now also emits real DSOs, with no required new fields.
+  // Automatic selection must never delegate shared linking to an executable.
   int rc = qld_link_bytes(&opts, &bytes, &size, &error);
-  require(rc == 0, error); image(bytes, size); qld_free_bytes(bytes, size);
+  require(rc != 0 && !bytes && !size, "shared link implicitly used toolchain");
+  qld_free_string(error); error = nullptr;
   qld_elf_options_t elf;
   qld_elf_options_init(&elf);
+  elf.linker = qld_elf_linker();
   const char *args[] = {"--soname=api.so", "--hash-style=both"};
   elf.arguments = args; elf.n_arguments = 2;
   rc = qld_link_elf_bytes(&opts, &elf, &bytes, &size, &error);
@@ -42,6 +44,7 @@ int main(int argc, char **argv) try {
   linker.setMode(qld::Mode::Shared);
   {
     qld::ElfOptions config;
+    config.linker = qld_elf_linker();
     config.arguments = {"--soname=builder.so", "--hash-style=both"};
     auto result = linker.setElfOptions(config);
     require(result.ok(), result.error().message.c_str());
@@ -69,6 +72,7 @@ int main(int argc, char **argv) try {
   require(linker.run().ok(), "invalid update damaged builder");
   qld::Options cpp;
   cpp.inputs = {argv[1]}; cpp.mode = qld::Mode::Shared;
+  cpp.elf.linker = qld_elf_linker();
   cpp.elf.arguments = {"--soname=cpp.so"};
   auto result = qld::link(cpp);
   require(result.ok(), result.error().message.c_str());

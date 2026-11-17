@@ -18,10 +18,13 @@ Backend invocationBackend(const std::vector<std::string>& arguments);
 const char *defaultPeLinker();
 const char *defaultMachOLinker();
 const char *defaultElfLinker();
-bool needsElfBackend(const LinkOptions&);
 bool linkElf(LinkState&, std::vector<uint8_t>&, std::string&, const ScriptSDK&);
 bool linkPe(LinkState&, std::vector<uint8_t>&, std::string&);
 bool linkMachO(LinkState&, std::vector<uint8_t>&, std::string&);
+// Native format selection never implies permission to spawn a toolchain.
+bool externalBackendRequested(const LinkOptions&, Backend);
+void parseNativeArguments(LinkOptions&, Backend);
+bool linkNativeImage(LinkState&, std::vector<uint8_t>&, std::string&);
 
 namespace toolchain {
 inline constexpr size_t sourceLimit = 16 * 1024 * 1024;

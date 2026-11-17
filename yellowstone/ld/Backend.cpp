@@ -172,6 +172,13 @@ std::string runProcess(const std::string& linker, const std::vector<std::string>
   if (std::getenv("QLD_TOOLCHAIN_BACKEND_ACTIVE") || std::getenv("QLD_ELF_BACKEND_ACTIVE"))
     throw std::runtime_error("recursive qobjld backend invocation; select a toolchain linker");
   if (linker.empty()) throw std::runtime_error("empty linker executable");
+#if defined(__linux__)
+  // A qobjld selected as its own explicit bridge is a configuration error even
+  // when its child would now reject the native-only request before respawning.
+  std::error_code selfError;
+  if (std::filesystem::equivalent(linker, "/proc/self/exe", selfError))
+    throw std::runtime_error("recursive qobjld backend invocation; select a toolchain linker");
+#endif
   std::string response;
   for (const auto& arg : args) response += quoted(arg, style) + "\n";
   auto rsp = work.path / "arguments.rsp";
@@ -378,7 +385,7 @@ Backend selectBackend(const LinkOptions& o) {
   if (o.elf.enabled) return Backend::ELF;
   auto selected = inputBackend(o.inputs);
   if (selected == Backend::PE || selected == Backend::MachO) return selected;
-  return needsElfBackend(o) ? Backend::ELF : Backend::Auto;
+  return Backend::Auto;
 }
 
 Backend invocationBackend(const std::vector<std::string>& raw) {

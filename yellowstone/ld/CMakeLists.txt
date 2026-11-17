@@ -30,6 +30,8 @@ add_library(qld STATIC
   Backend.cpp
   PeBackend.cpp
   MachOBackend.cpp
+  NativeOptions.cpp
+  NativeImage.cpp
   ld.c
   ld.cpp
   ldscript.cpp
@@ -50,13 +52,13 @@ target_compile_features(qld PRIVATE c_std_11)
 set_source_files_properties(ld.c PROPERTIES LANGUAGE CXX)
 
 target_compile_features(qld PUBLIC cxx_std_20)
-option(YELLOWSTONE_ENABLE_ELF_BACKEND "Enable the GNU-compatible ELF linker backend" ${UNIX})
+option(YELLOWSTONE_ENABLE_ELF_BACKEND "Enable the explicit external ELF compatibility bridge" OFF)
 set(YELLOWSTONE_ELF_LINKER "ld.bfd" CACHE STRING "Default GNU-compatible ELF linker executable (path or PATH name)")
 if(YELLOWSTONE_ENABLE_ELF_BACKEND AND NOT UNIX)
   message(FATAL_ERROR "The ELF toolchain backend currently requires POSIX process APIs")
 endif()
-option(YELLOWSTONE_ENABLE_PE_BACKEND "Enable the lld-link-compatible PE/COFF backend" ON)
-option(YELLOWSTONE_ENABLE_MACHO_BACKEND "Enable the ld64-compatible Mach-O backend" ON)
+option(YELLOWSTONE_ENABLE_PE_BACKEND "Enable the explicit external PE compatibility bridge" OFF)
+option(YELLOWSTONE_ENABLE_MACHO_BACKEND "Enable the explicit external Mach-O compatibility bridge" OFF)
 set(YELLOWSTONE_PE_LINKER "lld-link" CACHE STRING "Default PE/COFF toolchain linker")
 set(YELLOWSTONE_MACHO_LINKER "ld64.lld" CACHE STRING "Default Mach-O toolchain linker")
 if(YELLOWSTONE_ENABLE_PE_BACKEND)
@@ -95,6 +97,21 @@ if(YELLOWSTONE_BUILD_TESTS)
   set_tests_properties(qld-frontend PROPERTIES TIMEOUT 30)
   if(YELLOWSTONE_BUILD_TOOLS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(qld-native-api-test tests/native_api.cpp)
+    target_link_libraries(qld-native-api-test PRIVATE qld)
+    add_executable(qld-native-c-example examples/native-sdk.c)
+    target_compile_features(qld-native-c-example PRIVATE c_std_11)
+    target_compile_options(qld-native-c-example PRIVATE
+      $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Werror;-pedantic>)
+    target_link_libraries(qld-native-c-example PRIVATE qld)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+      add_test(NAME qld-native COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/native.py" "$<TARGET_FILE:qobjld>"
+        "${CMAKE_C_COMPILER}" "$<TARGET_FILE:qld-native-api-test>"
+        "$<TARGET_FILE:qld-native-c-example>")
+      set_tests_properties(qld-native PROPERTIES TIMEOUT 60
+        ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
+    endif()
     add_executable(qld-formats-api-test tests/formats_api.cpp)
     target_link_libraries(qld-formats-api-test PRIVATE qld)
     add_executable(qld-formats-c-example examples/formats-sdk.c)

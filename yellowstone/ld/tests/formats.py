@@ -29,6 +29,8 @@ if (pe_enabled and not tools["lld-link"]) or (macho_enabled and not tools["ld64.
 
 
 def run(*args, expected=0, **kwargs):
+    if args[0] == ld:
+        args = (ld, "--dynamic", *args[1:])  # Explicit compatibility bridge.
     p = subprocess.run(list(map(str, args)), capture_output=True, text=True, **kwargs)
     assert p.returncode == expected, (args, p.returncode, p.stdout, p.stderr)
     return p.stdout
@@ -63,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix="qld-formats-") as tmp:
         output.write_bytes(b"preserve-existing-image")
         if extra:
             extra.write_bytes(b"preserve-existing-auxiliary")
-        p = subprocess.run([ld, "--format=" + fmt, *map(str, args), "-o", str(output)],
+        p = subprocess.run([ld, "--dynamic", "--format=" + fmt, *map(str, args), "-o", str(output)],
                            capture_output=True, text=True)
         assert p.returncode and contains.lower() in p.stderr.lower(), (args, p.returncode, p.stderr)
         assert output.read_bytes() == b"preserve-existing-image"

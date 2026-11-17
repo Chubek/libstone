@@ -31,16 +31,29 @@ static bool writeFile(const std::string& path, const std::vector<uint8_t>& b,
 }
 
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
-                  std::string& error) {
+                  std::string& error, const ScriptSDK *sdk) {
   try {
+    auto backend = selectBackend(state.options);
+    if (backend == Backend::Auto) backend = Backend::ELF;
+    if (externalBackendRequested(state.options, backend)) {
+      switch (backend) {
+        case Backend::ELF: return linkElf(state, out, error, sdk ? *sdk : ScriptSDK{});
+        case Backend::PE: return linkPe(state, out, error);
+        case Backend::MachO: return linkMachO(state, out, error);
+        case Backend::Auto: break;
+      }
+    }
+    parseNativeArguments(state.options, backend);
+    state.format = backend == Backend::PE ? qbfd::Format::COFF :
+                   backend == Backend::MachO ? qbfd::Format::MachO : qbfd::Format::ELF;
     toolchain::checkDestinations(state.options.output, {state.options.mapFile});
+    if (sdk && (state.options.scriptIsText || !state.options.script.empty())) {
+      state.options.scriptText = sdk->preprocess(state.options.scriptIsText ?
+          state.options.scriptText : toolchain::readText(state.options.script),
+          state.options.scriptIsText ? "<script>" : state.options.script);
+      state.options.scriptIsText = true;
+    }
   } catch (const std::exception& e) { error = e.what(); return false; }
-  switch (selectBackend(state.options)) {
-    case Backend::ELF: return linkElf(state, out, error, ScriptSDK{});
-    case Backend::PE: return linkPe(state, out, error);
-    case Backend::MachO: return linkMachO(state, out, error);
-    case Backend::Auto: break;
-  }
   // Explicit scripts can supply INPUT and SEARCH_DIR before -l resolution.
   if (state.options.scriptIsText || !state.options.script.empty())
     if (!loadScriptExtras(state, error)) return false;
@@ -68,8 +81,37 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
     }
   }
   if (!discoverSymbols(state, error)) return false;
+  if (state.format == qbfd::Format::ELF) {
+    if (!state.options.emulator.empty()) {
+      const auto& emulation = state.options.emulator;
+      bool match = (state.arch == qbfd::Arch::X86_64 && emulation == "elf_x86_64") ||
+                   (state.arch == qbfd::Arch::X86 && emulation == "elf_i386") ||
+                   (state.arch == qbfd::Arch::AArch64 && emulation == "aarch64linux");
+      if (!match) {
+        error = "unsupported native ELF emulation or architecture mismatch: " + emulation;
+        return false;
+      }
+    }
+    for (const auto& input : state.objects) {
+      if (!input.object) continue;
+      for (const auto& section : input.object->sections()) {
+        if ((section.flags & qbfd::sec::Tls) || section.nativeType == 17) {
+          error = input.label + ": native ELF TLS/COMDAT processing is not yet supported";
+          return false;
+        }
+      }
+      for (const auto& symbol : input.object->symbols()) {
+        if (symbol.kind == qbfd::SymbolKind::Indirect) {
+          error = input.label + ": native ELF IFUNC processing is not yet supported";
+          return false;
+        }
+      }
+    }
+  }
   bool ok = false;
-  switch (state.options.mode) {
+  if (state.format != qbfd::Format::ELF) {
+    ok = linkNativeImage(state, out, error);
+  } else switch (state.options.mode) {
     case Mode::Exec: ok = linkStatic(state, out, error); break;
     case Mode::Shared: ok = linkShared(state, out, error); break;
     case Mode::Relocatable: ok = linkRelocatable(state, out, error); break;

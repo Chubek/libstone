@@ -49,7 +49,7 @@ constexpr OptionSpec kBase{0, "image-base", true, "addr",
 constexpr OptionSpec kVerbose{'v', "verbose", false, "", "be verbose"};
 constexpr OptionSpec kCheckScript{0, "check-script", false, "",
                                    "validate the script and exit"};
-constexpr OptionSpec kDynamic{0, "dynamic", false, "", "use the GNU-compatible ELF backend (ordered GNU ld arguments)"};
+constexpr OptionSpec kDynamic{0, "dynamic", false, "", "explicitly use an enabled external compatibility bridge"};
 constexpr OptionSpec kElfLinker{0, "elf-linker", true, "executable", "select the ELF toolchain linker"};
 constexpr OptionSpec kFormat{0, "format", true, "auto|elf|pe|macho", "select output format (default: input magic)"};
 constexpr OptionSpec kPeLinker{0, "pe-linker", true, "executable", "select lld-link-compatible PE backend"};
@@ -67,8 +67,8 @@ bool elfInvocation(int argc, char **argv) {
         a == "--elf-linker" || a.starts_with("--elf-linker=") ||
         a == "--dynamic-linker" || a == "-dynamic-linker" ||
         a.starts_with("--dynamic-linker=") || a.starts_with("-dynamic-linker=") ||
-        (qld_elf_linker() && (a == "--static" || a == "-static" || a == "-Bstatic" || a == "-Bdynamic" ||
-         a == "--library" || a.starts_with("--library=") || a.starts_with("-l"))) ||
+        a == "--static" || a == "-static" || a == "-Bstatic" || a == "-Bdynamic" ||
+        a == "--library" || a.starts_with("--library=") || a.starts_with("-l") ||
         a == "--as-needed" || a == "--no-as-needed" || a == "--start-group" ||
         a == "--whole-archive" || a == "-z" || a.starts_with("--soname") ||
         a.starts_with("--rpath") || a.starts_with("--version-script") ||

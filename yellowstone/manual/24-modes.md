@@ -1,9 +1,15 @@
 # Chapter 24: Link Modes
 
-For ELF, Exec creates ET_EXEC, shared and PIE create ET_DYN, and relocatable
-mode preserves input relocations for a later link. PE maps Exec/Shared to
-EXE/DLL and Mach-O maps them to MH_EXECUTE/MH_DYLIB; native `-bundle` is also
-available. All three formats support linking static archives.
+Native ELF Exec creates static ET_EXEC; relocatable mode preserves supported
+input relocations for a later link. Native PE creates fixed-base x86/x64 EXEs;
+native Mach-O creates fixed-base x86-64 MH_EXECUTE with LC_UNIXTHREAD.
+All three support static archives without external tools. Shared/PIE,
+dynamic imports and native PE/Mach-O partial links are explicitly unsupported;
+there is no automatic fallback.
+
+The optional external bridges provide ELF ET_DYN/PIE, PE DLLs, Mach-O dylibs
+and bundles. Enable the relevant CMake bridge and explicitly select
+`--dynamic` or `--elf-linker`/`--pe-linker`/`--macho-linker`.
 
 `lld-link` has no partial COFF (`-r`) mode. LLD's Mach-O backend does not
 implement fully static Darwin images or partial links; qld rejects ignored

@@ -20,6 +20,7 @@ int main(int argc, char **argv) {
   options.mode = QLD_MODE_SHARED;
   qld_elf_options_t elf;
   qld_elf_options_init(&elf);
+  elf.linker = qld_elf_linker(); /* Explicit opt-in to the compatibility bridge. */
   elf.arguments = arguments;
   elf.n_arguments = sizeof(arguments) / sizeof(arguments[0]);
   char *error = NULL;
