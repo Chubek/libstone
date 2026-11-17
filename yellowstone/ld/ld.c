@@ -19,6 +19,7 @@
 #include "parser.hpp"
 #include "ScriptSDK.hpp"
 #include "ElfBackend.hpp"
+#include "Backend.hpp"
 
 extern const char* qld_detail_version();
 
@@ -62,10 +63,6 @@ qld::detail::LinkOptions toInternal(const qld_options_t* o) {
     default: in.mode = qld::detail::Mode::Exec; break;
   }
   in.pie = o->pie != 0;
-  if (in.pie && in.mode == qld::detail::Mode::Exec) {
-    // PIE executables link as shared-type images with an entry point.
-    in.mode = qld::detail::Mode::Shared;
-  }
   in.gcSections = o->gc_sections != 0;
   in.stripDebug = o->strip_debug != 0;
   in.allowUndefined = o->allow_undefined != 0;
@@ -115,7 +112,9 @@ bool writeOutput(const std::string& path, const std::vector<uint8_t>& bytes,
 
 int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
                 char** errmsg, const qld::ScriptSDK *sdk = nullptr,
-                const qld::detail::ElfOptions *elf = nullptr) try {
+                const qld::detail::ElfOptions *elf = nullptr,
+                const qld::detail::ToolchainOptions *pe = nullptr,
+                const qld::detail::ToolchainOptions *macho = nullptr) try {
   std::string validation;
   if (!validOptions(opts, validation)) {
     setErr(errmsg, validation);
@@ -124,8 +123,10 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
   qld::detail::LinkState state;
   state.options = toInternal(opts);
   if (elf) state.options.elf = *elf;
-  bool dynamic = qld::detail::needsElfBackend(state.options);
-  if (!dynamic && sdk && (state.options.scriptIsText || !state.options.script.empty())) {
+  if (pe) state.options.pe = *pe;
+  if (macho) state.options.macho = *macho;
+  auto backend = qld::detail::selectBackend(state.options);
+  if (backend == qld::detail::Backend::Auto && sdk && (state.options.scriptIsText || !state.options.script.empty())) {
     std::string source = state.options.scriptText;
     if (!state.options.scriptIsText) {
       std::ifstream in(state.options.script, std::ios::binary);
@@ -137,7 +138,7 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
   }
   std::string error;
   std::vector<uint8_t> bytes;
-  bool linked = dynamic ? qld::detail::linkElf(state, bytes, error, sdk ? *sdk : qld::ScriptSDK{})
+  bool linked = backend == qld::detail::Backend::ELF ? qld::detail::linkElf(state, bytes, error, sdk ? *sdk : qld::ScriptSDK{})
                         : qld::detail::linkState(state, bytes, error);
   if (!linked) {
     setErr(errmsg, error.empty() ? "link failed" : error);
@@ -203,12 +204,14 @@ int qld_link(const qld_options_t* opts, char** errmsg) {
 
 static int linkBytes(const qld_options_t* opts, uint8_t** out_bytes,
                    size_t* out_size, char** errmsg, const qld::ScriptSDK *sdk = nullptr,
-                   const qld::detail::ElfOptions *elf = nullptr) {
+                   const qld::detail::ElfOptions *elf = nullptr,
+                   const qld::detail::ToolchainOptions *pe = nullptr,
+                   const qld::detail::ToolchainOptions *macho = nullptr) {
   if (out_bytes) *out_bytes = nullptr;
   if (out_size) *out_size = 0;
   if (!out_bytes || !out_size) { setErr(errmsg, "output pointers must not be null"); return QLD_INVALID_ARGUMENT; }
   std::vector<uint8_t> bytes;
-  int rc = runInternal(opts, bytes, errmsg, sdk, elf);
+  int rc = runInternal(opts, bytes, errmsg, sdk, elf, pe, macho);
   if (rc != 0) {
     if (out_bytes) *out_bytes = nullptr;
     if (out_size) *out_size = 0;
@@ -243,22 +246,22 @@ void qld_elf_options_init(qld_elf_options_t *opts) {
 
 const char *qld_elf_linker(void) { return qld::detail::defaultElfLinker(); }
 
-static qld::detail::ElfOptions copyElfOptions(const qld_elf_options_t *opts) {
+static qld::detail::ElfOptions copyElfOptions(const qld_elf_options_t *opts, const std::string& format = "ELF") {
   qld::detail::ElfOptions result;
   result.enabled = true;
   if (!opts) return result;
-  if (opts->struct_size != sizeof(*opts)) throw std::runtime_error("invalid ELF options struct_size");
-  if (opts->n_arguments && !opts->arguments) throw std::runtime_error("ELF arguments is null");
+  if (opts->struct_size != sizeof(*opts)) throw std::runtime_error("invalid " + format + " options struct_size");
+  if (opts->n_arguments && !opts->arguments) throw std::runtime_error(format + " arguments is null");
   if (opts->linker) {
-    if (!*opts->linker) throw std::runtime_error("empty ELF linker executable");
+    if (!*opts->linker) throw std::runtime_error("empty " + format + " linker executable");
     result.linker = opts->linker;
   }
   size_t budget = 16 * 1024 * 1024;
-  if (opts->n_arguments > budget) throw std::runtime_error("too many ELF arguments");
+  if (opts->n_arguments > budget) throw std::runtime_error("too many " + format + " arguments");
   for (size_t i = 0; i < opts->n_arguments; ++i) {
-    if (!opts->arguments[i]) throw std::runtime_error("null ELF argument");
+    if (!opts->arguments[i]) throw std::runtime_error("null " + format + " argument");
     auto size = std::strlen(opts->arguments[i]) + 1;
-    if (size > budget) throw std::runtime_error("ELF argument size limit exceeded");
+    if (size > budget) throw std::runtime_error(format + " argument size limit exceeded");
     budget -= size;
     result.arguments.emplace_back(opts->arguments[i]);
   }
@@ -290,6 +293,39 @@ int qld_link_elf_bytes(const qld_options_t *opts, const qld_elf_options_t *elf,
   catch (const std::exception& e) { setErr(errmsg, e.what()); return QLD_INVALID_ARGUMENT; }
 }
 
+void qld_pe_options_init(qld_pe_options_t *opts) { qld_elf_options_init(opts); }
+void qld_macho_options_init(qld_macho_options_t *opts) { qld_elf_options_init(opts); }
+const char *qld_pe_linker(void) { return qld::detail::defaultPeLinker(); }
+const char *qld_macho_linker(void) { return qld::detail::defaultMachOLinker(); }
+
+static int linkForeign(const qld_options_t *opts, const qld_elf_options_t *config,
+                       bool pe, uint8_t **bytes, size_t *size, char **errmsg, bool capture) {
+  if (bytes) *bytes = nullptr;
+  if (size) *size = 0;
+  try {
+    auto copied = copyElfOptions(config, pe ? "PE" : "Mach-O");
+    if (capture)
+      return linkBytes(opts, bytes, size, errmsg, nullptr, nullptr, pe ? &copied : nullptr, pe ? nullptr : &copied);
+    std::vector<uint8_t> image;
+    return runInternal(opts, image, errmsg, nullptr, nullptr, pe ? &copied : nullptr, pe ? nullptr : &copied);
+  } catch (const std::bad_alloc&) { setErr(errmsg, "out of memory"); return QLD_OUT_OF_MEMORY; }
+  catch (const std::exception& e) { setErr(errmsg, e.what()); return QLD_INVALID_ARGUMENT; }
+}
+int qld_link_pe(const qld_options_t *opts, const qld_pe_options_t *pe, char **errmsg) {
+  return linkForeign(opts, pe, true, nullptr, nullptr, errmsg, false);
+}
+int qld_link_pe_bytes(const qld_options_t *opts, const qld_pe_options_t *pe,
+                     uint8_t **bytes, size_t *size, char **errmsg) {
+  return linkForeign(opts, pe, true, bytes, size, errmsg, true);
+}
+int qld_link_macho(const qld_options_t *opts, const qld_macho_options_t *macho, char **errmsg) {
+  return linkForeign(opts, macho, false, nullptr, nullptr, errmsg, false);
+}
+int qld_link_macho_bytes(const qld_options_t *opts, const qld_macho_options_t *macho,
+                        uint8_t **bytes, size_t *size, char **errmsg) {
+  return linkForeign(opts, macho, false, bytes, size, errmsg, true);
+}
+
 int qld_check_script(const char* text, char** errmsg) {
   if (!text) {
     setErr(errmsg, "null script");
@@ -319,10 +355,31 @@ int qld_set_elf_options(qld_linker_t *self, const qld_elf_options_t *opts, char 
   try {
     if (!self) throw std::runtime_error("null linker");
     self->opts.elf = opts ? copyElfOptions(opts) : qld::detail::ElfOptions{};
+    self->opts.pe = {}; self->opts.macho = {};
     if (errmsg) *errmsg = nullptr;
     return QLD_OK;
   } catch (const std::bad_alloc&) { setErr(errmsg, "out of memory"); return QLD_OUT_OF_MEMORY; }
   catch (const std::exception& e) { setErr(errmsg, e.what()); return QLD_INVALID_ARGUMENT; }
+}
+
+static int setForeignOptions(qld_linker_t *self, const qld_elf_options_t *opts,
+                             bool pe, char **errmsg) {
+  try {
+    if (!self) throw std::runtime_error("null linker");
+    auto copy = opts ? copyElfOptions(opts, pe ? "PE" : "Mach-O") : qld::detail::ToolchainOptions{};
+    if (pe) { self->opts.pe = std::move(copy); self->opts.macho = {}; }
+    else { self->opts.macho = std::move(copy); self->opts.pe = {}; }
+    self->opts.elf = {};
+    if (errmsg) *errmsg = nullptr;
+    return QLD_OK;
+  } catch (const std::bad_alloc&) { setErr(errmsg, "out of memory"); return QLD_OUT_OF_MEMORY; }
+  catch (const std::exception& e) { setErr(errmsg, e.what()); return QLD_INVALID_ARGUMENT; }
+}
+int qld_set_pe_options(qld_linker_t *self, const qld_pe_options_t *opts, char **errmsg) {
+  return setForeignOptions(self, opts, true, errmsg);
+}
+int qld_set_macho_options(qld_linker_t *self, const qld_macho_options_t *opts, char **errmsg) {
+  return setForeignOptions(self, opts, false, errmsg);
 }
 
 int qld_register_directive(qld_linker_t *self, const char *name,
@@ -451,7 +508,6 @@ void qld_set_flag(qld_linker_t* self, const char* flag, int value) {
   bool v = value != 0;
   if (f == "pie") {
     self->opts.pie = v;
-    if (v) self->opts.mode = qld::detail::Mode::Shared;
   } else if (f == "gc-sections" || f == "gc_sections") {
     self->opts.gcSections = v;
   } else if (f == "strip-debug" || f == "strip_debug") {
@@ -496,6 +552,7 @@ static qld_options_t toC(const qld_linker* self, std::vector<const char*>& a,
   o.verbose = self->opts.verbose ? 1 : 0;
   o.map_file =
       self->opts.mapFile.empty() ? nullptr : self->opts.mapFile.c_str();
+  o.emulator = self->opts.emulator.empty() ? nullptr : self->opts.emulator.c_str();
   return o;
 }
 
@@ -507,7 +564,7 @@ int qld_run(qld_linker_t* self, char** errmsg) {
   std::vector<const char*> a, b, c;
   qld_options_t o = toC(self, a, b, c);
   std::vector<uint8_t> bytes;
-  return runInternal(&o, bytes, errmsg, &self->sdk, &self->opts.elf);
+  return runInternal(&o, bytes, errmsg, &self->sdk, &self->opts.elf, &self->opts.pe, &self->opts.macho);
 }
 
 int qld_run_bytes(qld_linker_t* self, uint8_t** out_bytes, size_t* out_size,
@@ -518,5 +575,5 @@ int qld_run_bytes(qld_linker_t* self, uint8_t** out_bytes, size_t* out_size,
   }
   std::vector<const char*> a, b, c;
   qld_options_t o = toC(self, a, b, c);
-  return linkBytes(&o, out_bytes, out_size, errmsg, &self->sdk, &self->opts.elf);
+  return linkBytes(&o, out_bytes, out_size, errmsg, &self->sdk, &self->opts.elf, &self->opts.pe, &self->opts.macho);
 }

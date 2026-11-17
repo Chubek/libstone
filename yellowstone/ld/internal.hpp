@@ -24,12 +24,13 @@ namespace qld::detail {
 // ---------------------------------------------------------------------------
 enum class Mode : uint8_t { Exec, Shared, Relocatable };
 
-struct ElfOptions {
+struct ToolchainOptions {
   bool enabled = false;
   std::string linker;
   std::vector<std::string> arguments;
   std::function<void(const std::string&)> diagnostic;
 };
+using ElfOptions = ToolchainOptions;
 
 // ---------------------------------------------------------------------------
 // Public-facing options (mirrors ld.hpp Options; internal copy avoids a
@@ -57,6 +58,8 @@ struct LinkOptions {
   std::string mapFile;                  // -M / -Map
   std::string emulator;                 // -m (accepted, selects arch check)
   ElfOptions elf;
+  ToolchainOptions pe;
+  ToolchainOptions macho;
 };
 
 // ---------------------------------------------------------------------------

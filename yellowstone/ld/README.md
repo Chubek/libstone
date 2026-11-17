@@ -1,0 +1,172 @@
+# qobjld link backends
+
+`qobjld` links ELF, PE/COFF and Mach-O objects and static archives. ELF's
+in-process static/partial linker and script SDK remain available. Full ELF
+toolchain links use GNU-compatible `ld.bfd`; PE uses `lld-link`'s command-line
+dialect; Mach-O uses `ld64.lld`'s Darwin dialect. These executables are runtime
+dependencies of the corresponding toolchain backends, not embedded libraries.
+
+## Selection and build
+
+Object **contents**, including archive members, select PE or Mach-O automatically.
+Use `--format=elf|pe|macho` for library-only links, LLVM bitcode-only inputs, or an
+explicit selection. Mixed object formats are errors. `--format=auto` uses input
+discovery. Library-only C/C++ calls should select the appropriate backend API.
+
+```sh
+cmake -S yellowstone -B build-yellowstone \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON \
+  -DQOBJFILE_DOMTERM=OFF
+cmake --build build-yellowstone --parallel
+ctest --test-dir build-yellowstone --output-on-failure
+```
+
+| CMake option | Default |
+| --- | --- |
+| `YELLOWSTONE_ENABLE_ELF_BACKEND` | ON on POSIX |
+| `YELLOWSTONE_ENABLE_PE_BACKEND` | ON |
+| `YELLOWSTONE_ENABLE_MACHO_BACKEND` | ON |
+| `YELLOWSTONE_ELF_LINKER` | `ld.bfd` |
+| `YELLOWSTONE_PE_LINKER` | `lld-link` |
+| `YELLOWSTONE_MACHO_LINKER` | `ld64.lld` |
+
+The runtime overrides are `--elf-linker`, `--pe-linker`, and `--macho-linker`.
+An unavailable executable or disabled backend produces an error. PE and Mach-O
+process launch uses POSIX spawning or Windows `CreateProcessW`, without a shell;
+the Windows host implementation has not yet been validated on a Windows runner.
+
+## PE/COFF
+
+Supported through the native linker:
+
+- Executables and DLLs; x86, x64 and ARM64 output are regression-tested.
+- Static `.lib`/`.a` archive extraction, COMDAT selection, relocation and base
+  relocations; section GC via `/opt:ref` or `--gc-sections`.
+- Function/data imports, import libraries, `__declspec(dllexport)`, `/export`,
+  `.def` ordinal exports and forwarded exports.
+- Native subsystem, entry, image base, CRT/default-library, TLS, unwind,
+  delay-load and other linker options. TLS and delay-load runtime behavior
+  requires the appropriate target CRT/SDK and is not runtime-tested here.
+- Import-library, map and PDB output. DLL export names and import-library DLL
+  names retain the requested output basename, never the temporary staging path.
+
+Common qld flags are translated: `--shared`, `-e`, `-L`, `-l`, `--image-base`,
+`--subsystem`, `--export`, `--out-implib`, `--pie`, `--strip-debug`, `-Map`,
+`--allow-undefined`. Native `/option:value` flags pass through in order.
+`-lfoo` searches `foo.lib`, `libfoo.lib`, `libfoo.a`, `libfoo.dll.a` in the `-L`
+directories, then falls back to native `foo.lib` lookup. `-l:filename` selects
+an exact filename. `/defaultlib` and `/nodefaultlib` retain native semantics.
+GNU `-Bstatic/-Bdynamic` are not PE options; choose static/import libraries
+explicitly. `--static` additionally verifies the image has neither an import
+directory nor a delay-import directory; ASLR is independent of this check.
+
+Self-contained cross-link example (from the repository root):
+
+```sh
+cat > provider.c <<'EOF'
+__declspec(dllexport) int answer(void) { return 42; }
+EOF
+clang -target x86_64-pc-windows-msvc -c provider.c -o provider.obj
+build-yellowstone/ld/qobjld provider.obj --shared /noentry -o provider.dll
+# Also creates provider.lib.
+cat > consumer.c <<'EOF'
+__declspec(dllimport) int answer(void);
+int entry(void) { return answer(); }
+EOF
+clang -target x86_64-pc-windows-msvc -c consumer.c -o consumer.obj
+build-yellowstone/ld/qobjld consumer.obj provider.lib \
+  /entry:entry /subsystem:console /nodefaultlib -o consumer.exe
+llvm-readobj --coff-exports provider.dll
+llvm-readobj --coff-imports consumer.exe
+```
+
+`/noentry` is explicit: a normal DLL may need `DllMainCRTStartup` and CRT
+initialization. Partial COFF links (`-r`) are unsupported by `lld-link`; use
+`qobjar`/`llvm-ar` to create static libraries.
+
+## Mach-O
+
+- Executables, dylibs and bundles; x86-64 and ARM64 cross-links are tested.
+- Static archive extraction and `-force_load`/`-all_load`, native library and
+  framework search, dylib install names, versions, rpaths, weak imports,
+  reexports, two-level namespace, export filters and runtime symbol lookup.
+- Native relocations, GOT/non-lazy bindings, lazy stubs and thread-local
+  variable descriptors; the tests inspect real emitted binding tables.
+- Native `-arch` and `-platform_version` are explicit. Target SDK, CRT,
+  libSystem and framework paths belong to the caller/compiler driver.
+
+```sh
+cat > answer.c <<'EOF'
+int answer(void) { return 42; }
+EOF
+clang -target x86_64-apple-macos11 -c answer.c -o answer.o
+build-yellowstone/ld/qobjld answer.o --shared -arch x86_64 \
+  -platform_version macos 11.0 11.0 \
+  -install_name @rpath/libanswer.dylib -o libanswer.dylib
+llvm-objdump --macho --private-headers libanswer.dylib
+
+# Statically link the function from an archive into an executable.
+llvm-ar --format=darwin rcs libanswer.a answer.o
+cat > main.c <<'EOF'
+extern int answer(void);
+int main(void) { return answer(); }
+EOF
+clang -target x86_64-apple-macos11 -c main.c -o main.o
+build-yellowstone/ld/qobjld main.o libanswer.a -arch x86_64 \
+  -platform_version macos 11.0 11.0 -o answer-macho
+llvm-nm answer-macho
+```
+
+Linking static archives into a Mach-O image is distinct from producing a
+fully static Darwin executable. LLD 22 does **not** implement `-static` or
+`-r`. qld checks the actual Mach-O file type and `MH_DYLDLINK` flag and rejects
+ignored requests. A configured ld64-compatible toolchain may implement these
+modes; its output must pass the same checks. No universal/fat image assembly
+is provided; link each architecture separately and use a suitable fat-binary
+tool. GNU/Lua linker scripts are unsupported in PE/Mach-O; use native section
+options (or ELF for the script SDK).
+
+## APIs and output lifetime
+
+The original `qld_options_t` ABI is unchanged. New C entry points mirror ELF:
+
+- `qld_pe_options_init`, `qld_link_pe`, `qld_link_pe_bytes`, `qld_set_pe_options`,
+  `qld_pe_linker`.
+- `qld_macho_options_init`, `qld_link_macho`, `qld_link_macho_bytes`,
+  `qld_set_macho_options`, `qld_macho_linker`.
+
+The PE/Mach-O v1 option records have the same layout as `qld_elf_options_t`.
+Initialize them before use. Each contains an optional executable, an ordered
+argv vector and a diagnostic callback. Structured options come first, then
+the argv vector. Setters copy strings; a successful setter replaces any
+previous backend selection. Passing NULL restores automatic selection.
+Invalid configurations leave the builder unchanged. Release returned bytes
+and diagnostics with `qld_free_bytes` and `qld_free_string`.
+
+C++ exposes `Options::pe`, `Options::macho`, `PeOptions`, `MachOOptions`,
+`Linker::setPeOptions` and `Linker::setMachOOptions`. Selecting multiple
+backends in one `Options` is an error.
+
+`examples/formats-sdk.c` is a compiled, executed C11 example. C++ and
+incremental calls are exercised by `tests/formats_api.cpp`.
+
+Output bytes are read only after successful process exit and format/kind
+validation. Primary output, PE import libraries/PDBs/maps/manifests and
+Mach-O maps are staged in a private workspace. Requested auxiliary
+destinations are published after validation. A file-producing PE link
+defaults to `<output-stem>.lib` when exports exist. For memory-only links,
+auxiliary files are discarded unless explicit destinations were supplied.
+Output-path collisions are errors. Publication is not a multi-file atomic
+filesystem transaction. Other native side outputs (LTO caches, reproducers,
+dependency logs, etc.) retain their native toolchain behavior.
+
+PE response files use Windows quoting; select `--format=pe` when the entire
+invocation is inside a response file. Mach-O response files use GNU quoting.
+Nested expansion is bounded and cycles/NULs/malformed quotes are errors.
+`@rpath`, `@loader_path` and `@executable_path` remain literal Mach-O tokens.
+Successful-link warnings are delivered through the diagnostic callback.
+Known “ignored/unsupported option” warnings are errors, rather than silent
+success.
+
+See [VALIDATION.md](VALIDATION.md) for tested configurations and remaining
+platform coverage.

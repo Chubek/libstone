@@ -125,7 +125,7 @@ void expandArguments(const std::vector<std::string>& args, std::vector<std::stri
 
 std::string runProcess(const std::string& linker, std::vector<std::string> args,
                        const Workspace& work) {
-  if (std::getenv("QLD_ELF_BACKEND_ACTIVE"))
+  if (std::getenv("QLD_ELF_BACKEND_ACTIVE") || std::getenv("QLD_TOOLCHAIN_BACKEND_ACTIVE"))
     throw std::runtime_error("recursive qobjld ELF backend invocation; select a toolchain linker");
   // A private response file avoids ARG_MAX/per-argument limits for large
   // archive groups. Quote every byte-sensitive token using GNU's grammar.
@@ -257,6 +257,8 @@ bool linkElf(LinkState& state, std::vector<uint8_t>& out, std::string& error,
         return expanded[i];
       };
       if (arg == "--dynamic") continue;
+      if (arg == "--format") { value(); continue; }
+      if (arg.starts_with("--format=")) continue;
       if (arg == "--elf-linker") { linker = value(); continue; }
       if (arg.starts_with("--elf-linker=")) { linker = arg.substr(13); continue; }
       if (arg == "-o" || arg == "--output" || arg == "-output") { o.output = value(); continue; }

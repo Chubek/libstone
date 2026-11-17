@@ -35,6 +35,8 @@ struct ElfOptions {
   std::string linker;
   std::vector<std::string> arguments;
 };
+using PeOptions = ElfOptions;
+using MachOOptions = ElfOptions;
 
 // Mirrors qld_options_t with owning C++ types.
 struct Options {
@@ -58,6 +60,8 @@ struct Options {
   std::string mapFile;
   std::string emulator;
   ElfOptions elf;
+  PeOptions pe;
+  MachOOptions macho;
 };
 
 struct Result {
@@ -145,14 +149,20 @@ inline Expected<Result> link(const Options& opts) {
   size_t size = 0;
   char* errmsg = nullptr;
   std::vector<const char *> arguments;
-  for (const auto& arg : opts.elf.arguments) arguments.push_back(arg.c_str());
+  auto enabled = [](const ElfOptions& o) { return o.enabled || !o.linker.empty() || !o.arguments.empty(); };
+  bool useElf = enabled(opts.elf), usePe = enabled(opts.pe), useMachO = enabled(opts.macho);
+  if (unsigned(useElf) + unsigned(usePe) + unsigned(useMachO) > 1)
+    return Error{"select only one linker backend"};
+  const auto& config = usePe ? opts.pe : useMachO ? opts.macho : opts.elf;
+  for (const auto& arg : config.arguments) arguments.push_back(arg.c_str());
   qld_elf_options_t elf{};
   qld_elf_options_init(&elf);
-  elf.linker = opts.elf.linker.empty() ? nullptr : opts.elf.linker.c_str();
+  elf.linker = config.linker.empty() ? nullptr : config.linker.c_str();
   elf.arguments = arguments.data();
   elf.n_arguments = arguments.size();
-  bool useElf = opts.elf.enabled || !opts.elf.linker.empty() || !arguments.empty();
-  int rc = useElf ? qld_link_elf_bytes(&c, &elf, &bytes, &size, &errmsg)
+  int rc = usePe ? qld_link_pe_bytes(&c, &elf, &bytes, &size, &errmsg)
+                   : useMachO ? qld_link_macho_bytes(&c, &elf, &bytes, &size, &errmsg)
+                   : useElf ? qld_link_elf_bytes(&c, &elf, &bytes, &size, &errmsg)
                   : qld_link_bytes(&c, &bytes, &size, &errmsg);
   if (rc != 0) {
     std::string msg = errmsg ? errmsg : "link failed";
@@ -218,6 +228,18 @@ class Linker {
   void setBase(uint64_t b) { qld_set_base(self_, b); }
   void setMode(Mode m) { qld_set_mode(self_, static_cast<qld_mode_t>(m)); }
   Expected<void> setElfOptions(const ElfOptions& opts) {
+    return setBackendOptions(opts, qld_set_elf_options);
+  }
+  Expected<void> setPeOptions(const PeOptions& opts) {
+    return setBackendOptions(opts, qld_set_pe_options);
+  }
+  Expected<void> setMachOOptions(const MachOOptions& opts) {
+    return setBackendOptions(opts, qld_set_macho_options);
+  }
+
+ private:
+  Expected<void> setBackendOptions(const ElfOptions& opts,
+      int (*setter)(qld_linker_t *, const qld_elf_options_t *, char **)) {
     std::vector<const char *> args;
     for (const auto& arg : opts.arguments) args.push_back(arg.c_str());
     qld_elf_options_t elf{};
@@ -226,12 +248,13 @@ class Linker {
     elf.arguments = args.data(); elf.n_arguments = args.size();
     char *error = nullptr;
     bool enabled = opts.enabled || !opts.linker.empty() || !args.empty();
-    int rc = qld_set_elf_options(self_, enabled ? &elf : nullptr, &error);
+    int rc = setter(self_, enabled ? &elf : nullptr, &error);
     std::string message = error ? error : "";
     qld_free_string(error);
     if (rc) return Error{std::move(message)};
     return {};
   }
+ public:
   void setFlag(const std::string& f, bool v) {
     qld_set_flag(self_, f.c_str(), v ? 1 : 0);
   }

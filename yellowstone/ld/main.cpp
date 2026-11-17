@@ -10,6 +10,7 @@
 
 #include "ld.h"
 #include "ScriptSDK.hpp"
+#include "Backend.hpp"
 
 using qobj::OptionSpec;
 
@@ -50,6 +51,9 @@ constexpr OptionSpec kCheckScript{0, "check-script", false, "",
                                    "validate the script and exit"};
 constexpr OptionSpec kDynamic{0, "dynamic", false, "", "use the GNU-compatible ELF backend (ordered GNU ld arguments)"};
 constexpr OptionSpec kElfLinker{0, "elf-linker", true, "executable", "select the ELF toolchain linker"};
+constexpr OptionSpec kFormat{0, "format", true, "auto|elf|pe|macho", "select output format (default: input magic)"};
+constexpr OptionSpec kPeLinker{0, "pe-linker", true, "executable", "select lld-link-compatible PE backend"};
+constexpr OptionSpec kMachOLinker{0, "macho-linker", true, "executable", "select ld64-compatible Mach-O backend"};
 
 // Dynamic invocations retain the original token order, which is essential for
 // --as-needed, archive groups, -Bstatic/-Bdynamic and compiler-driver use.
@@ -90,6 +94,24 @@ int elfMain(int argc, char **argv) {
   return rc ? 1 : 0;
 }
 
+int foreignMain(int argc, char **argv, qld::detail::Backend backend) {
+  qld_options_t opts{};
+  qld_options_init(&opts);
+  opts.output = backend == qld::detail::Backend::PE ? "a.exe" : "a.out";
+  qld_elf_options_t config{};
+  qld_elf_options_init(&config);
+  std::vector<const char *> args;
+  for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+  config.arguments = args.data(); config.n_arguments = args.size();
+  config.diagnostic = [](void *, const char *message) { std::cerr << message; };
+  char *error = nullptr;
+  int rc = backend == qld::detail::Backend::PE ? qld_link_pe(&opts, &config, &error)
+                                              : qld_link_macho(&opts, &config, &error);
+  if (rc) std::cerr << "qobjld: " << (error ? error : "link failed") << '\n';
+  qld_free_string(error);
+  return rc ? 1 : 0;
+}
+
 uint64_t parseAddr(const std::string& t, bool& ok) {
   ok = false;
   if (t.empty()) return 0;
@@ -106,13 +128,27 @@ uint64_t parseAddr(const std::string& t, bool& ok) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
+  std::vector<std::string> raw;
+  bool query = false, explicitFormat = false;
+  for (int i = 1; i < argc; ++i) {
+    raw.emplace_back(argv[i]);
+    if (raw.back() == "--help" || raw.back() == "--version" || raw.back() == "--check-script") query = true;
+    if (raw.back().starts_with("--format=") || raw.back() == "--format") explicitFormat = true;
+  }
+  if (!query) {
+    auto backend = qld::detail::invocationBackend(raw);
+    if (backend == qld::detail::Backend::PE || backend == qld::detail::Backend::MachO)
+      return foreignMain(argc, argv, backend);
+    if (explicitFormat && backend == qld::detail::Backend::ELF) return elfMain(argc, argv);
+  }
   if (elfInvocation(argc, argv)) return elfMain(argc, argv);
   std::vector<OptionSpec> specs = {
       kHelp,      kVersion,   kOutput,    kEntry,     kScript,
       kScriptText, kLibPath,  kLib,       kMap,       kEmulator,
       kShared,    kPie,       kReloc,     kStatic,    kGc,
       kStrip,     kAllowUndef, kBase,     kVerbose,   kCheckScript, kDynamic, kElfLinker,
+      kFormat, kPeLinker, kMachOLinker,
       {'M', "", false, "", "print a link map to stdout"},
       {'r', "", false, "", "emit a relocatable object"},
       {'M', "", false, "", ""},  // placeholder keeps -M visible
@@ -256,4 +292,7 @@ int main(int argc, char** argv) {
   }
   if (c.verbose) std::cerr << "qobjld: wrote " << output << '\n';
   return 0;
+} catch (const std::exception& e) {
+  std::cerr << "qobjld: " << e.what() << '\n';
+  return 1;
 }

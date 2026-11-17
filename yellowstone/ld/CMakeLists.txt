@@ -11,6 +11,9 @@ add_library(qld STATIC
   discover_symbols.cpp
   driver.cpp
   ElfBackend.cpp
+  Backend.cpp
+  PeBackend.cpp
+  MachOBackend.cpp
   ld.c
   ld.cpp
   ldscript.cpp
@@ -33,6 +36,18 @@ set(YELLOWSTONE_ELF_LINKER "ld.bfd" CACHE STRING "Default GNU-compatible ELF lin
 if(YELLOWSTONE_ENABLE_ELF_BACKEND AND NOT UNIX)
   message(FATAL_ERROR "The ELF toolchain backend currently requires POSIX process APIs")
 endif()
+option(YELLOWSTONE_ENABLE_PE_BACKEND "Enable the lld-link-compatible PE/COFF backend" ON)
+option(YELLOWSTONE_ENABLE_MACHO_BACKEND "Enable the ld64-compatible Mach-O backend" ON)
+set(YELLOWSTONE_PE_LINKER "lld-link" CACHE STRING "Default PE/COFF toolchain linker")
+set(YELLOWSTONE_MACHO_LINKER "ld64.lld" CACHE STRING "Default Mach-O toolchain linker")
+if(YELLOWSTONE_ENABLE_PE_BACKEND)
+  target_compile_definitions(qld PRIVATE QLD_ENABLE_PE_BACKEND=1
+    QLD_DEFAULT_PE_LINKER="${YELLOWSTONE_PE_LINKER}")
+endif()
+if(YELLOWSTONE_ENABLE_MACHO_BACKEND)
+  target_compile_definitions(qld PRIVATE QLD_ENABLE_MACHO_BACKEND=1
+    QLD_DEFAULT_MACHO_LINKER="${YELLOWSTONE_MACHO_LINKER}")
+endif()
 if(YELLOWSTONE_ENABLE_ELF_BACKEND)
   target_compile_definitions(qld PRIVATE QLD_ENABLE_ELF_BACKEND=1
     QLD_DEFAULT_ELF_LINKER="${YELLOWSTONE_ELF_LINKER}")
@@ -54,6 +69,21 @@ if(QOBJFILE_WERROR)
 endif()
 
 if(YELLOWSTONE_BUILD_TESTS)
+  if(YELLOWSTONE_BUILD_TOOLS)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(qld-formats-api-test tests/formats_api.cpp)
+    target_link_libraries(qld-formats-api-test PRIVATE qld)
+    add_executable(qld-formats-c-example examples/formats-sdk.c)
+    target_compile_features(qld-formats-c-example PRIVATE c_std_11)
+    target_compile_options(qld-formats-c-example PRIVATE
+      $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Werror;-pedantic>)
+    target_link_libraries(qld-formats-c-example PRIVATE qld)
+    add_test(NAME qld-formats COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/formats.py" "$<TARGET_FILE:qobjld>"
+      "$<TARGET_FILE:qld-formats-api-test>" "$<TARGET_FILE:qld-formats-c-example>"
+      "${YELLOWSTONE_ENABLE_PE_BACKEND}" "${YELLOWSTONE_ENABLE_MACHO_BACKEND}")
+    set_tests_properties(qld-formats PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+  endif()
   add_executable(qld-script-sdk-test tests/script_sdk.cpp)
   target_link_libraries(qld-script-sdk-test PRIVATE qld)
   add_test(NAME qld-script-sdk COMMAND qld-script-sdk-test)

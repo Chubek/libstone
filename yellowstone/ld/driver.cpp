@@ -5,6 +5,7 @@
 // one-shot API lives in ld.c; this file works on LinkState and byte vectors.
 #include "internal.hpp"
 #include "ElfBackend.hpp"
+#include "Backend.hpp"
 #include "ScriptSDK.hpp"
 
 #include <fstream>
@@ -30,7 +31,12 @@ static bool writeFile(const std::string& path, const std::vector<uint8_t>& b,
 
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
                  std::string& error) {
-  if (needsElfBackend(state.options)) return linkElf(state, out, error, ScriptSDK{});
+  switch (selectBackend(state.options)) {
+    case Backend::ELF: return linkElf(state, out, error, ScriptSDK{});
+    case Backend::PE: return linkPe(state, out, error);
+    case Backend::MachO: return linkMachO(state, out, error);
+    case Backend::Auto: break;
+  }
   // Explicit scripts can supply INPUT and SEARCH_DIR before -l resolution.
   if (state.options.scriptIsText || !state.options.script.empty())
     if (!loadScriptExtras(state, error)) return false;

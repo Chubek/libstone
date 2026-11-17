@@ -26,9 +26,9 @@ extern "C" {
 
 /* Link output mode. */
 typedef enum qld_mode {
-  QLD_MODE_EXEC = 0,      /* ET_EXEC static executable (default) */
-  QLD_MODE_SHARED = 1,    /* ET_DYN shared object (-shared) */
-  QLD_MODE_RELOCATABLE = 2 /* ET_REL partial link (-r) */
+  QLD_MODE_EXEC = 0,      /* executable (default) */
+  QLD_MODE_SHARED = 1,    /* ELF DSO / PE DLL / Mach-O dylib */
+  QLD_MODE_RELOCATABLE = 2 /* partial link (-r), if supported by the backend */
 } qld_mode_t;
 
 /* Stable result codes returned by every operation. */
@@ -61,13 +61,13 @@ typedef struct qld_options {
   uint64_t base;                 /* --image-base value */
   int has_base;                  /* nonzero when base is valid */
   qld_mode_t mode;               /* output mode */
-  int pie;                       /* -pie: ET_DYN position-independent exec */
+  int pie;                       /* PIE executable; PE maps to ASLR */
   int gc_sections;               /* --gc-sections */
   int strip_debug;               /* -s: drop debug sections/symbols */
   int allow_undefined;           /* --allow-undefined */
   int verbose;                   /* --verbose */
   const char* map_file;          /* -Map path, or NULL */
-  const char* emulator;          /* -m name, informational only */
+  const char* emulator;          /* ELF emulation / PE machine / Mach-O arch */
 } qld_options_t;
 
 /* Initialize an options record to documented defaults. This is ABI-safe for
@@ -111,6 +111,35 @@ QLD_API int qld_link_elf(const qld_options_t *, const qld_elf_options_t *, char 
 QLD_API int qld_link_elf_bytes(const qld_options_t *, const qld_elf_options_t *,
     uint8_t **out_bytes, size_t *out_size, char **errmsg);
 
+/* PE/COFF (lld-link dialect) and Mach-O (ld64 dialect) toolchain backends v1.
+ * The original qld_options_t ABI is unchanged; qld_link[_bytes] auto-detects
+ * these formats from object/archive contents. Explicit entry points also work
+ * for library-only links and ordered native arguments.
+ *
+ * PE response files use Windows quoting; Mach-O uses GNU quoting. Native
+ * /out:, /implib:, /pdb:, /map: and Mach-O -o/-map are staged. Import libraries
+ * default to <output-stem>.lib when exports exist. In-memory calls discard
+ * auxiliary files unless explicit destination arguments are supplied.
+ * Mach-O callers supply -arch and -platform_version (or toolchain equivalents).
+ * GNU/Lua linker scripts are not supported by these two backends.
+ * Backend executables are runtime dependencies, not in-process emitters.
+ * All pointer ownership and diagnostic rules match qld_elf_options_t. */
+#define QLD_PE_OPTIONS_VERSION 1
+#define QLD_MACHO_OPTIONS_VERSION 1
+typedef qld_elf_options_t qld_pe_options_t;
+typedef qld_elf_options_t qld_macho_options_t;
+QLD_API void qld_pe_options_init(qld_pe_options_t *);
+QLD_API void qld_macho_options_init(qld_macho_options_t *);
+/* NULL when the corresponding backend is disabled at build time. */
+QLD_API const char *qld_pe_linker(void);
+QLD_API const char *qld_macho_linker(void);
+QLD_API int qld_link_pe(const qld_options_t *, const qld_pe_options_t *, char **errmsg);
+QLD_API int qld_link_pe_bytes(const qld_options_t *, const qld_pe_options_t *,
+    uint8_t **out_bytes, size_t *out_size, char **errmsg);
+QLD_API int qld_link_macho(const qld_options_t *, const qld_macho_options_t *, char **errmsg);
+QLD_API int qld_link_macho_bytes(const qld_options_t *, const qld_macho_options_t *,
+    uint8_t **out_bytes, size_t *out_size, char **errmsg);
+
 /* Validate a linker script without linking. Returns 0 when the script
  * parses, nonzero otherwise (with *errmsg set as in qld_link). */
 QLD_API int qld_check_script(const char* text, char** errmsg);
@@ -134,6 +163,10 @@ int qld_add_library(qld_linker_t* self, const char* name);
 /* NULL resets to automatic backend selection. Invalid settings leave the
  * previous configuration intact. Registered script extensions apply here. */
 QLD_API int qld_set_elf_options(qld_linker_t *, const qld_elf_options_t *, char **errmsg);
+/* A successful setter selects that backend, replacing previous backend
+ * settings. NULL resets to automatic selection; invalid updates are atomic. */
+QLD_API int qld_set_pe_options(qld_linker_t *, const qld_pe_options_t *, char **errmsg);
+QLD_API int qld_set_macho_options(qld_linker_t *, const qld_macho_options_t *, char **errmsg);
 void qld_set_output(qld_linker_t* self, const char* path);
 void qld_set_entry(qld_linker_t* self, const char* symbol);
 void qld_set_script_path(qld_linker_t* self, const char* path);

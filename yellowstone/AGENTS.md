@@ -61,3 +61,16 @@ Keep unsupported linker-script semantics explicit rather than silently skipping
 them. Public behavior and examples are in `manual/19-scripts.md` and
 `manual/26-extension.md`; the current component Debug/Release/sanitizer report is
 `../sandstone/docs/assembler-linker-validation.md`.
+
+## PE/COFF and Mach-O linker backends
+
+`ld/PeBackend.cpp` and `ld/MachOBackend.cpp` are implemented toolchain bridges
+following the ELF backend design. Shared process/response handling is in
+`ld/Backend.cpp`; input magic (including archive members) selects the format.
+Keep native argument ordering, Windows versus GNU response quoting, staged
+output validation, final DLL/install names and C ABI compatibility intact.
+Do not report an ignored ld64 `-static`/`-r` as success: check actual output
+kind and flags. Static archive linking is supported independently of those
+modes. Public behavior is in `ld/README.md`; cross-format/API regressions
+are in `ld/tests/formats.py` and `ld/tests/formats_api.cpp`.
+The current test/platform report is `ld/VALIDATION.md`.
