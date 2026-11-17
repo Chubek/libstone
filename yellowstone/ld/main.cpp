@@ -47,7 +47,48 @@ constexpr OptionSpec kBase{0, "image-base", true, "addr",
                            "base address (e.g. 0x400000)"};
 constexpr OptionSpec kVerbose{'v', "verbose", false, "", "be verbose"};
 constexpr OptionSpec kCheckScript{0, "check-script", false, "",
-                                  "validate the script and exit"};
+                                   "validate the script and exit"};
+constexpr OptionSpec kDynamic{0, "dynamic", false, "", "use the GNU-compatible ELF backend (ordered GNU ld arguments)"};
+constexpr OptionSpec kElfLinker{0, "elf-linker", true, "executable", "select the ELF toolchain linker"};
+
+// Dynamic invocations retain the original token order, which is essential for
+// --as-needed, archive groups, -Bstatic/-Bdynamic and compiler-driver use.
+bool elfInvocation(int argc, char **argv) {
+  bool selected = false;
+  for (int i = 1; i < argc; ++i) {
+    std::string_view a = argv[i];
+    if (a == "--help" || a == "--version" || a == "--check-script") return false;
+    if (a == "--") break;
+    if (a == "--dynamic" || a == "--shared" || a == "-shared" || a == "--pie" || a == "-pie" ||
+        a == "--elf-linker" || a.starts_with("--elf-linker=") ||
+        a == "--dynamic-linker" || a == "-dynamic-linker" ||
+        a.starts_with("--dynamic-linker=") || a.starts_with("-dynamic-linker=") ||
+        (qld_elf_linker() && (a == "--static" || a == "-static" || a == "-Bstatic" || a == "-Bdynamic" ||
+         a == "--library" || a.starts_with("--library=") || a.starts_with("-l"))) ||
+        a == "--as-needed" || a == "--no-as-needed" || a == "--start-group" ||
+        a == "--whole-archive" || a == "-z" || a.starts_with("--soname") ||
+        a.starts_with("--rpath") || a.starts_with("--version-script") ||
+        a.starts_with('@')) selected = true;
+  }
+  return selected;
+}
+
+int elfMain(int argc, char **argv) {
+  qld_options_t opts{};
+  qld_options_init(&opts);
+  opts.output = "a.out";
+  qld_elf_options_t elf{};
+  qld_elf_options_init(&elf);
+  std::vector<const char *> args;
+  for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+  elf.arguments = args.data(); elf.n_arguments = args.size();
+  elf.diagnostic = [](void *, const char *message) { std::cerr << message; };
+  char *error = nullptr;
+  int rc = qld_link_elf(&opts, &elf, &error);
+  if (rc) std::cerr << "qobjld: " << (error ? error : "ELF link failed") << '\n';
+  qld_free_string(error);
+  return rc ? 1 : 0;
+}
 
 uint64_t parseAddr(const std::string& t, bool& ok) {
   ok = false;
@@ -66,11 +107,12 @@ uint64_t parseAddr(const std::string& t, bool& ok) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (elfInvocation(argc, argv)) return elfMain(argc, argv);
   std::vector<OptionSpec> specs = {
       kHelp,      kVersion,   kOutput,    kEntry,     kScript,
       kScriptText, kLibPath,  kLib,       kMap,       kEmulator,
       kShared,    kPie,       kReloc,     kStatic,    kGc,
-      kStrip,     kAllowUndef, kBase,     kVerbose,   kCheckScript,
+      kStrip,     kAllowUndef, kBase,     kVerbose,   kCheckScript, kDynamic, kElfLinker,
       {'M', "", false, "", "print a link map to stdout"},
       {'r', "", false, "", "emit a relocatable object"},
       {'M', "", false, "", ""},  // placeholder keeps -M visible

@@ -84,7 +84,32 @@ QLD_API int qld_link(const qld_options_t* opts, char** errmsg);
  * The caller releases the buffer with qld_free_bytes(). When opts->output
  * is set the file is also written. */
 QLD_API int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
-                   size_t* out_size, char** errmsg);
+                    size_t* out_size, char** errmsg);
+
+/* GNU-compatible ELF toolchain backend v1. qld_options_t keeps its original
+ * ABI. Shared/PIE links and explicit library searches use this backend by
+ * default; these entry points also select it for other modes.
+ * Arguments are individual argv tokens, appended after the structured options
+ * in order (including position-dependent -l/--as-needed/--start-group flags).
+ * Response files use GNU quoting. -o/--output overrides opts->output; absent
+ * either, the result stays in memory. -T scripts use the ScriptSDK, including
+ * Lua. All pointers are borrowed during a call, copied by qld_set_elf_options.
+ * The backend is a build/runtime dependency, not an in-process ELF emitter. */
+#define QLD_ELF_OPTIONS_VERSION 1
+typedef struct qld_elf_options {
+  size_t struct_size;                  /* sizeof(qld_elf_options_t) */
+  const char *linker;                  /* executable, NULL = configured default */
+  const char *const *arguments;
+  size_t n_arguments;
+  void (*diagnostic)(void *user, const char *text); /* successful-link warnings */
+  void *user;
+} qld_elf_options_t;
+QLD_API void qld_elf_options_init(qld_elf_options_t *opts);
+/* NULL when this build disables the ELF backend. */
+QLD_API const char *qld_elf_linker(void);
+QLD_API int qld_link_elf(const qld_options_t *, const qld_elf_options_t *, char **errmsg);
+QLD_API int qld_link_elf_bytes(const qld_options_t *, const qld_elf_options_t *,
+    uint8_t **out_bytes, size_t *out_size, char **errmsg);
 
 /* Validate a linker script without linking. Returns 0 when the script
  * parses, nonzero otherwise (with *errmsg set as in qld_link). */
@@ -106,6 +131,9 @@ void qld_destroy(qld_linker_t* self);
 int qld_add_input(qld_linker_t* self, const char* path);
 int qld_add_libpath(qld_linker_t* self, const char* path);
 int qld_add_library(qld_linker_t* self, const char* name);
+/* NULL resets to automatic backend selection. Invalid settings leave the
+ * previous configuration intact. Registered script extensions apply here. */
+QLD_API int qld_set_elf_options(qld_linker_t *, const qld_elf_options_t *, char **errmsg);
 void qld_set_output(qld_linker_t* self, const char* path);
 void qld_set_entry(qld_linker_t* self, const char* symbol);
 void qld_set_script_path(qld_linker_t* self, const char* path);

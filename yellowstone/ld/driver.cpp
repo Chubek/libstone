@@ -4,6 +4,8 @@
 // (static/shared/relocatable) -> optional -Map write. All file I/O for the
 // one-shot API lives in ld.c; this file works on LinkState and byte vectors.
 #include "internal.hpp"
+#include "ElfBackend.hpp"
+#include "ScriptSDK.hpp"
 
 #include <fstream>
 
@@ -27,7 +29,8 @@ static bool writeFile(const std::string& path, const std::vector<uint8_t>& b,
 }
 
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
-                std::string& error) {
+                 std::string& error) {
+  if (needsElfBackend(state.options)) return linkElf(state, out, error, ScriptSDK{});
   // Explicit scripts can supply INPUT and SEARCH_DIR before -l resolution.
   if (state.options.scriptIsText || !state.options.script.empty())
     if (!loadScriptExtras(state, error)) return false;
@@ -42,6 +45,16 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
         error = o.label + ": format/class/order/architecture mismatch with script inputs";
         return false;
       }
+    }
+  }
+  // A DSO hidden inside a native INPUT/GROUP script must never be copied as
+  // relocatable sections. Explicit dynamic mode preserves GNU script semantics.
+  for (const auto& object : state.objects) {
+    const auto& h = object.bytes;
+    if (h.size() >= 18 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F' &&
+        ((h[5] == 1 && h[16] == 3 && h[17] == 0) || (h[5] == 2 && h[16] == 0 && h[17] == 3))) {
+      error = object.label + ": dynamic input in native script; select --dynamic / qld_link_elf";
+      return false;
     }
   }
   if (!discoverSymbols(state, error)) return false;

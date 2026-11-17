@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -22,6 +23,13 @@ namespace qld::detail {
 // Link modes
 // ---------------------------------------------------------------------------
 enum class Mode : uint8_t { Exec, Shared, Relocatable };
+
+struct ElfOptions {
+  bool enabled = false;
+  std::string linker;
+  std::vector<std::string> arguments;
+  std::function<void(const std::string&)> diagnostic;
+};
 
 // ---------------------------------------------------------------------------
 // Public-facing options (mirrors ld.hpp Options; internal copy avoids a
@@ -48,6 +56,7 @@ struct LinkOptions {
   bool deterministic = true;            // -D not yet; placeholder
   std::string mapFile;                  // -M / -Map
   std::string emulator;                 // -m (accepted, selects arch check)
+  ElfOptions elf;
 };
 
 // ---------------------------------------------------------------------------
@@ -190,9 +199,6 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
 bool emitExecutable(const LinkState& state,
                     const std::vector<std::vector<uint8_t>>& staged,
                     std::vector<uint8_t>& out, std::string& error);
-bool emitShared(const LinkState& state,
-                const std::vector<std::vector<uint8_t>>& staged,
-                std::vector<uint8_t>& out, std::string& error);
 bool emitRelocatable(const LinkState& state, std::vector<uint8_t>& out,
                      std::string& error);
 

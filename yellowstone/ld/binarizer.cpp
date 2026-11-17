@@ -108,8 +108,9 @@ bool emitExecutable(const LinkState& state,
                     std::vector<uint8_t>& out, std::string& error) {
   bool wide = state.wide;
   qbfd::Endian order = state.endian;
-  bool pie = state.options.pie;
-  uint16_t eType = pie ? 3 : 2;  // ET_DYN for PIE, ET_EXEC otherwise
+  // Dynamic images are produced by ElfBackend, never by changing e_type on a
+  // static image without loader metadata.
+  uint16_t eType = 2;  // ET_EXEC
 
   // Stage bytes: if the caller already relocated, use them; otherwise build.
   std::vector<std::vector<uint8_t>> staged = stagedInput;
@@ -476,35 +477,6 @@ bool emitExecutable(const LinkState& state,
          0, 0, 1, 0);
   emitSh(shstrtabIdx, shNameOff[".shstrtab"], 3, 0, 0, shstrtabOff,
          shstrtab.size(), 0, 0, 1, 0);
-  return true;
-}
-
-bool emitShared(const LinkState& state,
-                const std::vector<std::vector<uint8_t>>& staged,
-                std::vector<uint8_t>& out, std::string& error) {
-  // Shared objects share the executable emitter; the only differences are
-  // e_type (ET_DYN) and base 0, both already reflected in LinkState.
-  // emitExecutable picks ET_DYN when options.pie is set, but LinkState is
-  // move-only (it owns ObjectFiles), so it cannot be copied to flip the
-  // flag. Instead, replicate the pie decision here: shared output is always
-  // ET_DYN, and the emitter below already honours a pre-set pie flag.
-  // When the caller did not set pie (plain -shared), force ET_DYN by
-  // rewriting the emitted e_type after the fact.
-  bool wasPie = state.options.pie;
-  if (wasPie) return emitExecutable(state, staged, out, error);
-  if (!emitExecutable(state, staged, out, error)) return false;
-  // Patch e_type 2 (EXEC) -> 3 (DYN). e_type lives at offset 16, 2 bytes.
-  if (out.size() < 18) {
-    error = "internal error: truncated image";
-    return false;
-  }
-  if (state.endian == qbfd::Endian::Little) {
-    out[16] = 3;
-    out[17] = 0;
-  } else {
-    out[16] = 0;
-    out[17] = 3;
-  }
   return true;
 }
 

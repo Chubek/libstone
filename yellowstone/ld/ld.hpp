@@ -28,6 +28,14 @@ inline constexpr const char* kVersion = "1.0";
 
 enum class Mode : uint8_t { Exec = 0, Shared = 1, Relocatable = 2 };
 
+// Ordered GNU-compatible arguments; shared/PIE and library links automatically
+// use the configured backend. enabled also selects it for an ordinary exec.
+struct ElfOptions {
+  bool enabled = false;
+  std::string linker;
+  std::vector<std::string> arguments;
+};
+
 // Mirrors qld_options_t with owning C++ types.
 struct Options {
   std::vector<std::string> inputs;
@@ -49,6 +57,7 @@ struct Options {
   bool verbose = false;
   std::string mapFile;
   std::string emulator;
+  ElfOptions elf;
 };
 
 struct Result {
@@ -135,7 +144,16 @@ inline Expected<Result> link(const Options& opts) {
   uint8_t* bytes = nullptr;
   size_t size = 0;
   char* errmsg = nullptr;
-  int rc = qld_link_bytes(&c, &bytes, &size, &errmsg);
+  std::vector<const char *> arguments;
+  for (const auto& arg : opts.elf.arguments) arguments.push_back(arg.c_str());
+  qld_elf_options_t elf{};
+  qld_elf_options_init(&elf);
+  elf.linker = opts.elf.linker.empty() ? nullptr : opts.elf.linker.c_str();
+  elf.arguments = arguments.data();
+  elf.n_arguments = arguments.size();
+  bool useElf = opts.elf.enabled || !opts.elf.linker.empty() || !arguments.empty();
+  int rc = useElf ? qld_link_elf_bytes(&c, &elf, &bytes, &size, &errmsg)
+                  : qld_link_bytes(&c, &bytes, &size, &errmsg);
   if (rc != 0) {
     std::string msg = errmsg ? errmsg : "link failed";
     qld_free_string(errmsg);
@@ -199,6 +217,21 @@ class Linker {
   }
   void setBase(uint64_t b) { qld_set_base(self_, b); }
   void setMode(Mode m) { qld_set_mode(self_, static_cast<qld_mode_t>(m)); }
+  Expected<void> setElfOptions(const ElfOptions& opts) {
+    std::vector<const char *> args;
+    for (const auto& arg : opts.arguments) args.push_back(arg.c_str());
+    qld_elf_options_t elf{};
+    qld_elf_options_init(&elf);
+    elf.linker = opts.linker.empty() ? nullptr : opts.linker.c_str();
+    elf.arguments = args.data(); elf.n_arguments = args.size();
+    char *error = nullptr;
+    bool enabled = opts.enabled || !opts.linker.empty() || !args.empty();
+    int rc = qld_set_elf_options(self_, enabled ? &elf : nullptr, &error);
+    std::string message = error ? error : "";
+    qld_free_string(error);
+    if (rc) return Error{std::move(message)};
+    return {};
+  }
   void setFlag(const std::string& f, bool v) {
     qld_set_flag(self_, f.c_str(), v ? 1 : 0);
   }

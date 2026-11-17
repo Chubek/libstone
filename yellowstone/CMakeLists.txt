@@ -127,9 +127,10 @@ if(YELLOWSTONE_BUILD_TESTS AND YELLOWSTONE_BUILD_TOOLS)
                    -DTOOLS_DIR=$<TARGET_FILE_DIR:qobjdump>
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-cli-tests.cmake)
   add_test(NAME qobjld_cli
-           COMMAND ${CMAKE_COMMAND}
-                   -DTOOLS_DIR=$<TARGET_FILE_DIR:qobjld>
-                   -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-ld-tests.cmake)
+            COMMAND ${CMAKE_COMMAND}
+                    -DTOOLS_DIR=$<TARGET_FILE_DIR:qobjld>
+                    -DELF_BACKEND_ENABLED=${YELLOWSTONE_ENABLE_ELF_BACKEND}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run-ld-tests.cmake)
 endif()
 
 if(YELLOWSTONE_BUILD_TOOLS)

@@ -10,6 +10,7 @@ add_library(qld STATIC
   binarizer.cpp
   discover_symbols.cpp
   driver.cpp
+  ElfBackend.cpp
   ld.c
   ld.cpp
   ldscript.cpp
@@ -27,6 +28,15 @@ add_library(qobjld::qobjld ALIAS qld)
 set_source_files_properties(ld.c PROPERTIES LANGUAGE CXX)
 
 target_compile_features(qld PUBLIC cxx_std_20)
+option(YELLOWSTONE_ENABLE_ELF_BACKEND "Enable the GNU-compatible ELF linker backend" ${UNIX})
+set(YELLOWSTONE_ELF_LINKER "ld.bfd" CACHE STRING "Default GNU-compatible ELF linker executable (path or PATH name)")
+if(YELLOWSTONE_ENABLE_ELF_BACKEND AND NOT UNIX)
+  message(FATAL_ERROR "The ELF toolchain backend currently requires POSIX process APIs")
+endif()
+if(YELLOWSTONE_ENABLE_ELF_BACKEND)
+  target_compile_definitions(qld PRIVATE QLD_ENABLE_ELF_BACKEND=1
+    QLD_DEFAULT_ELF_LINKER="${YELLOWSTONE_ELF_LINKER}")
+endif()
 target_include_directories(qld PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../qbfd
@@ -51,6 +61,17 @@ if(YELLOWSTONE_BUILD_TESTS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME qld-script-executable COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
+    if(YELLOWSTONE_ENABLE_ELF_BACKEND)
+      add_executable(qld-elf-api-test tests/elf_api.cpp)
+      target_link_libraries(qld-elf-api-test PRIVATE qld)
+      add_executable(qld-elf-c-example examples/dynamic-sdk.c)
+      target_compile_features(qld-elf-c-example PRIVATE c_std_11)
+      target_compile_options(qld-elf-c-example PRIVATE -Wall -Wextra -Werror -pedantic)
+      target_link_libraries(qld-elf-c-example PRIVATE qld)
+      add_test(NAME qld-dynamic COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/dynamic.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}" "$<TARGET_FILE:qld-elf-api-test>" "$<TARGET_FILE:qld-elf-c-example>")
+      set_tests_properties(qld-dynamic PROPERTIES TIMEOUT 120)
+    endif()
   endif()
 endif()
 
