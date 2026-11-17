@@ -1,0 +1,11 @@
+{
+  "title": "Pioneers & Trailblazers",
+  "name": "Grace Hopper",
+  "admin": true,
+  "quota": 41,
+  "items": ["Ada Lovelace", "Grace Hopper", "Ken Thompson"],
+  "address": {
+    "city": "Arlington",
+    "zip": "22206"
+  }
+}

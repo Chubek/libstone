@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{{ data.title }}</title></head>
+<body>
+  <h1>{{ data.title }}</h1>
+  <ul>
+  {% for _, item in ipairs(data.items) do %}
+    {% include 'item.qmr', {item=item} %}
+  {% end %}
+  </ul>
+</body>
+</html>
