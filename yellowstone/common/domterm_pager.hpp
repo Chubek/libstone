@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+#if defined(QOBJFILE_HAS_DOMTERM)
 #include <domterm.h>
 #include <cerrno>
 #include <fcntl.h>
@@ -56,3 +58,9 @@ class DomtermPager {
   void close() { if (!session_) return; DT_Error e{}; dt_tty_set_cooked(session_, &e); dt_tty_close(session_); session_=nullptr; }
 };
 }
+#else
+namespace qobj {
+// Returning false asks the caller to use ordinary stdout.
+class DomtermPager { public: bool run(std::string_view) { return false; } };
+}
+#endif

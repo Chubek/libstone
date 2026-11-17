@@ -96,11 +96,19 @@ public:
             << "  if (!form) throw std::invalid_argument(\"unknown operation\");\n"
             << "  return runtime::render(*form, values, context);\n}\n"
             << "// Lossless metadata, including P-code, ABI, selection and scheduling records.\n"
-            << "inline constexpr std::string_view metadata_json = {\n";
-        // Adjacent literals avoid toolchain line-length limits and raw delimiter collisions.
+            << "inline constexpr char metadata_storage[] = {\n";
+        // Adjacent string literals still form one oversized literal on Clang
+        // and MSVC. Byte initializers retain constexpr, contiguous storage
+        // without a runtime concatenation or a toolchain literal-size limit.
         const auto metadata = json(doc.root());
-        for (std::size_t i = 0; i < metadata.size(); i += 1024) out << cpp_quote(std::string_view(metadata).substr(i, 1024)) << '\n';
-        out << ", " << metadata.size() << "};\n} // namespace " << ns << '\n';
+        for (std::size_t i = 0; i < metadata.size(); ++i) {
+            unsigned byte = static_cast<unsigned char>(metadata[i]);
+            if (byte > 127) out << "static_cast<char>(" << byte << "),";
+            else out << byte << ',';
+            if (i % 32 == 31) out << '\n';
+        }
+        out << "0};\ninline constexpr std::string_view metadata_json{metadata_storage, "
+            << metadata.size() << "};\n} // namespace " << ns << '\n';
     }
 };
 }

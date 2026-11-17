@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "assembler.h"
+#include "sdk.h"
 #include "sandstone.h"
 
 static void usage(const char *argv0) {
@@ -18,6 +19,7 @@ static void usage(const char *argv0) {
             "Assemble SymAS-driven assembly sources.\n"
             "\n"
             "  -b, --bank BANK     .symas databank (required)\n"
+            "  --archml PROFILE   ArchML .insn encoder (may replace --bank)\n"
             "  -s, --syntax NAME   syntax record (default: first in bank)\n"
             "  -f, --format FMT    bin (flat image, default) or obj (JSON "
             "object)\n"
@@ -32,6 +34,7 @@ static void usage(const char *argv0) {
 
 int main(int argc, char **argv) {
     const char *bank = NULL;
+    const char *archml = NULL;
     const char *syntax = NULL;
     const char *format = "bin";
     const char *output = NULL;
@@ -42,6 +45,7 @@ int main(int argc, char **argv) {
 
     static const struct option longs[] = {
         {"bank", required_argument, NULL, 'b'},
+        {"archml", required_argument, NULL, 'A'},
         {"syntax", required_argument, NULL, 's'},
         {"format", required_argument, NULL, 'f'},
         {"feature", required_argument, NULL, 'F'},
@@ -55,6 +59,7 @@ int main(int argc, char **argv) {
     while ((c = getopt_long(argc, argv, "b:s:f:F:o:h", longs, NULL)) != -1) {
         switch (c) {
         case 'b': bank = optarg; break;
+        case 'A': archml = optarg; break;
         case 's': syntax = optarg; break;
         case 'f': format = optarg; break;
         case 'F':
@@ -72,8 +77,8 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!bank) {
-        fprintf(stderr, "sandstone-as: --bank is required\n");
+    if (!bank && !archml) {
+        fprintf(stderr, "sandstone-as: --bank or --archml is required\n");
         usage(argv[0]);
         return 2;
     }
@@ -84,11 +89,22 @@ int main(int argc, char **argv) {
 
     sandstone_asm_t *ctx = NULL;
     char err[1024] = {0};
-    if (sandstone_asm_new(&ctx, bank, err, sizeof err) != 0) {
+    if ((bank ? sandstone_asm_new(&ctx, bank, err, sizeof err) :
+                sandstone_asm_new_archml(&ctx, archml, err, sizeof err)) != 0) {
         fprintf(stderr, "sandstone-as: %s\n", err[0] ? err : "cannot open bank");
         return 1;
     }
+    if (bank && archml && sandstone_asm_load_archml(ctx, archml) != 0) {
+        fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
+        sandstone_asm_free(ctx);
+        return 1;
+    }
     if (list_syntaxes) {
+        if (!bank) {
+            fprintf(stderr, "sandstone-as: --list-syntaxes requires --bank\n");
+            sandstone_asm_free(ctx);
+            return 1;
+        }
         DomSymAs_Bank *bank_handle = NULL;
         if (domsymas_open_file(bank, &bank_handle) != DOMSYMAS_OK) {
             fprintf(stderr, "sandstone-as: cannot open bank '%s'\n", bank);

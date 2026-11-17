@@ -7,6 +7,11 @@ constraints, Algol-like encoding functions, syntaxes, sections, linking,
 relocations, and per-model optimization data — and every Sandstone tool
 reads that bank instead of hard-coding an architecture.
 
+The assembler also supports [ArchML `.insn`, inline Lua, source macros and a
+C/C++ extension SDK](docs/assembler.md). Lua and Kaguya are built from
+`third_party`; the [C11 SDK example](examples/assembler-sdk.c) combines all
+three. See [validation and remaining limits](docs/assembler-linker-validation.md).
+
 ```sh
 python3 scripts/spec-compiler.py --validate -o x86.symas \
     compiler/stdspec/x86.dsymspec

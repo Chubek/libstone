@@ -24,6 +24,11 @@ Python 3. ArchML is included in the Sandstone build with
 `SANDSTONE_BUILD_ARCHML=ON` (default). `SANDSTONE_BUILD_TOOLS` controls the CLI,
 and `SANDSTONE_BUILD_TESTS` controls tests. No external parser library is required.
 
+The generated parser embeds its strings rather than opening a relative string
+pool, so installed tools and `.insn` consumers can run from any directory.
+Generated metadata uses constexpr byte storage, preserving `metadata_json` as
+a contiguous string view without exceeding Clang's string-literal size limit.
+
 `--list-targets` lists the available backends. The default is `cpp`.
 `--namespace NAME` sets a C++ namespace; otherwise it is derived from the profile
 name (`archml_riscv64`, for example). Input/output `-` selects stdin/stdout.

@@ -191,7 +191,7 @@ bool loadInputs(LinkState& state, std::string& error) {
     if (!openOneObject(state, std::move(bytes), path, {}, error)) return false;
   }
 
-  if (state.objects.empty() && state.archives.empty()) {
+  if (state.objects.empty() && state.archives.empty() && !hasScript(state)) {
     error = "no input files";
     return false;
   }

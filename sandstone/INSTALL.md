@@ -11,11 +11,11 @@
 | Boost.JSON | 1.75+ | Required when building the spec compiler; also used by `Symspec.hpp` |
 | Python | 3.8+ | `scripts/spec-compiler.py`, ISA loader, tests |
 | stock Lua | 5.3+ | Running `.dsymspec` specs (any `lua` on `PATH`) |
-| DSL runtime | `dsl.lua` | Existing DomSymAsCC DSL module; set `--dsl-dir` or `SANDSTONE_DSL_DIRECTORY` |
+| DSL runtime | `compiler/stdspec/dsl.lua` | Shipped deterministic collector; C++ validates semantics |
 | libzstd | any | Optional: zstd banks (auto-detected) |
 | SWIG | 4.0+ | Optional: language bindings |
 | Doxygen | any | Optional: API docs (`-DSANDSTONE_BUILD_DOCS=ON`) |
-| Lua headers/lib | 5.1+ | Optional, run-time only: the Lua hook loads liblua via `dlopen()`; the framework builds and runs without it |
+| Bundled Lua/Kaguya | `third_party/lua`, `third_party/kaguya` | Required to build the assembler; linked statically |
 
 Debian/Ubuntu:
 
@@ -36,10 +36,11 @@ Useful flags:
 ```sh
 -DSANDSTONE_BUILD_COMPILER=ON   # spec compiler (default ON)
 -DSANDSTONE_BUILD_ASSEMBLER=ON  # assembler + sandstone-as (default ON)
+-DSANDSTONE_BUILD_ARCHML=ON     # .insn profile support (default ON; requires Perl)
 -DSANDSTONE_BUILD_TESTS=ON      # smoke + pipeline + ISA tests (default ON)
 -DSANDSTONE_BUILD_DOCS=ON       # Doxygen reference (default OFF)
 -DSANDSTONE_WITH_MUNE=ON        # legacy DomMune CLI (needs DomWEAVE sources)
--DSANDSTONE_DSL_DIRECTORY=/path/to/compiler/stdspec # external dsl.lua for source tests
+-DSANDSTONE_DSL_DIRECTORY=/path/to/compiler/stdspec # optional DSL override
 -DCMAKE_INSTALL_PREFIX=/usr/local
 ```
 
@@ -60,10 +61,21 @@ cmake --install build
 Installs libraries (`sandstone`, `sandstone_assembler`,
 `sandstone_spec_core`), binaries (`sandstone-spec-compiler`,
 `sandstone-as`), public headers, the `stdspec`/`isa` data directories,
-and (with docs enabled) the HTML reference. Downstream CMake projects
-can target `sandstone`, `sandstone_assembler`, or `sandstone_spec_core`
-after `find_package` wiring, or simply add this directory with
-`add_subdirectory`.
+and (with docs enabled) the HTML reference. In-tree CMake consumers can use
+`add_subdirectory` and link `sandstone_assembler`; its dependencies propagate.
+No installed Sandstone `find_package` configuration is currently provided.
+
+An installed C11 SDK consumer can be compiled and run as follows (Linux,
+ArchML enabled, default `lib` install directory; add `-lzstd` for zstd builds):
+
+```sh
+cmake --install build --prefix /tmp/opencode/sandstone-install
+P=/tmp/opencode/sandstone-install
+cc -std=c11 -Wall -Wextra -Werror -I"$P/include" -c examples/assembler-sdk.c -o "$P/example.o"
+c++ "$P/example.o" -L"$P/lib" -lsandstone_assembler -lsandstone -lsandstone-archml \
+    -llibstone_script_lua -lz -lzstd -ldl -lm -pthread -o "$P/example"
+"$P/example" "$P/share/sandstone/archml/stdspec/amd64.aml"
+```
 
 ## Verify
 
@@ -79,8 +91,9 @@ xxd /tmp/t.bin   # 90
 ## Platform notes
 
 - Linux x86-64 is the tested platform. The code is portable C11/C++20
-  with no OS-specific calls outside standard I/O and `dlopen()` (Lua
-  hook); MSVC needs C++20 `/std:c++20` and zlib.
+  with C11/C++20 libraries. The CLI uses `getopt`; Windows/MSVC is not
+  verified by this change. Lua/Kaguya headers are build-time dependencies,
+  not installed consumer requirements.
 - Cross assemblers need no target toolchain: the bank fully describes
   the target, and output is validated (`ctest` runs the `.dsymspec` →
   `.symas` → assembled-bytes pipeline for x86 and RISC-V).

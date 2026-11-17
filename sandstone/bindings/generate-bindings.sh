@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bindings/generate-bindings.sh [--language LANG]... [--all]
-#       [--out DIR] [--swig PATH] [--build] [-- python/setup args...]
+#       [--out DIR] [--swig PATH] [--build] [--build-dir DIR] [-- compiler args...]
 #
 # Languages: python (default), lua, java. --all generates all three.
 # Output: $OUT/<lang>/ contains the SWIG wrapper plus a small smoke test.
@@ -16,6 +16,7 @@ INTERFACE="$REPO/bindings/sandstone.i"
 OUT="$REPO/build/bindings"
 SWIG="${SWIG:-swig}"
 BUILD=0
+BUILD_DIR="$REPO/build"
 declare -a LANGS=()
 declare -a EXTRA=()
 
@@ -26,6 +27,7 @@ while [[ $# -gt 0 ]]; do
         --out) OUT="$2"; shift 2 ;;
         --swig) SWIG="$2"; shift 2 ;;
         --build) BUILD=1; shift ;;
+        --build-dir) BUILD_DIR="$2"; shift 2 ;;
         "--") shift; EXTRA+=("$@"); break ;;
         -h|--help)
             sed -n '2,12p' "$0"; exit 0 ;;
@@ -96,10 +98,12 @@ if [[ $BUILD -eq 1 ]]; then
         echo "error: python3 not found" >&2; exit 1
     fi
     # Locate built static libraries next to this script's build tree.
-    LIB="$(find "$REPO/build" -name 'libsandstone.a' 2>/dev/null | head -n 1 || true)"
-    ALIB="$(find "$REPO/build" -name 'libsandstone_assembler.a' 2>/dev/null | head -n 1 || true)"
-    if [[ -z "$LIB" ]]; then
-        echo "error: libsandstone.a not found under $REPO/build;" >&2
+    LIB="$(find "$BUILD_DIR" -name 'libsandstone.a' 2>/dev/null | head -n 1 || true)"
+    ALIB="$(find "$BUILD_DIR" -name 'libsandstone_assembler.a' 2>/dev/null | head -n 1 || true)"
+    LUA_LIB="$(find "$BUILD_DIR" -name 'liblibstone_script_lua.a' 2>/dev/null | head -n 1 || true)"
+    ARCH_LIB="$(find "$BUILD_DIR" -name 'libsandstone-archml.a' 2>/dev/null | head -n 1 || true)"
+    if [[ -z "$LIB" || -z "$ALIB" || -z "$LUA_LIB" ]]; then
+        echo "error: core, assembler and bundled Lua libraries are required under $BUILD_DIR;" >&2
         echo "build the project first (cmake --build <dir>)" >&2
         exit 1
     fi
@@ -112,7 +116,7 @@ if [[ $BUILD -eq 1 ]]; then
     # shellcheck disable=SC2068
     "${CXX:-c++}" -O2 -fPIC -shared -I"$REPO/include" -I"$REPO/assembler" \
         -I"$PYINC" \
-        "$OUT/python/sandstone_wrap.c" $LIB ${ALIB:+"$ALIB"} -lz $ZSTDDEP -o \
+        "$OUT/python/sandstone_wrap.c" "$ALIB" "$LIB" ${ARCH_LIB:+"$ARCH_LIB"} "$LUA_LIB" -lz $ZSTDDEP -ldl -lm -pthread -o \
         "$OUT/python/_sandstone$PYEXT" ${EXTRA[@]+"${EXTRA[@]}"}
     echo "built: $OUT/python/_sandstone$PYEXT"
 fi

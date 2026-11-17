@@ -21,7 +21,8 @@ bool linkShared(LinkState& state, std::vector<uint8_t>& out,
   for (size_t o = 0; o < state.outSections.size(); ++o) {
     const auto& sec = state.outSections[o];
     if (sec.bss) continue;
-    std::vector<uint8_t> buf(size_t(sec.size), 0);
+    std::vector<uint8_t> buf = sec.scriptData;
+    buf.resize(size_t(sec.size), 0);
     for (size_t idx : sec.inputs) {
       const auto& in = state.inputSections[idx];
       size_t n = in.contents.size();

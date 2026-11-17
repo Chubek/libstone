@@ -202,6 +202,7 @@ class Linker {
   void setFlag(const std::string& f, bool v) {
     qld_set_flag(self_, f.c_str(), v ? 1 : 0);
   }
+  qld_linker_t *native_handle() const { return self_; }
 
   Expected<Result> run() {
     uint8_t* bytes = nullptr;

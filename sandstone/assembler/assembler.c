@@ -1,5 +1,6 @@
 /* Sandstone assembler context and public C API. */
 #include "intern.h"
+#include "sdk.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -157,6 +158,21 @@ static sandstone_asm_t *asm_alloc(void) {
     return ctx;
 }
 
+int sandstone_asm_new_archml(sandstone_asm_t **out, const char *path,
+                            char *err, size_t err_n) {
+    if (!out || !path) return -1;
+    *out = NULL;
+    sandstone_asm_t *ctx = asm_alloc();
+    if (!ctx) return -1;
+    if (!load_defaults(ctx) || sandstone_asm_load_archml(ctx, path)) {
+        if (err && err_n) snprintf(err, err_n, "%s", ctx->error);
+        sandstone_asm_free(ctx);
+        return -1;
+    }
+    *out = ctx;
+    return 0;
+}
+
 int sandstone_asm_new(sandstone_asm_t **out, const char *bank_path,
                       char *err, size_t err_n) {
     sandstone_asm_t *ctx = asm_alloc();
@@ -243,6 +259,7 @@ void sandstone_asm_free(sandstone_asm_t *ctx) {
     if (!ctx)
         return;
     sand_lua_reset(ctx);
+    sand_extension_free(ctx);
     free_results(ctx);
     if (ctx->bank)
         domsymas_close(ctx->bank);
@@ -318,12 +335,13 @@ int sandstone_asm_disable_feature(sandstone_asm_t *ctx, const char *name) {
 
 int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
                                   const char *src_name) {
+    if (!ctx) return -1;
+    ctx->error[0] = 0;
     sand_lua_reset(ctx);
     free_results(ctx);
     char *processed = sand_run_hook(ctx, src ? src : "",
                                     src_name ? src_name : "<string>");
     if (!processed) {
-        sand_set_error(ctx, "preprocessing failed");
         return -1;
     }
     char *expanded = sand_preprocess_source(ctx, processed,

@@ -17,6 +17,7 @@
 
 #include "internal.hpp"
 #include "parser.hpp"
+#include "ScriptSDK.hpp"
 
 extern const char* qld_detail_version();
 
@@ -42,7 +43,7 @@ qld::detail::LinkOptions toInternal(const qld_options_t* o) {
   for (size_t i = 0; i < o->n_libs; ++i)
     if (o->libs[i]) in.libs.emplace_back(o->libs[i]);
   if (o->output) in.output = o->output;
-  if (o->entry) in.entry = o->entry;
+  if (o->entry) { in.entry = o->entry; in.hasEntry = true; }
   if (o->script) in.script = o->script;
   if (o->use_script_text && o->script_text) {
     in.scriptText = o->script_text;
@@ -112,7 +113,7 @@ bool writeOutput(const std::string& path, const std::vector<uint8_t>& bytes,
 }
 
 int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
-                char** errmsg) {
+                char** errmsg, const qld::ScriptSDK *sdk = nullptr) try {
   std::string validation;
   if (!validOptions(opts, validation)) {
     setErr(errmsg, validation);
@@ -120,6 +121,16 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
   }
   qld::detail::LinkState state;
   state.options = toInternal(opts);
+  if (sdk && (state.options.scriptIsText || !state.options.script.empty())) {
+    std::string source = state.options.scriptText;
+    if (!state.options.scriptIsText) {
+      std::ifstream in(state.options.script, std::ios::binary);
+      if (!in) throw std::runtime_error("cannot open script " + state.options.script);
+      source.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    state.options.scriptText = sdk->preprocess(source, state.options.scriptIsText ? "<script>" : state.options.script);
+    state.options.scriptIsText = true;
+  }
   std::string error;
   std::vector<uint8_t> bytes;
   if (!qld::detail::linkState(state, bytes, error)) {
@@ -143,6 +154,10 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
   outBytes = std::move(bytes);
   if (errmsg) *errmsg = nullptr;
   return 0;
+} catch (const std::exception &e) {
+  setErr(errmsg, e.what()); return QLD_ERROR;
+} catch (...) {
+  setErr(errmsg, "linker extension threw an exception"); return QLD_ERROR;
 }
 
 }  // namespace
@@ -180,10 +195,13 @@ int qld_link(const qld_options_t* opts, char** errmsg) {
   return runInternal(opts, bytes, errmsg);
 }
 
-int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
-                   size_t* out_size, char** errmsg) {
+static int linkBytes(const qld_options_t* opts, uint8_t** out_bytes,
+                   size_t* out_size, char** errmsg, const qld::ScriptSDK *sdk = nullptr) {
+  if (out_bytes) *out_bytes = nullptr;
+  if (out_size) *out_size = 0;
+  if (!out_bytes || !out_size) { setErr(errmsg, "output pointers must not be null"); return QLD_INVALID_ARGUMENT; }
   std::vector<uint8_t> bytes;
-  int rc = runInternal(opts, bytes, errmsg);
+  int rc = runInternal(opts, bytes, errmsg, sdk);
   if (rc != 0) {
     if (out_bytes) *out_bytes = nullptr;
     if (out_size) *out_size = 0;
@@ -205,6 +223,11 @@ int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
   return 0;
 }
 
+int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
+                   size_t* out_size, char** errmsg) {
+  return linkBytes(opts, out_bytes, out_size, errmsg);
+}
+
 int qld_check_script(const char* text, char** errmsg) {
   if (!text) {
     setErr(errmsg, "null script");
@@ -212,7 +235,10 @@ int qld_check_script(const char* text, char** errmsg) {
   }
   qld::script::ScriptFile sf;
   std::string error;
-  if (!qld::script::parseText(text, sf, error)) {
+  std::string expanded;
+  try { expanded = qld::ScriptSDK{}.preprocess(text); }
+  catch (const std::exception &e) { setErr(errmsg, e.what()); return 1; }
+  if (!qld::script::parseText(expanded, sf, error)) {
     setErr(errmsg, error.empty() ? "script parse error" : error);
     return 1;
   }
@@ -224,7 +250,64 @@ int qld_check_script(const char* text, char** errmsg) {
 
 struct qld_linker {
   qld::detail::LinkOptions opts;
+  qld::ScriptSDK sdk;
 };
+
+int qld_register_directive(qld_linker_t *self, const char *name,
+    qld_directive_handler callback, void *user, char **errmsg) {
+  try {
+    if (!self || !name || !callback) throw std::runtime_error("invalid directive registration");
+    self->sdk.registerDirective(name, [callback, user](const qld::ScriptSDK::Arguments &args) {
+      std::vector<const char *> pointers;
+      for (const auto &a : args) pointers.push_back(a.c_str());
+      struct Output { std::string text; bool failed = false; } output;
+      char error[1024] = {};
+      auto sink = [](void *opaque, const char *text, size_t size) -> int {
+        auto &out = *static_cast<Output *>(opaque);
+        if (out.failed || (!text && size) || size > 16 * 1024 * 1024 - out.text.size() || (size && std::memchr(text, 0, size))) {
+          out.failed = true; return 1;
+        }
+        try { if (size) out.text.append(text, size); return 0; }
+        catch (...) { out.failed = true; return 1; }
+      };
+      int status = callback(user, pointers.data(), pointers.size(), sink, &output, error, sizeof error);
+      error[sizeof error - 1] = 0;
+      if (output.failed) throw std::runtime_error("invalid or oversized generated script");
+      if (status)
+        throw std::runtime_error(error[0] ? error : "script directive failed");
+      return output.text;
+    });
+    if (errmsg) *errmsg = nullptr;
+    return 0;
+  } catch (const std::exception &e) { setErr(errmsg, e.what()); return QLD_ERROR; }
+}
+int qld_define_macro(qld_linker_t *self, const char *name,
+    const char *const *parameters, size_t count, const char *body, char **errmsg) {
+  try {
+    if (!self || !name || !body || (count && !parameters)) throw std::runtime_error("invalid macro definition");
+    std::vector<std::string> params;
+    for (size_t i = 0; i < count; ++i) {
+      if (!parameters[i]) throw std::runtime_error("null macro parameter");
+      params.emplace_back(parameters[i]);
+    }
+    self->sdk.defineMacro(name, std::move(params), body);
+    if (errmsg) *errmsg = nullptr;
+    return 0;
+  } catch (const std::exception &e) { setErr(errmsg, e.what()); return QLD_ERROR; }
+}
+int qld_expand_script(qld_linker_t *self, const char *source, char **text, char **errmsg) {
+  if (text) *text = nullptr;
+  try {
+    if (!self || !source || !text) throw std::runtime_error("invalid expansion arguments");
+    auto out = self->sdk.preprocess(source);
+    *text = static_cast<char *>(std::malloc(out.size() + 1));
+    if (!*text) throw std::bad_alloc();
+    std::memcpy(*text, out.c_str(), out.size() + 1);
+    if (errmsg) *errmsg = nullptr;
+    return 0;
+  } catch (const std::exception &e) { setErr(errmsg, e.what()); return QLD_ERROR; }
+  catch (...) { setErr(errmsg, "script directive threw an exception"); return QLD_ERROR; }
+}
 
 qld_linker_t* qld_create(void) { return new (std::nothrow) qld_linker(); }
 
@@ -256,6 +339,7 @@ void qld_set_output(qld_linker_t* self, const char* path) {
 void qld_set_entry(qld_linker_t* self, const char* symbol) {
   if (!self) return;
   self->opts.entry = symbol ? symbol : "_start";
+  self->opts.hasEntry = symbol != nullptr;
 }
 
 void qld_set_script_path(qld_linker_t* self, const char* path) {
@@ -321,7 +405,7 @@ static qld_options_t toC(const qld_linker* self, std::vector<const char*>& a,
   o.libs = c.empty() ? nullptr : c.data();
   o.n_libs = c.size();
   o.output = self->opts.output.empty() ? nullptr : self->opts.output.c_str();
-  o.entry = self->opts.entry.c_str();
+  o.entry = self->opts.hasEntry ? self->opts.entry.c_str() : nullptr;
   o.script = self->opts.script.empty() ? nullptr : self->opts.script.c_str();
   o.script_text =
       self->opts.scriptIsText ? self->opts.scriptText.c_str() : nullptr;
@@ -350,7 +434,8 @@ int qld_run(qld_linker_t* self, char** errmsg) {
   }
   std::vector<const char*> a, b, c;
   qld_options_t o = toC(self, a, b, c);
-  return qld_link(&o, errmsg);
+  std::vector<uint8_t> bytes;
+  return runInternal(&o, bytes, errmsg, &self->sdk);
 }
 
 int qld_run_bytes(qld_linker_t* self, uint8_t** out_bytes, size_t* out_size,
@@ -361,5 +446,5 @@ int qld_run_bytes(qld_linker_t* self, uint8_t** out_bytes, size_t* out_size,
   }
   std::vector<const char*> a, b, c;
   qld_options_t o = toC(self, a, b, c);
-  return qld_link_bytes(&o, out_bytes, out_size, errmsg);
+  return linkBytes(&o, out_bytes, out_size, errmsg, &self->sdk);
 }

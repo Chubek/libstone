@@ -27,16 +27,19 @@ static bool writeFile(const std::string& path, const std::vector<uint8_t>& b,
 }
 
 bool linkState(LinkState& state, std::vector<uint8_t>& out,
-               std::string& error) {
+                std::string& error) {
+  // Explicit scripts can supply INPUT and SEARCH_DIR before -l resolution.
+  if (state.options.scriptIsText || !state.options.script.empty())
+    if (!loadScriptExtras(state, error)) return false;
   if (!loadInputs(state, error)) return false;
-  if (hasScript(state)) {
+  if (hasScript(state) && !state.scriptPrepared) {
     if (!loadScriptExtras(state, error)) return false;
     // Geometry may have changed with new objects; revalidate class/order.
     for (const auto& o : state.objects) {
       if (o.isScript || !o.object) continue;
-      if (o.object->is64Bit() != state.wide ||
-          o.object->endian() != state.endian) {
-        error = o.label + ": class/order mismatch with script inputs";
+      if (o.object->format() != qbfd::Format::ELF || o.object->is64Bit() != state.wide ||
+          o.object->endian() != state.endian || o.object->arch() != state.arch) {
+        error = o.label + ": format/class/order/architecture mismatch with script inputs";
         return false;
       }
     }

@@ -51,3 +51,13 @@ relocation/loader/archive-discovery, and qobjnm translation units.
 
 A complete repository build was attempted, but the repository's broad build
 timed out in the environment before the final aggregate link step.
+
+## Linker scripting SDK follow-up
+
+`ld/ScriptSDK.hpp` and the incremental `qld_*` C SDK expand directives/macros
+before layout; bundled Lua/Kaguya scripts execute once before input discovery.
+Use typed section actions and recorded input offsets for data/relocation layout.
+Keep unsupported linker-script semantics explicit rather than silently skipping
+them. Public behavior and examples are in `manual/19-scripts.md` and
+`manual/26-extension.md`; the current component Debug/Release/sanitizer report is
+`../sandstone/docs/assembler-linker-validation.md`.

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <stdexcept>
 
 namespace qld::script {
 
@@ -97,7 +98,8 @@ void Lexer::skipSpaceAndComments() {
       while (pos_ < text_.size() &&
              !(text_[pos_] == '*' && peekChar() == '/'))
         advance();
-      if (pos_ < text_.size()) advance(2);
+      if (pos_ == text_.size()) throw std::runtime_error("unterminated script comment");
+      advance(2);
       continue;
     }
     if (cur() == '#') {
@@ -140,7 +142,8 @@ Token Lexer::makeNumber(size_t line, size_t col) {
   tok.line = line;
   tok.col = col;
   uint64_t v = 0;
-  if (parseScriptNumber(t, v)) tok.number = v;
+  if (!parseScriptNumber(t, v)) throw std::runtime_error("line " + std::to_string(line) + ": invalid script number: " + t);
+  tok.number = v;
   return tok;
 }
 
@@ -174,7 +177,8 @@ Token Lexer::makeString(size_t line, size_t col) {
       advance();
     }
   }
-  if (pos_ < text_.size()) advance();  // closing quote
+  if (pos_ == text_.size()) throw std::runtime_error("unterminated script string");
+  advance();  // closing quote
   Token tok;
   tok.kind = TokKind::String;
   tok.text = s;
@@ -200,7 +204,7 @@ Token Lexer::readNext() {
     return Token{TokKind::Dot, ".", 0, line, col};
   }
   if (std::isalpha((unsigned char)c) || c == '_' || c == '.' ||
-      (c == '*' && std::isalnum((unsigned char)peekChar())))
+      (c == '/' && text_.compare(pos_, 9, "/DISCARD/") == 0))
     return makeIdentOrKeyword(line, col);
   // Multi-char operators.
   char n = peekChar();
@@ -294,8 +298,7 @@ Token Lexer::readNext() {
     case '?': return Token{TokKind::Question, "?", 0, line, col};
     default: break;
   }
-  Token tok{TokKind::Eof, std::string(1, c), 0, line, col};
-  return tok;
+  throw std::runtime_error("line " + std::to_string(line) + ": invalid script character: " + c);
 }
 
 Token Lexer::next() {
@@ -387,6 +390,7 @@ bool parseScriptNumber(const std::string& text, uint64_t& value) {
   } catch (...) {
     return false;
   }
+  if (v > UINT64_MAX / mult) return false;
   value = v * mult;
   return true;
 }
@@ -419,9 +423,11 @@ bool Parser::expect(TokKind k, std::string& error, const char* what) {
 
 void Parser::fail(const std::string& msg) { error_ = msg; }
 
-bool parseText(const std::string& text, ScriptFile& out, std::string& error) {
+bool parseText(const std::string& text, ScriptFile& out, std::string& error) try {
   Parser p(text);
   return p.parse(out, error);
+} catch (const std::exception &e) {
+  error = e.what(); return false;
 }
 
 bool Parser::parse(ScriptFile& out, std::string& error) {
@@ -430,6 +436,7 @@ bool Parser::parse(ScriptFile& out, std::string& error) {
     error = error_.empty() ? "script parse error" : error_;
     return false;
   }
+  if (!error_.empty()) { error = error_; return false; }
   if (cur_.kind != TokKind::Eof) {
     error = "line " + std::to_string(cur_.line) +
             ": unexpected trailing '" + cur_.text + "'";
@@ -454,11 +461,11 @@ bool Parser::parseTopLevel(ScriptFile& out) {
     if (kw == "ENTRY") {
       if (!parseEntry(out)) return false;
     } else if (kw == "OUTPUT_FORMAT") {
-      if (!parseOutputFormat(out)) return false;
+      fail("OUTPUT_FORMAT is unsupported; the input objects select the ELF format"); return false;
     } else if (kw == "OUTPUT_ARCH") {
-      if (!parseOutputArch(out)) return false;
+      fail("OUTPUT_ARCH is unsupported; the input objects select the architecture"); return false;
     } else if (kw == "OUTPUT") {
-      if (!parseOutput(out)) return false;
+      fail("OUTPUT is unsupported; use -o or the output API option"); return false;
     } else if (kw == "SEARCH_DIR") {
       if (!parseSearchDir(out)) return false;
     } else if (kw == "GROUP") {
@@ -470,11 +477,11 @@ bool Parser::parseTopLevel(ScriptFile& out) {
     } else if (kw == "SECTIONS") {
       if (!parseSections(out)) return false;
     } else if (kw == "PHDRS") {
-      if (!parsePhdrs(out)) return false;
+      fail("PHDRS is not supported by the ELF segment writer"); return false;
     } else if (kw == "VERSION") {
-      if (!parseVersion(out)) return false;
+      fail("VERSION scripts require dynamic symbol versioning support"); return false;
     } else if (kw == "INSERT") {
-      if (!parseInsert(out)) return false;
+      fail("INSERT is not supported; specify a complete SECTIONS layout"); return false;
     } else if (kw == "ASSERT") {
       // ASSERT(expr, msg); — record for execution.
       advance();
@@ -505,6 +512,7 @@ bool Parser::parseTopLevel(ScriptFile& out) {
       out.sectionsBody.push_back(std::move(st));
     } else if (kw == "PROVIDE" || kw == "HIDDEN" ||
                kw == "PROVIDE_HIDDEN") {
+      if (kw != "PROVIDE") { fail("hidden script symbols are unsupported"); return false; }
       // PROVIDE(sym = expr); at top level defines a symbol when undefined.
       std::string kind = kw;
       advance();
@@ -537,30 +545,12 @@ bool Parser::parseTopLevel(ScriptFile& out) {
       auto st = std::make_unique<AssignStmt>();
       st->name = name;
       st->value = std::move(e);
-      st->provide = true;
+      st->provide = kind != "HIDDEN";
       st->hidden = (kind != "PROVIDE");
       out.sectionsBody.push_back(std::move(st));
     } else if (kw == "KEEP" || kw == "NOCROSSREFS" || kw == "REGION_ALIAS" ||
                kw == "INCLUDE") {
-      // Tolerate miscellaneous top-level commands by skipping their
-      // parenthesised/braced payload.
-      advance();
-      if (accept(TokKind::LParen)) {
-        int depth = 1;
-        while (depth && cur_.kind != TokKind::Eof) {
-          if (cur_.kind == TokKind::LParen) ++depth;
-          if (cur_.kind == TokKind::RParen) --depth;
-          advance();
-        }
-      } else if (accept(TokKind::LBrace)) {
-        int depth = 1;
-        while (depth && cur_.kind != TokKind::Eof) {
-          if (cur_.kind == TokKind::LBrace) ++depth;
-          if (cur_.kind == TokKind::RBrace) --depth;
-          advance();
-        }
-      }
-      accept(TokKind::Semicolon);
+      fail("unsupported top-level directive: " + kw); return false;
     } else {
       // A bare assignment at top level (e.g. `foo = 0x1000;`).
       std::string name = cur_.text;
@@ -737,7 +727,12 @@ bool Parser::parseGroup(ScriptFile& out, bool isGroup) {
       continue;
     }
     std::string f;
-    if (cur_.kind == TokKind::String) {
+    if (accept(TokKind::Minus)) {
+      if (cur_.kind != TokKind::Ident || !cur_.text.starts_with('l')) {
+        fail("INPUT/GROUP expects -lNAME"); return false;
+      }
+      f = "-" + cur_.text; advance();
+    } else if (cur_.kind == TokKind::String) {
       f = cur_.text;
       advance();
     } else if (cur_.kind == TokKind::Ident) {
@@ -970,6 +965,7 @@ std::unique_ptr<Stmt> Parser::parseSectionsStmt() {
   if (cur_.kind == TokKind::Ident &&
       (cur_.text == "PROVIDE" || cur_.text == "HIDDEN" ||
        cur_.text == "PROVIDE_HIDDEN")) {
+    if (cur_.text != "PROVIDE") { fail("hidden script symbols are unsupported"); return nullptr; }
     std::string kind = cur_.text;
     advance();
     std::string err;
@@ -1169,15 +1165,15 @@ bool Parser::parseOutputSection(OutputSection& section) {
   }
   // Trailing `>region`, `AT>region`, `:phdr`, `=fillexp`.
   while (true) {
-    if (cur_.kind == TokKind::Greater) {
+    if (cur_.kind == TokKind::Greater || cur_.kind == TokKind::Gt) {
       advance();
       if (cur_.kind == TokKind::Ident) {
         section.region = cur_.text;
         advance();
-      }
+      } else { fail("expected MEMORY region after '>'"); return false; }
     } else if (cur_.kind == TokKind::Ident && cur_.text == "AT") {
       advance();
-      if (cur_.kind == TokKind::Greater) {
+      if (cur_.kind == TokKind::Greater || cur_.kind == TokKind::Gt) {
         advance();
         if (cur_.kind == TokKind::Ident) {
           section.lmaRegion = cur_.text;
@@ -1192,12 +1188,11 @@ bool Parser::parseOutputSection(OutputSection& section) {
         }
       }
     } else if (cur_.kind == TokKind::Colon) {
-      advance();  // :phdr — accepted and ignored
-      if (cur_.kind == TokKind::Ident) advance();
+      fail("explicit program-header assignment is unsupported"); return false;
     } else if (cur_.kind == TokKind::Assign) {
-      advance();  // =fillexp — accepted and ignored
-      ExprPtr fill = parseExpr();
-      (void)fill;
+      advance();
+      section.fillExpr = parseExpr();
+      if (!section.fillExpr) { fail("invalid section fill expression"); return false; }
     } else {
       break;
     }
@@ -1209,7 +1204,7 @@ bool Parser::parseOutputSection(OutputSection& section) {
 bool Parser::parseInputPatterns(OutputSection& section) {
   // Contents: a sequence of `*(sections)`, `file(sections)`,
   // `EXCLUDE_FILE(...) *(...)`, `KEEP(...)`, assignments and `. = .` etc.
-  while (cur_.kind != TokKind::RBrace && cur_.kind != TokKind::Eof) {
+  while (cur_.kind != TokKind::RBrace && cur_.kind != TokKind::Eof && cur_.kind != TokKind::RParen) {
     if (cur_.kind == TokKind::Semicolon) {
       advance();
       continue;
@@ -1218,31 +1213,51 @@ bool Parser::parseInputPatterns(OutputSection& section) {
     if (cur_.kind == TokKind::Dot) {
       auto st = parseAssign("=");
       if (!st) return false;
-      // Stash as raw line for the executor: assignments inside output
-      // sections define symbols at the current dot. Represent by appending
-      // a synthetic pattern? Instead record in rawLines and handle in
-      // ldscript execution via re-parse? Simpler: the executor re-walks
-      // the section body? For now, record the assignment text so the
-      // executor can evaluate it. We stash into inputs as a marker with
-      // an empty file/section and keep the statement in a side list.
-      // To avoid changing the AST shape, encode as a SectionPattern with
-      // file=="=assign" and section==dump. The executor recognises it.
+      // Preserve the typed expression and source order for layout.
       SectionPattern p;
-      p.file = "=assign";
-      p.section = dynamic_cast<AssignStmt*>(st.get())->value->dump();
-      // Also keep the symbol name in sort field.
-      p.sort = dynamic_cast<AssignStmt*>(st.get())->name;
+      auto *a = static_cast<AssignStmt *>(st.get());
+      p.action = SectionPattern::Action::Assign;
+      p.expression = std::move(a->value);
+      p.symbol = a->name;
+      p.operation = a->op;
       section.inputs.push_back(std::move(p));
       continue;
     }
     std::string word =
         cur_.kind == TokKind::Ident ? cur_.text : std::string();
+    if (word == "BYTE" || word == "SHORT" || word == "LONG" || word == "QUAD" ||
+        word == "FILL" || word == "ASSERT" || word == "PROVIDE" || word == "HIDDEN" || word == "PROVIDE_HIDDEN") {
+      if (word == "HIDDEN" || word == "PROVIDE_HIDDEN") { fail("hidden script symbols are unsupported"); return false; }
+      SectionPattern p;
+      p.action = word == "FILL" ? SectionPattern::Action::Fill : word == "ASSERT" ? SectionPattern::Action::Assert :
+          (word == "PROVIDE" || word == "HIDDEN" || word == "PROVIDE_HIDDEN") ? SectionPattern::Action::Assign : SectionPattern::Action::Data;
+      p.width = word == "BYTE" ? 1 : word == "SHORT" ? 2 : word == "LONG" ? 4 : 8;
+      p.provide = word == "PROVIDE" || word == "PROVIDE_HIDDEN";
+      advance(); std::string err;
+      if (!expect(TokKind::LParen, err, "'('")) { fail(err); return false; }
+      if (p.action == SectionPattern::Action::Assign) {
+        if (cur_.kind != TokKind::Ident) { fail("expected symbol name"); return false; }
+        p.symbol = cur_.text; advance();
+        if (!expect(TokKind::Assign, err, "'='")) { fail(err); return false; }
+      }
+      p.expression = parseExpr();
+      if (!p.expression) { fail("invalid expression in " + word); return false; }
+      if (p.action == SectionPattern::Action::Assert && accept(TokKind::Comma)) {
+        if (cur_.kind != TokKind::String) { fail("ASSERT expects a string message"); return false; }
+        p.message = cur_.text; advance();
+      }
+      if (!expect(TokKind::RParen, err, "')'")) { fail(err); return false; }
+      accept(TokKind::Semicolon); section.inputs.push_back(std::move(p)); continue;
+    }
     if (word == "KEEP" || word == "EXCLUDE_FILE" || word == "INPUT_SECTION_FLAGS" ||
         word == "SORT" || word == "SORT_BY_NAME" || word == "SORT_BY_ALIGNMENT" ||
         word == "SORT_NONE" || word == "SORT_BY_INIT_PRIORITY") {
       // KEEP(*( ... )) — unwrap one level.
       bool isKeep = (word == "KEEP");
       bool isExclude = (word == "EXCLUDE_FILE");
+      if (isExclude || word == "INPUT_SECTION_FLAGS" || word == "SORT_BY_INIT_PRIORITY") {
+        fail("unsupported section selector: " + word); return false;
+      }
       advance();
       {
         std::string err;
@@ -1272,6 +1287,8 @@ bool Parser::parseInputPatterns(OutputSection& section) {
       if (isKeep) {
         for (size_t i = before; i < section.inputs.size(); ++i)
           section.inputs[i].keep = true;
+      } else {
+        for (size_t i = before; i < section.inputs.size(); ++i) section.inputs[i].sort = word;
       }
       std::string err;
       if (!expect(TokKind::RParen, err, "')'")) {
@@ -1280,26 +1297,8 @@ bool Parser::parseInputPatterns(OutputSection& section) {
       }
       continue;
     }
-    if (word == "PROVIDE" || word == "HIDDEN" || word == "PROVIDE_HIDDEN" ||
-        word == "ASSERT" || word == "FILL" || word == "CREATE_OBJECT_SYMBOLS" ||
-        word == "CONSTRUCTORS") {
-      // Skip balanced payload.
-      advance();
-      if (accept(TokKind::LParen)) {
-        int depth = 1;
-        while (depth && cur_.kind != TokKind::Eof) {
-          if (cur_.kind == TokKind::LParen) ++depth;
-          if (cur_.kind == TokKind::RParen) --depth;
-          if (depth) {
-            // Record PROVIDE assignments inside sections too.
-            advance();
-          } else
-            break;
-        }
-        accept(TokKind::RParen);
-      }
-      accept(TokKind::Semicolon);
-      continue;
+    if (word == "CREATE_OBJECT_SYMBOLS" || word == "CONSTRUCTORS") {
+      fail("unsupported section directive: " + word); return false;
     }
     // `file ( sections )` or `*( sections )`.
     if (cur_.kind == TokKind::Ident || cur_.kind == TokKind::Star ||
@@ -1308,6 +1307,12 @@ bool Parser::parseInputPatterns(OutputSection& section) {
       if (cur_.kind == TokKind::Ident) {
         file = cur_.text;
         advance();
+        if (cur_.kind == TokKind::Assign) {
+          advance(); SectionPattern p; p.action = SectionPattern::Action::Assign;
+          p.symbol = file; p.expression = parseExpr();
+          if (!p.expression) { fail("invalid symbol assignment"); return false; }
+          accept(TokKind::Semicolon); section.inputs.push_back(std::move(p)); continue;
+        }
         // Suffix wildcards: `file*.o` lexes as Ident + Star pieces.
         while (cur_.kind == TokKind::Star) {
           file += cur_.text;
@@ -1335,8 +1340,7 @@ bool Parser::parseInputPatterns(OutputSection& section) {
       // `file` without parens means a bare filename (INPUT-like)? Treat
       // `*(...)` shape only; a bare word followed by ';' is ignored.
       if (cur_.kind != TokKind::LParen) {
-        if (cur_.kind == TokKind::Semicolon) advance();
-        continue;
+        fail("expected section selector or assignment after " + file); return false;
       }
       advance();  // '('
       // Section list inside.
@@ -1354,6 +1358,9 @@ bool Parser::parseInputPatterns(OutputSection& section) {
              cur_.text == "EXCLUDE_FILE" || cur_.text == "KEEP" ||
              cur_.text == "INPUT_SECTION_FLAGS")) {
           std::string wrap = cur_.text;
+          if (wrap == "EXCLUDE_FILE" || wrap == "INPUT_SECTION_FLAGS" || wrap == "SORT_BY_INIT_PRIORITY") {
+            fail("unsupported section selector: " + wrap); return false;
+          }
           advance();
           if (accept(TokKind::LParen)) {
             // EXCLUDE_FILE takes file patterns then the real list; skip
@@ -1373,10 +1380,11 @@ bool Parser::parseInputPatterns(OutputSection& section) {
                 SectionPattern p;
                 p.file = file;
                 p.section = cur_.text;
+                advance();
+                while (cur_.kind == TokKind::Star) { p.section += '*'; advance(); }
                 p.sort = wrap;
                 if (wrap == "KEEP") p.keep = true;
                 section.inputs.push_back(std::move(p));
-                advance();
               } else if (cur_.kind == TokKind::LParen) {
                 // Nested parens (e.g. SORT_BY_NAME(COMMON)): skip.
                 advance();
@@ -1422,11 +1430,11 @@ bool Parser::parseInputPatterns(OutputSection& section) {
         }
         advance();
       }
-      accept(TokKind::RParen);
+      if (!accept(TokKind::RParen)) { fail("unterminated input section selector"); return false; }
       continue;
     }
-    // Unknown token: skip to avoid infinite loop.
-    advance();
+    if (cur_.kind == TokKind::RParen) break;
+    fail("unexpected token in output section: " + cur_.text); return false;
   }
   return true;
 }
@@ -1651,6 +1659,7 @@ ExprPtr Parser::parsePrimary() {
     advance();
     return std::make_unique<SymbolExpr>(s);
   }
+  fail("line " + std::to_string(cur_.line) + ": expected expression, found '" + cur_.text + "'");
   return nullptr;
 }
 

@@ -31,7 +31,7 @@ void malformed_and_roundtrip() {
         {"null", nullptr}, {"empty_array", boost::json::array{}},
         {"empty_object", boost::json::object{}}, {"large", UINT64_MAX},
         {"negative", INT64_MIN}, {"unicode", "\xf0\x9f\x98\x80"},
-        {"escaped", std::string("a\0\b\f\n\"\\]=]", 13)}
+        {"escaped", std::string("a\0\b\f\n\"\\]=]", sizeof("a\0\b\f\n\"\\]=]") - 1)}
     };
     auto spec = take(Spec::from_value(value));
     auto serialized = take(spec.serialize());

@@ -8,6 +8,10 @@
 #include "assembler.h"
 #include "sandstone.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct DomSymAs_Bank DomSymAs_Bank;
 
 typedef enum {
@@ -112,6 +116,7 @@ struct sandstone_asm {
 
     char *hook_path; /* optional Lua preprocess script */
     void *lua_state; /* persistent state shared by Lua blocks in one source */
+    void *extensions; /* SDK registrations and optional ArchML profile */
     char error[2048];
 };
 
@@ -125,6 +130,12 @@ char *sand_preprocess_source(sandstone_asm_t *ctx, const char *src,
                              const char *src_name);
 char *sand_run_lua_block(sandstone_asm_t *ctx, const char *code);
 void sand_lua_reset(sandstone_asm_t *ctx);
+int sand_lua_expand(sandstone_asm_t *, const char *, const char *, char **);
+void sand_lua_constant(sandstone_asm_t *, const char *, int64_t);
+int sand_extension_expand(sandstone_asm_t *, const char *, const char *, char **);
+char *sand_extension_prelude(sandstone_asm_t *);
+void sand_extension_free(sandstone_asm_t *);
+int sand_extension_reserved(const char *);
 void sand_free_lines(sandstone_asm_t *ctx);
 /* classify helpers exposed for directives.c */
 int sand_parse_integer(const char *text, int64_t *out);
@@ -163,4 +174,7 @@ sand_section_t *sand_find_section(sandstone_asm_t *ctx, const char *name);
 sand_section_t *sand_require_section(sandstone_asm_t *ctx, const char *name);
 int64_t sand_eval_expr(sandstone_asm_t *ctx, const char *expr, int *ok);
 
+#ifdef __cplusplus
+}
+#endif
 #endif /* SANDSTONE_ASM_INTERN_H */

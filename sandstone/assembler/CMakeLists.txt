@@ -2,10 +2,11 @@
 add_library(sandstone_assembler STATIC
   assembler.c
   parser.c
-  preprocess.c
+  preprocess.cpp
   directives.c
   binarizer.c
-  lua.c
+  lua.cpp
+  sdk.cpp
 )
 target_include_directories(sandstone_assembler
   PUBLIC
@@ -14,8 +15,12 @@ target_include_directories(sandstone_assembler
 )
 target_link_libraries(sandstone_assembler PUBLIC sandstone)
 libstone_warnings(sandstone_assembler)
-# dlopen() backend for the optional Lua hook; no link-time Lua needed.
-target_link_libraries(sandstone_assembler PRIVATE ${CMAKE_DL_LIBS})
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/LibstoneLua.cmake")
+target_link_libraries(sandstone_assembler PRIVATE libstone_kaguya)
+if(TARGET sandstone-archml)
+  target_link_libraries(sandstone_assembler PRIVATE sandstone-archml)
+  target_compile_definitions(sandstone_assembler PRIVATE SANDSTONE_ASM_ARCHML=1)
+endif()
 
 if(SANDSTONE_BUILD_TOOLS OR SANDSTONE_BUILD_TESTS)
   add_executable(sandstone-as driver.c)
@@ -29,6 +34,16 @@ endif()
 install(TARGETS sandstone_assembler
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES assembler.h assembler.hpp
+install(FILES assembler.h assembler.hpp sdk.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sandstone
 )
+if(SANDSTONE_BUILD_TESTS)
+  add_executable(sandstone-assembler-test ../tests/assembler_sdk.cpp)
+  target_link_libraries(sandstone-assembler-test PRIVATE sandstone_assembler)
+  if(TARGET sandstone-archml)
+    target_compile_definitions(sandstone-assembler-test PRIVATE
+      ARCHML_PROFILE="${CMAKE_CURRENT_SOURCE_DIR}/../archml/stdspec/amd64.aml")
+  endif()
+  libstone_warnings(sandstone-assembler-test)
+  add_test(NAME sandstone-assembler-sdk COMMAND sandstone-assembler-test)
+endif()

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "assembler.h"
+#include "sdk.h"
 
 namespace sandstone {
 
@@ -36,6 +37,12 @@ struct Section {
 
 class Assembler {
   public:
+    struct ArchMLProfile { std::string path; };
+    explicit Assembler(const ArchMLProfile &profile) {
+        char err[2048] = {};
+        if (sandstone_asm_new_archml(&ctx_, profile.path.c_str(), err, sizeof err))
+            throw std::runtime_error(err);
+    }
     explicit Assembler(const std::string &bank_path) {
         char err[1024] = {0};
         if (sandstone_asm_new(&ctx_, bank_path.c_str(), err, sizeof err) != 0)
@@ -130,6 +137,14 @@ class Assembler {
         return out;
     }
     std::string last_error() const { return sandstone_asm_error(ctx_); }
+    sandstone_asm_t *native_handle() const { return ctx_; }
+    void define_macro(const std::string &name, const std::string &parameters, const std::string &body) {
+        if (sandstone_asm_define_macro(ctx_, name.c_str(), parameters.c_str(), body.c_str()))
+            throw std::runtime_error(last_error());
+    }
+    void load_archml(const std::string &path) {
+        if (sandstone_asm_load_archml(ctx_, path.c_str())) throw std::runtime_error(last_error());
+    }
 
   private:
     sandstone_asm_t *ctx_ = nullptr;

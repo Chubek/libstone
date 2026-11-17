@@ -115,7 +115,22 @@ void qld_set_mode(qld_linker_t* self, qld_mode_t mode);
 void qld_set_flag(qld_linker_t* self, const char* flag, int value);
 int qld_run(qld_linker_t* self, char** errmsg);
 int qld_run_bytes(qld_linker_t* self, uint8_t** out_bytes, size_t* out_size,
-                  char** errmsg);
+                   char** errmsg);
+
+/* Source extension SDK v1. Handlers emit source through a bounded sink, return
+ * zero on success, and write a diagnostic into error on failure. User data is
+ * borrowed until destroy; registrations survive run calls. Names are invoked
+ * with @name on their own script line. Arguments retain source quoting. */
+#define QLD_SCRIPT_SDK_VERSION 1
+typedef int (*qld_source_sink)(void *, const char *, size_t);
+typedef int (*qld_directive_handler)(void *user, const char *const *arguments,
+    size_t count, qld_source_sink emit, void *sink, char *error, size_t error_size);
+int qld_register_directive(qld_linker_t *, const char *name,
+    qld_directive_handler, void *user, char **errmsg);
+int qld_define_macro(qld_linker_t *, const char *name,
+    const char *const *parameters, size_t count, const char *body, char **errmsg);
+/* Returned text is owned and freed with qld_free_string. --!lua selects Lua. */
+int qld_expand_script(qld_linker_t *, const char *source, char **text, char **errmsg);
 
 #ifdef __cplusplus
 } /* extern "C" */

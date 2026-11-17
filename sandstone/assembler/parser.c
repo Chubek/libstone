@@ -84,7 +84,16 @@ static void strip_comment(sandstone_asm_t *ctx, char *line) {
     size_t tl = strlen(tok);
     if (!tl)
         return;
-    for (char *p = line; (p = strstr(p, tok)) != NULL; p += tl) {
+    int quote = 0;
+    for (char *p = line; *p; ++p) {
+        if (quote) {
+            if (*p == '\\' && p[1]) ++p;
+            else if (*p == quote) quote = 0;
+            continue;
+        }
+        if (*p == '"' || *p == '\'') { quote = *p; continue; }
+        if (*p == ';') { *p = 0; return; }
+        if (strncmp(p, tok, tl)) continue;
         int at_start = (p == line);
         int pre_ws = at_start || isspace((unsigned char)p[-1]);
         char after = p[tl];
@@ -192,7 +201,9 @@ static char **split_operands(sandstone_asm_t *ctx, char *text, size_t *n_out) {
     for (char *p = text;; p++) {
         char c = *p;
         if (quote) {
-            if (c == quote)
+            if (c == '\\' && p[1])
+                p++;
+            else if (c == quote)
                 quote = 0;
             else if (c == '\0')
                 break;

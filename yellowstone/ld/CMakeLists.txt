@@ -20,6 +20,7 @@ add_library(qld STATIC
   shared.cpp
   static.cpp
   symbol.cpp
+  ScriptSDK.cpp
 )
 add_library(qobjld::qobjld ALIAS qld)
 
@@ -31,12 +32,26 @@ target_include_directories(qld PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../qbfd
 )
 target_link_libraries(qld PUBLIC qbfd::qbfd)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/LibstoneLua.cmake")
+target_link_libraries(qld PRIVATE libstone_kaguya)
+install(FILES ScriptSDK.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qobjld)
 
 target_compile_options(qld PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic>)
 if(QOBJFILE_WERROR)
   target_compile_options(qld PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Werror>)
+endif()
+
+if(YELLOWSTONE_BUILD_TESTS)
+  add_executable(qld-script-sdk-test tests/script_sdk.cpp)
+  target_link_libraries(qld-script-sdk-test PRIVATE qld)
+  add_test(NAME qld-script-sdk COMMAND qld-script-sdk-test)
+  if(YELLOWSTONE_BUILD_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME qld-script-executable COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
+  endif()
 endif()
 
 if(YELLOWSTONE_BUILD_TOOLS)

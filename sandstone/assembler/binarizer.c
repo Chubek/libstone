@@ -660,6 +660,18 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
     }
     (void)round;
 
+    for (size_t i = 0; i < ctx->n_lines; ++i) {
+        sand_line_t *ln = &ctx->lines[i];
+        if (ln->kind == SAND_LINE_DIRECTIVE && is_equ(ln->mnemonic)) {
+            int ok = 0;
+            if (ln->n_operands >= 2) sand_eval_expr(ctx, ln->operands[1].sval, &ok);
+            if (!ok) {
+                sand_set_error(ctx, "%s:%u: undefined or invalid constant expression", ln->src_name, ln->lineno);
+                free(off); return 0;
+            }
+        }
+    }
+
     /* Symbols in numeric (relocation-less) operand positions must be
      * defined: unlike SYM/REL positions they produce no relocation, so an
      * undefined name would silently assemble as zero. */
@@ -730,8 +742,7 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
              strcmp(ln->mnemonic, ".balign") == 0 ||
              strcmp(ln->mnemonic, ".p2align") == 0 ||
              strcmp(ln->mnemonic, ".org") == 0)) {
-            uint64_t addr = ctx->sections[sec_idx].base +
-                            ctx->sections[sec_idx].len;
+            uint64_t addr = ctx->sections[sec_idx].len;
             size_t before = ctx->sections[sec_idx].len;
             int pad = sand_directive_pad(ctx, ln, sec_idx, addr, 1);
             if (pad < 0) {

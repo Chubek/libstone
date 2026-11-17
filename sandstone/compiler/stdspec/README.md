@@ -1,19 +1,19 @@
 # DomSymAsCC stdspec
 
 `.dsymspec` files are architecture specifications written in the
-DomSymAsCC DSL (a small Lua library run under the embedded DomMune
-interpreter). Each file describes one architecture's registers, extensions,
+DomSymAsCC DSL (the shipped `dsl.lua`, run under stock Lua 5.3+).
+Each file describes one architecture's registers, extensions,
 relocations, sections, and a representative instruction set, and prints a
 JSON document with assembler records and a structured `backend` extension
 for register allocation, instruction selection, and instruction scheduling.
-`domlibs/domsymas/compiler` maps the assembler records onto
+`sandstone/compiler` maps the assembler records onto
 `domsymas::Builder` to emit a SymAS databank (`.symas`). Compiler consumers
 read the `backend` extension from the emitted JSON; the existing SymAS
 builder does not persist that extension.
 
 ```text
   .dsymspec (Lua DSL)  ->  JSON document  ->  domsymas::Builder  ->  .symas
-       (DomMune)             (this file)        (spec_document.cpp)
+       (Lua)                 (this file)        (spec_document.cpp)
 ```
 
 ## Using the DSL
@@ -42,8 +42,11 @@ print(symas.emit())
 
 `require("dsl")` returns a module; `dsl.new()` returns a fresh builder so
 multiple spec files can be compiled into one databank without sharing state.
-`emit()` performs a referential-integrity check (unknown mnemonic/encoder/
-feature/syntax names are rejected) before serializing.
+The shipped `dsl.lua` collector emits deterministic schema-1 JSON, rejecting
+cycles, mixed arrays and non-finite numbers. The C++ spec compiler performs
+referential-integrity and semantic checks. Defaults include explicit/error
+relocations, unknown section content, default linkage visibility, and read
+operand access. Use stock Lua 5.3+ for this collector; it needs no DomMune.
 
 ## JSON document schema
 

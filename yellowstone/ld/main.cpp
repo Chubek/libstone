@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "ld.h"
+#include "ScriptSDK.hpp"
 
 using qobj::OptionSpec;
 
@@ -18,7 +19,7 @@ constexpr OptionSpec kHelp{0, "help", false, "", "show this help"};
 constexpr OptionSpec kVersion{0, "version", false, "", "print version"};
 constexpr OptionSpec kOutput{'o', "output", true, "file", "write output here"};
 constexpr OptionSpec kEntry{'e', "entry", true, "symbol", "entry symbol"};
-constexpr OptionSpec kScript{'T', "script", true, "file", "linker script file"};
+constexpr OptionSpec kScript{'T', "script", true, "file", "linker script file (ld syntax or .lua)"};
 constexpr OptionSpec kScriptText{0, "script-text", true, "text",
                                  "linker script text"};
 constexpr OptionSpec kLibPath{'L', "library-path", true, "dir",
@@ -111,6 +112,7 @@ int main(int argc, char** argv) {
       try {
         auto bytes = qobj::readFile(options.value(kScript));
         text.assign(bytes.begin(), bytes.end());
+        text = qld::ScriptSDK{}.preprocess(text, options.value(kScript));
       } catch (const std::exception& e) {
         std::cerr << "qobjld: " << e.what() << '\n';
         return 1;
@@ -132,7 +134,8 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  if (options.positional().empty() && options.valueList(kLib).empty()) {
+  if (options.positional().empty() && options.valueList(kLib).empty() &&
+      !options.has(kScript) && options.value("script-text").empty()) {
     std::cerr << "qobjld: no input files\n\n" << options.usage();
     return 2;
   }

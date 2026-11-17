@@ -12,6 +12,10 @@ sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
 
 ## Pipeline
 
+0. **Expand source** (`preprocess.cpp`): includes, conditional assembly,
+   macros, repetitions, SDK directives and inline Lua execute in source
+   order, before layout. Generated output re-enters this processor. Expansion
+   is limited to 64 nested calls, 100,000 steps and 16 MiB of source.
 1. **Parse** (`parser.c`): each line is `[label:] (directive | mnemonic
    operands...)`. Comments follow the selected syntax record (a comment
    token starts a comment at line start, or when surrounded by
@@ -64,19 +68,75 @@ are ignored by the encoder. `COND` operands accept x86 condition names
 
 Sections (`.text` `.data` `.rodata` `.bss`, `.section NAME`), symbols
 (`.globl`/`.global`, `.extern`, `.equ`/`.set` with fixpoint evaluation),
-data (`.byte` `.short` `.word` `.long` `.quad`, `.ascii` `.asciz`
+data (`.byte` `.short`/`.hword`/`.2byte` `.word`/`.long`/`.4byte`
+`.quad`/`.8byte`, `.uleb128` `.sleb128`, `.ascii` `.asciz`
 `.string`, `.zero`/`.space`/`.skip`, `.fill`, `.align`/`.balign`
 `.p2align`, `.org`), and GAS-compatible no-ops (`.type`, `.size`).
 `.align N` follows GAS (`2^N` for small `N`; `.balign` takes bytes).
-Expressions allow integers, defined symbols, parentheses, and
-`+ - * / %` (plus unary `-`/`~`).
+Integer widths are 1, 2, 4 and 8 bytes respectively; `.word` is always
+4 bytes. `.asciz` terminates **each** string. Hex/octal escapes are checked.
+Expressions use signed 64-bit integers, symbols, parentheses, arithmetic,
+shifts, bitwise, comparison and logical operators with C precedence. Invalid
+shifts, division by zero and signed arithmetic overflow are errors.
 
-## Lua hook (`lua.c`)
+## Source directives and macros
 
-`sandstone-as --lua hook.lua` (or `sandstone_asm_load_hook`) runs the
-source through a user `preprocess(source, name)` function. liblua loads
-via `dlopen()` at run time, so the framework links and runs without Lua;
-absent Lua or absent hook, preprocessing is the identity.
+- `.macro NAME parameters` ... `.endmacro` (alias `.endm`): comma-separated
+  arguments, defaults (`n = 7`), final variadic arguments (`values...`),
+  `\name`/`\1` substitution, unique `\@`, and `local label` hygiene.
+- `.if`, `.elseif`, `.else`, `.endif`, `.ifdef`, `.ifndef`; inactive branches
+  neither execute Lua nor open includes. Conditions require known constants.
+- Nested `.rept COUNT` ... `.endr`; `.purge NAME` removes a source macro.
+- `.include "file"` and `.incbin "file"[,OFFSET[,COUNT]]` resolve relative to
+  the containing file. Include cycles and invalid binary ranges are errors.
+- `.struct NAME`, `.field NAME,SIZE`, `.align BYTES`, `.endstruct` define
+  `NAME.field` and `NAME.size` constants without emitting bytes.
+- `.enum NAME` ... `.endenum` accepts `ITEM = VALUE` or incrementing `ITEM`;
+  both `ITEM` and `NAME.ITEM` become constants.
+- `.assert EXPR[,MESSAGE]`, `.error MESSAGE`, `.pushsection`, `.popsection`,
+  `.previous`.
+
+## Bundled Lua and Kaguya (`lua.cpp`)
+
+The assembler links `third_party/lua` through `third_party/kaguya`; no system
+Lua ABI is guessed. Each assembly invocation starts a fresh Lua state.
+Blocks begin with `<:` at the start of a source line and end with `:>` outside
+Lua strings/comments. Globals persist between blocks in that invocation;
+block-local variables follow ordinary Lua scope. Known constants are available
+as globals (use `_G['Packet.size']` for names containing dots).
+
+```asm
+.equ N, 3
+<:
+lsandas.injectf('.byte ~li', {1, 2, N})
+lsandas.register_directive('.twice', function(arg)
+  lsandas.injectf('.byte %d, %d', tonumber(arg), tonumber(arg))
+end)
+:>
+.twice 4
+```
+
+`inject` inserts strings/numbers verbatim, or joins a sequence with commas.
+`injectf` supports Lua `string.format` plus `~li`, `~lx`, `~s`. A sequence
+can supply repeated groups of format arguments; formatted groups end in a
+newline. `lsandas.symas` exposes targets/opcodes/forms, registers, features,
+sections, relocations, syntaxes and linkages.
+
+`--lua hook.lua` / `sandstone_asm_load_hook` also supports a whole-source
+`preprocess(source, name)` function returning a string. Lua runs with its
+standard libraries; these are executable build scripts.
+
+## ArchML
+
+```sh
+sandstone-as --archml archml/stdspec/amd64.aml -o out.bin program.s
+```
+
+Use `.insn nop` or `.insn NAME, CONSTANT...`, with operand order and range
+checked by the profile encoder. `--bank` and `--archml` can be combined:
+ordinary mnemonics use SymAS; `.insn` uses ArchML. Symbolic ArchML relocation
+operands are unsupported. With `SANDSTONE_BUILD_ARCHML=OFF`, the public loader
+returns a diagnostic. ArchML parsing works independently of the working directory.
 
 ## APIs
 
@@ -84,3 +144,19 @@ absent Lua or absent hook, preprocessing is the identity.
   `char *` from `sandstone_asm_preprocess`).
 - C++: `assembler/assembler.hpp` (`sandstone::Assembler`, RAII,
   `std::vector` views, exceptions).
+- Extension SDK v1: `assembler/sdk.h`, `sandstone_asm_register_directive`,
+  `sandstone_asm_unregister_directive`, `sandstone_asm_define_macro`,
+  `sandstone_asm_load_archml`, `sandstone_asm_new_archml`.
+
+Callbacks receive argument text and a source sink. Return zero on success;
+write diagnostics into the supplied buffer on failure. Sink failures are
+sticky, and built-in/duplicate registrations are rejected. Registrations
+survive assembly calls; callback user data is borrowed until unregister or
+context destruction. Do not recursively assemble on the same context.
+See the executable [C SDK example](../examples/assembler-sdk.c) and
+[installed build instructions](../INSTALL.md).
+
+Output is flat binary or Sandstone JSON objects, not ELF. Yellowstone currently
+consumes ELF inputs; there is no direct JSON-object bridge. This is a defined
+assembler subset, not complete GAS/NASM compatibility; `.type`/`.size` remain
+accepted metadata no-ops.

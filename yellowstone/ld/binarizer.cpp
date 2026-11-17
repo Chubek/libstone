@@ -87,7 +87,8 @@ static bool buildStaged(const LinkState& state,
       staged[o].clear();
       continue;
     }
-    std::vector<uint8_t> buf(size_t(sec.size), 0);
+    std::vector<uint8_t> buf = sec.scriptData;
+    buf.resize(size_t(sec.size), 0);
     for (size_t idx : sec.inputs) {
       const auto& in = state.inputSections[idx];
       uint64_t off = in.outOffset;
@@ -320,6 +321,31 @@ bool emitExecutable(const LinkState& state,
   std::vector<Seg> loads;
   if (haveRe && (re.memsz || re.filesz)) loads.push_back(re);
   if (haveRw && (rw.memsz || rw.filesz)) loads.push_back(rw);
+  // A script may put writable data and code on the same page (or interleave
+  // their spans). Mapping a later RW LOAD over an RX page removes execute
+  // permission. Merge overlapping page spans into one mapping with the union
+  // of the required permissions. Disjoint page ranges keep separate LOADs.
+  if (loads.size() == 2) {
+    const auto &a = loads[0]; const auto &b = loads[1];
+    auto page = [](uint64_t value) { return value & ~UINT64_C(4095); };
+    if (page(a.vaddr) < alignUp(b.vaddr + b.memsz, 4096) &&
+        page(b.vaddr) < alignUp(a.vaddr + a.memsz, 4096)) {
+      if (a.vaddr - a.offset != b.vaddr - b.offset) {
+        error = "overlapping LOAD pages have incompatible file mappings"; return false;
+      }
+      Seg merged;
+      merged.flags = a.flags | b.flags;
+      merged.vaddr = std::min(a.vaddr, b.vaddr);
+      merged.offset = std::min(a.offset, b.offset);
+      merged.filesz = std::max(a.offset + a.filesz, b.offset + b.filesz) - merged.offset;
+      merged.memsz = std::max(a.vaddr + a.memsz, b.vaddr + b.memsz) - merged.vaddr;
+      loads = {merged};
+    }
+  }
+  std::sort(loads.begin(), loads.end(), [](const Seg &a, const Seg &b) { return a.vaddr < b.vaddr; });
+  for (const auto &load : loads) if (load.vaddr % load.align != load.offset % load.align || load.filesz > load.memsz) {
+    error = "invalid ELF LOAD geometry (alignment or file/memory size)"; return false;
+  }
   // Emit up to 2 LOADs + GNU_STACK.
   if (loads.size() + 1 != phnum) {
     phnum = loads.size() + 1;

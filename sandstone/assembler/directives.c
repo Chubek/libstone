@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* ---- expression evaluation ------------------------------------------ */
 
@@ -51,8 +52,10 @@ static int64_t expr_primary(expr_cursor_t *c) {
     if (*c->p == '-' || *c->p == '+' || *c->p == '~' || *c->p == '!') {
         char op = *c->p++;
         int64_t v = expr_primary(c);
-        if (op == '-')
-            v = -v;
+        if (op == '-') {
+            if (v == INT64_MIN) c->ok = 0;
+            else v = -v;
+        }
         else if (op == '~')
             v = ~v;
         else if (op == '!')
@@ -99,11 +102,16 @@ static int64_t expr_mul(expr_cursor_t *c) {
         expr_ws(c);
         if (*c->p == '*') {
             c->p++;
-            v *= expr_primary(c);
+            int64_t d = expr_primary(c);
+            if ((v > 0 && ((d > 0 && v > INT64_MAX / d) || (d < 0 && d < INT64_MIN / v))) ||
+                (v < 0 && ((d > 0 && v < INT64_MIN / d) || (d < 0 && v < INT64_MAX / d)))) {
+                c->ok = 0; return 0;
+            }
+            v *= d;
         } else if (*c->p == '/') {
             c->p++;
             int64_t d = expr_primary(c);
-            if (d == 0) {
+            if (d == 0 || (v == INT64_MIN && d == -1)) {
                 c->ok = 0;
                 return 0;
             }
@@ -111,7 +119,7 @@ static int64_t expr_mul(expr_cursor_t *c) {
         } else if (*c->p == '%') {
             c->p++;
             int64_t d = expr_primary(c);
-            if (d == 0) {
+            if (d == 0 || (v == INT64_MIN && d == -1)) {
                 c->ok = 0;
                 return 0;
             }
@@ -128,10 +136,14 @@ static int64_t expr_add(expr_cursor_t *c) {
         expr_ws(c);
         if (*c->p == '+') {
             c->p++;
-            v += expr_mul(c);
+            int64_t d = expr_mul(c);
+            if ((d > 0 && v > INT64_MAX - d) || (d < 0 && v < INT64_MIN - d)) { c->ok = 0; return 0; }
+            v += d;
         } else if (*c->p == '-') {
             c->p++;
-            v -= expr_mul(c);
+            int64_t d = expr_mul(c);
+            if ((d < 0 && v > INT64_MAX + d) || (d > 0 && v < INT64_MIN + d)) { c->ok = 0; return 0; }
+            v -= d;
         } else {
             return v;
         }
@@ -143,13 +155,14 @@ static int64_t expr_shift(expr_cursor_t *c) {
     for(;;){expr_ws(c);if(!strncmp(c->p,"<<",2)){c->p+=2;int64_t n=expr_add(c);if(n<0||n>=64)c->ok=0;else v=(int64_t)((uint64_t)v<<n);}
         else if(!strncmp(c->p,">>",2)){c->p+=2;int64_t n=expr_add(c);if(n<0||n>=64)c->ok=0;else v>>=n;}else return v;}
 }
-static int64_t expr_bitand(expr_cursor_t*c){int64_t v=expr_shift(c);for(;;){expr_ws(c);if(*c->p=='&'&&c->p[1]!='&'){c->p++;v&=expr_shift(c);}else return v;}}
+static int64_t expr_relational(expr_cursor_t*c){int64_t v=expr_shift(c);for(;;){expr_ws(c);const char*op=c->p;int n=0,kind=0;
+    if(!strncmp(op,"<=",2)){n=2;kind=1;}else if(!strncmp(op,">=",2)){n=2;kind=2;}else if(*op=='<'&&op[1]!='<'){n=1;kind=3;}else if(*op=='>'&&op[1]!='>'){n=1;kind=4;}else return v;
+    c->p+=n;int64_t r=expr_shift(c);switch(kind){case 1:v=v<=r;break;case 2:v=v>=r;break;case 3:v=v<r;break;default:v=v>r;break;}}}
+static int64_t expr_equality(expr_cursor_t*c){int64_t v=expr_relational(c);for(;;){expr_ws(c);if(!strncmp(c->p,"==",2)){c->p+=2;v=v==expr_relational(c);}else if(!strncmp(c->p,"!=",2)){c->p+=2;v=v!=expr_relational(c);}else return v;}}
+static int64_t expr_bitand(expr_cursor_t*c){int64_t v=expr_equality(c);for(;;){expr_ws(c);if(*c->p=='&'&&c->p[1]!='&'){c->p++;v&=expr_equality(c);}else return v;}}
 static int64_t expr_bitxor(expr_cursor_t*c){int64_t v=expr_bitand(c);for(;;){expr_ws(c);if(*c->p=='^'){c->p++;v^=expr_bitand(c);}else return v;}}
 static int64_t expr_bitor(expr_cursor_t*c){int64_t v=expr_bitxor(c);for(;;){expr_ws(c);if(*c->p=='|'&&c->p[1]!='|'){c->p++;v|=expr_bitxor(c);}else return v;}}
-static int64_t expr_compare(expr_cursor_t*c){int64_t v=expr_bitor(c);for(;;){expr_ws(c);const char*op=c->p;int n=0,kind=0;
-    if(!strncmp(op,"==",2)){n=2;kind=1;}else if(!strncmp(op,"!=",2)){n=2;kind=2;}else if(!strncmp(op,"<=",2)){n=2;kind=3;}else if(!strncmp(op,">=",2)){n=2;kind=4;}else if(*op=='<'&&op[1]!='<'){n=1;kind=5;}else if(*op=='>'&&op[1]!='>'){n=1;kind=6;}else return v;
-    c->p+=n;int64_t r=expr_bitor(c);switch(kind){case 1:v=v==r;break;case 2:v=v!=r;break;case 3:v=v<=r;break;case 4:v=v>=r;break;case 5:v=v<r;break;default:v=v>r;break;}}}
-static int64_t expr_logic_and(expr_cursor_t*c){int64_t v=expr_compare(c);for(;;){expr_ws(c);if(!strncmp(c->p,"&&",2)){c->p+=2;int64_t r=expr_compare(c);v=(v!=0)&&(r!=0);}else return v;}}
+static int64_t expr_logic_and(expr_cursor_t*c){int64_t v=expr_bitor(c);for(;;){expr_ws(c);if(!strncmp(c->p,"&&",2)){c->p+=2;int64_t r=expr_bitor(c);v=(v!=0)&&(r!=0);}else return v;}}
 static int64_t expr_logic(expr_cursor_t*c){int64_t v=expr_logic_and(c);for(;;){expr_ws(c);if(!strncmp(c->p,"||",2)){c->p+=2;int64_t r=expr_logic_and(c);v=(v!=0)||(r!=0);}else return v;}}
 
 int64_t sand_eval_expr(sandstone_asm_t *ctx, const char *expr, int *ok) {
@@ -279,6 +292,7 @@ int sand_directive_symbol(sandstone_asm_t *ctx, const sand_line_t *line,
             }
             if (name_is(m, ".globl") || name_is(m, ".global"))
                 s->global = 1;
+            if (name_is(m, ".local")) s->global = 0;
         }
         return 1;
     }
@@ -342,17 +356,40 @@ static int operand_count_ok(sandstone_asm_t *ctx, const sand_line_t *line,
     return 1;
 }
 
-/* Length of a parsed string literal operand (without quotes). */
-static int string_length(const char *s, size_t *len_out) {
+/* One decoder drives both sizing and emission, including octal/hex escapes. */
+static int decode_string(const char *s, uint8_t *out, size_t *len_out) {
     if (!s || s[0] != '"')
         return 0;
     size_t n = 0;
     for (s++; *s && *s != '"'; s++) {
-        if (*s == '\\' && s[1])
-            s++;
-        n++;
+        unsigned value = (unsigned char)*s;
+        if (*s == '\\') {
+            ++s;
+            if (!*s) return 0;
+            if (*s == 'x') {
+                value = 0; unsigned digits = 0;
+                while (isxdigit((unsigned char)s[1])) {
+                    ++s; unsigned d = isdigit((unsigned char)*s) ? (unsigned)(*s - '0') : (unsigned)(tolower((unsigned char)*s) - 'a' + 10);
+                    if (value > (255 - d) / 16) return 0;
+                    value = value * 16 + d; ++digits;
+                }
+                if (!digits) return 0;
+            } else if (*s >= '0' && *s <= '7') {
+                value = (unsigned)(*s - '0');
+                for (unsigned i = 1; i < 3 && s[1] >= '0' && s[1] <= '7'; ++i) value = value * 8 + (unsigned)(*++s - '0');
+                if (value > 255) return 0;
+            } else switch (*s) {
+                case 'n': value = '\n'; break; case 'r': value = '\r'; break;
+                case 't': value = '\t'; break; case 'b': value = '\b'; break;
+                case 'f': value = '\f'; break; case 'v': value = '\v'; break;
+                case 'a': value = '\a'; break; case '\\': value = '\\'; break;
+                case '"': value = '"'; break; default: return 0;
+            }
+        }
+        if (out) out[n] = (uint8_t)value;
+        ++n;
     }
-    if (*s != '"')
+    if (*s != '"' || s[1])
         return 0;
     *len_out = n;
     return 1;
@@ -380,11 +417,11 @@ int sand_directive_size(sandstone_asm_t *ctx, const sand_line_t *line,
     *size_out = 0;
     if (name_is(m, ".byte"))
         *size_out = (uint32_t)line->n_operands * 1;
-    else if (name_is(m, ".short"))
+    else if (name_is(m, ".short") || name_is(m, ".hword") || name_is(m, ".2byte"))
         *size_out = (uint32_t)line->n_operands * 2;
-    else if (name_is(m, ".word") || name_is(m, ".long"))
+    else if (name_is(m, ".word") || name_is(m, ".long") || name_is(m, ".4byte"))
         *size_out = (uint32_t)line->n_operands * 4;
-    else if (name_is(m, ".quad"))
+    else if (name_is(m, ".quad") || name_is(m, ".8byte"))
         *size_out = (uint32_t)line->n_operands * 8;
     else if (name_is(m, ".ascii") || name_is(m, ".asciz") ||
              name_is(m, ".string")) {
@@ -392,15 +429,15 @@ int sand_directive_size(sandstone_asm_t *ctx, const sand_line_t *line,
         for (size_t i = 0; i < line->n_operands; i++) {
             size_t l = 0;
             if (!line->operands[i].sval ||
-                !string_length(line->operands[i].sval, &l)) {
+                 !decode_string(line->operands[i].sval, NULL, &l)) {
                 sand_set_error(ctx, "%s:%u: %s needs quoted strings",
                                line->src_name, line->lineno, m);
                 return 0;
             }
             total += l;
+            if (!name_is(m, ".ascii")) ++total;
         }
-        if (!name_is(m, ".ascii"))
-            total += 1;
+        if (total > UINT32_MAX) return 0;
         *size_out = (uint32_t)total;
         return 1;
     } else if (name_is(m, ".zero") || name_is(m, ".space") ||
@@ -410,7 +447,7 @@ int sand_directive_size(sandstone_asm_t *ctx, const sand_line_t *line,
         int ok = 0;
         int64_t n = sand_eval_expr(
             ctx, line->operands[0].sval ? line->operands[0].sval : "", &ok);
-        if (!ok || n < 0) {
+        if (!ok || n < 0 || n > 16 * 1024 * 1024) {
             sand_set_error(ctx, "%s:%u: %s needs a constant count",
                            line->src_name, line->lineno, m);
             return 0;
@@ -428,12 +465,26 @@ int sand_directive_size(sandstone_asm_t *ctx, const sand_line_t *line,
         int ok2 = 0;
         int64_t size =
             sand_eval_expr(ctx, line->operands[1].sval, &ok2);
-        if (!ok || !ok2 || count < 0 || size < 0) {
+        if (!ok || !ok2 || count < 0 || size < 0 || size > 8 || (size && count > 16 * 1024 * 1024 / size)) {
             sand_set_error(ctx, "%s:%u: .fill needs constant COUNT,SIZE",
                            line->src_name, line->lineno);
             return 0;
         }
         *size_out = (uint32_t)(count * size);
+        return 1;
+    } else if (name_is(m, ".uleb128") || name_is(m, ".sleb128")) {
+        if (!operand_count_ok(ctx, line, 1)) return 0;
+        for (size_t i = 0; i < line->n_operands; ++i) {
+            int ok = 0; int64_t value = sand_eval_expr(ctx, line->operands[i].sval, &ok);
+            int sign = name_is(m, ".sleb128");
+            if (!ok || (!sign && value < 0)) { sand_set_error(ctx, "invalid LEB128 constant"); return 0; }
+            int more;
+            do {
+                unsigned byte = (unsigned)((uint64_t)value & 127); value >>= 7;
+                more = sign ? !((value == 0 && !(byte & 64)) || (value == -1 && (byte & 64))) : value != 0;
+                ++*size_out;
+            } while (more);
+        }
         return 1;
     } else if (name_is(m, ".align") || name_is(m, ".balign") ||
                name_is(m, ".p2align") || name_is(m, ".org")) {
@@ -458,18 +509,30 @@ int sand_directive_size(sandstone_asm_t *ctx, const sand_line_t *line,
 
 /* ---- data directive emission (pass 2) ---------------------------------- */
 
-static void put_u(sand_section_t *sec, uint64_t v, unsigned n, int be) {
+static int put_u(sand_section_t *sec, uint64_t v, unsigned n, int be) {
     if (sec->len + n > sec->cap) {
         size_t ncap = sec->cap ? sec->cap * 2 : 64;
         while (ncap < sec->len + n)
             ncap *= 2;
-        sec->bytes = realloc(sec->bytes, ncap);
+        uint8_t *next = realloc(sec->bytes, ncap);
+        if (!next) return 0;
+        sec->bytes = next;
         sec->cap = ncap;
     }
     for (unsigned i = 0; i < n; i++) {
         unsigned sh = be ? (n - 1 - i) * 8 : i * 8;
         sec->bytes[sec->len++] = (uint8_t)((v >> sh) & 0xFF);
     }
+    return 1;
+}
+
+static int put_checked(sandstone_asm_t *ctx, sand_section_t *sec, int64_t v, unsigned width) {
+    if (width < 8 && (v < -(INT64_C(1) << (width * 8 - 1)) ||
+        (v >= 0 && (uint64_t)v >= (UINT64_C(1) << (width * 8))))) {
+        sand_set_error(ctx, "data value out of range for %u-bit field", width * 8);
+        return 0;
+    }
+    return put_u(sec, (uint64_t)v, width, ctx->byte_order);
 }
 
 /* Append a relocation for a directive-emitted absolute field. */
@@ -502,11 +565,10 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
     if (sand_is_name(expr)) {
         sand_symbol_t *s = sand_find_symbol(ctx, expr);
         if (s && s->defined) {
-            put_u(sec, s->address, width, ctx->byte_order);
-            return 1;
+            return put_checked(ctx, sec, (int64_t)s->address, width);
         }
         uint32_t at = (uint32_t)sec->len;
-        put_u(sec, 0, width, ctx->byte_order);
+        if (!put_u(sec, 0, width, ctx->byte_order)) return 0;
         if (!add_abs_reloc(ctx, sec_idx, at, expr, 0, width * 8))
             return 0;
         return 1;
@@ -516,8 +578,7 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
     int ok = 0;
     int64_t v = sand_eval_expr(ctx, expr, &ok);
     if (ok) {
-        put_u(sec, (uint64_t)v, width, ctx->byte_order);
-        return 1;
+        return put_checked(ctx, sec, v, width);
     }
     /* symbol +/- constant? */
     char *plus = strrchr((char *)expr, '+');
@@ -532,19 +593,18 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
         char *trimmed = name ? sand_trim(name) : NULL;
         int64_t add = 0;
         int ok2 = trimmed && sand_is_name(trimmed) &&
-                  sand_parse_integer(sep + (sep == plus ? 1 : 0), &add);
+                  sand_parse_integer(sep + 1, &add);
         if (sep == minus && ok2)
             add = -add;
         if (ok2) {
             sand_symbol_t *s = sand_find_symbol(ctx, trimmed);
             if (s && s->defined) {
-                put_u(sec, (uint64_t)((int64_t)s->address + add), width,
-                      ctx->byte_order);
+                int result = put_checked(ctx, sec, (int64_t)((uint64_t)s->address + (uint64_t)add), width);
                 free(name);
-                return 1;
+                return result;
             }
             uint32_t at = (uint32_t)sec->len;
-            put_u(sec, 0, width, ctx->byte_order);
+            if (!put_u(sec, 0, width, ctx->byte_order)) { free(name); return 0; }
             int rc = add_abs_reloc(ctx, sec_idx, at, trimmed, add,
                                    width * 8);
             free(name);
@@ -558,31 +618,16 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
 }
 
 static int emit_string(sand_section_t *sec, const char *s) {
-    if (!s || s[0] != '"')
-        return 0;
-    for (s++; *s && *s != '"'; s++) {
-        uint8_t c = (uint8_t)*s;
-        if (c == '\\' && s[1]) {
-            s++;
-            switch (*s) {
-            case 'n': c = '\n'; break;
-            case 't': c = '\t'; break;
-            case 'r': c = '\r'; break;
-            case '0': c = '\0'; break;
-            default: c = (uint8_t)*s; break;
-            }
-        }
-        if (sec->len + 1 > sec->cap) {
-            size_t ncap = sec->cap ? sec->cap * 2 : 64;
-            uint8_t *nb = realloc(sec->bytes, ncap);
-            if (!nb)
-                return 0;
-            sec->bytes = nb;
-            sec->cap = ncap;
-        }
-        sec->bytes[sec->len++] = c;
+    size_t n = 0;
+    if (!decode_string(s, NULL, &n) || n > SIZE_MAX - sec->len) return 0;
+    if (sec->len + n > sec->cap) {
+        uint8_t *next = realloc(sec->bytes, sec->len + n);
+        if (!next) return 0;
+        sec->bytes = next; sec->cap = sec->len + n;
     }
-    return *s == '"';
+    if (n && !decode_string(s, sec->bytes + sec->len, &n)) return 0;
+    sec->len += n;
+    return 1;
 }
 
 int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
@@ -593,11 +638,11 @@ int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
     unsigned width = 0;
     if (name_is(m, ".byte"))
         width = 1;
-    else if (name_is(m, ".short"))
+    else if (name_is(m, ".short") || name_is(m, ".hword") || name_is(m, ".2byte"))
         width = 2;
-    else if (name_is(m, ".word") || name_is(m, ".long"))
+    else if (name_is(m, ".word") || name_is(m, ".long") || name_is(m, ".4byte"))
         width = 4;
-    else if (name_is(m, ".quad"))
+    else if (name_is(m, ".quad") || name_is(m, ".8byte"))
         width = 8;
     if (width) {
         for (size_t i = 0; i < line->n_operands; i++) {
@@ -617,9 +662,8 @@ int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
                                line->src_name, line->lineno, m);
                 return 0;
             }
+            if (!name_is(m, ".ascii") && !put_u(sec, 0, 1, 0)) return 0;
         }
-        if (!name_is(m, ".ascii"))
-            put_u(sec, 0, 1, 0);
         return 1;
     }
     if (name_is(m, ".zero") || name_is(m, ".space") ||
@@ -639,7 +683,7 @@ int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
             return 0;
         }
         for (int64_t i = 0; i < n; i++)
-            put_u(sec, (uint64_t)fill, 1, 0);
+            if (!put_u(sec, (uint64_t)fill, 1, 0)) return 0;
         return 1;
     }
     if (name_is(m, ".fill")) {
@@ -653,7 +697,20 @@ int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
             return 0;
         }
         for (int64_t i = 0; i < count; i++)
-            put_u(sec, (uint64_t)value, (unsigned)size, ctx->byte_order);
+            if (!put_u(sec, (uint64_t)value, (unsigned)size, ctx->byte_order)) return 0;
+        return 1;
+    }
+    if (name_is(m, ".uleb128") || name_is(m, ".sleb128")) {
+        for (size_t i = 0; i < line->n_operands; ++i) {
+            int ok = 0; int64_t value = sand_eval_expr(ctx, line->operands[i].sval, &ok);
+            int sign = name_is(m, ".sleb128"), more;
+            if (!ok || (!sign && value < 0)) return 0;
+            do {
+                unsigned byte = (unsigned)((uint64_t)value & 127); value >>= 7;
+                more = sign ? !((value == 0 && !(byte & 64)) || (value == -1 && (byte & 64))) : value != 0;
+                if (!put_u(sec, byte | (more ? 128 : 0), 1, 0)) return 0;
+            } while (more);
+        }
         return 1;
     }
     sand_set_error(ctx, "%s:%u: cannot emit '%s' here", line->src_name,
@@ -713,7 +770,7 @@ int sand_directive_pad(sandstone_asm_t *ctx, const sand_line_t *line,
         sand_section_t *sec = &ctx->sections[sec_idx];
         uint8_t fb = (uint8_t)(fill & 0xFF);
         for (uint64_t i = 0; i < want; i++)
-            put_u(sec, fb, 1, 0);
+            if (!put_u(sec, fb, 1, 0)) return -1;
     }
     return (int)want;
 }

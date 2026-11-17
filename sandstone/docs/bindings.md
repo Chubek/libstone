@@ -1,7 +1,9 @@
 # Language bindings
 
 `bindings/sandstone.i` is a SWIG 4.0 interface over the two C APIs
-(`sandstone.h`, `assembler.h`). `bindings/generate-bindings.sh` drives
+(`sandstone.h`, `assembler.h`) and source-macro/ArchML SDK functions.
+Native callback registration is excluded pending language-specific lifetime
+trampolines. `bindings/generate-bindings.sh` drives
 SWIG:
 
 ```sh
@@ -13,7 +15,9 @@ SWIG:
 Languages: `python` (default), `lua`, `java`. Each output directory holds
 the generated wrapper plus a smoke test (`smoke.py` for Python).
 `--build` compiles the Python extension against `libsandstone.a` from the
-CMake build tree (needs Python development headers).
+CMake build tree (needs Python development headers). Pass `--build-dir DIR`
+for an external build directory; assembler, ArchML (if enabled), bundled Lua
+and core dependencies are linked together.
 
 Ownership follows the C APIs: handles are caller-owned, record pointers
 are borrowed from the bank, and encode/disassemble outputs must be
@@ -24,5 +28,5 @@ out-parameters.
 
 ```python
 import sandstone as s
-assert s.domsymas_probe_magic(open("x86.symas", "rb").read(3), 3) == 1
+assert s.domsymas_probe_magic(open("x86.symas", "rb").read(3)) == 1
 ```

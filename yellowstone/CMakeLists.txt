@@ -29,6 +29,7 @@ target_compile_features(qobjcommon INTERFACE cxx_std_20)
 target_link_libraries(qobjcommon INTERFACE qbfd::qbfd)
 if(QOBJFILE_DOMTERM)
   target_link_libraries(qobjcommon INTERFACE domterm termscript_standalone)
+  target_compile_definitions(qobjcommon INTERFACE QOBJFILE_HAS_DOMTERM=1)
   target_include_directories(qobjcommon INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/external/domterm)
 endif()
 target_include_directories(qobjcommon INTERFACE
@@ -75,6 +76,12 @@ foreach(reader readelf readexe readmacho)
 endforeach()
 endif()
 
+set(_binscript_default OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/binscript/binscript.c")
+  set(_binscript_default ON)
+endif()
+option(YELLOWSTONE_BUILD_BINSCRIPT "Build the optional legacy binscript tool" ${_binscript_default})
+if(YELLOWSTONE_BUILD_BINSCRIPT)
 add_library(binscript STATIC binscript/binscript.c)
 target_include_directories(binscript PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/binscript)
 if(YELLOWSTONE_BUILD_TOOLS)
@@ -93,6 +100,11 @@ if(YELLOWSTONE_PERL)
     DEPENDS scripts/aurocks.pl binscript/binscript.g cmake/GenerateParser.cmake VERBATIM)
   add_custom_target(binscript_parser DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/binscript_parser.c)
   add_dependencies(binscript binscript_parser)
+endif()
+install(TARGETS binscript ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(YELLOWSTONE_BUILD_TOOLS)
+  install(TARGETS binscript_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 endif()
 
 # The Unix-style linker (qobjld library + CLI) in ld/.
@@ -121,10 +133,10 @@ if(YELLOWSTONE_BUILD_TESTS AND YELLOWSTONE_BUILD_TOOLS)
 endif()
 
 if(YELLOWSTONE_BUILD_TOOLS)
-  install(TARGETS qobjdump qobjsize qobjcp qobjstr qobjstrip qobjnm qobjar qobjld readelf readexe readmacho binscript_cli
+  install(TARGETS qobjdump qobjsize qobjcp qobjstr qobjstrip qobjnm qobjar qobjld readelf readexe readmacho
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS qld binscript
+install(TARGETS qld
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY qbfd/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qbfd

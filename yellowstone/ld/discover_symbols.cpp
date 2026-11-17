@@ -108,13 +108,18 @@ bool discoverSymbols(LinkState& state, std::string& error) {
       bool hasIndex = !index.empty();
       for (size_t m = 0; m < candidates[a].size(); ++m) {
         if (taken[a][m]) continue;
+        auto roots = state.undefined;
+        // An executable entry can itself live in a lazy archive, including
+        // an archive supplied solely by INPUT(-l...).
+        if (state.options.mode == Mode::Exec || state.options.pie)
+          roots.push_back(state.options.entry);
         bool needed = false;
         if (hasIndex) {
           // Use the armap: pull when the member is the index's recorded
           // definer of a needed symbol.
           for (const auto& e : index) {
             bool want = false;
-            for (const auto& u : state.undefined)
+            for (const auto& u : roots)
               if (u == e.symbol) {
                 want = true;
                 break;
@@ -133,7 +138,7 @@ bool discoverSymbols(LinkState& state, std::string& error) {
           if (!needed) {
             auto probe = qbfd::open(candidates[a][m].bytes,
                                     candidates[a][m].member.name);
-            if (probe && definesUndefined(*probe->object, state.undefined,
+            if (probe && definesUndefined(*probe->object, roots,
                                           state.defs))
               needed = true;
           }
@@ -142,7 +147,7 @@ bool discoverSymbols(LinkState& state, std::string& error) {
           auto probe = qbfd::open(candidates[a][m].bytes,
                                   candidates[a][m].member.name);
           if (!probe) continue;  // unreadable member: skip, error later
-          if (definesUndefined(*probe->object, state.undefined, state.defs))
+          if (definesUndefined(*probe->object, roots, state.defs))
             needed = true;
           else if (state.undefined.empty() && state.defs.empty()) {
             // First object from an index-less archive with no prior
@@ -173,7 +178,7 @@ bool discoverSymbols(LinkState& state, std::string& error) {
     // Shared links may leave dynamic undefined symbols; executables may not.
     std::vector<std::string> missing;
     for (const auto& u : state.undefined) {
-      if (state.defs.count(u)) continue;
+      if (state.defs.count(u) || state.scriptSymbols.count(u)) continue;
       missing.push_back(u);
     }
     if (!missing.empty()) {

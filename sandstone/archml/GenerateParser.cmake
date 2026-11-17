@@ -1,4 +1,4 @@
-execute_process(COMMAND "${PERL}" "${GENERATOR}" "${GRAMMAR}"
+execute_process(COMMAND "${PERL}" "${GENERATOR}" --no-strpool "${GRAMMAR}"
   RESULT_VARIABLE status OUTPUT_VARIABLE parser ERROR_VARIABLE error)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Aurocks: ${error}")

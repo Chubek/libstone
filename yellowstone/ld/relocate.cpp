@@ -87,26 +87,7 @@ bool applyRelocations(LinkState& state,
     const auto& obj = state.objects[in.objectIndex];
     uint64_t place = o.vma + in.outOffset;  // P for PC-relative
     std::vector<uint8_t>& img = staged[outIdx];
-    uint64_t baseOff = 0;
-    // intra-output offset of this input's bytes:
-    for (size_t idx : o.inputs) {
-      if (idx == (size_t)(&in - state.inputSections.data())) break;
-      (void)idx;
-    }
-    // Recompute input base offset within staged image.
-    {
-      uint64_t off = 0;
-      for (size_t idx : o.inputs) {
-        const auto& other = state.inputSections[idx];
-        if (idx == (size_t)(&in - state.inputSections.data())) {
-          baseOff = off;
-          break;
-        }
-        uint64_t a = other.section.alignment ? other.section.alignment : 1;
-        off = ((off + a - 1) / a) * a + std::max<uint64_t>(
-            other.section.size, other.contents.size());
-      }
-    }
+    uint64_t baseOff = in.outOffset;
 
     for (const auto& r : in.relocs) {
       // Resolve the symbol value S.

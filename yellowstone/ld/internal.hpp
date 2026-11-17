@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,7 @@ struct LinkOptions {
   std::vector<std::string> libs;        // -l names (without lib/.a)
   std::string output;                   // -o
   std::string entry = "_start";         // -e
+  bool hasEntry = false;
   std::string script;                   // -T path
   std::string scriptText;               // -T text via --script-text (or GROUP)
   bool scriptIsText = false;
@@ -106,6 +108,7 @@ struct OutputSection {
   bool executable = false;
   bool writable = false;
   std::vector<size_t> inputs;           // indices into LinkState::inputSections
+  std::vector<uint8_t> scriptData;      // script-emitted data and padding
   uint32_t index = 0;                   // output section index (0 == NULL)
 };
 
@@ -126,6 +129,9 @@ struct LinkState {
   uint64_t entryAddr = 0;
   // Diagnostics collected along the way.
   std::vector<std::string> warnings;
+  bool scriptExtrasOnly = false;
+  bool scriptPrepared = false;
+  std::set<std::string> scriptSymbols;
 };
 
 struct LinkError {

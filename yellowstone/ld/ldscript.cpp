@@ -5,10 +5,13 @@
 // SEARCH_DIR and GROUP/INPUT file lists.
 #include "internal.hpp"
 #include "parser.hpp"
+#include "ScriptSDK.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <stdexcept>
+#include <limits>
 
 namespace qld::detail {
 
@@ -16,6 +19,7 @@ namespace {
 
 uint64_t alignUp(uint64_t v, uint64_t a) {
   if (a <= 1) return v;
+  if (v > UINT64_MAX - (a - 1)) throw std::runtime_error("script alignment overflow");
   return ((v + a - 1) / a) * a;
 }
 
@@ -67,6 +71,7 @@ struct EvalCtx {
   const std::map<std::string, std::pair<uint64_t, uint64_t>>* mem = nullptr;
   const std::map<std::string, std::pair<uint64_t, uint64_t>>* secs =
       nullptr;  // name -> (addr,size)
+  const std::map<std::string, uint64_t>* alignments = nullptr;
   bool* failed = nullptr;
   std::string* error = nullptr;
 };
@@ -76,8 +81,7 @@ uint64_t evalExpr(const script::Expr* e, EvalCtx& ctx);
 uint64_t evalCall(const script::CallExpr* c, EvalCtx& ctx) {
   auto arg = [&](size_t i) -> uint64_t {
     if (i >= c->args.size()) {
-      if (ctx.failed) *ctx.failed = true;
-      return 0;
+      throw std::runtime_error("missing argument to " + c->name);
     }
     return evalExpr(c->args[i].get(), ctx);
   };
@@ -85,43 +89,27 @@ uint64_t evalCall(const script::CallExpr* c, EvalCtx& ctx) {
   if (n == "ALIGN") {
     if (c->args.size() == 1) {
       uint64_t a = arg(0);
-      ctx.dot = alignUp(ctx.dot, a ? a : 1);
-      return ctx.dot;
+      return alignUp(ctx.dot, a ? a : 1);
     }
     if (c->args.size() == 2) {
       uint64_t v = arg(0), a = arg(1);
       return alignUp(v, a ? a : 1);
     }
-    return ctx.dot;
+    throw std::runtime_error("ALIGN expects one or two arguments");
   }
-  if (n == "ABSOLUTE") return c->args.empty() ? 0 : arg(0);
-  if (n == "ADDR") {
-    if (c->args.empty() || !ctx.secs) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return arg(0);
-    auto it = ctx.secs->find(se->name);
-    return it == ctx.secs->end() ? 0 : it->second.first;
+  // Named queries must not turn misspelled sections/regions into address zero.
+  if (n == "ADDR" || n == "SIZEOF" || n == "LOADADDR" || n == "ORIGIN" || n == "LENGTH" || n == "DEFINED") {
+    if (c->args.size() != 1) throw std::runtime_error(n + " expects one name");
+    auto *symbol = dynamic_cast<const script::SymbolExpr *>(c->args[0].get());
+    if (!symbol) throw std::runtime_error(n + " expects a name");
+    if (n == "DEFINED") return ctx.syms && ctx.syms->count(symbol->name);
+    bool memory = n == "ORIGIN" || n == "LENGTH";
+    const auto *table = memory ? ctx.mem : ctx.secs;
+    if (!table || !table->count(symbol->name)) throw std::runtime_error("unknown name in " + n + ": " + symbol->name);
+    auto value = table->at(symbol->name);
+    return n == "SIZEOF" || n == "LENGTH" ? value.second : value.first;
   }
-  if (n == "SIZEOF") {
-    if (c->args.empty() || !ctx.secs) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return 0;
-    auto it = ctx.secs->find(se->name);
-    return it == ctx.secs->end() ? 0 : it->second.second;
-  }
-  if (n == "LOADADDR") {
-    if (c->args.empty() || !ctx.secs) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return arg(0);
-    auto it = ctx.secs->find(se->name);
-    return it == ctx.secs->end() ? 0 : it->second.first;
-  }
-  if (n == "DEFINED") {
-    if (c->args.empty() || !ctx.syms) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return 0;
-    return ctx.syms->count(se->name) ? 1 : 0;
-  }
+  if (n == "ABSOLUTE") { if (c->args.size() != 1) throw std::runtime_error("ABSOLUTE expects one argument"); return arg(0); }
   if (n == "CONSTANT") {
     if (c->args.empty()) return 0;
     auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
@@ -130,21 +118,10 @@ uint64_t evalCall(const script::CallExpr* c, EvalCtx& ctx) {
     if (k == "COMMONPAGESIZE") return 0x1000;
     return arg(0);
   }
-  if (n == "ORIGIN") {
-    if (c->args.empty() || !ctx.mem) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return 0;
-    auto it = ctx.mem->find(se->name);
-    return it == ctx.mem->end() ? 0 : it->second.first;
+  if (n == "SEGMENT_START") {
+    if (c->args.size() != 2) throw std::runtime_error("SEGMENT_START expects name, default");
+    return arg(1);
   }
-  if (n == "LENGTH") {
-    if (c->args.empty() || !ctx.mem) return 0;
-    auto* se = dynamic_cast<const script::SymbolExpr*>(c->args[0].get());
-    if (!se) return 0;
-    auto it = ctx.mem->find(se->name);
-    return it == ctx.mem->end() ? 0 : it->second.second;
-  }
-  if (n == "SEGMENT_START") return ctx.dot;
   if (n == "MAX" || n == "MIN") {
     if (c->args.empty()) return 0;
     uint64_t v = arg(0);
@@ -156,16 +133,15 @@ uint64_t evalCall(const script::CallExpr* c, EvalCtx& ctx) {
   }
   if (n == "DATA_SEGMENT_ALIGN" || n == "DATA_SEGMENT_RELRO_END" ||
       n == "DATA_SEGMENT_END" || n == "SEGMENT_START") {
-    if (!c->args.empty()) return arg(0);
-    return ctx.dot;
+    throw std::runtime_error("unsupported segment expression: " + n);
   }
   if (n == "ALIGNOF") {
-    if (c->args.empty() || !ctx.secs) return 1;
-    return 1;
+    if (c->args.size() != 1 || !ctx.alignments) throw std::runtime_error("ALIGNOF expects a laid-out section");
+    auto *s = dynamic_cast<const script::SymbolExpr *>(c->args[0].get());
+    if (!s || !ctx.alignments->count(s->name)) throw std::runtime_error("unknown section in ALIGNOF");
+    return ctx.alignments->at(s->name);
   }
-  // Unknown function: evaluate first arg.
-  if (!c->args.empty()) return arg(0);
-  return 0;
+  throw std::runtime_error("unknown linker expression function: " + n);
 }
 
 uint64_t evalExpr(const script::Expr* e, EvalCtx& ctx) {
@@ -177,26 +153,30 @@ uint64_t evalExpr(const script::Expr* e, EvalCtx& ctx) {
       auto it = ctx.syms->find(s->name);
       if (it != ctx.syms->end()) return it->second;
     }
-    return 0;  // forward refs read as 0 in the single-pass layout
+    throw std::runtime_error("undefined or forward-referenced script symbol: " + s->name);
   }
   if (auto* u = dynamic_cast<const script::UnaryExpr*>(e)) {
     uint64_t a = evalExpr(u->arg.get(), ctx);
-    if (u->op == "-") return uint64_t(-int64_t(a));
+    if (u->op == "-") return uint64_t(0) - a;
     if (u->op == "~") return ~a;
     if (u->op == "!") return a ? 0 : 1;
     return a;
   }
   if (auto* b = dynamic_cast<const script::BinaryExpr*>(e)) {
     uint64_t l = evalExpr(b->lhs.get(), ctx);
+    if (b->op == "&&" && !l) return 0;
+    if (b->op == "||" && l) return 1;
     uint64_t r = evalExpr(b->rhs.get(), ctx);
     const std::string& o = b->op;
     if (o == "+") return l + r;
     if (o == "-") return l - r;
     if (o == "*") return l * r;
-    if (o == "/") return r ? l / r : 0;
-    if (o == "%") return r ? l % r : 0;
-    if (o == "<<") return l << (r & 63);
-    if (o == ">>") return l >> (r & 63);
+    if ((o == "/" || o == "%") && !r) throw std::runtime_error("division by zero in linker expression");
+    if (o == "/") return l / r;
+    if (o == "%") return l % r;
+    if ((o == "<<" || o == ">>") && r >= 64) throw std::runtime_error("invalid shift in linker expression");
+    if (o == "<<") return l << r;
+    if (o == ">>") return l >> r;
     if (o == "&") return l & r;
     if (o == "|") return l | r;
     if (o == "^") return l ^ r;
@@ -252,6 +232,7 @@ std::string readScriptSource(const LinkState& state, std::string& error) {
 }  // namespace
 
 bool hasScript(const LinkState& state) {
+  if (state.scriptExtrasOnly) return false;
   if (state.options.scriptIsText && !state.options.scriptText.empty())
     return true;
   if (!state.options.script.empty()) return true;
@@ -265,18 +246,27 @@ bool loadScriptExtras(LinkState& state, std::string& error) {
   std::string src = readScriptSource(state, error);
   if (!error.empty()) return false;
   if (src.empty()) return true;
+  try {
+    src = qld::ScriptSDK{}.preprocess(src, state.options.scriptIsText ? "<script>" : state.options.script);
+  } catch (const std::exception &e) { error = e.what(); return false; }
+  // Lua and extensions execute once, before discovery; layout reuses the result.
+  state.options.scriptText = src;
+  state.options.scriptIsText = true;
   script::ScriptFile sf;
   if (!script::parseText(src, sf, error)) return false;
+  state.scriptExtrasOnly = !sf.hasSections;
+  state.scriptPrepared = true;
+  for (const auto &statement : sf.sectionsBody) {
+    if (const auto *a = dynamic_cast<const script::AssignStmt *>(statement.get())) {
+      if (a->name != ".") state.scriptSymbols.insert(a->name);
+    } else if (const auto *section = dynamic_cast<const script::OutputSectionStmt *>(statement.get())) {
+      for (const auto &item : section->section.inputs)
+        if (item.action == script::SectionPattern::Action::Assign && item.symbol != ".") state.scriptSymbols.insert(item.symbol);
+    }
+  }
   for (const auto& d : sf.searchDirs) state.options.libPaths.push_back(d);
-  if (sf.entry && !state.options.hasBase) {
-    // ENTRY from script overrides the default only when the user did not
-    // pass -e explicitly. Mark via hasEntry check in driver: the driver's
-    // options.entry already defaults to _start; override when the user did
-    // not set hasEntry... internal options always carry entry; check the
-    // public flag through state? internal LinkOptions has no hasEntry flag,
-    // so override only when entry is still the default and script differs.
-    if (state.options.entry == "_start") state.options.entry = *sf.entry;
-  } else if (sf.entry) {
+  if (sf.entry && !state.options.hasEntry) {
+    // An explicit -e wins, even when its value is the default _start.
     state.options.entry = *sf.entry;
   }
   // GROUP files join the input queue.
@@ -288,6 +278,10 @@ bool loadScriptExtras(LinkState& state, std::string& error) {
       continue;
     }
     // AS_NEEDED(...) already unwrapped by the parser.
+    if (!state.options.script.empty() && !std::filesystem::path(name).is_absolute()) {
+      auto relative = std::filesystem::path(state.options.script).parent_path() / name;
+      if (std::filesystem::is_regular_file(relative)) name = relative.string();
+    }
     std::ifstream probe(name, std::ios::binary);
     std::string resolved = name;
     if (!probe) {
@@ -338,13 +332,8 @@ bool loadScriptExtras(LinkState& state, std::string& error) {
     } else {
       auto opened = qbfd::open(bytes, resolved);
       if (!opened) {
-        // Maybe a nested script.
-        LoadedObject lo;
-        lo.label = resolved;
-        lo.bytes = std::move(bytes);
-        lo.isScript = true;
-        state.objects.push_back(std::move(lo));
-        continue;
+        error = resolved + ": INPUT expects an ELF object/archive; use INCLUDE for nested scripts";
+        return false;
       }
       LoadedObject lo;
       lo.label = resolved;
@@ -357,7 +346,7 @@ bool loadScriptExtras(LinkState& state, std::string& error) {
   return true;
 }
 
-bool runScript(LinkState& state, std::string& error) {
+bool runScript(LinkState& state, std::string& error) try {
   std::string src = readScriptSource(state, error);
   if (!error.empty()) return false;
   if (src.empty()) {
@@ -366,7 +355,7 @@ bool runScript(LinkState& state, std::string& error) {
   }
   script::ScriptFile sf;
   if (!script::parseText(src, sf, error)) return false;
-  if (sf.entry) state.options.entry = *sf.entry;
+  if (sf.entry && !state.options.hasEntry) state.options.entry = *sf.entry;
 
   // Collect input sections exactly like the default layout.
   state.inputSections.clear();
@@ -413,6 +402,8 @@ bool runScript(LinkState& state, std::string& error) {
     for (const auto& m : sf.memory) {
       uint64_t org = m.origin ? evalExpr(m.origin.get(), ctx) : 0;
       uint64_t len = m.length ? evalExpr(m.length.get(), ctx) : 0;
+      if (!m.origin || !m.length || mem.count(m.name) || len > UINT64_MAX - org)
+        throw std::runtime_error("invalid or duplicate MEMORY region: " + m.name);
       mem[m.name] = {org, len};
       memCursor[m.name] = org;
     }
@@ -430,10 +421,11 @@ bool runScript(LinkState& state, std::string& error) {
   uint64_t headerEnd = relocatable ? ehsize : ehsize + phnum * phentsize;
   uint64_t dot = (base == 0) ? headerEnd : alignUp(base + headerEnd, 0x1000);
 
-  // Seed the symbol table with already-known defs at 0 for expression use.
-  for (const auto& [n, d] : state.defs) state.symAddr[n] = 0;
+  for (const auto& [n, d] : state.defs)
+    if (d.symbol.flags & qbfd::sym::Absolute) state.symAddr[n] = d.symbol.value;
 
   std::map<std::string, std::pair<uint64_t, uint64_t>> secAddr;  // for ADDR()
+  std::map<std::string, uint64_t> secAlignment;
   state.outSections.clear();
   std::vector<bool> consumed(state.inputSections.size(), false);
 
@@ -447,6 +439,10 @@ bool runScript(LinkState& state, std::string& error) {
       if (!globMatch(pat.section, in.section.name)) continue;
       hits.push_back(i);
     }
+    if (pat.sort == "SORT" || pat.sort == "SORT_BY_NAME")
+      std::stable_sort(hits.begin(), hits.end(), [&](size_t a, size_t b) { return state.inputSections[a].section.name < state.inputSections[b].section.name; });
+    else if (pat.sort == "SORT_BY_ALIGNMENT")
+      std::stable_sort(hits.begin(), hits.end(), [&](size_t a, size_t b) { return state.inputSections[a].section.alignment > state.inputSections[b].section.alignment; });
     return hits;
   };
 
@@ -462,12 +458,14 @@ bool runScript(LinkState& state, std::string& error) {
   ctx.syms = &state.symAddr;
   ctx.mem = &mem;
   ctx.secs = &secAddr;
+  ctx.alignments = &secAlignment;
   ctx.dot = dot;
 
   uint32_t nextIndex = 1;
   for (const auto& st : sf.sectionsBody) {
     if (auto* a = dynamic_cast<script::AssignStmt*>(st.get())) {
       ctx.dot = dot;
+      if (a->provide && state.defs.count(a->name)) continue;
       uint64_t v = evalExpr(a->value.get(), ctx);
       if (a->name == ".") {
         if (a->op == "=") dot = v;
@@ -522,6 +520,8 @@ bool runScript(LinkState& state, std::string& error) {
     auto* os = dynamic_cast<script::OutputSectionStmt*>(st.get());
     if (!os) continue;
     const auto& sec = os->section;
+    if (!sec.type.empty() && sec.type != "NOLOAD") throw std::runtime_error("unsupported output section type: " + sec.type);
+    if (sec.lma || !sec.lmaRegion.empty()) throw std::runtime_error("AT/LMA layouts are unsupported by the ELF segment writer");
     if (sec.name == "/DISCARD/") {
       for (const auto& pat : sec.inputs) {
         for (size_t hit : takeMatches(pat)) {
@@ -547,59 +547,63 @@ bool runScript(LinkState& state, std::string& error) {
       uint64_t a = evalExpr(sec.alignExpr.get(), ctx);
       vma = alignUp(vma, a ? a : 1);
     }
+    uint64_t requiredAlignment = 1;
+    for (const auto &pat : sec.inputs) if (pat.action == script::SectionPattern::Action::Input)
+      for (auto hit : takeMatches(pat)) requiredAlignment = std::max(requiredAlignment, state.inputSections[hit].section.alignment);
+    if (!sec.address) vma = alignUp(vma, requiredAlignment);
+    else if (vma % requiredAlignment) throw std::runtime_error("output section address violates input alignment: " + sec.name);
     // Gather members.
     OutputSection out;
     out.name = sec.name;
     out.index = nextIndex++;
-    out.alignment = 1;
+    out.alignment = requiredAlignment;
     // Type NOLOAD: BSS-like, occupies VMA but no file bytes.
     bool noload = (sec.type == "NOLOAD");
+    uint64_t off = 0;
+    bool scriptBytes = false;
+    uint8_t fill = 0;
+    if (sec.fillExpr) {
+      auto value = evalExpr(sec.fillExpr.get(), ctx);
+      if (value > 255) throw std::runtime_error("section fill currently requires one byte");
+      fill = static_cast<uint8_t>(value);
+    }
+    auto grow = [&](uint64_t size) {
+      if (size > 256 * 1024 * 1024) throw std::runtime_error("script output section exceeds 256 MiB");
+      if (!noload) out.scriptData.resize(static_cast<size_t>(size), fill);
+    };
     for (const auto& pat : sec.inputs) {
-      if (pat.file == "=assign") {
-        // In-section symbol assignment at current dot.
-        uint64_t base2 = vma;
-        // Compute running size so far.
-        uint64_t run = 0;
-        for (size_t idx : out.inputs)
-          run = alignUp(run, state.inputSections[idx].section.alignment
-                                 ? state.inputSections[idx].section.alignment
-                                 : 1) +
-                std::max<uint64_t>(state.inputSections[idx].section.size,
-                                   state.inputSections[idx].contents.size());
-        // Reconstruct expression from dump (number or symbol ops may have
-        // been stringified; re-parse it).
-        script::ExprPtr e;
-        {
-          script::Parser pp(pat.section);
-          // pat.section holds the dumped expression; parse via a synthetic
-          // script `x = <expr>;` is overkill — parse directly.
-          (void)pp;
-        }
-        // Evaluate simple cases: number, symbol, or '.'-relative. The dump
-        // is re-parsed through parseText for correctness.
-        script::ScriptFile tmp;
-        std::string err2;
-        uint64_t v = base2 + run;
-        if (script::parseText("SECTIONS { . = " + pat.section + "; }", tmp,
-                              err2) &&
-            !tmp.sectionsBody.empty()) {
-          if (auto* aa =
-                  dynamic_cast<script::AssignStmt*>(tmp.sectionsBody[0].get())) {
-            EvalCtx c2 = ctx;
-            c2.dot = base2 + run;
-            // Expose section size context minimally.
-            v = evalExpr(aa->value.get(), c2);
+      using Action = script::SectionPattern::Action;
+      if (pat.action != Action::Input) {
+        ctx.dot = vma + off;
+        if (pat.provide && state.defs.count(pat.symbol)) continue;
+        uint64_t value = evalExpr(pat.expression.get(), ctx);
+        if (pat.action == Action::Fill) {
+          if (value > 255) throw std::runtime_error("FILL currently requires one byte");
+          fill = static_cast<uint8_t>(value);
+        } else if (pat.action == Action::Assert) {
+          if (!value) throw std::runtime_error("ASSERT failed: " + pat.message);
+        } else if (pat.action == Action::Data) {
+          scriptBytes = true;
+          if (noload) throw std::runtime_error("data directive in NOLOAD section");
+          if (pat.width < 8 && value >= (UINT64_C(1) << (pat.width * 8))) throw std::runtime_error("script data value out of range");
+          grow(off + pat.width);
+          for (unsigned b = 0; b < pat.width; ++b) {
+            unsigned shift = state.endian == qbfd::Endian::Little ? b : pat.width - b - 1;
+            out.scriptData[off + b] = static_cast<uint8_t>(value >> (shift * 8));
           }
-        }
-        bool exists = state.symAddr.count(pat.sort) != 0;
-        state.symAddr[pat.sort] = v;
-        if (!state.defs.count(pat.sort)) {
-          Def d;
-          d.symbol.name = pat.sort;
+          off += pat.width;
+        } else if (pat.symbol == ".") {
+          uint64_t current = vma + off;
+          if (pat.operation == "+=") value += current;
+          else if (pat.operation == "-=") value = current - value;
+          else if (pat.operation != "=") throw std::runtime_error("unsupported location-counter assignment: " + pat.operation);
+          if (value < current || value < vma) throw std::runtime_error("location counter moves backwards or overflows");
+          off = value - vma; grow(off);
+        } else {
+          state.symAddr[pat.symbol] = value;
+          auto &d = state.defs[pat.symbol]; d.symbol.name = pat.symbol;
           d.symbol.binding = qbfd::SymbolBinding::Global;
-          d.symbol.flags = qbfd::sym::Absolute;
-          d.symbol.value = v;
-          state.defs.emplace(pat.sort, std::move(d));
+          d.symbol.flags = qbfd::sym::Absolute; d.symbol.value = value;
         }
         continue;
       }
@@ -610,17 +614,14 @@ bool runScript(LinkState& state, std::string& error) {
         uint64_t a = in.section.alignment ? in.section.alignment : 1;
         out.alignment = std::max(out.alignment, a);
         out.flags |= in.section.flags;
+        off = alignUp(off, a);
+        in.outOffset = off;
+        uint64_t size = std::max<uint64_t>(in.section.size, in.contents.size());
+        if (size > UINT64_MAX - off) throw std::runtime_error("section size overflow");
+        off += size;
+        grow(off);
         out.inputs.push_back(hit);
       }
-    }
-    // Lay out members within the section.
-    uint64_t off = 0;
-    for (size_t idx : out.inputs) {
-      auto& in = state.inputSections[idx];
-      uint64_t a = in.section.alignment ? in.section.alignment : 1;
-      off = alignUp(off, a);
-      in.outOffset = off;
-      off += std::max<uint64_t>(in.section.size, in.contents.size());
     }
     out.size = off;
     bool anyFile = false;
@@ -630,7 +631,7 @@ bool runScript(LinkState& state, std::string& error) {
         break;
       }
     }
-    out.bss = noload || (!out.inputs.empty() && !anyFile);
+    out.bss = noload || (!scriptBytes && !out.inputs.empty() && !anyFile);
     // Empty script sections (no inputs) still exist with size 0 at dot.
     out.vma = vma;
     out.alloc = true;  // script sections are alloc by default
@@ -654,8 +655,21 @@ bool runScript(LinkState& state, std::string& error) {
     // linearly like the default layout.
     out.fileSize = out.bss ? 0 : out.size;
     secAddr[out.name] = {out.vma, out.size};
+    secAlignment[out.name] = out.alignment;
+    if (out.size > UINT64_MAX - vma) throw std::runtime_error("section address overflow");
     dot = vma + out.size;
-    if (!sec.region.empty()) memCursor[sec.region] = dot;
+    if (!sec.region.empty()) {
+      auto [origin, length] = mem.at(sec.region);
+      if (vma < origin || dot > origin + length) throw std::runtime_error("MEMORY region overflow: " + sec.region);
+      memCursor[sec.region] = dot;
+    }
+    for (const auto &[name, d] : state.defs) if (d.symbol.section) {
+      for (size_t idx : out.inputs) {
+        const auto &in = state.inputSections[idx];
+        if (in.objectIndex == d.objectIndex && in.sectionIndex == *d.symbol.section)
+          state.symAddr[name] = vma + in.outOffset + d.symbol.value;
+      }
+    }
     state.outSections.push_back(std::move(out));
   }
 
@@ -725,6 +739,8 @@ bool runScript(LinkState& state, std::string& error) {
     if (base != 0) {
       for (auto& o : state.outSections) {
         if (!o.alloc) continue;
+        if (o.vma < base || (!o.bss && o.fileSize && o.vma - base < headerEnd))
+          throw std::runtime_error("script section precedes image base or overlaps ELF headers: " + o.name);
         if (o.bss) {
           o.fileOffset = o.vma - base;
           continue;
@@ -831,12 +847,26 @@ bool runScript(LinkState& state, std::string& error) {
     }
   }
 
+  for (size_t i = 0; i < state.outSections.size(); ++i) {
+    const auto &a = state.outSections[i];
+    if (a.fileOffset > 256 * 1024 * 1024 || a.fileSize > 256 * 1024 * 1024 - a.fileOffset)
+      throw std::runtime_error("script file image exceeds 256 MiB");
+    if (!a.alloc || !a.size) continue;
+    for (size_t j = 0; j < i; ++j) {
+      const auto &b = state.outSections[j];
+      if (b.alloc && b.size && a.vma < b.vma + b.size && b.vma < a.vma + a.size)
+        throw std::runtime_error("overlapping output sections: " + b.name + " and " + a.name);
+    }
+  }
   // Entry.
   {
     auto it = state.symAddr.find(state.options.entry);
     state.entryAddr = it == state.symAddr.end() ? 0 : it->second;
   }
   return true;
+} catch (const std::exception &e) {
+  error = std::string("linker script: ") + e.what();
+  return false;
 }
 
 }  // namespace qld::detail

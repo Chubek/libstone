@@ -180,6 +180,11 @@ struct MemoryRegion {
 };
 
 struct SectionPattern {
+  enum class Action { Input, Assign, Data, Fill, Assert } action = Action::Input;
+  std::shared_ptr<Expr> expression;
+  std::string symbol, operation = "=", message;
+  unsigned width = 0;
+  bool provide = false;
   std::string file;     // empty means any file ("*")
   std::string section;  // e.g. ".text", ".text.*"
   bool excludeFile = false;
@@ -198,6 +203,7 @@ struct OutputSection {
   ExprPtr lma;                      // "AT(expr)"
   bool hasAlign = false;
   ExprPtr alignExpr;
+  ExprPtr fillExpr;
 };
 
 struct Stmt {

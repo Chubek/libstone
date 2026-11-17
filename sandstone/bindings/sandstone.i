@@ -16,6 +16,7 @@
 %{
 #include "sandstone.h"
 #include "assembler.h"
+#include "sdk.h"
 %}
 
 /* Fixed-width integer spellings for target languages. */
@@ -29,6 +30,7 @@
  * (domsymas_probe_magic, domsymas_crc32, domsymas_open_memory,
  * sandstone_asm_new_from_memory): pass one bytes object, the length is
  * taken from the object itself. */
+#ifdef SWIGPYTHON
 %typemap(in) (const uint8_t *data, size_t len) {
     if (!PyBytes_Check($input)) {
         SWIG_exception_fail(SWIG_TypeError, "bytes expected");
@@ -38,6 +40,12 @@
     $1 = (uint8_t *)PyBytes_AsString($input);
     $2 = (size_t)PyBytes_Size($input);
 }
+#endif
 
 %include "sandstone.h"
 %include "assembler.h"
+/* Native callback registration needs language-specific lifetime trampolines.
+ * Source macros and ArchML loading are directly callable from these bindings. */
+%ignore sandstone_asm_register_directive;
+%ignore sandstone_asm_unregister_directive;
+%include "sdk.h"

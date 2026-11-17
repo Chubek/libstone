@@ -43,6 +43,11 @@ directives: `.text` `.data` `.rodata` `.bss` `.section`, `.globl`
 `.ascii` `.asciz` `.string`, `.zero` `.space` `.fill`, `.align`
 `.balign` `.p2align` `.org`.
 
+Source macros, defaults/variadics, conditional/repeated assembly, structures,
+enums, inline Lua and extension callbacks are described in
+[`docs/assembler.md`](docs/assembler.md). With an ArchML profile, `.insn nop`
+can be assembled directly using `--archml archml/stdspec/amd64.aml`.
+
 ## 3. Assemble
 
 ```sh
@@ -54,7 +59,8 @@ sandstone-as --bank x86.symas -F avx -F -sse2 -o out.bin prog.s
 
 Flat (`bin`) output requires every symbol to resolve locally; external
 references need `obj` output, which records sections, symbols, and
-relocations as JSON for a linker (see `docs/object.md`). Whole-word
+relocations as JSON (see `docs/object.md`). Yellowstone currently requires ELF
+inputs; there is no JSON-object bridge. Whole-word
 PC-relative relocations whose immediates share bytes with opcode bits
 (e.g. RISC-V `jal`/`branch` in the shipped specs) always take the `obj`
 path — the framework never guesses linker bit-splicing.
