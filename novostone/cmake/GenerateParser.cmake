@@ -5,6 +5,9 @@ if(NOT status EQUAL 0)
 endif()
 # Keep the runtime and yyparse private to this grammar's namespace, including
 # shared-library builds linked with ExoML or other Aurocks users.
-string(REPLACE "aurocks_" "novo_dl_aurocks_" parser "${parser}")
-string(REPLACE "void *yyparse(" "void *novo_dl_yyparse(" parser "${parser}")
+if(NOT DEFINED PREFIX)
+  set(PREFIX novo_dl)
+endif()
+string(REPLACE "aurocks_" "${PREFIX}_aurocks_" parser "${parser}")
+string(REPLACE "void *yyparse(" "void *${PREFIX}_yyparse(" parser "${parser}")
 file(WRITE "${OUTPUT}" "${parser}")

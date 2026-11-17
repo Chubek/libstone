@@ -1,4 +1,16 @@
-# Novostone implementation audit — 2026-11-14
+# Novostone implementation audit
+
+## ActionSemantics addition — 2026-11-17
+
+Added the independent `Novostone::ActionSemantics` library and `acsem` CLI.
+The `.acsem` frontend uses the repository Aurocks parser generator and ASDL AST
+and visitor generator. It synthesizes standalone C11, Python, Rust and Free Pascal
+interpreters plus compilable LaTeX documentation. The dialect covers transient
+data, scoped bindings, tagged storage cells, checked arithmetic, failure and escape.
+See [ActionSemantics/STATUS.md](ActionSemantics/STATUS.md) for evidence and
+[ActionSemantics/README.md](ActionSemantics/README.md) for its exact supported scope.
+
+## Previous compiler-method audit — 2026-11-14
 
 Audited repository revision: `321bcc989ece9e08cc2ba318c21aa14d02d98a3c`.
 The existing six libraries were functional; the baseline passed 27/27 CTests.

@@ -1,9 +1,14 @@
 # Novostone
 
 Executable compiler-method libraries based on
-`/mnt/aleph/dossier-on-modern-cc-design/` as the design source of truth. The six components form a small, testable
+`/mnt/aleph/dossier-on-modern-cc-design/` as the design source of truth. The six compiler-method components form a small, testable
 compiler substrate with relational analysis, transactional optimization,
 speculation/recovery, and learned profitability decisions.
+
+The independent [ActionSemantics](ActionSemantics/README.md) language synthesizer
+uses Mosses and Watt's Action Semantics framework. Its Aurocks/ASDL frontend
+translates `.acsem` syntax and semantic equations to standalone C, Python, Rust,
+or Pascal interpreters and LaTeX documents.
 
 ## Components and dependencies
 
@@ -15,6 +20,7 @@ speculation/recovery, and learned profitability decisions.
 | `Novostone::QueryBasedIR` / `QueryBasedIR` | Declarative rewrites, conditional constant propagation, rooted DCE, CFG simplification, CSE, forwarding, differential validation | Chapters 09, 39 |
 | `Novostone::SpeculativeIR` / `SpeculativeIR` | Explicit assumptions, guards, frame snapshots, parameter specialization, invalidation, resumable deoptimization | Chapters 03, 04 |
 | `Novostone::CostCC` / `CostCC` | Target-specific ridge regression, calibration, model persistence, drift quarantine, fallback, ranking and measurement logs | Chapters 11, 27 |
+| `Novostone::ActionSemantics` / `ActionSemantics` | `.acsem` parser, generated AST/visitor, validated action equations, five synthesis targets | Mosses and Watt's Action Semantics |
 
 Dependency order:
 
@@ -41,6 +47,10 @@ build-novostone/novostone optimize novostone/examples/equal-phi.nir
 build-novostone/novostone validate novostone/examples/wrapping.nir novostone/examples/wrapping.nir 728
 build-novostone/novostone datalog novostone/examples/reachability.dl Reach
 build-novostone/novostone format-datalog novostone/examples/reachability.dl
+build-novostone/ActionSemantics/acsem --check novostone/ActionSemantics/examples/expressions.acsem
+build-novostone/ActionSemantics/acsem --target c novostone/ActionSemantics/examples/expressions.acsem -o expressions.c
+cc -std=c11 expressions.c -o expressions
+./expressions < novostone/ActionSemantics/examples/store.term
 ```
 
 The aggregate build enables Novostone through `LIBSTONE_BUILD_NOVOSTONE`.
@@ -50,6 +60,9 @@ are required to build. `scripts/aurocks.pl` generates the parser from
 `Datalog/Datalog.g`; `scripts/asdl.pl` generates its owned syntax tree from
 `Datalog/Datalog.asdl`. Generated files live in the build directory. Installed
 libraries need neither Perl nor the source tree; no string-pool file is used.
+ActionSemantics uses the same generators for its separate grammar, AST and
+elaboration visitor. Its CLI backend tests require Python and discover optional
+Rust, Free Pascal, and LaTeX toolchains.
 `BUILD_SHARED_LIBS=ON` builds shared libraries; Unix installations use relative
 runtime paths so the CLI and transitive libraries resolve within the prefix.
 

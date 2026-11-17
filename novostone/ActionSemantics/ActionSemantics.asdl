@@ -1,0 +1,20 @@
+-- Concrete specification syntax; the generated visitor lowers it to machine IR.
+%prefix novo_as
+%option no-builtins
+%%
+document = (string name, string start, sort* sorts, rule* rules)
+sort = (string name, constructor* constructors, usize offset)
+constructor = (string name, field* fields, usize offset)
+field = (string name, string type, usize offset)
+rule = (string name, action body, usize offset)
+action = Primitive(string op, expr* operands)
+       | Evaluate(string field)
+       | Furthermore(action body)
+       | Combine(string op, action left, action right)
+       attributes (usize offset)
+expr = Integer(string spelling)
+     | Field(string name)
+     | Token(string name)
+     | Unary(string op, expr operand)
+     | Binary(string op, expr left, expr right)
+     attributes (usize offset)

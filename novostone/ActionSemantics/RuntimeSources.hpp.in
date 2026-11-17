@@ -1,0 +1,8 @@
+#pragma once
+#include <string_view>
+namespace novostone::action::detail {
+inline constexpr std::string_view runtime_c = R"_ACSEM_(@ACSEM_C@)_ACSEM_";
+inline constexpr std::string_view runtime_python = R"_ACSEM_(@ACSEM_PYTHON@)_ACSEM_";
+inline constexpr std::string_view runtime_rust = R"_ACSEM_(@ACSEM_RUST@)_ACSEM_";
+inline constexpr std::string_view runtime_pascal = R"_ACSEM_(@ACSEM_PASCAL@)_ACSEM_";
+}
