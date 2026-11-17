@@ -188,6 +188,56 @@ Literal tokens count towards the runtime symbol limit. Aurocks also has a
 elaboration. Runtime depth counts action and yielder calls, not just program
 tree depth. Limits report resource exhaustion, not proof of divergence.
 
+## Extended notation: dialect 2
+
+New constructs automatically select dialect 2. `--dialect 2` can also run an
+existing specification with extended budget policies; `--dialect 1` rejects
+extended specifications. Both modes use the same model, lowering, and
+explicit-frame runtime templates. Legacy semantic step/depth accounting is
+preserved, but generated source is no longer byte-identical to the old runtime.
+
+| Construct | Behavior |
+| --- | --- |
+| `closure A`, `abstraction A`, `give closure A` | First-class lexical closure |
+| `apply f to (x, y, ...)` | Call with left-to-right evaluated arguments |
+| `enact f` | Call with the current transient tuple |
+| `tailcall f to (...)` | Discard the current function continuation and call |
+| `return y` | Complete the nearest function (or top level) |
+| `letrec "f" = closure A, "g" = closure B in C` | Shared recursive lexical scope |
+| `callcc f` | Pass a one-shot abortive continuation to a closure |
+| `resume k with y` | Restore captured control; keep current store |
+| `unfolding A`, `unfold` | Recursive action scope and recursive substitution |
+| `tailunfold` | Explicit tail restart of the nearest unfolding scope |
+| `put y in cell` | Store any supported tagged value; `store` remains integer-only |
+| `if y then A else B` | Select one branch by integer truth |
+| `while y do A`, `break`, `continue` | Bounded-frame loops, function-scoped control |
+| `generator A`, `yield_value y`, `next g`, `close g` | Lazy stackless generators |
+
+`A`, `B`, `C` above are primitives or parenthesized actions. Functions receive
+arguments as `given(1)`, etc.; use `bind`/`furthermore` for named parameters.
+Bindings are captured by value; captured cells preserve shared mutable identity.
+Nested closures implement currying explicitly, not automatic partial application.
+
+`next` returns `1, value` on suspension, `0, completion-data...` on termination,
+and just `0` after termination/close. Failure and escape propagate. Generator
+close discards suspended frames; it does **not** invoke cleanup handlers.
+Call/cc and generators currently cannot share a specification: synthesis reports
+a capability error. Multi-shot continuations, shift/reset and cleanup are not
+implemented.
+
+```sh
+build-novostone/ActionSemantics/acsem --target c \
+  novostone/ActionSemantics/examples/closures.acsem -o closures.c
+cc -std=c11 -Wall -Wextra -Werror -pedantic closures.c -o closures
+./closures < novostone/ActionSemantics/examples/closures.term
+# completed 42
+```
+
+Dialect-2 budgets can be set at synthesis time with repeated
+`--define steps=1000000 --define heap=128`, etc. See [RUNTIME.md](RUNTIME.md)
+for limits and [BACKENDS.md](BACKENDS.md) for exact coverage.
+The default C11 output still needs only the standard library.
+
 ## Library and installation
 
 ```cpp
@@ -217,8 +267,10 @@ when unavailable. They are not dependencies of the library or C backend.
 This is a specified, executable subset of Action Notation. It implements basic,
 functional, declarative, and imperative facets and selected exception handling.
 It does not yet implement arbitrary concrete grammars, user-defined data
-algebras, procedural abstractions/closures, unfolding, nondeterministic choice,
-concurrent agents, or the complete notation from the book. Generated artifacts
+algebras, nondeterministic choice, concurrent agents, or the complete notation
+from the book. Dialect 2 adds procedural closures, recursive unfolding,
+one-shot continuations and synchronous generators, not a universal runtime.
+Generated artifacts
 are interpreters for the described language, not optimizing native compilers
 for individual input programs. Unknown notation is rejected.
 

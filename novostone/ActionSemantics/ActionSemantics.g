@@ -13,6 +13,8 @@ static novo_as_constructor_seq as_constructors(void *);
 static novo_as_field_seq as_fields(void *);
 static novo_as_rule_seq as_rules(void *);
 static novo_as_expr_seq as_operands(void *, void *);
+static novo_as_expr_seq as_expressions(void *);
+static novo_as_binding_seq as_bindings(void *);
 %}
 %%
 %start novo_as_document
@@ -38,11 +40,34 @@ action:
   | primitive { $$ = $1; };
 primitive:
     /furthermore\b/ primitive { $$ = novo_as_Furthermore(as_arena, $2, as_offset(save)); }
+  | /closure\b/ primitive { $$ = novo_as_Closure(as_arena, $2, as_offset(save)); }
+  | /give\b/ /closure\b/ primitive { $$ = novo_as_Closure(as_arena, $3, as_offset(save)); }
+  | /abstraction\b/ primitive { $$ = novo_as_Closure(as_arena, $2, as_offset(save)); }
+  | /callcc\b/ expr { $$ = novo_as_CallCC(as_arena, $2, as_offset(save)); }
+  | /resume\b/ expr /with\b/ expr { $$ = novo_as_Resume(as_arena, $2, $4, as_offset(save)); }
+  | /unfolding\b/ primitive { $$ = novo_as_Unfolding(as_arena, $2, as_offset(save)); }
+  | /unfold\b/ { $$ = novo_as_Unfold(as_arena, as_offset(save)); }
+  | /tailunfold\b/ { $$ = novo_as_TailUnfold(as_arena, as_offset(save)); }
+  | /generator\b/ primitive { $$ = novo_as_Generator(as_arena, $2, as_offset(save)); }
+  | /yield_value\b/ expr { $$ = novo_as_YieldValue(as_arena, $2, as_offset(save)); }
+  | /next\b/ expr { $$ = novo_as_Next(as_arena, $2, as_offset(save)); }
+  | /close\b/ expr { $$ = novo_as_Close(as_arena, $2, as_offset(save)); }
+  | /if\b/ expr /then\b/ primitive /else\b/ primitive
+      { $$ = novo_as_Conditional(as_arena, $2, $4, $6, as_offset(save)); }
+  | /while\b/ expr /do\b/ primitive { $$ = novo_as_While(as_arena, $2, $4, as_offset(save)); }
+  | /break\b/ { $$ = novo_as_Break(as_arena, as_offset(save)); }
+  | /continue\b/ { $$ = novo_as_Continue(as_arena, as_offset(save)); }
+  | /enact\b/ expr { $$ = novo_as_Enact(as_arena, $2, as_offset(save)); }
+  | /apply\b/ expr /to\b/ args { $$ = novo_as_Apply(as_arena, $2, as_expressions($4), as_offset(save)); }
+  | /tailcall\b/ expr /to\b/ args { $$ = novo_as_TailCall(as_arena, $2, as_expressions($4), as_offset(save)); }
+  | /letrec\b/ letrecdefs /in\b/ primitive { $$ = novo_as_LetRec(as_arena, as_bindings($2), $4, as_offset(save)); }
+  | /return\b/ expr { $$ = novo_as_Return(as_arena, $2, as_offset(save)); }
   | /give\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("give"), as_operands($2, NULL), as_offset(save)); }
   | /check\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("check"), as_operands($2, NULL), as_offset(save)); }
   | /escape\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("escape"), as_operands($2, NULL), as_offset(save)); }
   | /bind\b/ expr /to\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("bind"), as_operands($2, $4), as_offset(save)); }
   | /store\b/ expr /in\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("store"), as_operands($2, $4), as_offset(save)); }
+  | /put\b/ expr /in\b/ expr { $$ = novo_as_Primitive(as_arena, as_word("put"), as_operands($2, $4), as_offset(save)); }
   | /allocate\b/ /cell\b/ { $$ = novo_as_Primitive(as_arena, as_word("allocate"), as_operands(NULL, NULL), as_offset(save)); }
   | /complete\b/ { $$ = novo_as_Primitive(as_arena, as_word("complete"), as_operands(NULL, NULL), as_offset(save)); }
   | /fail\b/ { $$ = novo_as_Primitive(as_arena, as_word("fail"), as_operands(NULL, NULL), as_offset(save)); }
@@ -51,6 +76,11 @@ primitive:
 expr: sum '==' sum { $$ = novo_as_Binary(as_arena, as_word("=="), $1, $3, as_offset(save)); }
   | sum '<' sum { $$ = novo_as_Binary(as_arena, as_word("<"), $1, $3, as_offset(save)); }
   | sum { $$ = $1; };
+args: '(' ')' { $$ = NULL; } | '(' arglist ')' { $$ = $2; };
+arglist: arglist ',' expr { $$ = as_push($1, $3); } | expr { $$ = as_push(NULL, $1); };
+letrecdefs: letrecdefs ',' letrecdef { $$ = as_push($1, $3); } | letrecdef { $$ = as_push(NULL, $1); };
+letrecdef: quoted '=' /closure\b/ primitive
+  { $$ = novo_as_Binding(as_arena, as_string($1), novo_as_Closure(as_arena, $4, as_offset(save)), as_offset(save)); };
 sum: sum '+' product { $$ = novo_as_Binary(as_arena, as_word("+"), $1, $3, as_offset(save)); }
   | sum '-' product { $$ = novo_as_Binary(as_arena, as_word("-"), $1, $3, as_offset(save)); }
   | product { $$ = $1; };
@@ -94,6 +124,8 @@ AS_SEQUENCE(as_sorts, sort)
 AS_SEQUENCE(as_constructors, constructor)
 AS_SEQUENCE(as_fields, field)
 AS_SEQUENCE(as_rules, rule)
+AS_SEQUENCE(as_expressions, expr)
+AS_SEQUENCE(as_bindings, binding)
 #undef AS_SEQUENCE
 static novo_as_expr_seq as_operands(void *a, void *b) {
     novo_as_expr_seq seq = novo_as_expr_seq_new(as_arena, a ? (b ? 2 : 1) : 0);

@@ -1,0 +1,33 @@
+// One-shot, abortive call/cc. Store state is shared, never rewound.
+language Continuations {
+  start E;
+  syntax E = Immediate() | Context() | Normal() | Invalid() | Shared()
+    | Replay() | Count(n: integer) | Outside() | Diverge() | NonTail(n: integer);
+  rule Immediate = closure (resume given(1) with 42) then callcc given(1);
+  rule Context = (closure (resume given(1) with 40) then callcc given(1))
+    then give given(1) + 2;
+  rule Normal = closure (give 42) then callcc given(1);
+  rule Invalid = resume 1 with 42;
+  rule Shared = allocate cell then (furthermore (bind "c" to given(1)) hence
+    (store 0 in bound("c") then
+      ((closure (furthermore (bind "k" to given(1)) hence
+        (store 42 in bound("c") then resume bound("k") with 7))
+        then callcc given(1)) then give contents(bound("c")))));
+  // Save the continuation in a tagged cell, resume it after callcc has returned,
+  // then attempt a second resume. That attempt fails; otherwise preserves 42.
+  rule Replay = allocate cell then (furthermore (bind "k" to given(1)) hence
+    (allocate cell then (furthermore (bind "count" to given(1)) hence
+      (store 0 in bound("count") then
+        ((closure (put given(1) in bound("k") then give 1) then callcc given(1))
+          then ((check contents(bound("count")) == 0 and then
+            (store 1 in bound("count") then resume contents(bound("k")) with 42))
+            otherwise (resume contents(bound("k")) with 99 otherwise give given(1))))))));
+  rule Count = give n then unfolding (
+    (check given(1) < 1 and then give given(1)) otherwise
+      (give given(1) - 1 then tailunfold));
+  rule NonTail = give n then unfolding (
+    if given(1) < 1 then give 0 else
+      ((give given(1) - 1 then unfold) and then give 99));
+  rule Outside = unfold;
+  rule Diverge = unfolding unfold otherwise give 42;
+}

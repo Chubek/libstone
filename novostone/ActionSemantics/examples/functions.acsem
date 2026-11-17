@@ -1,0 +1,67 @@
+// First-class functions: closures, lexical capture, recursion, and tail calls.
+// Dialect 2 (auto-detected): closure, apply, tailcall, letrec, return.
+language Functions {
+  start E;
+  syntax E =
+      Num(n: integer)
+    | Add(l: E, r: E)
+    | Sub(l: E, r: E)
+    | Mul(l: E, r: E)
+    | Var(name: identifier)
+    | Let(name: identifier, value: E, body: E)
+    | Seq(first: E, second: E)
+    | Pairx(l: E, r: E)
+    | Const(n: integer)
+    | Adder()
+    | Call(f: E, a: E)
+    | Compose(f: E, g: E, x: E)
+    | Fact(n: integer)
+    | Even(n: integer)
+    | Loop(n: integer)
+    | Counter()
+    | Early();
+
+  rule Num = give n;
+  rule Add = (evaluate(l) and then evaluate(r)) then give given(1) + given(2);
+  rule Sub = (evaluate(l) and then evaluate(r)) then give given(1) - given(2);
+  rule Mul = (evaluate(l) and then evaluate(r)) then give given(1) * given(2);
+  rule Var = give bound(name);
+  rule Let = furthermore (evaluate(value) then bind name to given(1)) hence evaluate(body);
+  rule Seq = evaluate(first) then evaluate(second);
+  rule Pairx = evaluate(l) and then evaluate(r);
+  // A closure capturing its defining syntax node and empty bindings.
+  rule Const = give closure (give n);
+  // A closure yielding an inner closure that captures the applied argument.
+  rule Adder = give closure (furthermore (bind "x" to given(1)) hence
+    give closure (give bound("x") + given(1)));
+  rule Call = (evaluate(f) and then evaluate(a)) then apply given(1) to (given(2));
+  // Function composition via saved closures.
+  rule Compose = (evaluate(f) and then evaluate(g) and then evaluate(x)) then
+    (furthermore (bind "f" to given(1)) hence
+      (furthermore (bind "g" to given(2)) hence
+        ((apply bound("g") to (given(3))) then apply bound("f") to (given(1)))));
+  // Single-name recursion through letrec.
+  rule Fact = letrec "fact" = closure (furthermore (bind "n" to given(1)) hence
+    ((check bound("n") < 2 then give 1) otherwise
+     (apply bound("fact") to (bound("n") - 1) then give given(1) * bound("n")))) in
+    apply bound("fact") to (n);
+  // Mutual recursion through letrec.
+  rule Even = letrec "even" = closure ((check given(1) == 0 then give 1) otherwise
+      apply bound("odd") to (given(1) - 1)),
+    "odd" = closure ((check given(1) == 0 then give 0) otherwise
+      apply bound("even") to (given(1) - 1)) in
+    apply bound("even") to (n);
+  // Tail recursion: tailcall replaces the frame, so depth stays bounded.
+  rule Loop = letrec "loop" = closure (furthermore (bind "i" to given(1)) hence
+      (furthermore (bind "acc" to given(2)) hence
+        ((check bound("i") == 0 then give bound("acc")) otherwise
+         (tailcall bound("loop") to (bound("i") - 1, bound("acc") + 1))))) in
+    apply bound("loop") to (n, 0);
+  // A closure capturing a mutable cell: state persists across calls.
+  rule Counter = allocate cell then (furthermore (bind "c" to given(1)) hence
+    (store 0 in bound("c") then
+      give closure ((store contents(bound("c")) + 1 in bound("c")) then give contents(bound("c")))));
+  // return unwinds pending combinator frames inside the function body.
+  rule Early = give closure (((check given(1) < 10 and then return given(1)) otherwise
+    return 10) and then give 99);
+}

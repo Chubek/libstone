@@ -1,0 +1,19 @@
+language Imperative {
+  start E;
+  syntax E = Loop(n: integer) | Choice(n: integer) | Failure() | Escape()
+    | Outside() | Crossing() | Forever();
+  rule Loop = allocate cell then (furthermore (bind "i" to given(1)) hence
+    (store 0 in bound("i") then
+      (while contents(bound("i")) < n do (
+        store contents(bound("i")) + 1 in bound("i") then
+          if contents(bound("i")) == 3 then continue else
+            if contents(bound("i")) == 5 then break else complete)
+        then give contents(bound("i")))));
+  rule Choice = if n then give 42 else give 7;
+  rule Failure = while 1 do fail;
+  rule Escape = while 1 do escape 42;
+  rule Outside = break;
+  // A called function cannot break its caller's loop.
+  rule Crossing = while 1 do (closure break then enact given(1));
+  rule Forever = while 1 do continue otherwise give 42;
+}

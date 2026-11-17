@@ -1,0 +1,37 @@
+// next yields a flag followed by data: 1=value yielded, 0=generator completed.
+language Generators {
+  start E;
+  syntax E = Once() | Sequence() | Lazy() | Closed() | Failing()
+    | Escaping() | Outside() | Nested() | Recursive(n: integer) | Reentrant() | Stress(n: integer);
+  rule Once = generator (yield_value 42) then
+    (furthermore (bind "g" to given(1)) hence
+      (next bound("g") and then next bound("g") and then next bound("g")));
+  rule Sequence = generator (yield_value 20 then yield_value 22 then return 99) then
+    (furthermore (bind "g" to given(1)) hence
+      (next bound("g") and then next bound("g") and then next bound("g") and then next bound("g")));
+  rule Lazy = generator fail then give 42;
+  rule Closed = generator (yield_value 99) then
+    (furthermore (bind "g" to given(1)) hence (close bound("g") then next bound("g")));
+  rule Failing = generator fail then (furthermore (bind "g" to given(1)) hence
+    ((next bound("g") otherwise give 42) and then next bound("g")));
+  rule Escaping = generator (escape 42) then next given(1);
+  rule Outside = yield_value 42;
+  rule Nested = generator (generator (yield_value 42) then next given(1) then yield_value given(2))
+    then next given(1);
+  rule Recursive = give n then generator (
+    unfolding ((check given(1) < 1 and then return 99) otherwise
+      ((yield_value given(1) and then give given(1) - 1) then tailunfold))) then
+    (furthermore (bind "g" to given(1)) hence
+      (next bound("g") and then next bound("g") and then next bound("g") and then next bound("g")));
+  // A cell can form a cycle through the generator's captured environment.
+  rule Reentrant = allocate cell then (furthermore (bind "self" to given(1)) hence
+    (generator (next contents(bound("self"))) then
+      (put given(1) in bound("self") and then next given(1))));
+  rule Stress = allocate cell then (furthermore (bind "i" to given(1)) hence
+    (store 0 in bound("i") then
+      (generator (while contents(bound("i")) < n do
+        (yield_value contents(bound("i")) then store contents(bound("i")) + 1 in bound("i")))
+        then (furthermore (bind "g" to given(1)) hence
+          (while contents(bound("i")) < n do (next bound("g"))
+            then give contents(bound("i")))))));
+}

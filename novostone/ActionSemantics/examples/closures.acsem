@@ -1,0 +1,22 @@
+// A small call-by-value lambda calculus with lexical let and tagged references.
+language Closures {
+  start E;
+  syntax E = Num(n: integer) | Var(name: identifier) | Add(left: E, right: E)
+    | Lambda(parameter: identifier, body: E) | Apply(function: E, argument: E)
+    | Let(name: identifier, value: E, body: E)
+    | Ref(value: E) | Get(reference: E) | Set(reference: E, value: E)
+    | Seq(first: E, second: E) | Pair(left: E, right: E);
+  rule Num = give n;
+  rule Var = give bound(name);
+  rule Add = (evaluate(left) and then evaluate(right)) then give given(1) + given(2);
+  rule Lambda = closure (furthermore (bind parameter to given(1)) hence evaluate(body));
+  rule Apply = (evaluate(function) and then evaluate(argument)) then apply given(1) to (given(2));
+  rule Let = furthermore (evaluate(value) then bind name to given(1)) hence evaluate(body);
+  rule Ref = allocate cell then (furthermore (bind "ref" to given(1)) hence
+    (evaluate(value) then (put given(1) in bound("ref") then give bound("ref"))));
+  rule Get = evaluate(reference) then give contents(given(1));
+  rule Set = evaluate(reference) then (furthermore (bind "ref" to given(1)) hence
+    (evaluate(value) then put given(1) in bound("ref")));
+  rule Seq = evaluate(first) then evaluate(second);
+  rule Pair = evaluate(left) and then evaluate(right);
+}

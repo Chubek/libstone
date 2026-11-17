@@ -19,9 +19,94 @@ void rejected(const std::string& source, const std::string& reason) {
 std::string spec(const std::string& rule) {
   return "language Test { start E; syntax E = N(n: integer) | V(v: identifier); rule N = " + rule + "; rule V = give bound(v); }";
 }
+void extended_frontend() {
+  auto language = parse(spec("give n + 1 * 2"));
+  check(language.default_dialect() == Dialect::One, "legacy specs default to dialect 1");
+  Options forced;
+  forced.dialect = Dialect::Two;
+  for (auto t : {Target::C, Target::Python, Target::Rust, Target::Pascal, Target::Latex}) {
+    auto output = generate(language, t, forced);
+    check(output.find("@TABLES@") == std::string::npos, "unsubstituted tables");
+    check(output.find("acsem dialect 2; source FNV-1a-64") != std::string::npos, "missing dialect 2 provenance");
+    check(output == generate(parse(spec("give n + 1 * 2")), t, forced), "nondeterministic generation");
+    Options one;
+    one.dialect = Dialect::One;
+    auto legacy = generate(language, t);
+    check(legacy == generate(language, t, one), "dialect routing mismatch");
+    check(legacy.find("acsem dialect 1;") != std::string::npos, "legacy stamp lost");
+    if (t != Target::Latex) {
+      auto pool_name = t == Target::Pascal ? "Pool:" : "POOL";
+      check(legacy.find(pool_name) != std::string::npos && output.find(pool_name) != std::string::npos,
+            "dialects must share the canonical instruction format");
+    }
+  }
+  auto tex = generate(parse("language A_b { start E; syntax E = N_x(a_b: integer); rule N_x = give a_b < 42; }"),
+                      Target::Latex, forced);
+  check(tex.find("A\\_b") != std::string::npos, "LaTeX escaping");
+  check(tex.find("N\\_x") != std::string::npos, "extended semantic equations");
+  Options wide;
+  wide.dialect = Dialect::Two;
+  wide.steps = 200000;
+  auto stepped = generate(language, Target::C, wide);
+  check(stepped.find("STEPS_MAX = 200000") != stepped.npos, "budget override");
+  check(stepped == generate(parse(spec("give n + 1 * 2")), Target::C, wide), "override determinism");
+  auto closure_text = std::string("language F { start E; syntax E = N(n: integer) | Make() | Call(f: E, a: E);") +
+    " rule N = give n; rule Make = give closure (give 7);" +
+    " rule Call = (evaluate(f) and then evaluate(a)) then apply given(1) to (given(2)); }";
+  auto functions = parse(closure_text, "functions.acsem");
+  check(functions.default_dialect() == Dialect::Two, "closure specs need dialect 2");
+  check(functions.name() == "F", "extended name");
+  auto out = generate(functions, Target::C);
+  check(out.find("acsem dialect 2;") != std::string::npos, "auto-routed dialect 2");
+  check(out.find("POOL") != std::string::npos, "missing operand pool");
+  check(out == generate(functions, Target::C), "nondeterministic extended generation");
+  check(generate(functions, Target::Latex).find("closure") != std::string::npos, "LaTeX closure equations");
+  bool refused = false;
+  try { Options one; one.dialect = Dialect::One; (void)generate(functions, Target::C, one); }
+  catch (const std::invalid_argument& e) { refused = std::string(e.what()).find("dialect 2") != std::string::npos; }
+  check(refused, "dialect 1 capability error");
+  rejected("language F { start E; syntax E = N(); rule N = letrec \"x\" = closure complete, \"x\" = closure fail in complete; }",
+           "duplicate letrec");
+  std::string arguments = "1";
+  for (int j = 1; j < 65; ++j) arguments += ", 1";
+  rejected("language F { start E; syntax E = N(); rule N = apply 1 to (" + arguments + "); }", "64 arguments");
+  for (int bad : {-1, 65537}) {
+    Options budgets; budgets.dialect = Dialect::Two; budgets.heap = bad;
+    bool rejected_budget = false;
+    try { (void)generate(language, Target::C, budgets); }
+    catch (const std::invalid_argument&) { rejected_budget = true; }
+    check(rejected_budget, "invalid library heap budget accepted");
+  }
+  Options legacy_budget; legacy_budget.steps = 1;
+  bool rejected_budget = false;
+  try { (void)generate(language, Target::C, legacy_budget); }
+  catch (const std::invalid_argument&) { rejected_budget = true; }
+  check(rejected_budget, "legacy budget silently ignored");
+  auto mixed = parse("language M { start E; syntax E = N(); rule N = generator (callcc given(1)); }");
+  for (auto t : {Target::C, Target::Python, Target::Rust, Target::Pascal, Target::Latex}) {
+    bool rejected_combination = false;
+    try { (void)generate(mixed, t); }
+    catch (const std::invalid_argument& e) { rejected_combination = std::string(e.what()).find("capability error") != std::string::npos; }
+    check(rejected_combination, "unsafe continuation/generator composition accepted");
+  }
+  const std::string located = "language M { start E;\nsyntax E = N();\nrule N = closure (\ngive unknown);\n}";
+  try { (void)parse(located, "located.acsem"); check(false, "unknown closure field accepted"); }
+  catch (const ParseError& e) { check(e.line == 4, "extended diagnostic lost source location"); }
+  rejected(spec("give bound(contents(bound(\"x\")))"), "type");
+  auto tagged = parse("language T { start E; syntax E = Load() | Store();"
+                      " rule Load = give bound(contents(bound(\"r\")));"
+                      " rule Store = put \"x\" in bound(\"r\"); }");
+  check(tagged.default_dialect() == Dialect::Two, "tagged cells must be detected before lowering earlier rules");
 }
-int main() {
+}
+int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--extended") {
+      extended_frontend();
+      std::cout << "ActionSemantics extended frontend checks passed\n";
+      return 0;
+    }
+    check(argc == 1, "unexpected test argument");
     auto m = parse(spec("give n")); check(m.name() == "Test", "name");
     for (auto t : {Target::C, Target::Python, Target::Rust, Target::Pascal, Target::Latex}) {
       auto s = generate(m, t);
@@ -41,7 +126,7 @@ int main() {
     rejected(spec("give \"x\" + 1"), "type");
     rejected(spec("give 1 junk"), "syntax");
     rejected(spec("give \"x\\\"; malicious\""), "syntax");
-    rejected(spec("unfold"), "syntax");
+    rejected(spec("choose (complete, complete)"), "syntax");
     rejected(spec("complete and complete"), "syntax");
     rejected("language L { start E; syntax E = N(); }", "syntax");
     rejected("language L { start Missing; syntax E = N(); rule N = complete; }", "start sort");

@@ -13,6 +13,8 @@ p.add_argument('--work', required=True)
 p.add_argument('--target', required=True)
 p.add_argument('--compiler', required=True)
 p.add_argument('--flags', default='')
+p.add_argument('--dialect', default='')
+p.add_argument('--define', action='append', default=[])
 args = p.parse_args()
 work = pathlib.Path(args.work)
 work.mkdir(parents=True, exist_ok=True)
@@ -25,10 +27,15 @@ def run(command, input=None, expected=0):
     return r.stdout.decode()
 
 
-def compile_spec(spec, stem):
+def compile_spec(spec, stem, defines=None):
     ext = {'c': 'c', 'python': 'py', 'rust': 'rs', 'pascal': 'pas', 'latex': 'tex'}[args.target]
     output = work / f'{stem}.{ext}'
-    run([args.cli, '--target', args.target, spec, '-o', output])
+    command = [args.cli]
+    if args.dialect:
+        command += ['--dialect', args.dialect]
+    for definition in (defines if defines is not None else args.define):
+        command += ['--define', definition]
+    run(command + ['--target', args.target, spec, '-o', output])
     if args.target == 'python':
         run([args.compiler, '-m', 'py_compile', output])
         return [args.compiler, output]
@@ -51,6 +58,9 @@ if args.target == 'latex':
     escaped = work / 'escaped.acsem'
     escaped.write_text('language A_b { start E; syntax E = N_x(a_b: integer); rule N_x = give a_b < 42; }')
     compile_spec(escaped, 'escaped')
+    if args.dialect == '2':
+        for stem in ('functions', 'closures', 'continuations', 'generators', 'imperative_language'):
+            compile_spec(pathlib.Path(args.source).parent / f'{stem}.acsem', stem)
     sys.exit(0)
 
 cases = [
@@ -165,15 +175,23 @@ assert run(compile_spec(minimal, 'minimal'), b'Skip()').strip() == 'completed'
 resources = work / 'resources.acsem'
 resources.write_text('''language Resources {
 start E;
-syntax E = Empty() | New() | Twice(x: E) | B(k: identifier) | Both(x: E, y: E) | Try(x: E);
+syntax E = Empty() | New() | Twice(x: E) | B(k: identifier) | Both(x: E, y: E) | Try(x: E) | Pass(x: E);
 rule Empty = complete;
 rule New = allocate cell;
 rule Twice = evaluate(x) then evaluate(x);
 rule B = bind k to 1;
 rule Both = evaluate(x) and then evaluate(y);
 rule Try = evaluate(x) otherwise complete;
+rule Pass = evaluate(x);
 }''')
 resource_command = compile_spec(resources, 'resources')
+depth_boundary = ('Pass(' * 128 + 'B(x)' + ')' * 128).encode()
+run(resource_command, depth_boundary, 0 if args.dialect == '2' else 2)
+assert run(resource_command, ('Pass(' * 127 + 'B(x)' + ')' * 127).encode()).strip() == 'completed'
+# The original recursive evaluator counts action entry/yielders, not delivery.
+step_boundary = ('Both(' + 'Twice(' * 14 + 'Empty()' + ')' * 14 + ',' +
+                 'Twice(' * 13 + 'Empty()' + ')' * 13 + ')').encode()
+run(resource_command, step_boundary, 2 if args.dialect == '2' else 0)
 assert run(resource_command, ('Twice(' * 10 + 'New()' + ')' * 10).encode()).strip() == 'completed cell:1023'
 run(resource_command, ('Try(' + 'Twice(' * 11 + 'New()' + ')' * 11 + ')').encode(), 2)
 run(resource_command, ('Try(' + 'Twice(' * 16 + 'Empty()' + ')' * 16 + ')').encode(), 2)
@@ -193,4 +211,87 @@ run(resource_command, f'Try(Both({bindings},B(extra)))'.encode(), 2)
 assert run(resource_command, f'Both({bindings},Both(B(extra),B(k0)))'.encode(), 1).strip() == 'failed'
 run(resource_command, balanced(['Empty()'] * 1025).encode(), 2)
 run(resource_command, balanced([f'B(k{i})' for i in range(257)]).encode(), 2)
-print(f'{args.target}: {len(cases)} semantic/oracle cases, malformed input, resource limits, micro and minimal languages passed')
+
+# Dialect 2: first-class functions. Closure capture, escaping closures,
+# recursion, mutual recursion, tail calls, mutable capture, and returns.
+if args.dialect == '2':
+    functions = pathlib.Path(args.source).parent / 'functions.acsem'
+    function_command = compile_spec(functions, 'functions', defines=['steps=10000000'])
+    function_cases = [
+        ('Num(42)', 'completed 42'),
+        ('Call(Const(7), Num(0))', 'completed 7'),
+        ('Call(Call(Adder(), Num(3)), Num(4))', 'completed 7'),
+        ('Call(Call(Adder(), Num(10)), Num(-3))', 'completed 7'),
+        ('Compose(Const(2), Const(3), Num(42))', 'completed 2'),
+        ('Fact(10)', 'completed 3628800'),
+        ('Fact(12)', 'completed 479001600'),
+        ('Fact(13)', 'failed'),
+        ('Even(4)', 'completed 1'),
+        ('Even(5)', 'completed 0'),
+        ('Let(k, Counter(), Pairx(Call(Var(k), Num(0)), Call(Var(k), Num(0))))', 'completed 1 2'),
+        ('Call(Early(), Num(5))', 'completed 5'),
+        ('Call(Early(), Num(50))', 'completed 10'),
+        ('Call(Num(1), Num(2))', 'failed'),
+        ('Loop(10000)', 'completed 10000'),
+    ]
+    for text, expected in function_cases:
+        code = 0 if expected.startswith('completed') else 1
+        actual = run(function_command, (text + '\n').encode(), code).strip()
+        assert actual == expected, (args.target, text, actual, expected)
+    # Tail calls keep frame depth bounded: deep loops finish within DEPTH_MAX.
+    assert run(function_command, b'Loop(100000)').strip() == 'completed 100000'
+    control = pathlib.Path(args.source).parent / 'continuations.acsem'
+    control_command = compile_spec(control, 'continuations', defines=['steps=1000000', 'heap=128'])
+    control_cases = [
+        ('Immediate()', 'completed 42'), ('Context()', 'completed 42'),
+        ('Normal()', 'completed 42'), ('Invalid()', 'failed'),
+        ('Shared()', 'completed 42'), ('Replay()', 'completed 42'),
+        ('Count(10000)', 'completed 0'), ('Outside()', 'failed'),
+        ('NonTail(3)', 'completed 0 99 99 99'),
+    ]
+    for text, expected in control_cases:
+        assert run(control_command, text.encode(), 1 if expected == 'failed' else 0).strip() == expected
+    run(control_command, b'Diverge()', 2)
+    # Force repeated collection with escaping closures and recursive env cycles.
+    gc_command = compile_spec(functions, 'functions_gc', defines=['steps=10000000', 'heap=128'])
+    assert run(gc_command, b'Loop(100000)').strip() == 'completed 100000'
+    assert run(gc_command, b'Call(Call(Adder(),Num(40)),Num(2))').strip() == 'completed 42'
+    gen_command = compile_spec(pathlib.Path(args.source).parent / 'generators.acsem',
+                               'generators', defines=['heap=128', 'steps=1000000'])
+    generator_cases = [
+        ('Once()', 'completed 1 42 0 0'), ('Sequence()', 'completed 1 20 1 22 0 99 0'),
+        ('Lazy()', 'completed 42'), ('Closed()', 'completed 0'),
+        ('Failing()', 'completed 42 0'), ('Escaping()', 'escaped 42'),
+        ('Outside()', 'failed'), ('Nested()', 'completed 1 42'),
+        ('Recursive(3)', 'completed 1 3 1 2 1 1 0 99'), ('Reentrant()', 'failed'),
+    ]
+    for text, expected in generator_cases:
+        assert run(gen_command, text.encode(), 0 if expected.startswith('completed') else 1).strip() == expected
+    assert run(gen_command, b'Stress(10000)').strip() == 'completed 10000'
+    loop_command = compile_spec(pathlib.Path(args.source).parent / 'imperative_language.acsem', 'imperative')
+    loop_cases = [
+        ('Loop(0)', 'completed 0'), ('Loop(4)', 'completed 4'), ('Loop(10000)', 'completed 5'),
+        ('Choice(0)', 'completed 7'), ('Choice(-1)', 'completed 42'), ('Failure()', 'failed'),
+        ('Escape()', 'escaped 42'), ('Outside()', 'failed'), ('Crossing()', 'failed'),
+    ]
+    for text, expected in loop_cases:
+        assert run(loop_command, text.encode(), 0 if expected.startswith('completed') else 1).strip() == expected
+    run(loop_command, b'Forever()', 2)
+    closures_command = compile_spec(pathlib.Path(args.source).parent / 'closures.acsem', 'closures',
+                                   defines=['heap=128'])
+    closure_cases = [
+        ('Apply(Apply(Lambda(x,Lambda(y,Add(Var(x),Var(y)))),Num(40)),Num(2))', 'completed 42'),
+        ('Let(x,Num(40),Let(f,Lambda(y,Add(Var(x),Var(y))),Let(x,Num(99),Apply(Var(f),Num(2)))))', 'completed 42'),
+        ('Let(c,Ref(Num(0)),Let(f,Lambda(x,Seq(Set(Var(c),Add(Get(Var(c)),Num(1))),Get(Var(c)))),Pair(Apply(Var(f),Num(0)),Apply(Var(f),Num(0)))))', 'completed 1 2'),
+        ('Let(f,Ref(Lambda(x,Add(Var(x),Num(2)))),Apply(Get(Var(f)),Num(40)))', 'completed 42'),
+        ('Let(r,Ref(Num(0)),Seq(Set(Var(r),Var(r)),Get(Var(r))))', 'completed cell:0'),
+    ]
+    for text, expected in closure_cases:
+        assert run(closures_command, text.encode()).strip() == expected
+    cases += function_cases
+    cases += control_cases
+    cases += generator_cases
+    cases += loop_cases
+    cases += closure_cases
+dialect_note = f' (dialect {args.dialect})' if args.dialect else ''
+print(f'{args.target}{dialect_note}: {len(cases)} semantic/oracle cases, malformed input, resource limits, micro and minimal languages passed')
