@@ -5,7 +5,7 @@
     (bits 32)
     (endian little)
     (default-features (ref feature base))
-    (sources "ArchTk/infobank/Capstone-Arch/WASM/WASMDisassembler.c opcode table; Binaryen-WASM/wasm-stack.cpp and wasm-validator.cpp for stack typing and binary emission.")
+    (sources "ArchTk/infobank/Capstone-Arch/WASM/WASMDisassembler.c opcode table; Binaryen-WASM/wasm-stack.cpp and wasm-validator.cpp for stack typing and binary emission; Binaryen-WASM/wasm.cpp feature names.")
     (semantics "Operands read pre-state. Effects commit after fault checks; normal fallthrough advances PC by encoded length. Widths are bits; offsets are bytes."))
   (coverage profile
     (status selected-concrete-forms)
@@ -596,4 +596,39 @@
     (constraints "none"))
   (exception trap
     (rules "unreachable always traps. Validation and module/function context are required separately; an encodable instruction stream is not necessarily a valid WebAssembly module."))
+  (feature bulk-memory
+    (doc "Bulk memory/table operations use prefixed variable-length opcodes and module index operands not supplied by this MVP subset.")
+    (requires (ref feature base)))
+  (extension bulk-memory
+    (requires (ref feature bulk-memory))
+    (coverage metadata-only)
+    (semantics "Bulk memory/table operations use prefixed variable-length opcodes and module index operands not supplied by this MVP subset."))
+  (feature simd128
+    (doc "SIMD introduces v128 values and 0xfd-prefixed variable-length opcode/immediate forms; no concrete SIMD form is supplied.")
+    (requires (ref feature base)))
+  (extension simd128
+    (requires (ref feature simd128))
+    (coverage metadata-only)
+    (semantics "SIMD introduces v128 values and 0xfd-prefixed variable-length opcode/immediate forms; no concrete SIMD form is supplied."))
+  (feature threads
+    (doc "Threads require shared memories and atomic 0xfe-prefixed operations with alignment and memory-order semantics not supplied here.")
+    (requires (ref feature base)))
+  (extension threads
+    (requires (ref feature threads))
+    (coverage metadata-only)
+    (semantics "Threads require shared memories and atomic 0xfe-prefixed operations with alignment and memory-order semantics not supplied here."))
+  (feature memory64
+    (doc "Memory64 changes memory index/address typing to i64 and must not be inferred from this wasm32 profile.")
+    (requires (ref feature base)))
+  (extension memory64
+    (requires (ref feature memory64))
+    (coverage metadata-only)
+    (semantics "Memory64 changes memory index/address typing to i64 and must not be inferred from this wasm32 profile."))
+  (feature multimemory
+    (doc "Multiple memories add explicit memory indices to operations whose MVP encodings assume the default memory.")
+    (requires (ref feature base)))
+  (extension multimemory
+    (requires (ref feature multimemory))
+    (coverage metadata-only)
+    (semantics "Multiple memories add explicit memory indices to operations whose MVP encodings assume the default memory."))
 )

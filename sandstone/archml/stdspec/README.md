@@ -1,10 +1,8 @@
 # ArchML compiler profiles
 
-Load these version-1 S-expression descriptions using
-`sandstone::archml::Document::load` or `sandstone_archml_load`, or compile them
-with the `archml` CLI. See the [ArchML compiler guide](../README.md).
+Load these version-1 S-expression descriptions using `mulib_archml_load`.
 The canonical RV64 RISC-V filename is **`riscv64.aml`**.
-The nine additional LLVM-target profiles use the requested **`.am`** filenames;
+The sixteen additional profiles use the requested **`.am`** filenames;
 the loader does not depend on the filename extension.
 
 | File | Default compiler profile | Concrete forms |
@@ -26,6 +24,12 @@ the loader does not depend on the filename extension.
 | `m68k.am` | Big-endian 68000 register-direct byte/word/long integer subset | 20 |
 | `hexagon.am` | Hexagon V60 scalar forms in single-instruction packets | 7 |
 | `dex.am` | DEX035 selected virtual-register integer/control/invoke forms; ART metadata | 98 |
+| `loongarch64.am` | Little-endian LA64 scalar integer, memory and control subset | 20 |
+| `avr8.am` | Classic AVR 8-bit register ALU and high-register immediates | 11 |
+| `msp430.am` | MSP430 16-bit register-direct ALU, JMP and NOP | 9 |
+| `sparc.am` | Big-endian SPARC V8 visible-window ALU and delayed BA subset | 13 |
+| `systemz.am` | z/Architecture 64-bit RRE ALU, LGHI and NOPR subset | 8 |
+| `evm.am` | EVM 256-bit stack operations, bounded PUSH, DUP and SWAP forms | 69 |
 
 The AMD64, AArch64 and RV64 compiler profiles include register storage/aliases, classes and allocation restrictions,
 concrete bit encodings, structured P-code, memory/atomic/exception semantics,
@@ -48,7 +52,8 @@ fixed-bit encoding schema cannot express general variable-length LEB128.
 The additional profiles preserve important target distinctions:
 
 * AMDGPU fixes **gfx600**, excludes special/inline/literal operand encodings, and
-  models SCC effects; SALU runs once per wave, not once per active lane.
+  models SCC effects; SALU runs once per wave, not once per active lane. GFX10+
+  wave32 is recorded as metadata only and does not change this wave64 profile.
 * ARM fixes A32 condition AL and S=0. PC register operands are excluded; B/BL
   use PC+8 as their displacement base, and BL writes PC+4 to LR.
 * Xtensa excludes density/window rotation; its offsets are unsigned scaled bytes.
@@ -63,8 +68,8 @@ The additional profiles preserve important target distinctions:
   `OpUnreachable` denotes undefined execution, not a guaranteed hardware trap.
 * NVPTX and DirectX use validated **`operation`** records with `value` operands
   and P-code. They have no invented machine opcodes or finite physical register
-  banks. Query these records with `doc.find("operation", name)`;
-  binary encoding rejects operations and binary decoding skips them.
+  banks. Query these records with `mulib_archml_find(doc, "operation", name)`;
+  `encode`/`decode` return `MULIB_ARCHML_INVALID` without changing outputs.
   Consumers emit the PTX text/DXIL LLVM IR templates and supply valid module
   context. A DXIL opcode is an IR call argument, not a byte instruction encoding.
 * DEX uses 16-bit little-endian code units and **virtual frame indices**, not a
@@ -74,6 +79,20 @@ The additional profiles preserve important target distinctions:
   encoded at scale 2. Verification, pool lookup and invoke-result adjacency are
   runtime obligations. ART GC/JIT/AOT records are explicitly metadata-only;
   MuLIB's executable integer-method subset is documented in mulib-art.h.
+* LoongArch fixes LA64 and models r0 discard writes, masked variable shifts,
+  naturally aligned LD.D/ST.D, PC-relative branches without delay slots, BL's
+  link write and JIRL's pre-state source/link behavior.
+* AVR8 is distinct from `avr32.aml`. Its FRdRr register fields are five bits,
+  while FRdK uses an encoded 0..15 view of r16..r31. MSP430 ordinary operands
+  intentionally exclude r0..r3 so PC, SR and constant-generator interpretations
+  cannot be selected accidentally.
+* SPARC uses the current register-window view and gives BA an explicit delay
+  slot; SAVE/RESTORE cannot be inferred from the flat aliases. SystemZ preserves
+  variable two/four-byte instruction lengths and models condition-code effects.
+* EVM has no physical registers. Stack words are 256 bits and depth is capped at
+  1024. PUSH immediates are big-endian; ArchML v1's scalar encoder API limits
+  concrete forms to PUSH1..PUSH8 (plus fork-gated PUSH0). Gas/fork checks and
+  state rollback remain execution-environment obligations.
 
 ## Local source provenance
 
@@ -86,8 +105,8 @@ to that directory); regeneration does not require the corpus:
 | PowerPC64 | `Capstone-Arch/PowerPC/PPCGenDisassemblerTables.inc`; `LLVM-Target/PowerPC/PPCInstrInfo.td`, `PPCInstr64Bit.td`, `PPCInstrFormats.td` |
 | MIPS32 | `Capstone-Arch/Mips/MipsGenDisassemblerTables.inc`; `LLVM-Target/Mips/MipsInstrInfo.td`, `MipsInstrFormats.td` |
 | AVR32A | `Ghidra-CPU/Atmel/data/languages/avr32a.slaspec` and its arithmetic, logic, data-transfer and system-control `.sinc` files |
-| WebAssembly | `Capstone-Arch/WASM/WASMDisassembler.c`; `Binaryen-WASM/wasm-stack.cpp`, `wasm-validator.cpp` |
-| AMDGPU | `LLVM-Target/AMDGPU/SOPInstructions.td`, `SIRegisterInfo.td` (gfx6 opcode tables and formats) |
+| WebAssembly | `Capstone-Arch/WASM/WASMDisassembler.c`; `Binaryen-WASM/wasm-stack.cpp`, `wasm-validator.cpp`, `wasm.cpp` |
+| AMDGPU | `LLVM-Target/AMDGPU/SOPInstructions.td`, `SIRegisterInfo.td`, `GCNSubtarget.h` (gfx6 forms and wave-size distinction) |
 | ARM A32 | `LLVM-Target/ARM/ARMInstrInfo.td`, `ARMInstrFormats.td`, `ARMRegisterInfo.td` |
 | NVPTX | `LLVM-Target/NVPTX/NVPTXInstrInfo.td`, `NVPTXInstrFormats.td`, `NVPTXRegisterInfo.td` |
 | SPIR-V | `LLVM-Target/SPIRV/SPIRVInstrInfo.td`, `SPIRVInstrFormats.td`, `MCTargetDesc/SPIRVMCCodeEmitter.cpp` |
@@ -96,6 +115,12 @@ to that directory); regeneration does not require the corpus:
 | DirectX | `LLVM-Target/DirectX/DXIL.td`, `DXILOpBuilder.cpp`, `DXILWriter/DXILBitcodeWriter.cpp` |
 | M68k | `LLVM-Target/M68k/M68kInstrArithmetic.td`, `M68kInstrData.td`, `M68kInstrControl.td`, `M68kRegisterInfo.td` |
 | Hexagon | `LLVM-Target/Hexagon/HexagonDepInstrInfo.td`, `HexagonDepInstrFormats.td`, `HexagonInstrFormats.td`, `MCTargetDesc/HexagonBaseInfo.h` |
+| LoongArch64 | `LLVM-Target/LoongArch/LoongArchInstrInfo.td`, `LoongArchInstrFormats.td`, `LoongArchRegisterInfo.td` |
+| AVR8 | `LLVM-Target/AVR/AVRInstrInfo.td`, `AVRInstrFormats.td`, `AVRRegisterInfo.td`, `AVRDevices.td` |
+| MSP430 | `LLVM-Target/MSP430/MSP430InstrInfo.td`, `MSP430InstrFormats.td`, `MSP430RegisterInfo.td` |
+| SPARC V8 | `LLVM-Target/Sparc/SparcInstrInfo.td`, `SparcInstrFormats.td`, `SparcRegisterInfo.td` |
+| SystemZ | `LLVM-Target/SystemZ/SystemZInstrInfo.td`, `SystemZInstrFormats.td`, `SystemZRegisterInfo.td` |
+| EVM | `Capstone-Arch/EVM/EVMDisassembler.c`, `EVMMappingInsn.inc`; `Radare2-Opcodes/evm/evm.c`, `evm.h` |
 
 DEX/ART facts come from repository-local `standards/android/android-bytecode.txt`,
 `android-dex.txt`, `android-art.txt` and `android-abi.txt`; its original generator
@@ -104,10 +129,11 @@ tables do not require any third-party source tree.
 AVR32 is absent from this Capstone snapshot; its profile uses the surrounding
 Ghidra corpus instead. Tables describe selected facts, not a wholesale conversion
 of third-party source. LLVM MC independently checks the supported PowerPC64,
-MIPS, ARM A32, gfx600 SALU, eBPF and Hexagon forms. SPIRV-Tools independently
-checks SPIR-V forms when `spirv-as` is installed. AVR32, WebAssembly, Xtensa and
-M68k have source-derived byte fixtures instead. The local LLVM MC build has no
-Xtensa/M68k targets or SPIR-V text parser.
+MIPS, ARM A32, gfx600 SALU, eBPF, Hexagon, LoongArch64, AVR8, MSP430,
+SPARC and SystemZ forms. SPIRV-Tools independently checks SPIR-V forms when
+`spirv-as` is installed. AVR32, WebAssembly, Xtensa, M68k and EVM have
+source-derived byte fixtures instead. The local LLVM MC build has no
+Xtensa/M68k/EVM targets or SPIR-V text parser.
 
 ## Coverage contract
 
@@ -140,9 +166,12 @@ backend data foundation, not a claim of a complete production compiler target.
    signed displacements, or translate assembly templates into the chosen dialect.
 8. Apply machine rewrites only after discharging their flags/memory/trap guards.
 
-These profiles are supplied inputs to Sandstone; their original MuLIB generator
-and manuals are not part of this directory. The native compiler, schema checks,
-ownership contracts and backend interfaces are documented in
-[the ArchML guide](../README.md). Run `archml --check FILE` to validate a profile.
-Sandstone tests load these actual files, roundtrip all forms and metadata, check
-representative machine-byte fixtures, and compile and run the generated C++.
+The public schema and ownership contracts are in
+[`manual/mulib-archml.md`](../../manual/mulib-archml.md).
+The AML is generated deterministically from
+[`tools/generate_archml.py`](../../tools/generate_archml.py),
+[`tools/archml_extra.py`](../../tools/archml_extra.py) and
+[`tools/archml_targets.py`](../../tools/archml_targets.py), and
+[`tools/archml_android.py`](../../tools/archml_android.py); use `--check` in CI.
+Tests load these actual files, roundtrip every form, and compare representative
+forms with independent LLVM MC encodings.

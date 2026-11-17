@@ -5,7 +5,7 @@
     (bits 64)
     (endian little)
     (default-features (ref feature base))
-    (sources "LLVM-Target/AMDGPU/SOPInstructions.td (SOP1_Real, SOP2_Real32, SOPP_Real_32 and gfx6 opcode tables); SIRegisterInfo.td.")
+    (sources "LLVM-Target/AMDGPU/SOPInstructions.td (SOP1_Real, SOP2_Real32, SOPP_Real_32 and gfx6 opcode tables); SIRegisterInfo.td; GCNSubtarget.h (wave32 generation distinction).")
     (semantics "Operands read pre-state. Effects commit after fault checks; normal fallthrough advances PC by encoded length. Widths are bits; offsets are bytes."))
   (coverage profile
     (status selected-concrete-forms)
@@ -1227,4 +1227,11 @@
     (requires (ref feature valu))
     (coverage metadata-only)
     (semantics "Per-lane VGPR arithmetic under EXEC, VCC carry/predicate effects, and generation-specific encodings require a separate vector backend."))
+  (feature rdna-wave32
+    (doc "GFX10 and later targets can support wave32, changing EXEC/VCC width and several lane-mask operations. This profile remains fixed to gfx600 wave64; no RDNA encoding is selectable.")
+    (requires (ref feature base)))
+  (extension rdna-wave32
+    (requires (ref feature rdna-wave32))
+    (coverage metadata-only)
+    (semantics "GFX10 and later targets can support wave32, changing EXEC/VCC width and several lane-mask operations. This profile remains fixed to gfx600 wave64; no RDNA encoding is selectable."))
 )
