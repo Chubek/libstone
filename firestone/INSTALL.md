@@ -19,8 +19,9 @@ find_package(Firestone CONFIG REQUIRED COMPONENTS ir eqsat)
 target_link_libraries(compiler PRIVATE Firestone::ir Firestone::eqsat)
 ```
 
-Available components are `ir`, `rewrite`, `eqsat`, `cps`, `memory`, `object`,
-`sema`, `type`, `vm`, `bignum`, `compute`, `concurrency`, `gfx`, and `intrin`.
+Available components are `ir`, `rewrite`, `trs`, `eqsat`, `cps`, `memory`, `object`,
+`sema`, `type`, `vm`, `bignum`, `compute`, `concurrency`, `gfx`, `intrin`, `isel`,
+`isched`, `regalloc`, and `lr`.
 `Firestone::firestone` links all components; individual
 targets carry their public dependencies. Every `lib*/*.hpp` header is installed
 and compiled independently by the test build.
@@ -62,3 +63,7 @@ For VM-only consumers, request `COMPONENTS vm`, link `Firestone::vm`, and includ
 `<libvm/Compiler.hpp>` and `<libvm/RegisterVM.hpp>` or `<libvm/StackVM.hpp>`.
 The component carries its IR and checked-arithmetic dependencies.
 See [VM contracts](docs/VM.md) for embedding and backend APIs.
+
+For lexer and parser consumers, request `COMPONENTS lr`, link `Firestone::lr`, and
+include `<liblr/LR.hpp>` or only the headers you use. See the [lexing and parsing
+guide](docs/LR.md).

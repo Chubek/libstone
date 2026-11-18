@@ -4,7 +4,8 @@ Firestone is a dependency-free, header-only C++17 library for compiler IRs,
 graph analysis, CPS, type systems, semantic checking, memory management,
 object models, term rewriting, equality saturation, bytecode virtual machines,
 arbitrary-precision arithmetic, concurrency, portable vector operations, and
-compute/graphics adapters, instruction selection, instruction scheduling, and register allocation.
+compute/graphics adapters, instruction selection, instruction scheduling, register
+allocation, and lexical analysis and parsing.
 
 ## Build and test
 
@@ -25,8 +26,10 @@ allocation/collection, checked arithmetic, stack/register execution, recursive c
 phi-correct SSA compilation, malformed bytecode, tiering contracts, big-number
 arithmetic/rounding, channel shutdown and scheduling, vector overflow semantics,
 compute/display resource lifetimes, SPIR-V framing, cross-component hardening
-contracts, and relocated installed-package consumers.
+contracts, lexer and parser behavior, and relocated installed-package consumers.
 Every public header is also compiled independently in C++17 mode.
+With a native C compiler, the lexer backend tests also compile and run the
+emitted C99 scanner and, on supported Linux x86-64 systems, the assembly scanner.
 Set `-DFIRESTONE_ENABLE_OPENMP=ON` to test the native OpenMP path as well as the
 default serial fallback in a separate build.
 
@@ -43,7 +46,7 @@ Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::trs`, 
 `Firestone::cps`, `Firestone::memory`, `Firestone::object`, `Firestone::sema`, and
 `Firestone::type`, `Firestone::vm`, `Firestone::bignum`, `Firestone::compute`,
 `Firestone::concurrency`, `Firestone::gfx`, `Firestone::intrin`, `Firestone::isel`,
-`Firestone::isched`, and `Firestone::regalloc`.
+`Firestone::isched`, `Firestone::regalloc`, and `Firestone::lr`.
 Source-tree embedding uses `add_subdirectory(firestone)`
 with the same target names. Include `<Firestone.hpp>` or individual headers,
 such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
@@ -55,6 +58,7 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 | `libisel/*.hpp` | Pattern-based tree/DAG selection, BURS labeling, exact covering, bounded ILP/SMT selection, factor elimination, macros and peepholes |
 | `libisched/*.hpp` | Latency/resource scheduling, exact search, modulo kernels, unrolling, dynamic issue simulation, regional plans and delay slots |
 | `libregalloc/*.hpp` | Twenty allocation/support methods: coloring, linear scan, greedy/SSA/local allocation, exact PBQP/ILP, matching, annealing, spills, splits, copies and pressure |
+| `liblr/*.hpp` | Byte automata and lexer generation, EBNF grammars, deterministic and generalized CFG parsing, and PEG/combinators |
 | `libir/Graph.hpp` | Stable node IDs, typed/ported edges, reachability, deterministic topological ordering, SCCs, DOT output |
 | `RawDAG.hpp` | Cycle-rejecting DAG construction |
 | `ControlFlowGraph.hpp` | Basic blocks, terminators, dominance, postdominance, frontiers, control dependence |
@@ -107,9 +111,7 @@ Namespaces follow component names: `firestone::ir`, `firestone::rewrite`,
 `firestone::eqsat`, `firestone::cps`, `firestone::memory`, `firestone::object`,
 `firestone::sema`, `firestone::type`, `firestone::trs`, `firestone::vm`, `firestone::bignum`,
 `firestone::compute`, `firestone::gfx`, `firestone::intrin`, `firestone::concurrency`,
-`firestone::isel`, `firestone::isched`, and `firestone::regalloc`.
-The original `DataDependenceGrahp.hpp` spelling remains a compatibility include
-and type alias.
+`firestone::isel`, `firestone::isched`, `firestone::regalloc`, and `firestone::lr`.
 
 ## Example: equality saturation
 
@@ -160,3 +162,5 @@ IR/rewrite/equality-saturation integration, scheduled register-allocation inputs
 search limits, and target contracts.
 The [register allocation guide](docs/Regalloc.md) describes the 20 selected methods,
 physical-register constraints, SSA integration, spill/transfer plans and verification.
+The [lexing and parsing guide](docs/LR.md) describes the `Firestone::lr` component,
+including how to connect a byte lexer to a token parser.

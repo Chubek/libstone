@@ -46,7 +46,6 @@
 #include "libir/ControlFlowGraph.hpp"
 #include "libir/CPSGraph.hpp"
 #include "libir/DataDependenceGraph.hpp"
-#include "libir/DataDependenceGrahp.hpp"
 #include "libir/DataflowGraph.hpp"
 #include "libir/GatedSSAGraph.hpp"
 #include "libir/InterferenceGraph.hpp"
@@ -204,3 +203,6 @@
 
 #include "libisel/Verify.hpp"
 #include "libisched/RegisterAllocation.hpp"
+
+// Lexical analysis and parsing.
+#include "liblr/LR.hpp"
