@@ -1,0 +1,15 @@
+-- Descriptive lowering model. WASM-CC.cpp consumes validated WASM-IR
+-- directly; it does not generate or use an ASDL parser or C syntax tree.
+%prefix wasm_cc
+%option no-builtins
+%%
+translation_unit = (helper* helpers, entry run)
+entry = Trap | Return(lowered* statements, result* outputs)
+lowered = Constant(usize target, int value, width type)
+        | Select(usize target, usize alternate, usize condition)
+        | Unary(string operation, width type, usize target)
+        | Binary(string operation, width type, usize target, usize rhs)
+result = (width type, usize slot)
+width = I32 | I64
+helper = Clz32 | Ctz32 | Popcnt32 | Sar32 | Rol32
+       | Add64 | Sub64 | Mul64 | Shl64 | Shr64 | Rol64

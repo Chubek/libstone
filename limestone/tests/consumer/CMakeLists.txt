@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(LimestoneConsumer LANGUAGES C CXX)
-find_package(Limestone 0.1 CONFIG REQUIRED COMPONENTS core il object bin2bin_object optimization traceml_api exolayer parsers tunah_unisel tunah_bin2bin limeburg_text limeburg_infobank schedrow_text regtl_text vmweave)
+find_package(Limestone 0.1 CONFIG REQUIRED COMPONENTS core il object bin2bin_object optimization traceml_api exolayer parsers tunah_unisel tunah_bin2bin limeburg_text limeburg_infobank schedrow_text regtl_text vmweave wasmutils)
 add_executable(limestone-consumer main.cpp other.cpp api.c)
 target_link_libraries(limestone-consumer PRIVATE Limestone::core Limestone::il Limestone::exolayer Limestone::parsers
   Limestone::tunah_unisel Limestone::tunah_bin2bin Limestone::limeburg_text Limestone::schedrow_text Limestone::regtl_text)
@@ -29,3 +29,5 @@ add_executable(limestone-vmweave-consumer vmweave.cpp)
 target_link_libraries(limestone-vmweave-consumer PRIVATE Limestone::vmweave)
 add_executable(limestone-archml-consumer archml.cpp)
 target_link_libraries(limestone-archml-consumer PRIVATE Limestone::bin2bin Limestone::schedrow_text)
+add_executable(limestone-wasmutils-consumer wasmutils.cpp)
+target_link_libraries(limestone-wasmutils-consumer PRIVATE Limestone::wasmutils)

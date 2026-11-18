@@ -2,7 +2,7 @@
 set(limestone_install_targets limestone_foundation limestone_parsers limestone_satie_runtime limestone_vmweave_lua metacode
   schedrow regtl regtl_schedrow limeburg unisel limeburg_umd limeburg_infobank
   limeburg_text schedrow_text regtl_text bin2bin bin2bin_codegen bin2bin_object machineir_bridge machineir_native
-  tunah tunah_unisel tunah_bin2bin tunah_stages traceml traceml_runtime exolayer vmweave limestone_core limestone_il limestone_optimization limestone_object limestone_traceml_api limestone_selection_contracts)
+  tunah tunah_unisel tunah_bin2bin tunah_stages traceml traceml_runtime exolayer vmweave wasmutils limestone_core limestone_il limestone_optimization limestone_object limestone_traceml_api limestone_selection_contracts)
 foreach(target IN LISTS limestone_install_targets)
   string(REGEX REPLACE "^limestone_" "" public_name "${target}")
   set_target_properties(${target} PROPERTIES EXPORT_NAME ${public_name})
@@ -17,17 +17,19 @@ install(FILES ${PROJECT_SOURCE_DIR}/traceml/runtime.h
 # These static implementations are link dependencies, never public parser types.
 list(APPEND limestone_install_targets limestone_parser_tables limestone_dparse)
 if(LIMESTONE_BUILD_TOOLS)
-  install(TARGETS limestone-cli limeburg-generate-specs vmweave-cli traceml-cli
+  install(TARGETS limestone-cli limeburg-generate-specs vmweave-cli traceml-cli wasm2c wat2c wit2c wasm-disassemble
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 install(TARGETS ${limestone_install_targets} EXPORT LimestoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-foreach(component IN ITEMS limestone metacode schedrow regtl limeburg unisel bin2bin tunah traceml exolayer parsers)
+foreach(component IN ITEMS limestone metacode schedrow regtl limeburg unisel bin2bin tunah traceml exolayer parsers wasmutils)
   set(private_headers)
   if(component STREQUAL "traceml")
     set(private_headers PATTERN "runtime.h" EXCLUDE PATTERN "integer_ops.h" EXCLUDE PATTERN "primitives.hpp" EXCLUDE)
+  elseif(component STREQUAL "wasmutils")
+    set(private_headers PATTERN "CLI.hpp" EXCLUDE)
   endif()
   install(DIRECTORY ${PROJECT_SOURCE_DIR}/${component}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${component}
     FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
@@ -47,12 +49,13 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/limeburg/specs/ DESTINATION ${CMAKE_INST
 install(FILES ${PROJECT_SOURCE_DIR}/vmweave/vmweave.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/limestone/vmweave)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/vmweave/examples/ DESTINATION ${CMAKE_INSTALL_DATADIR}/limestone/vmweave/examples)
 install(FILES ${PROJECT_SOURCE_DIR}/vmweave/STK-00.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone/vmweave)
+install(FILES ${PROJECT_SOURCE_DIR}/wasmutils/WASM.aml DESTINATION ${CMAKE_INSTALL_DATADIR}/limestone/wasmutils)
 install(FILES ${PROJECT_SOURCE_DIR}/README.md ${PROJECT_SOURCE_DIR}/IMPLEMENTATION.md ${PROJECT_SOURCE_DIR}/LICENSE
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/manual/
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone/manual
   FILES_MATCHING PATTERN "*.md")
-foreach(component IN ITEMS limestone metacode/machine-ir schedrow regtl limeburg unisel bin2bin tunah traceml exolayer vmweave bindings parsers)
+foreach(component IN ITEMS limestone metacode/machine-ir schedrow regtl limeburg unisel bin2bin tunah traceml exolayer vmweave bindings parsers wasmutils)
   install(FILES ${PROJECT_SOURCE_DIR}/${component}/README.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone/${component})
 endforeach()

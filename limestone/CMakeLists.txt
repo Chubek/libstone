@@ -99,6 +99,7 @@ add_library(machineir_native STATIC metacode/machine-ir/native_c.cpp metacode/ma
 target_link_libraries(machineir_native PUBLIC machineir_bridge PRIVATE ${CMAKE_DL_LIBS})
 target_compile_definitions(machineir_native PRIVATE LIMESTONE_NATIVE_CC="${CMAKE_C_COMPILER}")
 add_subdirectory(vmweave)
+add_subdirectory(wasmutils)
 
 add_library(tunah STATIC tunah/tunah.cpp tunah/specification.cpp)
 add_executable(limestone-tunah-benchmark EXCLUDE_FROM_ALL tunah/benchmark.cpp)

@@ -1,0 +1,17 @@
+-- Descriptive schema for the forms in WASM.aml; the C++ IR is in WASM-IR.hpp.
+-- Const values are canonical signed one-byte LEB128, decoded to -64..63.
+%prefix wasm_ir
+%option no-builtins
+%%
+program = (instruction* instructions)
+instruction = Unreachable | Nop | Drop | Select
+            | I32Const(int value) | I64Const(int value)
+            | I32Eqz | I32Clz | I32Ctz | I32Popcnt
+            | I32Add | I32Sub | I32Mul
+            | I32And | I32Or | I32Xor
+            | I32Shl | I32ShrS | I32ShrU | I32Rotl | I32Rotr
+            | I64Eqz | I64Clz | I64Ctz | I64Popcnt
+            | I64Add | I64Sub | I64Mul
+            | I64And | I64Or | I64Xor
+            | I64Shl | I64ShrS | I64ShrU | I64Rotl | I64Rotr
+            attributes (usize offset)

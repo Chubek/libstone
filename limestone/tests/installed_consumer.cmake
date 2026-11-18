@@ -59,6 +59,11 @@ execute_process(COMMAND "${BINARY}/installed-consumer/limestone-vmweave-consumer
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Standalone VMWeave consumer failed: ${output}${error}")
 endif()
+execute_process(COMMAND "${BINARY}/installed-consumer/limestone-wasmutils-consumer"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Standalone WASM utilities consumer failed: ${output}${error}")
+endif()
 execute_process(COMMAND "${BINARY}/installed-consumer/limestone-archml-consumer"
   "${prefix}/${DATA_DIR}/sandstone/archml/stdspec/riscv64.aml"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)

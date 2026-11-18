@@ -25,6 +25,9 @@ descriptions through STK-00 into embeddable C
 runtimes with optional subsystems, plus MachineIR-backed assembly, native shared
 images and baseline JIT execution through the host C toolchain. Instructions
 can use checked abstract stack semantics or concrete C handlers in the same VM.
+[`wasmutils`](wasmutils/README.md) encodes and decodes the WebAssembly Core 2.0
+instruction set. It also interprets and emits ANSI C90 for the selected
+`WASM.aml` profile and generates ANSI C90 declarations from scalar WIT.
 
 ## Manual
 

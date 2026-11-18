@@ -1,0 +1,15 @@
+-- Owning AST for the standalone scalar subset; implemented in WIT-IDL.hpp.
+-- Names retain source case; '%' is removed. Version text omits '@'.
+%prefix wit
+%option no-builtins
+%%
+document = (package? declared_package, interface+ interfaces)
+package = (name name_space, name package_name, version? declared_version)
+interface = (name interface_name, function* functions)
+function = (name function_name, parameter* parameters, scalar_type? result)
+parameter = (name parameter_name, scalar_type type)
+name = (string text, location source)
+version = (string text, location source)
+scalar_type = (scalar kind, location source)
+scalar = Bool | U8 | S8 | U16 | S16 | U32 | S32 | U64 | S64 | F32 | F64 | Char
+location = (usize offset, usize line, usize column)

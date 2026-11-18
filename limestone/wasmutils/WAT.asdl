@@ -1,0 +1,7 @@
+-- Descriptive schema for WAT-AST.hpp; byte offsets refer to the input text.
+module WAT {
+    document = (instruction* instructions, function_result? declared_result)
+    instruction = (int opcode, int immediate, int offset, instruction* operands)
+    function_result = (value_type* types, int end_offset)
+    value_type = I32 | I64
+}
