@@ -39,16 +39,23 @@ function methods:state(name, attributes)
 end
 function methods:instruction(name, attributes)
   receiver(self); identifier(name); attributes=attributes or {}
-  keys(attributes,{opcode=true,body=true,semantics=true,operands=true,stack_effect=true,flow=true,source=true})
-  assert(not(attributes.body and attributes.semantics),"VMWeave: body and semantics are aliases")
-  local body=attributes.semantics or attributes.body or ""
-  assert(type(body)=="string" and not body:find("\0",1,true),"VMWeave: invalid C semantics")
+  keys(attributes,{opcode=true,body=true,semantics=true,abstract=true,operands=true,stack_effect=true,flow=true,source=true})
+  assert(attributes.body==nil or attributes.semantics==nil,"VMWeave: body and semantics are aliases")
+  local body=attributes.semantics
+  if body==nil then body=attributes.body end
+  if attributes.abstract~=nil then
+    assert(body==nil,"VMWeave: concrete and abstract semantics are mutually exclusive")
+    assert(type(attributes.abstract)=="string" and not attributes.abstract:find("\0",1,true),"VMWeave: invalid abstract semantics")
+  else
+    assert(body==nil or (type(body)=="string" and not body:find("\0",1,true)),"VMWeave: invalid C semantics")
+  end
   assert(attributes.opcode==nil or integer(attributes.opcode,0,2147483647),"VMWeave: invalid opcode")
   for _,i in ipairs(self.instructions) do
     assert(i.name~=name,"VMWeave: duplicate instruction '"..name.."'")
     assert(attributes.opcode==nil or attributes.opcode~=i.opcode,"VMWeave: duplicate opcode")
   end
-  local i=copy(attributes); i.name=name; i.semantics=body; i.body=nil
+  local i=copy(attributes); i.name=name; i.body=nil
+  if i.abstract==nil then i.semantics=body or "" end
   i.source=i.source or location(); self.instructions[#self.instructions+1]=i; return self
 end
 local vmkeys={name=true,stack=true,instructions=true,fields=true,execution=true,components=true,

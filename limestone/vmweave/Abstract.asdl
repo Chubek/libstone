@@ -1,0 +1,8 @@
+-- Syntax tree for VMWeave abstract stack semantics.
+%prefix vw_ast
+%option no-builtins
+%%
+operation = Bare(string name)
+          | Numbered(string name, string spelling)
+          | Named(string name, string field)
+          attributes (usize offset)

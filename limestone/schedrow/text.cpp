@@ -1,4 +1,5 @@
 #include "text.hpp"
+#include "archml.hpp"
 #include "timing_metadata.hpp"
 #include "parsers/schedrow_ast.hpp"
 #include "parsers/semantic.hpp"
@@ -54,7 +55,8 @@ void instruction_model(Instruction& i,const Object& fields,const sem::Names& val
   for(auto key:{"fusion","speculation","motion","latencies","register_bank"})if(fields.contains(key))sem::fail("scheduling field needs an explicit adapter: "+std::string(key),Error::Code::Unsupported);
 }
 }
-Result<SchedulingDocument> load_schedrow(std::string_view source,std::string_view file) {
+static Result<SchedulingDocument> load_schedrow_impl(std::string_view source,std::string_view file,
+                                                      const metacode::ArchMLSchedule* model,std::string_view model_name) {
   auto parsed=ast::parse(source,file);if(!parsed)return Result<SchedulingDocument>::err(parsed.error());
   try {
     SchedulingDocument document;std::vector<const ast::Region*> regions;std::vector<const ast::Instruction*> standalone;std::vector<const ast::Bundle*> standalone_bundles;
@@ -95,6 +97,12 @@ Result<SchedulingDocument> load_schedrow(std::string_view source,std::string_vie
       if(text.metadata.contains("blocks")){auto& list=sem::array(text.metadata.at("blocks"));for(size_t k=0;k<list.size();++k){auto& b=sem::object(list[k]);if(b.contains("live_out"))text.region.blocks[k].live_out=references(b.at("live_out"),values);}}
       for(auto p:instructions){Instruction i{};i.id=instruction_ids.at(sem::spelling(*p->name));i.origin=std::string(file)+":"+std::to_string(p->source.begin.line);auto attributes=fields.at(p);i.opcode=sem::text(attributes,"opcode");if(i.opcode.empty())sem::fail(*p,"instruction has no opcode");if(timings.contains(i.opcode)){auto model=sem::object(timings.at(i.opcode));if(model.contains("group"))sem::fail(*p,"opcode timing cannot declare occurrence-specific groups",Error::Code::Unsupported);for(auto& [key,value]:attributes)model[key]=value;attributes=std::move(model);}text.instruction_metadata[i.id]=attributes;
         for(auto& item:p->items)std::visit([&](const auto& n){using N=std::remove_cvref_t<decltype(*n)>;if constexpr(std::is_same_v<N,ast::RegisterOperand>){auto role=n->role->value;if(role=="implicit_def")i.implicit_defs.push_back(physical.at(n->reference->value));else if(role=="implicit_use")i.implicit_uses.push_back(physical.at(n->reference->value));else if(role=="def")i.defs.push_back(values.at(n->reference->value));else i.uses.push_back(values.at(n->reference->value));}},item->value);
+        if(model&&!attributes.contains("latency")) {
+          // The complete model is bound before dependency validation below.
+          auto found=model->instructions.find(i.opcode);
+          if(found==model->instructions.end())sem::fail(*p,"no ArchML schedule in "+std::string(model_name)+" for "+i.opcode,Error::Code::Unsupported);
+          attributes["latency"]=Value(uint64_t(found->second.latency));
+        }
         instruction_model(i,attributes,values,block_ids,physical);text.region.instructions.push_back(std::move(i));
       }
       std::set<std::string> group_names;for(auto& group:groups)if(!group_names.insert(group.id).second)sem::fail("duplicate scheduling group",Error::Code::Conflict);sem::Names group_ids;group_ids.assign(group_names);
@@ -103,11 +111,26 @@ Result<SchedulingDocument> load_schedrow(std::string_view source,std::string_vie
         for(auto& [key,v]:fields)if(key!="id"&&key!="kind"&&key!="members"&&key!="name"&&key!="origin"&&key!="pattern"&&key!="benefit"&&key!="issue")sem::fail("unknown group field: "+key,Error::Code::Unsupported);text.region.groups.push_back(std::move(group));
       }
       for(auto p:dependencies){auto fields=sem::attributes(p->attributes);Dependency d{instruction_ids.at(sem::required(fields,"producer").text()),instruction_ids.at(sem::required(fields,"consumer").text()),enumeration<DepKind>(sem::required(fields,"kind").text(),kinds)};if(fields.contains("latency")){auto range=metadata::latency(fields.at("latency"));d.latency=range.maximum;if(range.minimum!=range.maximum)d.latency_range=range;}if(fields.contains("distance"))d.distance=sem::number(fields.at("distance").text());if(fields.contains("scheduler_only"))d.scheduler_only=sem::boolean(fields.at("scheduler_only").text());for(auto& [key,v]:fields)if(key!="producer"&&key!="consumer"&&key!="kind"&&key!="latency"&&key!="distance"&&key!="scheduler_only")sem::fail(*p,"unsupported dependency property: "+key,Error::Code::Unsupported);text.region.deps.push_back(d);}
+      if(model) {
+        auto bound=detail::bind_archml_schedule(text.region,*model,model_name,document.machine);
+        if(!bound)throw bound.error();
+        text.region=std::move(bound.value().region);
+        document.machine=std::move(bound.value().machine);
+      }
       auto checked=schedrow::dependencies(text.region,document.machine.register_aliases);if(!checked)throw checked.error();document.regions.push_back(std::move(text));
     };
     for(auto p:regions)region(p,{},{});if(!standalone.empty()||!standalone_bundles.empty())region(nullptr,standalone,standalone_bundles);
     return Result<SchedulingDocument>::ok(std::move(document));
   }catch(const Error& e){return Result<SchedulingDocument>::err(e);}
+}
+Result<SchedulingDocument> load_schedrow(std::string_view source,std::string_view file) {
+  return load_schedrow_impl(source,file,nullptr,{});
+}
+Result<SchedulingDocument> load_schedrow(std::string_view source,std::string_view file,
+                                        const metacode::ArchMLProfile& profile,std::string_view microarchitecture) {
+  auto model=profile.scheduling(microarchitecture);
+  if(!model)return Result<SchedulingDocument>::err(model.error());
+  return load_schedrow_impl(source,file,&model.value(),profile.name()+"/"+std::string(microarchitecture));
 }
 Result<std::string> print_schedrow(const SchedulingDocument& document) {
   try {

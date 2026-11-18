@@ -19,10 +19,30 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS vmweave.lua)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vmweave.lua" VMWEAVE_LUA_SOURCE)
 configure_file(lua_source.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/lua_source.hpp" @ONLY)
-add_library(vmweave STATIC model.cpp frontend.cpp stk.cpp c_backend.cpp machineir.cpp native.cpp native_c_api.cpp)
+set(vmweave_scripts "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts")
+set(vmweave_generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_command(
+  OUTPUT "${vmweave_generated}/AbstractAST.h" "${vmweave_generated}/AbstractAST.c"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${vmweave_generated}"
+  COMMAND "${PERL_EXECUTABLE}" "${vmweave_scripts}/asdl.pl"
+          --header "${vmweave_generated}/AbstractAST.h" --source "${vmweave_generated}/AbstractAST.c"
+          "${CMAKE_CURRENT_SOURCE_DIR}/Abstract.asdl"
+  DEPENDS Abstract.asdl "${vmweave_scripts}/asdl.pl" VERBATIM)
+add_custom_command(
+  OUTPUT "${vmweave_generated}/AbstractParser.c"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${vmweave_generated}"
+  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
+          "-DGENERATOR=${vmweave_scripts}/aurocks.pl" "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/Abstract.g"
+          "-DOUTPUT=${vmweave_generated}/AbstractParser.c" -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateParser.cmake"
+  DEPENDS Abstract.g GenerateParser.cmake "${vmweave_scripts}/aurocks.pl" VERBATIM)
+add_library(vmweave STATIC model.cpp frontend.cpp stk.cpp abstract.cpp abstract_c.cpp
+  c_backend.cpp machineir.cpp native.cpp native_c_api.cpp
+  "${vmweave_generated}/AbstractAST.h" "${vmweave_generated}/AbstractAST.c"
+  "${vmweave_generated}/AbstractParser.c")
+target_compile_features(vmweave PRIVATE c_std_11)
 target_link_libraries(vmweave PUBLIC limestone_foundation PRIVATE machineir_bridge machineir_native
-  limestone_vmweave_lua)
-target_include_directories(vmweave SYSTEM PRIVATE "${MLVM_KAGUYA_SOURCE_DIR}/include")
+  limestone_vmweave_lua Threads::Threads)
+target_include_directories(vmweave SYSTEM PRIVATE "${MLVM_KAGUYA_SOURCE_DIR}/include" "${vmweave_generated}")
 target_include_directories(vmweave PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 if(LIMESTONE_BUILD_TOOLS OR LIMESTONE_BUILD_TESTS)
   add_executable(vmweave-cli main.cpp)
@@ -64,6 +84,10 @@ if(LIMESTONE_BUILD_TESTS)
     -DCLI=$<TARGET_FILE:vmweave-cli> -DCC=${CMAKE_C_COMPILER}
     -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DBINARY=${CMAKE_CURRENT_BINARY_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_cli.cmake)
+  add_test(NAME vmweave-abstract COMMAND ${CMAKE_COMMAND}
+    -DCLI=$<TARGET_FILE:vmweave-cli> -DCC=${CMAKE_C_COMPILER} "-DCFLAGS=${CMAKE_C_FLAGS}"
+    -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DBINARY=${CMAKE_CURRENT_BINARY_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/abstract.cmake)
   add_test(NAME vmweave-runtime COMMAND ${CMAKE_COMMAND}
     -DCLI=$<TARGET_FILE:vmweave-cli> -DCC=${CMAKE_C_COMPILER}
     -DKLIB=${MLVM_KLIB_SOURCE_DIR}

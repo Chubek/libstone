@@ -1,6 +1,7 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
+find_dependency(ArchML CONFIG)
 if(@LIMESTONE_ENABLE_PERSISTENT_CACHE@ AND NOT TARGET Limestone::lmdb)
   find_library(Limestone_LMDB_LIBRARY NAMES lmdb REQUIRED)
   add_library(Limestone::lmdb UNKNOWN IMPORTED)

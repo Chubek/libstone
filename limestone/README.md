@@ -18,10 +18,13 @@ machine-independent graph -> Tunah -> Unisel / Limeburg
                            MachineIR exchange -> Bin2Bin encoding -> ELF objects
 ```
 
-TraceML supplies a metatracing frontend. Exolayer supplies the native C ABI/FFI
-boundary. VMWeave compiles Lua descriptions through STK-00 into embeddable C
+TraceML supplies a metatracing frontend, a portable CESK-Theta loop-tracing
+runtime, and a C99 backend that links with `libtraceml`. Exolayer supplies the
+native C ABI/FFI boundary. VMWeave compiles Lua
+descriptions through STK-00 into embeddable C
 runtimes with optional subsystems, plus MachineIR-backed assembly, native shared
-images and baseline JIT execution through the host C toolchain.
+images and baseline JIT execution through the host C toolchain. Instructions
+can use checked abstract stack semantics or concrete C handlers in the same VM.
 
 ## Manual
 
@@ -35,7 +38,8 @@ hands-on introduction.
 
 Requirements: CMake 3.20+, a C compiler, a C++20 compiler, and Perl. The parser,
 solver, e-graph, and language-tooling dependencies are supplied in `third_party/`.
-The default build also requires LMDB, libffi, and Lua 5.4 (or 5.3) development packages.
+The default build also requires LMDB and libffi development packages. VMWeave
+builds its Lua runtime from the vendored sources.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -113,6 +117,29 @@ Consumers use a relocatable CMake package:
 find_package(Limestone 0.1 CONFIG REQUIRED COMPONENTS core il)
 target_link_libraries(my_backend PRIVATE Limestone::core Limestone::il)
 ```
+
+### ArchML profiles
+
+Limestone builds Sandstone's ArchML library alongside its Infobank readers.
+`metacode::ArchMLProfile` (`<metacode/archml.hpp>`) loads `.aml` profiles through
+Sandstone's generated Aurocks/ASDL parser and exposes concrete encoding, decoding
+and named microarchitecture timing. Bin2Bin can disassemble ArchML binary forms,
+including mixed lengths and scattered immediate fields. Schedrow can bind an
+existing instruction region to a named ArchML microarchitecture:
+
+```sh
+build/limestone-cli --disassemble-archml ../sandstone/archml/stdspec/riscv64.aml code.bin
+build/limestone-cli --schedule-il --archml-schedule ../sandstone/archml/stdspec/riscv64.aml generic region.schedrow
+```
+
+ArchML disassembly prints architectural register numbers and scaled byte
+displacements; it does not guess branch addresses or establish a lifting contract.
+Schedrow uses the profile's generic timing, issue width, and issue-slot
+reservations. The selected profile replaces the text document's machine timing
+and resources, not its dataflow or per-result latency overrides. Memory, trap,
+and control-flow effects still come from the region. Missing schedules are
+diagnosed. Infobank remains the input for the existing translation, selection,
+and object-file contracts.
 
 Headers retain their source-tree layout, for example
 `<limestone/limestone.hpp>`, `<limestone/limestone.h>`, and `<limestone/il.h>`.

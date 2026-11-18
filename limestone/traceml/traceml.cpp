@@ -1,59 +1,16 @@
 #include "traceml.hpp"
-#include <dparse.h>
-#include <charconv>
+#include "integer_ops.h"
+#include "primitives.hpp"
 #include <limits>
 #include <map>
 #include <set>
 
-extern "C" D_ParserTables parser_tables_traceml;
-
 namespace limestone::traceml {
+namespace detail { Result<Program> parse_document(std::string_view); }
 namespace {
 using E=std::shared_ptr<Expr>;
-void syntax_error(D_Parser*) {}
-D_ParseNode* ambiguity(D_Parser*,int,D_ParseNode** v){return v[0];}
-std::string_view symbol(D_ParseNode* n){return parser_tables_traceml.symbols[n->symbol].name;}
-std::vector<D_ParseNode*> collect(D_ParseNode* n,std::string_view name) {
-  if(symbol(n)==name)return {n};std::vector<D_ParseNode*> out;
-  for(int i=0;i<d_get_number_of_children(n);++i){auto part=collect(d_get_child(n,i),name);out.insert(out.end(),part.begin(),part.end());}
-  return out;
-}
-E expression(D_ParseNode* n,const char* start) {
-  auto e=std::make_shared<Expr>();e->offset=n->start_loc.s-start;e->line=1;e->column=1;
-  for(size_t i=0;i<e->offset;++i){if(start[i]=='\n'){++e->line;e->column=1;}else ++e->column;}
-  auto syntax=d_get_child(n,0);auto name=symbol(syntax);
-  std::string_view text{syntax->start_loc.s,static_cast<size_t>(syntax->end-syntax->start_loc.s)};
-  if(name=="List") {
-    e->kind=Expr::Kind::Apply;
-    for(int i=0;i<d_get_number_of_children(syntax);++i)
-      for(auto c:collect(d_get_child(syntax,i),"Expr"))e->children.push_back(expression(c,start));
-  }else {
-    int64_t value=0;auto [end,err]=std::from_chars(text.data(),text.data()+text.size(),value);
-    if(err==std::errc{}&&end==text.data()+text.size()){e->kind=Expr::Kind::Integer;e->integer=value;}
-    else if(name=="Integer")throw Error{Error::Code::Parse,"TraceML integer out of range at line "+std::to_string(e->line)};
-    else {e->kind=Expr::Kind::Symbol;e->atom=text;}
-  }
-  return e;
-}
-Result<Program> document(std::string_view text) {
-  if(text.size()>static_cast<size_t>(std::numeric_limits<int>::max()))return Result<Program>::err({Error::Code::ResourceLimit,"TraceML input too large"});
-  // Bound recursion before entering the generated parser/tree conversion.
-  size_t depth=0;bool comment=false;
-  for(char c:text){if(comment){if(c=='\n')comment=false;continue;}if(c==';'){comment=true;continue;}if(c=='('&&++depth>256)return Result<Program>::err({Error::Code::ResourceLimit,"TraceML nesting limit exceeded"});if(c==')'&&depth)--depth;}
-  std::string buffer(text);std::unique_ptr<D_Parser,decltype(&free_D_Parser)> parser(new_D_Parser(&parser_tables_traceml,0),free_D_Parser);
-  parser->save_parse_tree=1;parser->syntax_error_fn=syntax_error;parser->ambiguity_fn=ambiguity;
-  auto tree=dparse(parser.get(),buffer.data(),static_cast<int>(buffer.size()));
-  if(!tree||parser->syntax_errors){if(tree)free_D_ParseNode(parser.get(),tree);return Result<Program>::err({Error::Code::Parse,"TraceML syntax error at "+std::to_string(parser->loc.line)+":"+std::to_string(parser->loc.col+1)});}
-  auto deleter=[&](D_ParseNode* n){free_D_ParseNode(parser.get(),n);};std::unique_ptr<D_ParseNode,decltype(deleter)> owned(tree,deleter);
-  try {
-    Program p;for(auto n:collect(tree,"Expr"))p.forms.push_back(expression(n,buffer.data()));return Result<Program>::ok(std::move(p));
-  }catch(const Error& e){return Result<Program>::err(e);}
-}
 [[noreturn]] void fail(const E& e,std::string message,Error::Code code=Error::Code::InvalidArgument) {
   throw Error{code,"TraceML "+std::to_string(e->line)+":"+std::to_string(e->column)+": "+message};
-}
-const std::map<std::string,size_t>& primitives() {
-  static const std::map<std::string,size_t> table{{"add",2},{"sub",2},{"mul",2},{"eq",2},{"lt",2},{"neg",1}};return table;
 }
 E normalize(E e) {
   if(e->kind!=Expr::Kind::Apply)return e;
@@ -77,7 +34,7 @@ void check(const E& e,std::set<std::string> bound,std::set<const Expr*>& visitin
   if(depth>256)fail(e,"TraceLambda nesting limit exceeded",Error::Code::ResourceLimit);
   if(!visiting.insert(e.get()).second)fail(e,"cyclic TraceLambda expression");
   if(e->kind==Expr::Kind::Symbol) {
-    if(e->atom.empty()||(!bound.contains(e->atom)&&!primitives().contains(e->atom)))fail(e,"unbound symbol: "+e->atom);
+    if(e->atom.empty()||(!bound.contains(e->atom)&&!detail::primitive(e->atom)))fail(e,"unbound symbol: "+e->atom);
     if(!e->children.empty())fail(e,"symbol has child expressions");
   }else if(e->kind==Expr::Kind::Integer) {
     if(!e->children.empty())fail(e,"integer has child expressions");
@@ -87,7 +44,8 @@ void check(const E& e,std::set<std::string> bound,std::set<const Expr*>& visitin
     if(e->children.size()!=3)fail(e,"invalid conditional");
   }else if(e->kind==Expr::Kind::Apply) {
     if(e->children.size()<2)fail(e,"application requires an argument");
-    if(e->children[0]&&e->children[0]->kind==Expr::Kind::Symbol&&!bound.contains(e->children[0]->atom)&&primitives().contains(e->children[0]->atom)&&e->children.size()-1!=primitives().at(e->children[0]->atom))fail(e,"wrong primitive arity");
+    if(const auto& callee=e->children[0];callee&&callee->kind==Expr::Kind::Symbol&&!bound.contains(callee->atom))
+      if(auto op=detail::primitive(callee->atom);op&&e->children.size()-1!=op->arity)fail(e,"wrong primitive arity");
   }else if(e->kind==Expr::Kind::Begin) {
     if(e->children.empty())fail(e,"empty begin");
   }else fail(e,"unknown expression kind");
@@ -150,17 +108,10 @@ struct Evaluator {
     auto value=event.value;if(options.record_trace)execution.trace.push_back(std::move(event));return value;
   }
   int64_t primitive(const E& e,const std::string& op,const std::vector<int64_t>& args) {
-      auto a=args[0],b=args.size()>1?args[1]:0;int64_t result=0;
-      const auto min=std::numeric_limits<int64_t>::min(),max=std::numeric_limits<int64_t>::max();
-      if(op=="eq")result=a==b;
-      else if(op=="lt")result=a<b;
-      else if(op=="neg"){if(a==min)fail(e,"integer overflow");result=-a;}
-      else if(op=="add"){if((b>0&&a>max-b)||(b<0&&a<min-b))fail(e,"integer overflow");result=a+b;}
-      else if(op=="sub"){if((b<0&&a>max+b)||(b>0&&a<min+b))fail(e,"integer overflow");result=a-b;}
-      else if(op=="mul") {
-        if(a&&b&&((a==-1&&b==min)||(b==-1&&a==min)||(a>0?(b>0?a>max/b:b<min/a):(b>0?a<min/b:a<max/b))))fail(e,"integer overflow");result=a*b;
-      }
-      return result;
+    int64_t result=0;
+    if(traceml_integer_op(detail::primitive(op)->opcode,args[0],args.size()>1?args[1]:0,&result)!=TRACEML_OK)
+      fail(e,"integer overflow");
+    return result;
   }
   Value eval(const E& initial,std::shared_ptr<const Environment> initial_env,std::vector<Closure> arguments={}) {
     return eval_state({{initial,std::move(initial_env)},std::move(arguments)});
@@ -206,7 +157,8 @@ struct Evaluator {
       if(e->kind==Expr::Kind::Symbol) {
         if(env)if(auto it=env->bindings.find(e->atom);it!=env->bindings.end()){record(TraceEvent::Kind::Lookup,e,e->atom);control=it->second;continue;}
         if(arguments.empty()){returned=Value{{},{},e->atom};continue;}
-        if(!primitives().contains(e->atom)||arguments.size()!=primitives().at(e->atom))fail(e,"invalid primitive application");
+        auto op=detail::primitive(e->atom);
+        if(!op||arguments.size()!=op->arity)fail(e,"invalid primitive application");
         Continuation frame{Continuation::Kind::Primitive,control,{},{},{},e->atom};
         while(!arguments.empty()){frame.operands.push_back(std::move(arguments.back()));arguments.pop_back();}
         control=frame.operands.front();frame.next=1;continuations.push_back(std::move(frame));continue;
@@ -233,12 +185,12 @@ struct Evaluator {
 };
 }
 Result<E> parse(std::string_view text) {
-  auto p=document(text);if(!p)return Result<E>::err(p.error());
+  auto p=detail::parse_document(text);if(!p)return Result<E>::err(p.error());
   if(p.value().forms.size()!=1)return Result<E>::err({Error::Code::Parse,"expected exactly one TraceML expression"});
   return Result<E>::ok(p.value().forms.front());
 }
 Result<Program> compile(std::string_view text) {
-  auto p=document(text);if(!p)return p;
+  auto p=detail::parse_document(text);if(!p)return p;
   if(p.value().forms.empty())return Result<Program>::err({Error::Code::Parse,"empty TraceML program"});
   try{for(auto& e:p.value().forms)e=normalize(e);}catch(const Error& e){return Result<Program>::err(e);}
   auto v=verify(p.value());if(!v)return Result<Program>::err(v.error());return p;
@@ -364,7 +316,7 @@ std::vector<RecoverySlot> recovery_slots(GuardState& state,size_t limit){
   auto work=[&]{if(!limit)throw Error{Error::Code::ResourceLimit,"guard recovery work limit"};--limit;};
   std::vector<RecoverySlot> slots;
   auto closure_slot=[&](Closure& closure,std::string path){work();GuardValueSlot info;info.id=uint32_t(slots.size());info.path=std::move(path);auto& expr=*closure.expression;
-    if(expr.kind==Expr::Kind::Integer){info.kind=GuardValueSlot::Kind::Integer;info.integer=expr.integer;}else if(expr.kind==Expr::Kind::Lambda||(expr.kind==Expr::Kind::Symbol&&!closure.environment&&primitives().contains(expr.atom)))info.kind=GuardValueSlot::Kind::Callable;
+    if(expr.kind==Expr::Kind::Integer){info.kind=GuardValueSlot::Kind::Integer;info.integer=expr.integer;}else if(expr.kind==Expr::Kind::Lambda||(expr.kind==Expr::Kind::Symbol&&!closure.environment&&detail::primitive(expr.atom)))info.kind=GuardValueSlot::Kind::Callable;
     slots.push_back({std::move(info),&closure});
   };
   struct EnvCopy {std::shared_ptr<Environment> copy;std::string path;};

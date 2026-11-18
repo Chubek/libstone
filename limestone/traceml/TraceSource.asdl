@@ -1,0 +1,8 @@
+-- Raw TraceML source forms; special forms are normalized after parsing.
+%prefix traceml_ast
+%option no-builtins
+%%
+document = (expr* forms)
+expr = Atom(string spelling)
+     | List(expr* items)
+     attributes (usize offset)

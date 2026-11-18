@@ -1,4 +1,4 @@
-#include "vmweave.hpp"
+#include "internal.hpp"
 #include <cctype>
 #include <set>
 #include <sstream>
@@ -74,18 +74,38 @@ Result<Specification> validate(Specification s) {
   static const std::set<std::string> handler_reserved={"init","step","run","run_direct","thread","compile","destroy","lookup","push","pop","jump","halt","call","ret","alloc","free","token","rewrite",
     "vm","cell","handler","instruction","tape","metadata","threaded","allocator","activation","object","symbol","module","atomic","cache_entry","jit_backend","nil","integer","floating","boolean","reference"};
   std::set<uint32_t> opcodes;
-  for(const auto& i:s.instructions) {
+  for(auto& i:s.instructions) {
     auto prefix="instruction '"+i.name+"' ("+i.source.file+":"+std::to_string(i.source.line)+"): ";
     if(i.source.file.find('\0')!=std::string::npos || i.source.line>2147483647) return error(prefix+"invalid source location");
     if(!identifier(i.name) || handler_reserved.contains(i.name) || i.name.starts_with("vw_") || i.name.starts_with("opcode_") || i.name.starts_with("memory_") || i.name.starts_with("object_") || i.name.starts_with("atomic_") || i.name.starts_with("ipc_") || i.name.starts_with("module_") || i.name.starts_with("optim_") || i.name.starts_with("jit_") || i.name.starts_with("tape_")) return error(prefix+"invalid/reserved name");
     if(!names.insert(i.name).second) return error(prefix+"duplicate mnemonic",Error::Code::Conflict);
     if(i.opcode && (*i.opcode>2147483647 || !opcodes.insert(*i.opcode).second)) return error(prefix+"duplicate or invalid opcode",Error::Code::Conflict);
-    if(!effect(i.stack_effect)) return error(prefix+"expected stack effect '( before -- after )'");
-    if(i.flow!="next" && i.flow!="jump" && i.flow!="branch" && i.flow!="call" && i.flow!="return" && i.flow!="halt") return error(prefix+"unknown control flow");
-    if((i.flow=="call" || i.flow=="return") && !has(s,"frame")) return error(prefix+"call/return requires frame");
     if(i.operands.size()>16) return error(prefix+"at most 16 operands supported");
     for(const auto& operand:i.operands) if(operand!="cell" && operand!="label") return error(prefix+"unsupported operand type '"+operand+"'");
     if(i.semantics.find('\0')!=std::string::npos) return error(prefix+"NUL in C semantics");
+    if(!i.stack_effect.empty() && !effect(i.stack_effect)) return error(prefix+"expected stack effect '( before -- after )'");
+    if(i.abstract) {
+      if(!i.semantics.empty()) return error(prefix+"concrete and abstract semantics are mutually exclusive");
+      auto profile=profile_abstract(s,i);
+      if(!profile) return error(prefix+profile.error().message,profile.error().code);
+      const auto [inputs,outputs,flow]=profile.value();
+      if(i.stack_effect.empty()) {
+        i.stack_effect="(";
+        for(size_t n=0;n<inputs;++n) i.stack_effect+=" in"+std::to_string(n);
+        i.stack_effect+=" --";
+        for(size_t n=0;n<outputs;++n) i.stack_effect+=" out"+std::to_string(n);
+        i.stack_effect+=" )";
+      } else if(effect_counts(i.stack_effect)!=std::pair{inputs,outputs}) {
+        return error(prefix+"declared stack effect disagrees with abstract semantics");
+      }
+      if(i.flow.empty()) i.flow=flow;
+      else if(i.flow!=flow) return error(prefix+"declared flow disagrees with abstract semantics");
+    } else {
+      if(i.stack_effect.empty()) i.stack_effect="( -- )";
+      if(i.flow.empty()) i.flow="next";
+    }
+    if(i.flow!="next" && i.flow!="jump" && i.flow!="branch" && i.flow!="call" && i.flow!="return" && i.flow!="halt") return error(prefix+"unknown control flow");
+    if((i.flow=="call" || i.flow=="return") && !has(s,"frame")) return error(prefix+"call/return requires frame");
   }
   for(const auto& r:s.rewrites) {
     if(r.from.empty() || r.from.size()>32 || r.to.size()>=r.from.size()) return error("rewrite must strictly shorten a nonempty sequence");
@@ -97,8 +117,8 @@ Result<Specification> validate(Specification s) {
       int64_t depth=0,required=0,peak=0;
       for(const auto& name:sequence) {
         const auto& i=*std::find_if(s.instructions.begin(),s.instructions.end(),[&](const auto& x){return x.name==name;});
-        std::istringstream text(i.stack_effect); std::string token; int64_t inputs=0,outputs=0; bool after=false;
-        while(text>>token) {if(token=="--") after=true; else if(token!="(" && token!=")") ++(after?outputs:inputs);}
+        auto [in,out]=effect_counts(i.stack_effect);
+        const auto inputs=static_cast<int64_t>(in),outputs=static_cast<int64_t>(out);
         required=std::max(required,inputs-depth); depth+=outputs-inputs; peak=std::max(peak,depth);
       }
       return std::tuple{depth,required,peak};
@@ -121,7 +141,7 @@ Result<Module> lower(Specification spec) {
   uint32_t next=0;
   for(auto& i:m.configuration.instructions) {
     if(!i.opcode) {while(used.contains(next)) ++next; i.opcode=next; used.insert(next);}
-    m.words.push_back({i.name,i.stack_effect,i.flow,i.semantics,*i.opcode,i.operands,i.source});
+    m.words.push_back({i.name,i.stack_effect,i.flow,std::move(i.semantics),*i.opcode,i.operands,i.source,std::move(i.abstract)});
   }
   m.configuration.instructions.clear();
   return Result<Module>::ok(std::move(m));

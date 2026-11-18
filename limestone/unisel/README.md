@@ -14,12 +14,20 @@ auto region = limestone::unisel::emit_scheduler(prepared.value(), patterns,
                                                solution.value());
 ```
 
-`candidates` and `constraints` provide inspection before solving. The global
-selector uses Satie CDCL with coverage, incompatibility, boundary-definition, and
-dependency legality constraints, plus pseudo-Boolean cost bounds bit-blasted
-through Satie's theory encoder; `solve_greedy` is an explicit alternative.
-Selection minimizes scalar pattern costs and keeps physical allocation and issue
-cycles for downstream stages. Nested pattern trees support concrete types,
+`match_checked` and `build_model` expose the candidates and exact-cover clauses
+before solving. The global selector uses Satie CDCL and its theory encoder: a
+weighted sum circuit is built once, then SAT probes with unit clauses minimize
+its bits and resolve ties in stable candidate order. `solve_greedy` is an explicit
+alternative that does not backtrack.
+
+Pure interior operations may carry external `Ordering` dependencies. These
+edges retain their kind, latency, and scheduler-only flag on the selected
+instructions. If grouping source operations creates a dependency cycle, the
+global solver excludes the candidates forming that cycle and searches again.
+This check is applied during solving, not represented in the initial
+inspectable coverage/exclusion clauses. Fusion of observable operations remains
+conservative. Selection keeps physical allocation and issue cycles for
+downstream stages. Nested pattern trees support concrete types,
 repeated named bindings, immediate ranges, and register-class constraints.
 Flat `Pattern::operands` entries are concrete source types; an empty entry or
 `v` denotes an untyped value boundary. Matching, BURS adaptation, and canonical

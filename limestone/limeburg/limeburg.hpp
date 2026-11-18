@@ -34,7 +34,15 @@ struct Derivation {
   RuleId rule; int cost; std::vector<std::string> child_nt; std::vector<NodeId> children, covered;
   bool operator==(const Derivation&) const = default;
 };
-struct Selection { std::string root_nt; std::unordered_map<NodeId,Derivation> chosen; int cost=0; std::optional<NodeId> root; };
+struct Selection {
+  std::string root_nt;
+  // Required nodes are unique in a tree. At a shared external leaf this is
+  // the first occurrence's derivation; see boundaries for all required states.
+  std::unordered_map<NodeId,Derivation> chosen;
+  int cost=0;
+  std::optional<NodeId> root;
+  std::map<std::pair<NodeId,NonterminalId>,Derivation> boundaries;
+};
 struct RuleAttempt {
   NodeId node; RuleId rule;
   // No cost means the rule did not match. State updates use cost, priority, ID.

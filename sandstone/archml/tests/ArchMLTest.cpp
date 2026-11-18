@@ -111,7 +111,7 @@ int main() {
         }));
         for (auto &future : futures) future.get();
         std::mt19937_64 random(0x415243484d4c);
-        std::size_t files = 0, forms = 0;
+        std::size_t files = 0, forms = 0, text_ops = 0;
         for (const auto &entry : std::filesystem::directory_iterator(ARCHML_STDSPEC)) {
             if (entry.path().extension() != ".am" && entry.path().extension() != ".aml") continue;
             const auto doc = Document::load(entry.path().string());
@@ -119,7 +119,10 @@ int main() {
             const auto regenerated = generate(doc, "archml");
             check(json(Document::parse(regenerated).root()) == json(doc.root()), "profile metadata lost in roundtrip");
             check(generate(doc, "json") == json(doc.root()) + '\n', "JSON backend mismatch");
-            for (const auto &form : doc.instructions()) { ++forms; roundtrip(doc, form, random); }
+            for (const auto &form : doc.instructions()) {
+                if (form.base.empty()) ++text_ops; else ++forms;
+                roundtrip(doc, form, random);
+            }
             if (doc.name() == "riscv64") {
                 fixture(doc, "add", {1, 2, 3}, {0xb3, 0x00, 0x31, 0x00});
                 fixture(doc, "addi", {1, 0, UINT64_MAX}, {0x93, 0x00, 0xf0, 0xff});
@@ -145,8 +148,10 @@ int main() {
                 check(runtime::render(*doc.instruction("add.s32"), values) == "add.s32 %r0, %r1, %r2;", "PTX template failed");
             }
         }
-        check(files == 17 && forms == 657, "unexpected profile/form count: " + std::to_string(files) + "/" + std::to_string(forms));
+        check(files == 23 && forms == 764 && text_ops == 23,
+              "unexpected profile/form/text-operation count: " + std::to_string(files) + "/" +
+              std::to_string(forms) + "/" + std::to_string(text_ops));
         check(archml_c_test((std::filesystem::path(ARCHML_STDSPEC) / "riscv64.aml").c_str()) == 0, "C API test failed");
-        std::cout << "Validated " << files << " profiles and " << forms << " forms\n";
+        std::cout << "Validated " << files << " profiles, " << forms << " binary forms and " << text_ops << " text operations\n";
     } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
 }

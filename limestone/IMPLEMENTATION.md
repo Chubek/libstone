@@ -11,24 +11,27 @@ implemented.
 
 | Component | Available behavior |
 | --- | --- |
-| Metacode | Source-located ISA ingestion; registers/classes/aliases, operation/encoding normalization, shared declarative operand predicates, unknown-metadata preservation, deterministic JSON |
-| Unisel | Semantic UMD load/print, bounded source-located include graphs, explicit Infobank selection patterns, typed/repeated-binding/register-class and declarative operand legality, owning C/Python candidate/constraint/selection inspection, Satie global selection, greedy selection, CFG/effect-preserving Scheduler IR emission |
-| Limeburg | Deterministic typed BURS dynamic programming, stable-ID state tables and rejection traces via C/C++/Python/CLI, bounded textual includes, nested patterns, immediate/identity predicates, rule priorities and provenance, effect legality, UMD adapter, 23 reproducible Infobank-derived `.lburg` specifications with explicit coverage, tree-only and shared-value-preserving graph policies |
-| Schedrow | Register/physical/memory/control hazards, SSA and architectural result latency domains, alternative resources, fractional quantities, occupancy/offsets, throughput metadata, priorities/critical paths, joint issue-slot/resource matching, ordered/adjacent/atomic/same-cycle/bundle/fusion/pair groups, list/CFG/modulo scheduling, schedule and sequential-order verification |
+| Metacode | Source-located ISA ingestion; registers/classes/aliases, operation/encoding normalization, shared declarative operand predicates, unknown-metadata preservation, deterministic JSON; owning ArchML profiles with concrete encoding/decoding and named scheduling models |
+| Unisel | Semantic UMD load/print, bounded source-located include graphs, explicit Infobank selection patterns, typed/repeated-binding/register-class and declarative operand legality, owning C/Python candidate/constraint/selection inspection, incremental Satie CDCL and weighted objectives, greedy selection, CFG/effect-preserving Scheduler IR emission |
+| Limeburg | Deterministic typed BURS dynamic programming, rules indexed by operator and arity, stable-ID state tables and rejection traces via C/C++/Python/CLI, bounded textual includes, nested patterns, immediate/identity predicates, rule priorities and provenance, effect legality, UMD adapter, 23 reproducible Infobank-derived `.lburg` specifications with explicit coverage, tree-only and shared-value-preserving graph policies |
+| Schedrow | ArchML microarchitecture timing and resources; register/physical/memory/control hazards, SSA and architectural result latency domains, alternative resources, fractional quantities, occupancy/offsets, throughput metadata, priorities/critical paths, joint issue-slot/resource matching, ordered/adjacent/atomic/same-cycle/bundle/fusion/pair groups, list/CFG/modulo scheduling, schedule and sequential-order verification |
 | RegTL | CFG liveness, precise interference and lifetime segments, architectural-state liveness, classes, aliases, fixed/allowed/forbidden registers, ties, early definitions, clobbers, linear/greedy/coloring/constraint allocation, parallel-move resolution, private spill frames and scratch transfers, post-allocation scheduling adapter |
 | Tunah | Equinox-NG-backed bounded saturation; transactional EkippX/SExprTk/DSLtk rule loading; host predicates, checked costs and traces; owning C/Python sessions/results, typed target attachments and binary/runtime transforms; typed bidirectional Unisel graph reconstruction/remapping with effect/CFG/live-out preservation; validated lifted-semantic Bin2Bin adapter with owning rule snapshots and deterministic cache identity |
 | Bin2Bin | Fixed8 and explicit masked codecs, signed/register/PC-relative fields, status/control/trap preservation, semantic operand matching/lifting/transforms, CFG analysis, relocated same/cross-ISA translation, monotonic branch relaxation, complete selected operand bindings, bounded owning ELF32/ELF64 REL/RELA object ingestion/emission, metadata-driven symbol/bitfield relocation and addressed linking via C/C++/Python/CLI, version-sensitive memory/LMDB caches, bounded heat-tracking C/C++ runtime with owning installers and invalidation, Python observation handles |
 | MachineIR | Architecture-neutral D instructions/operands/effects/CFGs; dominance, liveness, use/def and serialization; validated versioned C++/D region/CFG/spill/group exchange |
-| TraceML | Source-located S-expression frontend, lexical call-by-name MetaKrivine execution, checked integer primitives, observers/events, budgets/cancellation, guard-preserving trace-to-graph lowering, explicit-target C/C++/Python/CLI compilation and a callable native constant/return integration |
+| TraceML | Source-located S-expression frontend, lexical call-by-name MetaKrivine execution, checked integer primitives, observers/events, budgets/cancellation, guard-preserving trace-to-graph lowering, explicit-target C/C++/Python/CLI compilation, C99 emission with a pure-C `libtraceml` runtime, and a callable native constant/return integration; separate CESK-Theta instruction-tape engine with hot-loop recording, portable trace execution, and resumable guards |
 | Exolayer | Opaque C contexts, typed callbacks, scalar layouts, extension loading/lifetimes, fixed/variadic scalar native signatures, owning exact-width scalar/struct/embedded-array descriptors and fixed/variadic transactional by-value data calls, explicit calling conventions, owning native-library bindings through an isolated libffi adapter |
-| VMWeave | Kaguya-backed Lua compiler; validated owning model, lossless versioned STK-00, deterministic optional C components, four execution models, checked stack/tapes/labels, allocator adapters, objects/lifetimes, frames, module exports, atomic values, IPC, explicit rewrites and inline caches; built-in MachineIR foreign-call lowering, assembly/AOT native output and owning executable handles, generated C baseline-JIT binding |
+| VMWeave | Kaguya-backed Lua compiler, abstract stack semantics or concrete C instruction bodies, validated owning model, lossless versioned STK-00, deterministic optional C components, four execution models, checked stack/tapes/labels, allocator adapters, objects/lifetimes, frames, module exports, atomic values, IPC, explicit rewrites and inline caches; built-in MachineIR foreign-call lowering, assembly/AOT native output and owning executable handles, generated C baseline-JIT binding |
 | Orchestration | C/C++ target/program/configuration APIs, optimizer/allocation/backend adapters, selected fixed-operand/ABI requirements merged into allocation and independently checked in encoding, inspectable stages, final spill/register/frame inspection, MachineIR handoff, byte/relocation/ELF output and CLI |
 
 Textual Unisel, Limeburg, Schedrow, and RegTL loaders have independent targets and canonical
 serializers. `limestone/il.h` exposes document/result handles that can be used
-without the top-level pipeline. All ten grammars and AST schemas are generated
-through DParser and `scripts/syngen.pl`; generated tables and parser headers are
-build/install artifacts. Optional SWIG Python bindings consume the C ABI.
+without the top-level pipeline. The existing ten grammars and AST schemas are
+generated through DParser and `scripts/syngen.pl`; the TraceML source compiler,
+ArchML and VMWeave's abstract semantics grammar use `scripts/aurocks.pl` and
+`scripts/asdl.pl`. Generated tables
+and parser headers are build/install artifacts. Optional SWIG Python bindings
+consume the C ABI.
 
 The Tunah instruction corpus has 13 tuner files and 239 rules, with explicit
 width, overflow, memory-forwarding, and vector-shape preconditions. Detailed
@@ -45,6 +48,9 @@ and the per-architecture counts are in `limeburg/specs/README.md`.
 
 - Source value graphs are acyclic SSA; CFGs may contain cycles. Values crossing
   blocks must dominate their uses. Phi elimination is an input adapter.
+- ArchML is an explicit source for Bin2Bin disassembly and Schedrow issue/timing
+  models. Concrete decoding alone does not establish an Infobank lifting,
+  relocation, or semantic-equivalence contract.
 - Blocks are laid out in declaration order with entry first. A conditional
   branch's second target is the next block; the direct encoding binding uses
   target index zero. Scheduling cycles are block-local.
@@ -83,6 +89,10 @@ and the per-architecture counts are in `limeburg/specs/README.md`.
 
 These are concrete implementation boundaries, rather than silently approximated
 behavior:
+
+- CESK-Theta executes portable guarded traces over a typed tape. The existing
+  TraceLambda frontend does not lower to that tape yet, and the tracing tier
+  does not generate native code or compile bridges from hot guard exits.
 
 - VMWeave's built-in MachineIR C backend uses a GCC/Clang-compatible compiler and
   POSIX process/shared-library loading. Host-compatible ABI/layout is checked;

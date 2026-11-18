@@ -74,11 +74,21 @@ Specification convert(const kaguya::LuaTable& t, const std::string& file) {
   });
   kaguya::LuaRef instructions=t["instructions"];
   if(!instructions.isNilref()) array(instructions.get<kaguya::LuaTable>(),[&](kaguya::LuaRef value){
-    auto a=value.get<kaguya::LuaTable>(); keys(a,{"name","opcode","body","semantics","stack_effect","operands","flow","source"});
+    auto a=value.get<kaguya::LuaTable>(); keys(a,{"name","opcode","body","semantics","abstract","stack_effect","operands","flow","source"});
     Instruction i; i.name=a["name"].get<std::string>(); i.source=source(a,s.source);
-    if(!a["body"].isNilref() && !a["semantics"].isNilref()) throw std::runtime_error("body and semantics are aliases");
-    i.semantics=get<std::string>(a,"semantics",get<std::string>(a,"body",""));
-    i.stack_effect=get<std::string>(a,"stack_effect","( -- )"); i.flow=get<std::string>(a,"flow","next");
+    const bool has_body=!a["body"].isNilref(), has_semantics=!a["semantics"].isNilref();
+    if(has_body && has_semantics) throw std::runtime_error("body and semantics are aliases");
+    if(!a["abstract"].isNilref()) {
+      if(has_body || has_semantics) throw std::runtime_error("concrete and abstract semantics are mutually exclusive");
+      auto parsed=parse_abstract(get<std::string>(a,"abstract",""),i.source);
+      if(!parsed) throw std::runtime_error("instruction '"+i.name+"': "+parsed.error().message);
+      i.abstract=std::move(parsed.value());
+    } else i.semantics=get<std::string>(a,has_body?"body":"semantics","");
+    i.stack_effect=get<std::string>(a,"stack_effect","");
+    i.flow=get<std::string>(a,"flow","");
+    if((!a["stack_effect"].isNilref() && i.stack_effect.empty()) ||
+       (!a["flow"].isNilref() && i.flow.empty()))
+      throw std::runtime_error("instruction '"+i.name+"': empty stack effect or flow");
     if(!a["opcode"].isNilref()) i.opcode=integer(a,"opcode",0,2147483647);
     if(!a["operands"].isNilref()) array(a["operands"].get<kaguya::LuaTable>(),[&](kaguya::LuaRef o){i.operands.push_back(o.get<std::string>());});
     s.instructions.push_back(std::move(i));

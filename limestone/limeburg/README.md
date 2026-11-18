@@ -19,6 +19,14 @@ explicit effect-capable rules; emitted operations retain their source semantics.
 An `external_only` rule materializes graph boundaries without covering an internal
 computation.
 
+Ordinary state computation dispatches rules by root operator and arity; flat
+rules are normalized once per analysis. A shared external leaf can satisfy
+different nonterminal requirements at different operand positions. A selection
+records each distinct `(node, nonterminal ID)` in `Selection::boundaries`;
+`Selection::chosen` holds the first occurrence for callers inspecting by node.
+Each operand occurrence contributes its boundary cost, but Scheduler IR still
+uses the same external value identity and does not emit a definition for it.
+
 `analyze(nodes, root, rules, true)` computes every reachable state and records
 rule attempts in deterministic postorder/priority/ID order. States use stable
 nonterminal IDs and retain the cheapest derivation; attempts include costs,

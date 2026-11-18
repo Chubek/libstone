@@ -19,7 +19,7 @@ serialization.
 | Grammar | Syntax represented | Example |
 | --- | --- | --- |
 | `isa.g` | Infobank architectures, sections, registers, encodings, operations, nested values and semantic S-expressions | [`isa.isa`](examples/isa.isa) |
-| `traceml.g` | The existing TraceML S-expression frontend: applications, symbols, and integers | [`traceml.trace`](examples/traceml.trace) |
+| `traceml.g` | Compatibility syntax-tree API for TraceML applications, symbols, and integers | [`traceml.trace`](examples/traceml.trace) |
 | `tuner.g` | Normalized operator declarations and rewrite rules, terms, variables, `:where` and `:cost` clauses | [`tuner.tuner`](examples/tuner.tuner) |
 | `limeburg.g` | BURS nonterminals, terminals, typed/recursive patterns, immediate bounds, costs, priorities, and explicit input trees | [`limeburg.limeburg`](examples/limeburg.limeburg) |
 | `unisel.g` | Universal machine descriptions, registers, instructions, patterns, source graphs, outputs, dependencies, and constraints | [`unisel.umd`](examples/unisel.umd) |
@@ -35,8 +35,10 @@ respective semantic adapters. Attribute nodes retain unknown metadata in source
 order. An ISA legacy marker, for example, parses successfully even though
 Metacode requires an architecture before it can build a usable target.
 
-The ISA and TraceML subsystem APIs share these generated C tables. Tunah's
-existing compiler continues to use EkippX, SExprTk, and DSLtk: `tuner.g` describes
+The ISA subsystem API shares these generated C tables. The TraceML compiler
+uses Aurocks/ASDL from [`traceml/`](../traceml/); the typed DParser syntax API
+remains available to existing clients. Tunah's existing compiler continues to
+use EkippX, SExprTk, and DSLtk: `tuner.g` describes
 the **post-preprocessing** syntax and provides a separate syntax-tree entry
 point. Parsing a `:cost` clause preserves it; Tunah's current semantic compiler
 still reports that extraction costs belong to `CostModel`. These grammars do

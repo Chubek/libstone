@@ -1,8 +1,8 @@
 # ArchML
 
 ArchML compiles version-1 architecture descriptions into reusable code-generator
-data and standalone C++20 encoding libraries. The 17 profiles in [`stdspec/`](stdspec/)
-contain 634 concrete instruction forms and 23 text/IR operations.
+data and standalone C++20 encoding libraries. The 23 profiles in [`stdspec/`](stdspec/)
+contain 764 concrete instruction forms and 23 text/IR operations.
 
 ## Build and run
 
@@ -95,6 +95,9 @@ those compiler passes; generated encoding functions perform concrete form checks
 ## Library interfaces
 
 Link `Sandstone::ArchML` (alias of `sandstone-archml`) in a CMake build.
+Installed clients can use `find_package(ArchML CONFIG REQUIRED)` without
+loading the rest of Sandstone's dependencies. `find_package(Sandstone CONFIG)`
+also imports `Sandstone::ArchML` when ArchML was enabled.
 
 ```cpp
 #include <ArchML.hpp>

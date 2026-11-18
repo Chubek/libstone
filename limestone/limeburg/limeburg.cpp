@@ -68,9 +68,38 @@ Result<StateTable> analyze(const std::vector<Node>& nodes,NodeId root,const Rule
   StateTable table{root};auto& dp=table.states;
   std::map<NonterminalId,std::string> names;if(trace)for(auto& [name,nt]:rs.nonterminals)names[nt]=name;
   auto available=[&](NodeId id){std::string out="{";for(auto& [nt,d]:dp[id]){if(out.back()!='{')out+=", ";out+=names.at(nt);}return out+"}";};
-  auto rules=rs.rules;std::sort(rules.begin(),rules.end(),[](auto& a,auto& b){return std::tie(a.priority,a.id)<std::tie(b.priority,b.id);});
-  for(auto id:postorder)for(auto& r:rules) {
+  struct CompiledRule { const Rule* rule; Pattern flat; };
+  std::vector<CompiledRule> rules;
+  for(const auto& rule:rs.rules) {
+    CompiledRule entry{&rule,{}};
+    if(!rule.pattern) {
+      entry.flat.op=rule.op;
+      for(const auto& nt:rule.operands)entry.flat.children.push_back(Pattern{"",nt});
+    }
+    rules.push_back(std::move(entry));
+  }
+  std::sort(rules.begin(),rules.end(),[](const auto& a,const auto& b){
+    return std::tie(a.rule->priority,a.rule->id)<std::tie(b.rule->priority,b.rule->id);
+  });
+  using RuleIndices=std::vector<size_t>;
+  std::map<std::pair<std::string_view,size_t>,RuleIndices> dispatch;
+  RuleIndices all;
+  for(size_t index=0;index<rules.size();++index) {
+    const auto& entry=rules[index];
+    const auto& pattern=entry.rule->pattern?*entry.rule->pattern:entry.flat;
+    if(trace)all.push_back(index);
+    else dispatch[{pattern.op,pattern.children.size()}].push_back(index);
+  }
+  const RuleIndices empty;
+  auto applicable=[&](const Node& node)->const RuleIndices& {
+    if(trace)return all;
+    auto it=dispatch.find({node.op,node.children.size()});
+    return it==dispatch.end()?empty:it->second;
+  };
+  for(auto id:postorder)for(auto index:applicable(*map.at(id))) {
     const auto& n=*map.at(id);
+    const auto& entry=rules[index];
+    const auto& r=*entry.rule;
     auto reject=[&](std::string reason){if(trace)table.attempts.push_back({id,r.id,{},false,std::move(reason)});};
     if(r.external_only&&n.required){reject("rule requires an external value");continue;}
     if(r.instruction.empty()&&(!n.children.empty()||(n.required&&(!n.has_imm||n.side_effect||n.access||n.call||n.terminator||n.may_trap)))){reject("non-emitting rule requires an effect-free immediate or external leaf");continue;}
@@ -96,9 +125,7 @@ Result<StateTable> analyze(const std::vector<Node>& nodes,NodeId root,const Rule
       for(size_t i=0;i<node.children.size();++i)if(!match(node.children[i],pattern.children[i]))return false;
       return true;
     };
-    Pattern pattern;
-    if(r.pattern)pattern=*r.pattern;
-    else { pattern.op=r.op;for(auto& nt:r.operands)pattern.children.push_back(Pattern{"",nt}); }
+    const auto& pattern=r.pattern?*r.pattern:entry.flat;
     if(!match(id,pattern)){reject(std::move(reason));continue;}
     auto memory_count=std::count_if(d.covered.begin(),d.covered.end(),[&](auto value){return bool(map.at(value)->access);});
     if((memory_count>1&&!r.fused_memory)||(r.fused_memory&&!memory_count)){reject("multiple memory accesses require an explicit proved memory contract");continue;}
@@ -135,11 +162,17 @@ Result<Selection> select(const std::vector<Node>& nodes,NodeId root,const RuleSe
     if(traced)for(auto& attempt:traced.value().attempts)if(attempt.node==root){auto& rule=*std::find_if(rs.rules.begin(),rs.rules.end(),[&](auto& r){return r.id==attempt.rule;});if(rule.lhs==rootnt){message+="\n  rule "+std::to_string(rule.id);if(!rule.origin.empty())message+=" @"+rule.origin;message+=": "+attempt.reason;}}
     return Result<Selection>::err({Error::Code::Unsatisfiable,std::move(message)});
   }
-  Selection s{std::string(rootnt),{},dp.at(root).at(nt->second).cost,root};
-  std::vector<std::pair<NodeId,std::string>> work{{root,std::string(rootnt)}};
+  Selection s{std::string(rootnt),{},dp.at(root).at(nt->second).cost,root,{}};
+  std::vector<std::pair<NodeId,NonterminalId>> work{{root,nt->second}};
+  std::unordered_set<NodeId> external;
+  for(const auto& node:nodes)if(!node.required)external.insert(node.id);
   while(!work.empty()) {
-    auto [id,nt]=work.back();work.pop_back();auto d=dp.at(id).at(rs.nonterminals.at(nt));s.chosen[id]=d;
-    for(size_t i=0;i<d.children.size();++i)work.push_back({d.children[i],d.child_nt[i]});
+    auto [id,nonterminal]=work.back();work.pop_back();
+    const auto& d=dp.at(id).at(nonterminal);
+    s.chosen.try_emplace(id,d);
+    if(external.contains(id))s.boundaries.emplace(std::pair{id,nonterminal},d);
+    for(size_t i=d.children.size();i>0;--i)
+      work.emplace_back(d.children[i-1],rs.nonterminals.at(d.child_nt[i-1]));
   }
   return Result<Selection>::ok(std::move(s));
 }
@@ -172,7 +205,7 @@ Result<schedrow::Region> emit_scheduler(const std::vector<Node>& nodes,const Rul
   if(roots.size()!=1||(selection.root&&*selection.root!=*roots.begin()))return Result<schedrow::Region>::err({Error::Code::InvalidArgument,"selection must have one derivation root"});
   auto checked=select(nodes,*roots.begin(),rs,selection.root_nt);
   if(!checked)return Result<schedrow::Region>::err(checked.error());
-  if(checked.value().cost!=selection.cost||checked.value().chosen!=selection.chosen)return Result<schedrow::Region>::err({Error::Code::Conflict,"selection does not match its BURS derivation"});
+  if(checked.value().cost!=selection.cost||checked.value().chosen!=selection.chosen||checked.value().boundaries!=selection.boundaries)return Result<schedrow::Region>::err({Error::Code::Conflict,"selection does not match its BURS derivation"});
   std::map<NodeId,const Node*> map;for(auto& n:nodes)map[n.id]=&n;
   std::map<RuleId,const Rule*> rules;for(auto& r:rs.rules)rules[r.id]=&r;
   schedrow::Region region{"limeburg"};
@@ -198,8 +231,11 @@ Result<schedrow::Region> emit_scheduler(const std::vector<Node>& nodes,const Rul
      i.access=rule.fused_memory;i.memory=bool(i.access);
       if(map.at(id)->produces_value&&!map.at(id)->register_class.empty())i.register_classes[id]=map.at(id)->register_class;
     for(auto source:d.covered)if(map.at(source)->has_imm)i.immediates.emplace_back(source,map.at(source)->imm);
-    for(auto child:d.children) {
-       if(rules.at(selection.chosen.at(child).rule)->instruction.empty()){if(map.at(child)->has_imm)i.immediates.emplace_back(child,map.at(child)->imm);else i.uses.push_back(child);}
+     for(size_t index=0;index<d.children.size();++index) {
+        auto child=d.children[index];
+        const auto& choice=map.at(child)->required?selection.chosen.at(child):
+          selection.boundaries.at({child,rs.nonterminals.at(d.child_nt[index])});
+        if(rules.at(choice.rule)->instruction.empty()){if(map.at(child)->has_imm)i.immediates.emplace_back(child,map.at(child)->imm);else i.uses.push_back(child);}
        else {i.uses.push_back(child);region.deps.push_back({child,id,schedrow::DepKind::True,0});}
      }
      for(auto child:i.uses)if(!map.at(child)->register_class.empty())i.register_classes[child]=map.at(child)->register_class;

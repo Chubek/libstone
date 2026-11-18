@@ -27,3 +27,5 @@ target_compile_options(limestone-traceml-consumer PRIVATE $<$<COMPILE_LANG_AND_I
 set_target_properties(limestone-traceml-consumer PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES)
 add_executable(limestone-vmweave-consumer vmweave.cpp)
 target_link_libraries(limestone-vmweave-consumer PRIVATE Limestone::vmweave)
+add_executable(limestone-archml-consumer archml.cpp)
+target_link_libraries(limestone-archml-consumer PRIVATE Limestone::bin2bin Limestone::schedrow_text)

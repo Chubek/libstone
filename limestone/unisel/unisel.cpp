@@ -1,13 +1,18 @@
 #include "unisel.hpp"
 #include "schedrow/operand_facts.hpp"
 #include "schedrow/memory_metadata.hpp"
-#include <SatieCDCL.hpp>
-#include <SatieFrontendOPB.hpp>
+#include "satie_adapter.inl"
 #include <limits>
 #include <map>
 #include <set>
 
 namespace limestone::unisel {
+namespace {
+bool observable(const Node& node) {
+  return node.side_effect || node.access || node.call || node.terminator ||
+         node.may_trap || node.control != schedrow::ControlFlow::None;
+}
+}
 PatternTree pattern_tree(const Pattern& pattern) {
   if(pattern.tree)return *pattern.tree;
   PatternTree tree;tree.op=pattern.root_op;
@@ -58,9 +63,8 @@ Result<int> validate(const Program& p,const std::vector<Pattern>& patterns) {
   }
   return Result<int>::ok(0);
 }
-Result<std::vector<Candidate>> match_checked(const Program& input,const std::vector<Pattern>& patterns) {
+static Result<std::vector<Candidate>> match_prepared(const Program& p,const std::vector<Pattern>& patterns) {
   using Output=Result<std::vector<Candidate>>;
-  auto prepared=prepare(input);if(!prepared)return Output::err(prepared.error());const auto& p=prepared.value();
   auto valid=validate(p,patterns);if(!valid)return Output::err(valid.error());
   for(auto& pattern:patterns)for(auto& predicate:pattern.host_constraints)if(!predicate.prove)return Output::err({Error::Code::Unsupported,pattern.origin+": unbound target predicate: "+predicate.name});
   std::map<NodeId,const Node*> nodes;std::map<NodeId,std::vector<NodeId>> users;
@@ -81,7 +85,7 @@ Result<std::vector<Candidate>> match_checked(const Program& input,const std::vec
        if(tree.op.empty()){if(!node.produces_value)return false;c.inputs.push_back(id);return true;}
       if(tree.op!=node.op||tree.inputs.size()!=node.inputs.size()||!node.required)return false;
       if(std::find(c.covered.begin(),c.covered.end(),id)!=c.covered.end())return false;
-        c.covered.push_back(id);effects|=node.side_effect||bool(node.access)||node.call||node.terminator||node.may_trap||node.control!=schedrow::ControlFlow::None;
+       c.covered.push_back(id);effects|=observable(node);
       for(size_t i=0;i<node.inputs.size();++i)if(!visit(node.inputs[i],tree.inputs[i]))return false;
       return true;
     };
@@ -107,9 +111,16 @@ Result<std::vector<Candidate>> match_checked(const Program& input,const std::vec
       for(auto user:users[id])if(!std::binary_search(c.covered.begin(),c.covered.end(),user))escapes=true;
       if(std::find(p.outputs.begin(),p.outputs.end(),id)!=p.outputs.end())escapes=true;
       for(auto& b:p.blocks)if(std::find(b.live_out.begin(),b.live_out.end(),id)!=b.live_out.end())escapes=true;
-      if(nodes.at(id)->control!=schedrow::ControlFlow::None)escapes=true;
-      // Preserve effect placement: explicit ordering may not be hidden by fusion.
-      for(auto& d:p.dependencies)if(d.producer==id||d.consumer==id)if(!pat.fused_memory||!std::binary_search(c.covered.begin(),c.covered.end(),d.producer)||!std::binary_search(c.covered.begin(),c.covered.end(),d.consumer))escapes=true;
+       if(nodes.at(id)->control!=schedrow::ControlFlow::None)escapes=true;
+       for(auto& d:p.dependencies)if(d.producer==id||d.consumer==id) {
+         auto other=d.producer==id?d.consumer:d.producer;
+         auto inside=std::binary_search(c.covered.begin(),c.covered.end(),other);
+         // A pure operation may carry external ordering edges: preserve
+         // them on its selected owner, but forbid cycles in that projection.
+         // Memory/control placement and hidden dependencies stay conservative.
+         if(inside ? !pat.fused_memory : observable(*nodes.at(id))||d.kind!=schedrow::DepKind::Ordering)
+           escapes=true;
+       }
     }
     if(escapes)continue;
     candidates.push_back(std::move(c));
@@ -117,95 +128,67 @@ Result<std::vector<Candidate>> match_checked(const Program& input,const std::vec
   std::sort(candidates.begin(),candidates.end(),[](auto& a,auto& b){return std::tie(a.root,a.cost,a.pattern)<std::tie(b.root,b.cost,b.pattern);});
   return Output::ok(std::move(candidates));
 }
+Result<std::vector<Candidate>> match_checked(const Program& input,const std::vector<Pattern>& patterns) {
+  auto prepared=prepare(input);if(!prepared)return Result<std::vector<Candidate>>::err(prepared.error());
+  return match_prepared(prepared.value(),patterns);
+}
 std::vector<Candidate> match(const Program& input,const std::vector<Pattern>& patterns) {
   auto result=match_checked(input,patterns);return result?std::move(result.value()):std::vector<Candidate>{};
 }
-Result<ConstraintModel> build_model(const Program& input,const std::vector<Pattern>& patterns) {
-  auto prepared=prepare(input);if(!prepared)return Result<ConstraintModel>::err(prepared.error());const auto& p=prepared.value();
-  auto valid=validate(p,patterns);if(!valid)return Result<ConstraintModel>::err(valid.error());
-  auto matched=match_checked(p,patterns);if(!matched)return Result<ConstraintModel>::err(matched.error());ConstraintModel m{std::move(matched.value()),{}};
+static Result<ConstraintModel> build_prepared_model(const Program& p,const std::vector<Pattern>& patterns) {
+  auto matched=match_prepared(p,patterns);if(!matched)return Result<ConstraintModel>::err(matched.error());ConstraintModel m{std::move(matched.value()),{}};
   if(m.candidates.size()>static_cast<size_t>(std::numeric_limits<int32_t>::max()/128))return Result<ConstraintModel>::err({Error::Code::ResourceLimit,"too many candidates"});
+  std::map<NodeId,std::vector<int32_t>> coverage;
+  for(size_t i=0;i<m.candidates.size();++i)
+    for(auto id:m.candidates[i].covered)coverage[id].push_back(static_cast<int32_t>(i+1));
   for(auto& n:p.nodes)if(n.required) {
-    std::vector<int32_t> covering;
-    for(size_t i=0;i<m.candidates.size();++i)if(std::binary_search(m.candidates[i].covered.begin(),m.candidates[i].covered.end(),n.id))covering.push_back(static_cast<int32_t>(i+1));
+    const auto& covering=coverage[n.id];
     // Exactly one implementation prevents both missing coverage and overlap.
     m.clauses.push_back(covering);
     for(size_t i=0;i<covering.size();++i)for(size_t j=i+1;j<covering.size();++j)m.clauses.push_back({-covering[i],-covering[j]});
   }
   return Result<ConstraintModel>::ok(std::move(m));
 }
-namespace {
-// Selection variables are 1-based Satie variables in candidate order, so the
-// solver adapter below never exposes vendor types through unisel.hpp.
-bool has_empty_clause(const std::vector<std::vector<int32_t>>& clauses) {
-  return std::any_of(clauses.begin(),clauses.end(),[](auto& c){return c.empty();});
+Result<ConstraintModel> build_model(const Program& input,const std::vector<Pattern>& patterns) {
+  auto prepared=prepare(input);if(!prepared)return Result<ConstraintModel>::err(prepared.error());
+  return build_prepared_model(prepared.value(),patterns);
 }
-bool satisfiable(const std::vector<std::vector<int32_t>>& clauses) {
-  // CDCL cannot ingest an empty clause (nothing to watch); it is UNSAT by
-  // definition, e.g. a required operation with no covering candidate.
-  if(has_empty_clause(clauses))return false;
-  satie::CNF cnf;
-  for(auto& clause:clauses)cnf.add_clause(satie::Clause(clause.begin(),clause.end()));
-  return satie::solve_cdcl(cnf).status==satie::SolveStatus::SAT;
-}
-// Pseudo-Boolean cost bound over the selection variables, bit-blasted with
-// Satie's theory encoder: sum(cost[i] * select[i]) <= bound. Hard coverage
-// clauses stay native CNF; only the weighted bound uses integer reasoning.
-std::vector<std::vector<int32_t>> bounded(const std::vector<std::vector<int32_t>>& hard,const std::vector<Candidate>& candidates,uint64_t bound) {
-  const size_t n=candidates.size();
-  satie::frontend::PBConstraint limit;
-  for(size_t i=0;i<n;++i)if(candidates[i].cost>0)limit.terms.push_back({candidates[i].cost,static_cast<int>(i+1)});
-  limit.cmp=satie::frontend::PBCmp::Le;
-  limit.rhs=static_cast<long long>(bound);
-  if(limit.terms.empty())return hard;
-  satie::frontend::PBProblem probe;
-  probe.variables=static_cast<int>(n);
-  probe.constraints.push_back(limit);
-  const int width=satie::frontend::pb_working_width(probe);
-  satie::theory::Encoder enc(static_cast<satie::Var>(n+1));
-  for(auto& clause:hard)enc.add_clause(satie::Clause(clause.begin(),clause.end()));
-  std::vector<satie::Lit> bits;bits.reserve(n);
-  for(size_t v=1;v<=n;++v)bits.push_back(static_cast<satie::Lit>(v));
-  satie::frontend::blast_pb_constraint(enc,bits,limit,width);
-  std::vector<std::vector<int32_t>> out;
-  for(auto& clause:enc.take_clauses())out.emplace_back(clause.begin(),clause.end());
-  return out;
-}
-}
-Result<Selection> solve(const Program& p,const std::vector<Pattern>& patterns) {
-  auto model=build_model(p,patterns);if(!model)return Result<Selection>::err(model.error());
-  auto& m=model.value();uint64_t total=0;for(auto& c:m.candidates)total+=static_cast<uint32_t>(c.cost);
-  if(!satisfiable(m.clauses))return Result<Selection>::err({Error::Code::Unsatisfiable,"no exact instruction covering satisfies the selection model"});
-  uint64_t low=0,high=total;
-  while(low<high){auto mid=low+(high-low)/2;if(satisfiable(bounded(m.clauses,m.candidates,mid)))high=mid;else low=mid+1;}
-  if(low>std::numeric_limits<int>::max())return Result<Selection>::err({Error::Code::ResourceLimit,"selection cost overflow"});
-  auto cnf=bounded(m.clauses,m.candidates,low);Selection s;
-  // Fix the optimum lexicographically; vendor decision order is not observable.
-  for(size_t i=0;i<m.candidates.size();++i) {
-    auto lit=static_cast<int32_t>(i+1);cnf.push_back({lit});
-    if(satisfiable(cnf)){s.selected.push_back(m.candidates[i]);s.cost+=m.candidates[i].cost;}
-    else cnf.back()[0]=-lit;
+static Result<schedrow::Region> emit_prepared(const Program&,const std::vector<Pattern>&,
+                                              const std::vector<Candidate>&,const Selection&);
+Result<Selection> solve(const Program& input,const std::vector<Pattern>& patterns) {
+  auto prepared=prepare(input);if(!prepared)return Result<Selection>::err(prepared.error());const auto& p=prepared.value();
+  auto model=build_prepared_model(p,patterns);if(!model)return Result<Selection>::err(model.error());
+  if(!p.dependencies.empty()) {
+    std::unordered_set<NodeId> required;
+    for(const auto& node:p.nodes)if(node.required)required.insert(node.id);
+    for(const auto& dep:p.dependencies)
+      if(!required.contains(dep.producer)||!required.contains(dep.consumer))
+        return Result<Selection>::err({Error::Code::Unsupported,"semantic dependency involves an external value"});
   }
-  auto emitted=emit_scheduler(p,patterns,s);if(!emitted)return Result<Selection>::err(emitted.error());
-  return Result<Selection>::ok(std::move(s));
+  auto solution=detail::optimize_cover(model.value(),p.dependencies);if(!solution)return solution;
+  auto emitted=emit_prepared(p,patterns,model.value().candidates,solution.value());if(!emitted)return Result<Selection>::err(emitted.error());
+  return solution;
 }
 Result<Selection> solve_greedy(const Program& input,const std::vector<Pattern>& patterns) {
   auto prepared=prepare(input);if(!prepared)return Result<Selection>::err(prepared.error());const auto& p=prepared.value();
-  auto valid=validate(p,patterns);if(!valid)return Result<Selection>::err(valid.error());
-  auto matched=match_checked(p,patterns);if(!matched)return Result<Selection>::err(matched.error());auto candidates=std::move(matched.value());std::sort(candidates.begin(),candidates.end(),[](auto& a,auto& b){return std::tie(a.cost,a.pattern,a.root)<std::tie(b.cost,b.pattern,b.root);});
+  auto matched=match_prepared(p,patterns);if(!matched)return Result<Selection>::err(matched.error());auto candidates=std::move(matched.value());std::sort(candidates.begin(),candidates.end(),[](auto& a,auto& b){return std::tie(a.cost,a.pattern,a.root)<std::tie(b.cost,b.pattern,b.root);});
   Selection s;std::unordered_set<NodeId> covered;int64_t cost=0;
   for(auto& c:candidates)if(std::none_of(c.covered.begin(),c.covered.end(),[&](auto id){return covered.contains(id);})) {
     s.selected.push_back(c);cost+=c.cost;covered.insert(c.covered.begin(),c.covered.end());
   }
   if(covered.size()!=static_cast<size_t>(std::count_if(p.nodes.begin(),p.nodes.end(),[](auto& n){return n.required;})))return Result<Selection>::err({Error::Code::Unsatisfiable,"greedy selection cannot cover all required operations"});
   if(cost>std::numeric_limits<int>::max())return Result<Selection>::err({Error::Code::ResourceLimit,"selection cost overflow"});
-  s.cost=static_cast<int>(cost);auto emitted=emit_scheduler(p,patterns,s);if(!emitted)return Result<Selection>::err(emitted.error());
+  s.cost=static_cast<int>(cost);auto emitted=emit_prepared(p,patterns,candidates,s);if(!emitted)return Result<Selection>::err(emitted.error());
   return Result<Selection>::ok(std::move(s));
 }
 Result<schedrow::Region> emit_scheduler(const Program& input,const std::vector<Pattern>& patterns,const Selection& selection) {
   auto prepared=prepare(input);if(!prepared)return Result<schedrow::Region>::err(prepared.error());const auto& p=prepared.value();
-  auto valid=validate(p,patterns);if(!valid)return Result<schedrow::Region>::err(valid.error());
-  auto matched=match_checked(p,patterns);if(!matched)return Result<schedrow::Region>::err(matched.error());auto candidates=std::move(matched.value());std::map<NodeId,NodeId> owner;std::map<PatternId,const Pattern*> pats;
+  auto matched=match_prepared(p,patterns);if(!matched)return Result<schedrow::Region>::err(matched.error());
+  return emit_prepared(p,patterns,matched.value(),selection);
+}
+static Result<schedrow::Region> emit_prepared(const Program& p,const std::vector<Pattern>& patterns,
+                                              const std::vector<Candidate>& candidates,const Selection& selection) {
+  std::map<NodeId,NodeId> owner;std::map<PatternId,const Pattern*> pats;
   for(auto& pat:patterns)pats[pat.id]=&pat;
   int64_t cost=0;
   for(auto& c:selection.selected) {

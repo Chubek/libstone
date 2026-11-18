@@ -1,10 +1,10 @@
-# STK-00 version 1
+# STK-00 versions 1 and 2
 
 STK-00 is VMWeave's architecture-neutral, stack-effect-oriented interchange.
 `stk.cpp` is its sole text reader/writer; backends consume the owning `Module`.
-There was no existing STK-00 implementation in this checkout. This document
-defines the initial format. Changes must update reader, writer, consumers,
-examples, and tests together.
+Version 1 supports length-framed foreign C. Version 2 additionally supports
+typed abstract stack programs and may mix them with foreign C in one module.
+The canonical writer emits version 1 for modules without abstract words.
 
 ## Grammar
 
@@ -13,7 +13,7 @@ printing canonicalizes fields/instructions/components by name. Rewrite order
 preserves rule priority.
 
 ```text
-module       = "stk-00" "1"
+module       = "stk-00" ("1" | "2")
                "vm" string
                "configuration" execution cell stack-capacity frame-capacity
                    ipc-capacity allocator hooks
@@ -28,9 +28,10 @@ word         = ":" string "opcode" integer
                "operands" operand-count { string }
                "effect" string "flow" string
                "source" string line
-               c-primitive ";"
+               (c-primitive | a-primitive) ";"
 rewrite      = "rewrite" from-count { string } "to" to-count { string }
 c-primitive  = "c{" byte-count LF exactly-byte-count-bytes LF "}c"
+a-primitive  = "a{" byte-count LF exactly-byte-count-bytes LF "}a"  (version 2 only)
 ```
 
 Execution/cell/allocator values are strings. A string is double quoted; backslash
@@ -46,7 +47,7 @@ Semantic validation matches Lua: names, stack effects, flow, operand kinds,
 capacities, component dependencies, and rewrite contracts. Source locations are
 provenance independent of where the serialized module is saved.
 
-## Words and foreign C
+## Word bodies
 
 ```text
 stk-00 1
@@ -73,14 +74,33 @@ serialization/lowering verbatim. It is an explicit semantic escape, not a guess
 at how arbitrary C maps to stack arithmetic. VM stack/control/memory operations
 use the API in [README.md](README.md). Subsystem extensions use this primitive too.
 
-C lowering derives instruction implementations solely from these words. Component
-directives select runtime facilities. Built-in native lowering creates a validated
-MachineIR CFG with explicit foreign-runtime calls; the MachineIR C backend compiles
-the authoritative handlers and subsystem bodies with the selected C toolchain.
-Unsupported C or unresolved external functions are compiler/linker errors.
-Custom MachineIR adapters must also preserve foreign-C semantics; no path may
-assign meanings based on mnemonics. Native binding envelopes are defined in
-`metacode/machine-ir/README.md`; they do not change STK-00 syntax.
+Version 2 can represent the same halt behavior without C:
+
+```text
+: "HALT" opcode 0 operands 0 effect "( -- )" flow "halt" source "tiny.lua" 5
+a{ 6
+halt;
+
+}a ;
+```
+
+The abstract primitive's payload above is `halt;` followed by a newline; the
+second newline is part of the framing. It uses the generated abstract-operations
+grammar documented in [README.md](README.md). Printing uses one operation per
+line and normalizes numeric values; unlike foreign C, comments and original
+spacing are not retained. A parsed program is revalidated against the VM's cell,
+state, operand, stack-effect and flow declarations. The STK-00 word's metadata
+is mandatory even when the Lua frontend would have inferred it.
+
+C lowering derives instruction implementations solely from these words.
+Component directives select runtime facilities. Built-in native lowering creates
+a validated MachineIR CFG with explicit foreign-runtime calls; the MachineIR C
+backend compiles synthesized abstract handlers, concrete handlers and subsystem
+bodies with the selected C toolchain. Unsupported C or unresolved externals are
+compiler/linker errors. Custom MachineIR adapters must preserve both kinds of
+semantics; no path may assign meanings based on mnemonics. Native binding
+envelopes are defined in `metacode/machine-ir/README.md`; they do not change
+STK-00 syntax.
 
 Saving/reloading a canonical module produces identical C. Opcodes are already
 assigned and are never renumbered when parsing STK-00.

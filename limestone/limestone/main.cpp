@@ -1,5 +1,6 @@
 #include "limestone.hpp"
 #include "../bin2bin/bin2bin.hpp"
+#include "bin2bin/archml.hpp"
 #include "../bin2bin/object.hpp"
 #include "../metacode/metacode.hpp"
 #include "../traceml/traceml.hpp"
@@ -47,7 +48,8 @@ void help() {
       "  --emit-umd ISA             Normalize Infobank metadata to UMD\n"
        "  --select-burs              Select trees from a Limeburg rule document\n"
        "  --analyze-burs             Inspect BURS states and rejected rules\n"
-      "  --schedule-il              Schedule a textual Schedrow document\n"
+       "  --schedule-il              Schedule a textual Schedrow document\n"
+       "  --archml-schedule PROFILE MODEL  Use ArchML timing with --schedule-il\n"
       "  --modulo N                 Use modulo scheduling with initiation interval N\n"
       "  --allocate-il              Allocate textual RegTL units/functions\n"
      "  --selector global|greedy|burs  Select instruction-selection algorithm\n"
@@ -61,7 +63,8 @@ void help() {
     "  --trace                    Print Tunah matches and statistics to stderr\n"
     "  --no-optimize --no-schedule Configure portable MachineIR lowering\n"
     "  --isa FILE                 Parse and summarize an Infobank description\n"
-    "  --disassemble ISA          Decode fixed8 or masked instruction forms\n"
+     "  --disassemble ISA          Decode fixed8 or masked instruction forms\n"
+     "  --disassemble-archml PROFILE  Decode ArchML binary instruction forms\n"
     "  --decompile ISA            Lift binary code to semantic assembly\n"
     "  --translate SOURCE TARGET  Translate semantically equivalent forms\n"
     "  --cache DIRECTORY          Use a persistent LMDB translation cache\n"
@@ -71,11 +74,12 @@ void help() {
 }
 int main(int argc,char** argv) {
   try {
-    enum class Command { Compile, CompileUMD, EmitUMD, SelectBURS, AnalyzeBURS, ScheduleIL, AllocateIL, Evaluate, OptimizeTerm, ISA, Disassemble, Decompile, Translate, InspectObject, WrapObject, LinkObjects } command=Command::Compile;
+    enum class Command { Compile, CompileUMD, EmitUMD, SelectBURS, AnalyzeBURS, ScheduleIL, AllocateIL, Evaluate, OptimizeTerm, ISA, Disassemble, DisassembleArchML, Decompile, Translate, InspectObject, WrapObject, LinkObjects } command=Command::Compile;
     limestone::PipelineOptions options;std::string input,output,source,target,cache_path,pipeline_isa;bool mode_set=false;
     limestone::tunah::CostModel costs;limestone::tunah::Limits limits;limits.trace=false;
     std::vector<std::string> rule_files;bool tunah_options=false,machineir_json=false;uint32_t modulo=0;
     std::string object_symbol;std::vector<std::string> object_files;limestone::bin2bin::LinkOptions link_options;bool link_arguments=false;
+    std::optional<std::pair<std::string,std::string>> archml_schedule;
     auto next=[&](int& i){if(++i>=argc)throw std::runtime_error("missing option argument");return std::string(argv[i]);};
     auto mode=[&](Command value){if(mode_set)throw std::runtime_error("choose one operation");command=value;mode_set=true;};
     for(int i=1;i<argc;++i) {
@@ -88,6 +92,7 @@ int main(int argc,char** argv) {
       else if(arg=="--select-burs")mode(Command::SelectBURS);
       else if(arg=="--analyze-burs")mode(Command::AnalyzeBURS);
       else if(arg=="--schedule-il")mode(Command::ScheduleIL);
+      else if(arg=="--archml-schedule"){if(archml_schedule)throw std::runtime_error("choose one ArchML schedule");auto path=next(i);archml_schedule.emplace(std::move(path),next(i));}
       else if(arg=="--allocate-il")mode(Command::AllocateIL);
       else if(arg=="--modulo"){auto value=number(next(i));if(!value||value>UINT32_MAX)throw std::runtime_error("modulo interval must be a positive 32-bit integer");modulo=uint32_t(value);}
       else if(arg=="--target-isa")pipeline_isa=next(i);
@@ -122,6 +127,7 @@ int main(int argc,char** argv) {
       else if(arg=="--trace"){limits.trace=true;tunah_options=true;}
       else if(arg=="--isa"){mode(Command::ISA);source=next(i);}
       else if(arg=="--disassemble"){mode(Command::Disassemble);source=next(i);}
+      else if(arg=="--disassemble-archml"){mode(Command::DisassembleArchML);source=next(i);}
       else if(arg=="--decompile"){mode(Command::Decompile);source=next(i);}
       else if(arg=="--translate"){mode(Command::Translate);source=next(i);target=next(i);}
       else if(arg=="--no-optimize")options.optimize=false;
@@ -134,6 +140,7 @@ int main(int argc,char** argv) {
     }
     if(command!=Command::Compile&&command!=Command::CompileUMD&&(!options.optimize||!options.schedule||options.allocate||options.encode||options.trace_execution||options.selector!=limestone::SelectionStrategy::Global||(command!=Command::AllocateIL&&options.allocator!=limestone::AllocationStrategy::LinearScan)))throw std::runtime_error("pipeline options require compilation");
     if(modulo&&command!=Command::ScheduleIL)throw std::runtime_error("--modulo requires --schedule-il");
+    if(archml_schedule&&command!=Command::ScheduleIL)throw std::runtime_error("--archml-schedule requires --schedule-il");
     if(machineir_json&&(options.encode||(command!=Command::Compile&&command!=Command::CompileUMD)))throw std::runtime_error("--machineir-json requires compilation to MachineIR");
     if(!pipeline_isa.empty()&&command!=Command::Compile&&command!=Command::CompileUMD)throw std::runtime_error("--target-isa requires compilation");
     if(command==Command::CompileUMD&&options.trace_execution)throw std::runtime_error("--trace-execution requires TraceML source");
@@ -159,7 +166,21 @@ int main(int argc,char** argv) {
       else if(command==Command::WrapObject){auto target=checked(limestone::bin2bin::object_target(checked(limestone::metacode::load_isa_file(source))));auto object=checked(limestone::bin2bin::code_object(target,{reinterpret_cast<const uint8_t*>(contents.data()),contents.size()},object_symbol));auto bytes=checked(limestone::bin2bin::emit_elf(object));result.assign(bytes.begin(),bytes.end());}
       else if(command==Command::Evaluate)result=std::to_string(checked(limestone::traceml::evaluate(checked(limestone::traceml::compile(contents)))))+"\n";
       else if(command==Command::SelectBURS||command==Command::AnalyzeBURS){auto document=checked(input.empty()||input=="-"?limestone::limeburg::load_rules(contents,"<stdin>"):limestone::limeburg::load_rules_file(input));if(document.trees.empty())throw std::runtime_error("Limeburg document has no input trees");for(auto& tree:document.trees){if(command==Command::AnalyzeBURS){result+="tree "+tree.name+"\n";result+=checked(limestone::limeburg::print_analysis(checked(limestone::limeburg::analyze(tree.nodes,tree.root,document.rules,true)),document.rules));}else {auto selected=checked(limestone::limeburg::select(tree.nodes,tree.root,document.rules,tree.nonterminal));auto region=checked(limestone::limeburg::emit_scheduler(tree.nodes,document.rules,selected));region.name=tree.name;result+=limestone::schedrow::print(region)+"cost = "+std::to_string(selected.cost)+"\n";}}}
-      else if(command==Command::ScheduleIL){auto document=checked(limestone::schedrow::load_schedrow(contents,input.empty()?"<stdin>":input));for(auto& text:document.regions){auto schedule=modulo?checked(limestone::schedrow::schedule_modulo(text.region,document.machine,{modulo})):checked(limestone::schedrow::schedule(text.region,document.machine));if(modulo)checked(limestone::schedrow::verify_modulo(text.region,document.machine,schedule,modulo));else checked(limestone::schedrow::verify(text.region,document.machine,schedule));result+=limestone::schedrow::print(text.region);for(auto& s:schedule){result+="instruction "+std::to_string(s.id)+" cycle "+std::to_string(s.cycle);if(s.slot)result+=" slot "+std::to_string(*s.slot);for(auto& r:s.resources)result+=" resource "+r;result+='\n';}}}
+      else if(command==Command::ScheduleIL){
+        const auto file=input.empty()||input=="-"?"<stdin>":input;
+        auto document=archml_schedule?
+          checked(limestone::schedrow::load_schedrow(contents,file,
+            checked(limestone::metacode::ArchMLProfile::load(archml_schedule->first)),archml_schedule->second)):
+          checked(limestone::schedrow::load_schedrow(contents,file));
+        for(auto& text:document.regions) {
+          const auto& region=text.region;
+          const auto& machine=document.machine;
+          auto schedule=modulo?checked(limestone::schedrow::schedule_modulo(region,machine,{modulo})):checked(limestone::schedrow::schedule(region,machine));
+          if(modulo)checked(limestone::schedrow::verify_modulo(region,machine,schedule,modulo));else checked(limestone::schedrow::verify(region,machine,schedule));
+          result+=limestone::schedrow::print(region);
+          for(auto& s:schedule){result+="instruction "+std::to_string(s.id)+" cycle "+std::to_string(s.cycle);if(s.slot)result+=" slot "+std::to_string(*s.slot);for(auto& r:s.resources)result+=" resource "+r;result+='\n';}
+        }
+      }
       else if(command==Command::AllocateIL){auto units=checked(limestone::regtl::load_regtl(contents,input.empty()?"<stdin>":input));auto allocate=[&](const limestone::regtl::Program& p,const limestone::regtl::PbqpOptions& policy){using A=limestone::AllocationStrategy;switch(options.allocator){case A::LinearScan:return limestone::regtl::linear_scan(p);case A::Greedy:return limestone::regtl::greedy(p);case A::GraphColoring:return limestone::regtl::graph_color(p);case A::Constraint:return limestone::regtl::constraint_allocate(p);case A::PBQP:return limestone::regtl::pbqp_allocate(p,policy);}throw std::runtime_error("unknown allocator");};for(auto& unit:units){auto emit_allocation=[&](const auto& problem,const auto& allocation){result+=limestone::regtl::print(problem);std::map<uint32_t,uint32_t> assignments(allocation.regs.begin(),allocation.regs.end());for(auto [v,r]:assignments)result+="v"+std::to_string(v)+" -> physical "+std::to_string(r)+"\n";for(auto v:allocation.spilled)result+="v"+std::to_string(v)+" -> spill\n";};if(unit.functions.empty())emit_allocation(unit.problem,checked(allocate(unit.problem,unit.pbqp)));else for(auto& f:unit.functions){auto live=checked(limestone::regtl::analyze(f.function));emit_allocation(live.problem,checked(allocate(live.problem,unit.pbqp)));}}}
       else if(command==Command::OptimizeTerm){
         limestone::tunah::Session session;
@@ -174,7 +195,10 @@ int main(int argc,char** argv) {
             <<" saturated="<<optimized.saturated<<" limit_reached="<<optimized.limit_reached<<'\n';
         }
       }
-      else {
+      else if(command==Command::DisassembleArchML) {
+        auto profile=checked(limestone::metacode::ArchMLProfile::load(source));
+        result=checked(limestone::bin2bin::disassemble_archml(profile,{reinterpret_cast<const uint8_t*>(contents.data()),contents.size()}));
+      }else {
         auto src=checked(limestone::bin2bin::from_metacode(checked(limestone::metacode::load_isa_file(source))));
         std::span<const uint8_t> bytes{reinterpret_cast<const uint8_t*>(contents.data()),contents.size()};
         if(command==Command::Disassemble)result=limestone::bin2bin::disassemble(checked(limestone::bin2bin::decode(src,bytes)));

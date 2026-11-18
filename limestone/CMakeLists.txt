@@ -17,6 +17,15 @@ endif()
 include(cmake/Dependencies.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(NOT TARGET Sandstone::ArchML)
+  function(limestone_add_archml)
+    set(SANDSTONE_BUILD_TOOLS OFF)
+    set(SANDSTONE_BUILD_TESTS OFF)
+    add_subdirectory(../sandstone/archml ${CMAKE_CURRENT_BINARY_DIR}/archml)
+  endfunction()
+  limestone_add_archml()
+endif()
+
 add_library(limestone_foundation INTERFACE)
 target_compile_features(limestone_foundation INTERFACE cxx_std_20)
 target_include_directories(limestone_foundation INTERFACE
@@ -28,12 +37,12 @@ add_dependencies(limestone_parsers limestone-generate-parsers)
 target_link_libraries(limestone_parsers PUBLIC limestone_foundation PRIVATE limestone_parser_tables limestone_dparse)
 target_include_directories(limestone_parsers PUBLIC $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>)
 
-add_library(metacode STATIC metacode/metacode.cpp metacode/json.cpp metacode/operand_constraints.cpp)
+add_library(metacode STATIC metacode/metacode.cpp metacode/json.cpp metacode/operand_constraints.cpp metacode/archml.cpp)
 target_link_libraries(metacode PUBLIC limestone_foundation)
-target_link_libraries(metacode PRIVATE limestone_parser_tables limestone_dparse)
+target_link_libraries(metacode PRIVATE limestone_parser_tables limestone_dparse Sandstone::ArchML)
 target_include_directories(metacode PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/metacode> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/metacode>)
 
-add_library(schedrow STATIC schedrow/schedrow.cpp schedrow/modulo.cpp schedrow/cfg.cpp schedrow/groups.cpp schedrow/timing.cpp schedrow/motion.cpp)
+add_library(schedrow STATIC schedrow/schedrow.cpp schedrow/modulo.cpp schedrow/cfg.cpp schedrow/groups.cpp schedrow/timing.cpp schedrow/motion.cpp schedrow/archml.cpp)
 target_link_libraries(schedrow PUBLIC limestone_foundation metacode)
 target_include_directories(schedrow PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/schedrow> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/schedrow>)
 
@@ -72,7 +81,7 @@ add_library(limestone_selection_contracts STATIC limestone/selection.cpp)
 target_link_libraries(limestone_selection_contracts PUBLIC limestone_foundation PRIVATE metacode)
 target_link_libraries(limestone_il PUBLIC limestone_foundation PRIVATE unisel limeburg_text schedrow_text regtl_text limestone_selection_contracts)
 
-add_library(bin2bin STATIC bin2bin/bin2bin.cpp bin2bin/codec.cpp bin2bin/native_codec.cpp bin2bin/decompiler.cpp bin2bin/runtime.cpp)
+add_library(bin2bin STATIC bin2bin/bin2bin.cpp bin2bin/codec.cpp bin2bin/native_codec.cpp bin2bin/decompiler.cpp bin2bin/runtime.cpp bin2bin/archml.cpp)
 target_link_libraries(bin2bin PUBLIC limestone_foundation metacode PRIVATE $<BUILD_INTERFACE:metatk::sexprtk>)
 if(LIMESTONE_ENABLE_PERSISTENT_CACHE)
   target_link_libraries(bin2bin PRIVATE $<BUILD_INTERFACE:limestone_lmdb> $<INSTALL_INTERFACE:Limestone::lmdb>)
@@ -106,10 +115,48 @@ target_link_libraries(tunah_stages PUBLIC tunah_unisel limeburg regtl traceml ma
 add_library(limestone_optimization STATIC limestone/optimization.cpp)
 target_link_libraries(limestone_optimization PUBLIC limestone_foundation PRIVATE tunah_unisel tunah_bin2bin)
 
-add_library(traceml STATIC traceml/traceml.cpp traceml/pipeline_adapter.cpp traceml/native.cpp)
+set(traceml_sources "${CMAKE_CURRENT_SOURCE_DIR}/traceml")
+set(traceml_generated "${PROJECT_BINARY_DIR}/generated/traceml")
+set(traceml_scripts "${CMAKE_CURRENT_SOURCE_DIR}/../scripts")
+add_custom_command(
+  OUTPUT "${traceml_generated}/TraceSourceAST.h" "${traceml_generated}/TraceSourceAST.c"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${traceml_generated}"
+  COMMAND "${PERL_EXECUTABLE}" "${traceml_scripts}/asdl.pl"
+          --header "${traceml_generated}/TraceSourceAST.h" --source "${traceml_generated}/TraceSourceAST.c"
+          "${traceml_sources}/TraceSource.asdl"
+  DEPENDS "${traceml_sources}/TraceSource.asdl" "${traceml_scripts}/asdl.pl" VERBATIM)
+add_custom_command(
+  OUTPUT "${traceml_generated}/TraceSourceParser.c"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${traceml_generated}"
+  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
+          "-DGENERATOR=${traceml_scripts}/aurocks.pl" "-DGRAMMAR=${traceml_sources}/TraceSource.g"
+          "-DOUTPUT=${traceml_generated}/TraceSourceParser.c" -P "${traceml_sources}/GenerateParser.cmake"
+  DEPENDS "${traceml_sources}/TraceSource.g" "${traceml_sources}/GenerateParser.cmake"
+          "${traceml_scripts}/aurocks.pl" VERBATIM)
+
+add_library(traceml_runtime STATIC traceml/runtime.c)
+set_target_properties(traceml_runtime PROPERTIES OUTPUT_NAME traceml
+  C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON)
+target_compile_features(traceml_runtime PUBLIC c_std_99)
+target_include_directories(traceml_runtime PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+libstone_warnings(traceml_runtime)
+
+add_library(traceml STATIC traceml/traceml.cpp traceml/pipeline_adapter.cpp traceml/native.cpp
+  traceml/cesk_theta.cpp traceml/source.cpp traceml/c99.cpp
+  "${traceml_generated}/TraceSourceAST.c" "${traceml_generated}/TraceSourceAST.h"
+  "${traceml_generated}/TraceSourceParser.c")
+set_target_properties(traceml PROPERTIES OUTPUT_NAME limestone_traceml)
+target_compile_features(traceml PRIVATE c_std_11)
 target_link_libraries(traceml PUBLIC limestone_foundation unisel)
-target_link_libraries(traceml PRIVATE limestone_parser_tables limestone_dparse $<BUILD_INTERFACE:metatk::sexprtk>)
+target_link_libraries(traceml PRIVATE Threads::Threads)
 target_include_directories(traceml PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/traceml> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/traceml>)
+target_include_directories(traceml PRIVATE "${traceml_generated}")
+if(LIMESTONE_BUILD_TOOLS OR LIMESTONE_BUILD_TESTS)
+  add_executable(traceml-cli traceml/main.cpp)
+  target_link_libraries(traceml-cli PRIVATE traceml)
+  add_dependencies(traceml-cli traceml_runtime)
+endif()
 add_library(limestone_traceml_api STATIC limestone/traceml.cpp)
 target_link_libraries(limestone_traceml_api PUBLIC traceml)
 
@@ -147,6 +194,24 @@ if(LIMESTONE_BUILD_TOOLS OR LIMESTONE_BUILD_TESTS)
 endif()
 include(cmake/Install.cmake)
 if(LIMESTONE_BUILD_TESTS)
+add_executable(limestone-cesk-theta-test traceml/tests/cesk_theta.cpp)
+target_link_libraries(limestone-cesk-theta-test PRIVATE traceml)
+add_test(NAME traceml-cesk-theta COMMAND limestone-cesk-theta-test)
+if(NOT CMAKE_CROSSCOMPILING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  add_test(NAME traceml-c99 COMMAND "${CMAKE_COMMAND}"
+    "-DCLI=$<TARGET_FILE:traceml-cli>" "-DRUNTIME=$<TARGET_FILE:traceml_runtime>"
+    "-DCC=${CMAKE_C_COMPILER}" "-DCC_ID=${CMAKE_C_COMPILER_ID}"
+    "-DCFLAGS=${CMAKE_C_FLAGS}" "-DLINK_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "-DINCLUDE_DIR=${PROJECT_SOURCE_DIR}" "-DSOURCE=${traceml_sources}" "-DBINARY=${PROJECT_BINARY_DIR}"
+    -P "${traceml_sources}/tests/c99.cmake")
+  set_tests_properties(traceml-c99 PROPERTIES TIMEOUT 30)
+endif()
+add_executable(limestone-selection-slice-test limeburg/tests/selection_slice.cpp)
+target_link_libraries(limestone-selection-slice-test PRIVATE limeburg_umd)
+add_test(NAME selection-slice COMMAND limestone-selection-slice-test)
+add_executable(limestone-archml-test tests/archml.cpp)
+target_link_libraries(limestone-archml-test PRIVATE bin2bin schedrow_text)
+add_test(NAME limestone-archml COMMAND limestone-archml-test ${PROJECT_SOURCE_DIR}/../sandstone/archml/stdspec)
 add_executable(limestone-text-il-test tests/text_il.cpp)
 target_link_libraries(limestone-text-il-test PRIVATE limeburg_text schedrow_text regtl_text)
 add_test(NAME text-il COMMAND limestone-text-il-test ${PROJECT_SOURCE_DIR}/tests/fixtures)
@@ -189,7 +254,15 @@ target_compile_options(limestone-smoke PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-U
 foreach(suite IN ITEMS metadata selection scheduling allocation optimization traceml binary pipeline interop)
   add_executable(limestone-${suite}-test tests/${suite}.cpp)
   target_include_directories(limestone-${suite}-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_link_libraries(limestone-${suite}-test PRIVATE metacode schedrow regtl limeburg unisel bin2bin tunah traceml exolayer limestone_core)
+  if(suite STREQUAL "selection")
+    target_link_libraries(limestone-${suite}-test PRIVATE limeburg_umd)
+  elseif(suite STREQUAL "traceml")
+    target_link_libraries(limestone-${suite}-test PRIVATE traceml)
+  elseif(suite STREQUAL "scheduling")
+    target_link_libraries(limestone-${suite}-test PRIVATE schedrow)
+  else()
+    target_link_libraries(limestone-${suite}-test PRIVATE metacode schedrow regtl limeburg unisel bin2bin tunah traceml exolayer limestone_core)
+  endif()
 endforeach()
 add_test(NAME metadata COMMAND limestone-metadata-test ${CMAKE_CURRENT_SOURCE_DIR}/metacode/infobank/isa)
 foreach(suite IN ITEMS selection scheduling allocation optimization traceml pipeline)

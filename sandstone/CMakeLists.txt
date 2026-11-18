@@ -37,7 +37,7 @@ endif()
 if(SANDSTONE_BUILD_SANDSLAB)
   add_subdirectory(sandslab)
 endif()
-if(SANDSTONE_BUILD_ARCHML)
+if(SANDSTONE_BUILD_ARCHML AND NOT TARGET Sandstone::ArchML)
   add_subdirectory(archml)
 endif()
 

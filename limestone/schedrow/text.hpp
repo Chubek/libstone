@@ -1,6 +1,7 @@
 #pragma once
 #include "schedrow.hpp"
 #include "metacode/metacode.hpp"
+#include "metacode/archml.hpp"
 #include <map>
 
 namespace limestone::schedrow {
@@ -17,5 +18,9 @@ struct SchedulingDocument {
   std::vector<TextRegion> regions;
 };
 Result<SchedulingDocument> load_schedrow(std::string_view,std::string_view file="<schedrow>");
+// Uses ArchML for default latency and replaces the document's issue/resource
+// model, while retaining the document's register aliases and search policy.
+Result<SchedulingDocument> load_schedrow(std::string_view,std::string_view file,
+                                        const metacode::ArchMLProfile&,std::string_view microarchitecture);
 Result<std::string> print_schedrow(const SchedulingDocument&);
 }

@@ -1,19 +1,20 @@
 # VMWeave
 
 VMWeave compiles declarative Lua VM descriptions into a validated owning model,
-versioned **STK-00**, and embeddable **C99** runtimes. C instruction bodies are the
-authoritative semantics. The frontend uses `third_party/kaguya`; Lua does not
-implement a second code generator.
+versioned **STK-00**, and embeddable **C99** runtimes. Each instruction defines its
+behavior using either abstract stack operations or a concrete C body. The
+frontend uses `third_party/kaguya`; Lua does not implement a second code generator.
 
 ```text
 Lua description -> VM model -> STK-00 -> C components
-                                     -> MachineIRAdapter -> MachineIR exchange
+                                     -> MachineIR -> host compiler -> native image
 ```
 
 ## Build and generate
 
-VMWeave requires Lua 5.4 or 5.3 development headers/libraries. Kaguya in this
-checkout does not support Lua 5.5's changed GC API.
+VMWeave uses the Lua and Kaguya sources in Limestone's build and a compatibility
+adapter for Lua 5.5. Perl runs `scripts/aurocks.pl` and `scripts/asdl.pl` to generate
+the abstract-semantics grammar and syntax tree in the build tree.
 
 ```sh
 cmake -S . -B build
@@ -71,13 +72,71 @@ Fields/instructions are sorted by name. Missing opcodes take the first unused
 nonnegative integer in that order. Explicit opcodes must be unique and within
 0..2147483647; pin them for persistent bytecode formats.
 
-Instructions accept `name`, `opcode`, `operands`, `semantics` (legacy alias
-`body`), `stack_effect`, `flow`, and `source`. At most 16 operands are supported,
-each `cell` or `label`. Flow is next/jump/branch/call/return/halt. Default body is
-empty, effect `( -- )`, flow next. Supply accurate effects: dispatch checks input
-depth, output capacity, and final depth. Table declarations retain file-level
-provenance; an explicit `source` can supply precise lines when Lua tail calls
-remove the caller frame.
+Instructions accept `name`, `opcode`, `operands`, `abstract` or `semantics` (legacy
+alias `body`), `stack_effect`, `flow`, and `source`. At most 16 operands are
+supported, each `cell` or `label`. Flow is next/jump/branch/call/return/halt.
+Concrete instructions default to an empty body, effect `( -- )` and flow next.
+Supply accurate effects: dispatch checks input depth, output capacity, and
+final depth. Table declarations retain file-level provenance; an explicit
+`source` can supply precise lines when Lua tail calls remove the caller frame.
+
+### Abstract stack semantics
+
+```lua
+{ name="LOAD_IMM", operands={"cell"}, abstract="operand 0;" }
+{ name="INCREMENT", abstract="const 1; add;" }
+{ name="BRANCH_ZERO", operands={"label"}, abstract="jump_zero 0;" }
+```
+
+Abstract bodies are sequences of semicolon-terminated operations with decimal
+arguments and optional `#` line comments. Bodies are limited to 64 KiB and 256
+operations. An empty body is a no-op. `abstract` cannot be combined with `body`
+or `semantics`, even when the latter is empty. The verifier derives the minimum
+instruction input/output stack depths and final control-flow category; if
+specified, `stack_effect` (depths only) and `flow` must agree. The source is parsed
+by the generated parser once on load and becomes typed STK-00 operations.
+
+| Operation | Stack effect / behavior |
+| --- | --- |
+| `const n;` | `( -- n )` Push a decimal cell literal |
+| `operand i;` | `( -- value )` Read declared zero-based `cell` operand `i` |
+| `load field;`, `store field;` | `( -- value )`, `( value -- )` Read/write scalar VM state |
+| `drop;`, `dup;`, `swap;` | `( a -- )`, `( a -- a a )`, `( a b -- b a )` |
+| `add;`, `sub;`, `mul;`, `div;` | `( a b -- result )` Evaluate `a op b` |
+| `eq;`, `lt;` | `( a b -- flag )` Compare `a` to `b`, push 0 or 1 |
+| `jump i;`, `jump_zero i;` | Unconditional jump, or pop a flag and jump if zero; `i` is a `label` operand index |
+| `halt;` | Stop the current run successfully |
+
+Jump, conditional jump and halt must be the last operation. Abstract `load` and
+`store` require a scalar `i64` field with `int64_t` cells or a scalar `u64` field
+with `uint64_t` cells. `intptr_t` constants are restricted to signed 32-bit range
+so the same specification can generate for 32- and 64-bit hosts.
+
+Lowering generates straight-line C, not a second runtime interpreter. Intermediate
+values are C temporaries and do not use guest stack capacity; the input window
+is checked before execution and the final output window is committed only on
+success. Completed `store` operations are not rolled back on a subsequent trap.
+Signed arithmetic traps on overflow; unsigned addition, subtraction and
+multiplication wrap modulo 2^64. Division by zero or signed overflow returns
+sticky status `-10`.
+
+The [mixed calculator](examples/abstract_calculator.lua) computes `42` with
+[`abstract_calculator.tape`](examples/abstract_calculator.tape). It combines
+synthesized arithmetic and branching with a concrete C state update:
+
+```sh
+build/vmweave/vmweave-cli --generate -o build/abstract-vm vmweave/examples/abstract_calculator.lua
+build/vmweave/vmweave-cli --native \
+  --program vmweave/examples/abstract_calculator.tape \
+  -o build/abstract-native build/abstract-vm/AbstractCalculator.stk00
+```
+
+There is no abstract support for arrays, objects, frames, foreign calls, or
+loops inside a handler; use concrete C when those are required. Decoded VM
+tapes do not need target bit encodings, so this path has no direct ArchML
+dependency.
+
+### Concrete C semantics
 
 | C semantic operation | Meaning |
 | --- | --- |
@@ -234,10 +293,14 @@ optimized and reference execution; no equivalence is inferred from names.
 
 `vmweave/vmweave.hpp` exposes `load_lua/load_file`, `validate`, `lower`,
 `print_stk/parse_stk`, `emit_c`, and `generate`, using owning models and `Result<T>`.
-Kaguya types remain private. Installed consumers link `Limestone::vmweave`.
+`parse_abstract` produces an owning `AbstractProgram` for `Instruction::abstract`.
+C++ users can also construct these typed operations directly; `validate` checks
+their arguments and VM constraints. Leave a C++ instruction's `stack_effect`
+or `flow` empty to request defaults or inference. Kaguya and generated parser
+types remain private. Installed consumers link `Limestone::vmweave`.
 
-`MachineIRAdapter::lower(Module)` must compile authoritative foreign-C primitives
-and return the existing `metacode/machine-ir` region-exchange format.
+`MachineIRAdapter::lower(Module)` must respect abstract programs and foreign-C
+primitives and return the existing `metacode/machine-ir` region-exchange format.
 `emit_machineir` validates/canonicalizes through `machineir_bridge`. Target
 metadata, assembly, and encoding remain in downstream MachineIR backends.
 
@@ -255,9 +318,11 @@ STK-00 + validated tape
 
 The MachineIR entry has SSA values and conservative memory/call/trap effects.
 Each foreign binding invokes the same generated C handler as the interpreter;
-arbitrary C99 semantics and subsystem extensions are compiled by the C toolchain.
-Names never imply semantics. The backend owns ABI lowering, compilation, loading,
-and executable lifetime. It does not need an application-provided semantic frontend.
+this includes C synthesized from abstract semantics, foreign C99 handlers, and
+subsystem extensions. Abstract arithmetic is not lowered directly into individual
+MachineIR operations by the built-in native backend. Names never imply semantics.
+The backend owns ABI lowering, compilation, loading, and executable lifetime. It
+does not need an application-provided semantic frontend.
 
 ```sh
 build/vmweave/vmweave-cli --native \
