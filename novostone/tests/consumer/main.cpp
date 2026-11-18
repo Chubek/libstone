@@ -1,6 +1,13 @@
 #include <novostone/CostCC/CostCC.hpp>
+#include <novostone/PCC/Native.hpp>
+#include <novostone/PCC/SMTProof.hpp>
 #include <novostone/SpeculativeIR/SpeculativeIR.hpp>
 #include <novostone/ActionSemantics/ActionSemantics.hpp>
+
+#ifdef TEST_PCC_PACKAGE
+#include <novostone/PCC/Package.hpp>
+#include <sstream>
+#endif
 
 int main() {
   using namespace novostone;
@@ -28,5 +35,39 @@ int main() {
   auto version = speculative::Version::specialize(source, assumptions, {{argument, 42, id}});
   assumptions->invalidate(id);
   auto recovered = version.execute({7});
-  return recovered.failed_guard && recovered.outcome.value == 7 ? 0 : 3;
+  if (!recovered.failed_guard || recovered.outcome.value != 7) return 3;
+
+  auto proof_input = ir::parse(
+      "novostone 1 0 1\n"
+      "block 1\n"
+      "instr 2 const 40 0 0\n"
+      "instr 3 const 2 0 0\n"
+      "instr 4 add 0 2 2 3 0\n"
+      "instr 5 return 0 1 4 0\n");
+  auto artifact = pcc::build(proof_input, pcc::RewriteConstraints{});
+  auto proof = pcc::emit_smt_proof(artifact);
+  if (artifact.transformations().size() != 1 ||
+      proof.obligations.size() != 1) return 5;
+  auto result = pcc::run_smtlib2(proof.obligations.front());
+  if (pcc::satie_smtlib2_available() &&
+      result.status != pcc::ObligationStatus::UnsatProved) return 6;
+  if (!pcc::satie_smtlib2_available() &&
+      result.status != pcc::ObligationStatus::Unknown) return 7;
+  const auto native = pcc::lower_native(artifact.transformed());
+  if (!native.program) return 8;
+  const auto checked = pcc::verify_native(artifact.transformed(), *native.program);
+  if (!checked.binding_checked || checked.assembly.empty()) return 9;
+  if (checked.status != (pcc::satie_smtlib2_available()
+                            ? pcc::NativeStatus::Proved
+                            : pcc::NativeStatus::Unknown)) return 10;
+#ifdef TEST_PCC_PACKAGE
+  std::istringstream invalid;
+  try {
+    (void)pcc::read_package(invalid);
+    return 11;
+  } catch (const pcc::PackageError&) {
+    // The installed package target performs the same bounded framing checks.
+  }
+#endif
+  return 0;
 }

@@ -207,12 +207,18 @@ std::optional<Rewrite> step(const ccdb::Snapshot& snapshot, ir::Function& f, Bud
   return std::nullopt;
 }
 }
-Candidate baseline(const ccdb::Snapshot& snapshot) { eligible(snapshot); return {snapshot, snapshot, {}, false}; }
+Candidate baseline(const ccdb::Snapshot& snapshot) {
+  eligible(snapshot);
+  return {snapshot, snapshot, {}, false, {}, 0, 0, Options{0}};
+}
 Candidate optimize(const ccdb::Snapshot& snapshot, std::size_t budget) {
   Options options; options.rewrites = budget;
   return optimize(snapshot, options);
 }
 Candidate optimize(const ccdb::Snapshot& snapshot, Options options) {
+  return optimize(snapshot, options, {});
+}
+Candidate optimize(const ccdb::Snapshot& snapshot, Options options, const RewriteObserver& observer) {
   eligible(snapshot);
   ccdb::Database scratch(ir::program(), [](const auto& s) { ir::verify(s); });
   auto transaction = scratch.begin();
@@ -220,20 +226,29 @@ Candidate optimize(const ccdb::Snapshot& snapshot, Options options) {
   auto current = transaction.commit("optimization input");
   std::vector<Rewrite> rewrites;
   Budget budget{options};
-  try {
-    for (std::size_t n = 0; n < options.rewrites; ++n) {
-      auto f = ir::load(current);
+  auto on_exhausted = [&](const datalog::BudgetExceeded& error) {
+    // Tentative work is private. Return the last committed, verified prefix.
+    return Candidate{snapshot, current, std::move(rewrites), true, error.what(),
+                     budget.work, budget.analysis_work, options};
+  };
+  for (std::size_t n = 0; n < options.rewrites; ++n) {
+    auto f = ir::load(current);
+    try {
       auto rewrite = step(current, f, budget);
-      if (!rewrite) return {snapshot, current, std::move(rewrites), false, {}, budget.work, budget.analysis_work};
+      if (!rewrite) return {snapshot, current, std::move(rewrites), false, {}, budget.work, budget.analysis_work, options};
       current = ir::publish(scratch, current, f, rewrite->rule);
       rewrites.push_back(std::move(*rewrite));
+    } catch (const datalog::BudgetExceeded& error) {
+      return on_exhausted(error);
     }
+    if (observer) observer(rewrites.back(), f);
+  }
+  try {
     auto f = ir::load(current);
     bool exhausted = step(current, f, budget).has_value();
-    return {snapshot, current, std::move(rewrites), exhausted, exhausted ? "rewrite limit reached" : "", budget.work, budget.analysis_work};
+    return {snapshot, current, std::move(rewrites), exhausted, exhausted ? "rewrite limit reached" : "", budget.work, budget.analysis_work, options};
   } catch (const datalog::BudgetExceeded& error) {
-    // Tentative work is private. Return the last committed, verified prefix.
-    return {snapshot, current, std::move(rewrites), true, error.what(), budget.work, budget.analysis_work};
+    return on_exhausted(error);
   }
 }
 ccdb::Snapshot apply(ccdb::Database& database, const Candidate& candidate) {

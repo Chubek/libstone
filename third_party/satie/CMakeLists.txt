@@ -44,6 +44,7 @@ endif()
 # ------------------------------------------------------------
 add_library(satie STATIC)
 add_library(satie::satie ALIAS satie)
+set_target_properties(satie PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(satie
   PUBLIC
@@ -99,15 +100,23 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
 
-# Ship only bundled dependency headers that actually exist in this archive.
-install(FILES
+# Ship optional bundled dependency headers only when this source archive
+# contains them.  Some vendored distributions intentionally leave QaMRpp
+# unpopulated when the corresponding plugin support is disabled.
+set(satie_qamrpp_headers
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QaMRpp/include/QaMRpp.hpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QaMRpp/include/QaMRpp-Plugin.hpp
-  DESTINATION third_party/QaMRpp/include)
-
-install(FILES
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QaMRpp/qlib/C/QaMRpp-Library.h
-  DESTINATION third_party/QaMRpp/qlib/C)
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QaMRpp/include/QaMRpp-Plugin.hpp)
+foreach(header IN LISTS satie_qamrpp_headers)
+  if(EXISTS "${header}")
+    install(FILES "${header}" DESTINATION third_party/QaMRpp/include)
+  endif()
+endforeach()
+set(satie_qamrpp_library
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QaMRpp/qlib/C/QaMRpp-Library.h)
+if(EXISTS "${satie_qamrpp_library}")
+  install(FILES "${satie_qamrpp_library}"
+    DESTINATION third_party/QaMRpp/qlib/C)
+endif()
 
 install(EXPORT SatieTargets
   FILE SatieTargets.cmake

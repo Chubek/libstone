@@ -1,4 +1,10 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
+if(@NOVOSTONE_PCC_PACKAGE_REQUIRES_SATIE@)
+  find_dependency(Satie 0.1 CONFIG)
+endif()
+if(@NOVOSTONE_PCC_PACKAGE_REQUIRES_OPENSSL@)
+  find_dependency(OpenSSL 3.0 COMPONENTS Crypto)
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/NovostoneTargets.cmake")

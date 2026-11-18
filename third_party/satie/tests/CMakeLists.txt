@@ -2,30 +2,37 @@
 # tests/catch_shim.hpp provides the macro surface so no external Catch2
 # dependency or network fetch is required.
 
-add_executable(satie_tests
-  satie_tests.cpp
-  catch_shim.hpp
-  test_common.hpp
-  test_dsltk.hpp
-  test_plugins.hpp
-  test_solvers.hpp
-  test_capi.hpp
-  test_module.hpp
-  test_dt.hpp
-  test_frontends.hpp
-  test_stdlib.hpp)
+set(satie_qamrpp_header
+  "${PROJECT_SOURCE_DIR}/third_party/QaMRpp/include/QaMRpp.hpp")
+if(EXISTS "${satie_qamrpp_header}")
+  add_executable(satie_tests
+    satie_tests.cpp
+    catch_shim.hpp
+    test_common.hpp
+    test_dsltk.hpp
+    test_plugins.hpp
+    test_solvers.hpp
+    test_capi.hpp
+    test_module.hpp
+    test_dt.hpp
+    test_frontends.hpp
+    test_stdlib.hpp)
 
-target_link_libraries(satie_tests PRIVATE satie::satie satie::stdlib)
-target_include_directories(satie_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(satie_tests PRIVATE
-  SATIE_STDLIB_DIR="${CMAKE_SOURCE_DIR}/stdlib")
+  target_link_libraries(satie_tests PRIVATE satie::satie satie::stdlib)
+  target_include_directories(satie_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(satie_tests PRIVATE
+    SATIE_STDLIB_DIR="${CMAKE_SOURCE_DIR}/stdlib")
 
-# Compile flags inherited from the satie target; keep tests strict too.
-target_compile_options(satie_tests PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wall -Wextra -Wpedantic>)
+  # Compile flags inherited from the satie target; keep tests strict too.
+  target_compile_options(satie_tests PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wall -Wextra -Wpedantic>)
 
-include(CTest)
-add_test(NAME satie_tests COMMAND satie_tests)
+  add_test(NAME satie_tests COMMAND satie_tests)
+else()
+  message(STATUS
+    "Skipping Satie plugin/stdlib aggregate tests: optional QaMRpp header "
+    "${satie_qamrpp_header} is absent")
+endif()
 
 # SAT core tests can run even when optional plugin headers are unavailable.
 add_executable(satie_sat_tests satie_sat_tests.cpp test_theory.hpp)

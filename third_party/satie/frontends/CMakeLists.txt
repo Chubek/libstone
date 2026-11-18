@@ -1,39 +1,58 @@
 # Frontends — compiled D modules plus the C++ consumer interface.
 # C++ implementations remain part of satie; the D archive is built whenever
-# a D compiler is available, independently of BUILD_TESTING.
+# a D compiler and complete source set are available, independently of
+# BUILD_TESTING.
 
 set(SATIE_D_MODULES
   Common.d CNF.d IPASIR.d OPB.d SatieLisp.d SMT-LIB2.d WCNF.d)
 set(SATIE_D_MODULE_NAMES
   common cnf ipasir opb satielisp smt_lib2 wcnf)
 
-install(FILES ${SATIE_D_MODULES} ipasir_smoke.d
-  DESTINATION ${CMAKE_INSTALL_DATADIR}/satie/frontends)
-
-# Single-module compilation and D consumers need the import paths to match
-# the module declarations (satie.common, satie.smt_lib2, and so on).
-set(satie_d_sources)
-foreach(index RANGE 0 6)
-  list(GET SATIE_D_MODULES ${index} source)
-  list(GET SATIE_D_MODULE_NAMES ${index} module_name)
-  set(module_source "${CMAKE_CURRENT_BINARY_DIR}/satie/${module_name}.d")
-  configure_file("${source}" "${module_source}" COPYONLY)
-  list(APPEND satie_d_sources "${module_source}")
-endforeach()
-install(FILES ${satie_d_sources}
-  DESTINATION ${CMAKE_INSTALL_DATADIR}/satie/frontends/satie)
-
 find_program(D_COMPILER NAMES ldc2 dmd gdc)
+set(satie_d_sources_available ON)
+foreach(source IN LISTS SATIE_D_MODULES)
+  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+    set(satie_d_sources_available OFF)
+  endif()
+endforeach()
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ipasir_smoke.d")
+  set(satie_d_sources_available OFF)
+endif()
+
 set(satie_d_default OFF)
-if(D_COMPILER)
+if(D_COMPILER AND satie_d_sources_available)
   set(satie_d_default ON)
 endif()
 option(BUILD_D_FRONTENDS "Build the D frontend library" ${satie_d_default})
 
+set(satie_d_sources)
+if(satie_d_sources_available)
+  install(FILES ${SATIE_D_MODULES} ipasir_smoke.d
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/satie/frontends)
+
+  # Single-module compilation and D consumers need the import paths to match
+  # the module declarations (satie.common, satie.smt_lib2, and so on).
+  foreach(index RANGE 0 6)
+    list(GET SATIE_D_MODULES ${index} source)
+    list(GET SATIE_D_MODULE_NAMES ${index} module_name)
+    set(module_source "${CMAKE_CURRENT_BINARY_DIR}/satie/${module_name}.d")
+    configure_file("${source}" "${module_source}" COPYONLY)
+    list(APPEND satie_d_sources "${module_source}")
+  endforeach()
+  install(FILES ${satie_d_sources}
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/satie/frontends/satie)
+endif()
+
 if(BUILD_D_FRONTENDS)
+  if(NOT satie_d_sources_available)
+    message(FATAL_ERROR
+      "BUILD_D_FRONTENDS requires the complete D source set in "
+      "${CMAKE_CURRENT_SOURCE_DIR}")
+  endif()
   if(NOT D_COMPILER)
     message(FATAL_ERROR "BUILD_D_FRONTENDS requires ldc2, dmd, or gdc; set D_COMPILER to its path")
   endif()
+
   execute_process(COMMAND "${D_COMPILER}" --version
     OUTPUT_VARIABLE d_version ERROR_VARIABLE d_version_error
     RESULT_VARIABLE d_version_result)

@@ -1,9 +1,11 @@
 # Novostone
 
 Executable compiler-method libraries based on
-`/mnt/aleph/dossier-on-modern-cc-design/` as the design source of truth. The six compiler-method components form a small, testable
-compiler substrate with relational analysis, transactional optimization,
-speculation/recovery, and learned profitability decisions.
+`/mnt/aleph/dossier-on-modern-cc-design/` as the design source of truth. The
+seven compiler-method components form a small, testable compiler substrate with
+relational analysis, transactional optimization, speculation/recovery,
+proof-carrying rewrites, checked register allocation and native lowering, and learned
+profitability decisions.
 
 The independent [ActionSemantics](ActionSemantics/README.md) language synthesizer
 uses Mosses and Watt's Action Semantics framework. Its Aurocks/ASDL frontend
@@ -20,6 +22,8 @@ or Pascal interpreters and LaTeX documents.
 | `Novostone::QueryBasedIR` / `QueryBasedIR` | Declarative rewrites, conditional constant propagation, rooted DCE, CFG simplification, CSE, forwarding, differential validation | Chapters 09, 39 |
 | `Novostone::SpeculativeIR` / `SpeculativeIR` | Explicit assumptions, guards, frame snapshots, parameter specialization, invalidation, resumable deoptimization | Chapters 03, 04 |
 | `Novostone::CostCC` / `CostCC` | Target-specific ridge regression, calibration, model persistence, drift quarantine, fallback, ranking and measurement logs | Chapters 11, 27 |
+| `Novostone::PCC` / `PCC` | Deterministic constrained rewrite artifacts, SMT-LIB2 obligations for all built-in rewrites, and abstract and x86-64 SysV register-allocation checks | Proof-carrying optimization vertical slice |
+| `Novostone::PCCPackage` / `PCC` (optional) | Signed source-level packages, independent proof replay, and a verifier for OpenSSH forced-command deployment | Authenticated proof distribution |
 | `Novostone::ActionSemantics` / `ActionSemantics` | `.acsem` parser, generated AST/visitor, validated action equations, five synthesis targets | Mosses and Watt's Action Semantics |
 
 Dependency order:
@@ -27,11 +31,15 @@ Dependency order:
 ```text
 Datalog -> CCDB -> DatabaseBasedIR -> QueryBasedIR -> CostCC
                                  -> SpeculativeIR
+                                 -> PCC
 ```
 
 All IR libraries use the same CCDB/Datalog implementation. No external database,
-solver, package download, or machine-learning runtime is required. Public headers
-live at `novostone/<component>/<component>.hpp` in namespace `novostone`.
+package download, solver, or machine-learning runtime is required for the core
+libraries. PCC optionally uses the separately compiled vendored Satie SMT-LIB2
+frontend; without it, obligations are emitted with `Unknown` discharge status.
+Public headers live at `novostone/<component>/<component>.hpp` in namespace
+`novostone`.
 
 ## Build, test, and run
 
@@ -44,6 +52,8 @@ build-novostone/novostone optimize novostone/examples/wrapping.nir
 build-novostone/novostone run novostone/examples/sum-loop.nir 10
 build-novostone/novostone analyze novostone/examples/sum-loop.nir
 build-novostone/novostone optimize novostone/examples/equal-phi.nir
+build-novostone/novostone pcc novostone/examples/pcc.nir \
+  --frontend smtlib2 --transforms constant_folding,local_cse
 build-novostone/novostone validate novostone/examples/wrapping.nir novostone/examples/wrapping.nir 728
 build-novostone/novostone datalog novostone/examples/reachability.dl Reach
 build-novostone/novostone format-datalog novostone/examples/reachability.dl
@@ -66,6 +76,13 @@ Rust, Free Pascal, and LaTeX toolchains.
 `BUILD_SHARED_LIBS=ON` builds shared libraries; Unix installations use relative
 runtime paths so the CLI and transitive libraries resolve within the prefix.
 
+PCC options are `NOVOSTONE_PCC_USE_SATIE` (default `ON`) and
+`NOVOSTONE_PCC_REQUIRE_SATIE` (default `OFF`). When no compiled Satie package is
+discoverable, PCC remains usable as an emitter and reports checking as
+`Unknown`. Set `NOVOSTONE_PCC_SIGNED_PACKAGES=ON` to build the signed package
+tools with OpenSSL 3 Crypto. See [PCC/README.md](PCC/README.md) for the Satie
+build, proof coverage, CLI formats, and native verification limits.
+
 Installation exports a relocatable CMake package:
 
 ```sh
@@ -77,7 +94,8 @@ ctest --test-dir build-novostone-consumer --output-on-failure
 
 ```cmake
 find_package(Novostone CONFIG REQUIRED)
-target_link_libraries(my_compiler PRIVATE Novostone::QueryBasedIR Novostone::SpeculativeIR)
+target_link_libraries(my_compiler PRIVATE
+  Novostone::QueryBasedIR Novostone::SpeculativeIR Novostone::PCC)
 ```
 
 ## Build and optimize a function
@@ -451,6 +469,59 @@ argument count is rejected. `Reduction::explain()` includes the input, outcomes,
 work counters, and stopping status. Reduction is deterministic and greedy; it
 does not claim a globally minimal input or minimize the programs themselves.
 
+## Proof-carrying optimization
+
+`pcc::build(function, constraints)` packages the verified source IR, a complete
+source SCCP fixed point, deterministic optimizer work counters, the accepted
+rewrite prefix, its stopping reason, and transformed IR. The default constraint
+set permits only constant folding and local CSE. Selection stops before the first
+disallowed QueryBasedIR rewrite, so a later allowed rule is never reordered
+across a policy boundary.
+
+```cpp
+#include <novostone/PCC/SMTProof.hpp>
+
+pcc::RewriteConstraints constraints;
+constraints.limits.max_rewrites = 100;
+auto artifact = pcc::build(function, constraints);
+auto proof = pcc::emit_smt_proof(artifact);
+pcc::discharge_smt(proof);
+if (!proof.all_proved()) {
+  // Reject or preserve the artifact as unproved/Unknown.
+}
+```
+
+Proof emission independently replays every recorded optimizer step and verifies
+both IR endpoints. Constant folding uses exact 32-bit Boolean bit-blasting; CSE
+encodes both matching expression circuits over shared operand words. Additional
+obligations cover algebraic replacements, copy propagation, uniform phis,
+branch folding with CFG and phi repair, same-block load forwarding, rooted dead
+code and dead-cycle elimination, and SCCP constants. Use
+`RewriteConstraints::all_query_rewrites()` to opt into all the built-in rules.
+
+The optional Satie conduit parses and solves the selected standardized SMT-LIB2
+frontend. Since each script asserts the negated claim, only `UNSAT` produces
+`UnsatProved`; `SAT` is a counterexample and unavailable or unsupported checking
+remains `Unknown`. The core `Artifact` and optional evidence attachments do not
+themselves expose a positive trust bit.
+
+The companion register allocator derives an interference graph from SSA
+liveness, validates abstract argument/return register locations and explicit
+constraints, and emits a one-hot Boolean obligation. It models no stack
+arguments, spills, instruction constraints, call clobbers, or
+prologue/epilogue. Callee-saved use therefore remains `Unknown` in the abstract
+API. The separate [native verifier](PCC/Native.md) checks assembly for
+straight-line i32 on x86-64 SysV Linux, including spills, stack frames,
+callee-saved registers, and clobbers at calls to a checked unit-local helper.
+
+The `novostone pcc` command emits a versioned diagnostic report containing the canonical
+artifact core plus source/optimized IR, constraints, analysis, transformations,
+and length-prefixed SMT code. `--frontend smtlib2` is mandatory;
+`--require-proof` exits 3 if any obligation is not proved. The separate
+`pcc-pack`, `pcc-verify`, and `pcc-serve` commands handle [signed wire
+packages](PCC/Package.md) and regenerate proofs using a configured public key
+and Satie; `pcc-serve` supports authenticated SSH deployment.
+
 ## Speculation and recovery
 
 ```cpp
@@ -572,12 +643,17 @@ The dossier suites cover compact and empty recovery frames, future phi-edge uses
 forced failure with prior stores, uncertainty overlap despite high confidence,
 model-format migration, malformed calibration evidence, deterministic witness
 reduction, and inconclusive or exhausted reduction trials.
+The PCC suites cover deterministic rewrite-policy boundaries, modular-i32
+folding, independently encoded CSE expressions, Satie UNSAT/SAT results,
+malformed and unsupported obligations, SSA interference, invalid colorings,
+callee-saved uncertainty, and impossible register-only allocations.
 
 This implements the dossier's executable reference and bounded vertical-slice
-approach. Verification is structural plus semantic differential testing, not an
-SMT proof or machine-code translation validation. The current dialect excludes
-calls, floating point, allocation, language-level exceptions, atomics,
-FFI, object shapes, and native code generation. CCDB is in-memory; Datalog uses
+approach. Verification combines structural checks, semantic differential tests,
+and SMT obligations for the built-in PCC rewrites. Native verification covers
+the documented assembly subset, not machine-code bytes. The current IR dialect
+excludes calls, floating point, allocation, language-level exceptions, atomics,
+FFI, and object shapes. CCDB is in-memory; Datalog uses
 semi-naive fixed-point recomputation of affected queries rather than persistent
 differential dataflow across revisions.
 Future extensions can retain the same dependency and recovery contracts.

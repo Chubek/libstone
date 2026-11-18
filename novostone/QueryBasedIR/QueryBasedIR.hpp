@@ -1,6 +1,8 @@
 #pragma once
 #include "novostone/DatabaseBasedIR/DatabaseBasedIR.hpp"
 
+#include <functional>
+
 namespace novostone::query {
 struct Input {
   std::vector<std::uint32_t> arguments;
@@ -48,6 +50,9 @@ struct Options {
   std::size_t analysis_work = 1000000;
   bool conditional_constants = true;
 };
+// Called synchronously after each committed rewrite, not for a tentative
+// budget/lookahead step. An observer cannot authorize or modify the rewrite.
+using RewriteObserver = std::function<void(const Rewrite&, const ir::Function&)>;
 enum class ValueKind { Unknown, Constant, Overdefined };
 struct AbstractValue {
   ValueKind kind = ValueKind::Unknown;
@@ -75,25 +80,27 @@ public:
   const std::string& stop_reason() const { return stop_reason_; }
   std::size_t query_work() const { return work_; }
   std::size_t analysis_work() const { return analysis_work_; }
+  const Options& options() const { return options_; }
   std::string explain() const;
 private:
   Candidate(ccdb::Snapshot base, ccdb::Snapshot result, std::vector<Rewrite> rewrites, bool exhausted,
-            std::string stop_reason = {}, std::size_t work = 0, std::size_t analysis_work = 0)
+            std::string stop_reason, std::size_t work, std::size_t analysis_work, Options options)
     : base_(std::move(base)), result_(std::move(result)), rewrites_(std::move(rewrites)), exhausted_(exhausted),
-      stop_reason_(std::move(stop_reason)), work_(work), analysis_work_(analysis_work) {}
+      stop_reason_(std::move(stop_reason)), work_(work), analysis_work_(analysis_work), options_(options) {}
   ccdb::Snapshot base_, result_;
   std::vector<Rewrite> rewrites_;
   bool exhausted_;
   std::string stop_reason_;
   std::size_t work_;
   std::size_t analysis_work_;
+  Options options_;
   friend Candidate baseline(const ccdb::Snapshot&);
-  friend Candidate optimize(const ccdb::Snapshot&, std::size_t);
-  friend Candidate optimize(const ccdb::Snapshot&, Options);
+  friend Candidate optimize(const ccdb::Snapshot&, Options, const RewriteObserver&);
 };
 Candidate baseline(const ccdb::Snapshot& snapshot);
 Candidate optimize(const ccdb::Snapshot& snapshot, std::size_t rewrite_budget = 1000);
 Candidate optimize(const ccdb::Snapshot& snapshot, Options options);
+Candidate optimize(const ccdb::Snapshot& snapshot, Options options, const RewriteObserver& observer);
 ccdb::Snapshot apply(ccdb::Database& database, const Candidate& candidate);
 ccdb::Snapshot apply_checked(ccdb::Database& database, const Candidate& candidate,
                             const std::vector<Input>& inputs, std::size_t step_budget = 100000);
