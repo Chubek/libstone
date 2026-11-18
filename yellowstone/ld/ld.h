@@ -203,6 +203,21 @@ int qld_define_macro(qld_linker_t *, const char *name,
 /* Returned text is owned and freed with qld_free_string. --!lua selects Lua. */
 int qld_expand_script(qld_linker_t *, const char *source, char **text, char **errmsg);
 
+/* Evaluate a portable backend registration manifest, not a layout script or a
+ * native link. `source` is Lua text (up to 64 KiB, no NUL) with the byte count
+ * excluding any terminator. In this mode qld.backend(name, registrar) records
+ * entries in call order. Names match [a-z][a-z0-9-]* (up to 64 bytes);
+ * registrars match [A-Za-z_][A-Za-z0-9_]* (up to 128 bytes). Both columns must
+ * be unique and 1-128 entries are required. The caller validates the actual
+ * backend set and resolves the registrar identifiers.
+ *
+ * On QLD_OK, *out_bytes contains `name<TAB>registrar<LF>` records with no
+ * terminator. Free with qld_free_bytes(*out_bytes, *out_size). Both output
+ * pointers are required; they are cleared on failure. Optional *errmsg is
+ * cleared on success and freed with qld_free_string on failure. */
+QLD_API int qld_backend_manifest(const char *source, size_t source_size,
+    uint8_t **out_bytes, size_t *out_size, char **errmsg);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

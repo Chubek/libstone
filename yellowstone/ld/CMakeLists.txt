@@ -28,6 +28,7 @@ add_library(qld STATIC
   driver.cpp
   ElfBackend.cpp
   Backend.cpp
+  BackendManifest.cpp
   PeBackend.cpp
   MachOBackend.cpp
   NativeOptions.cpp
@@ -145,6 +146,13 @@ if(YELLOWSTONE_BUILD_TESTS)
   add_executable(qld-script-sdk-test tests/script_sdk.cpp)
   target_link_libraries(qld-script-sdk-test PRIVATE qld)
   add_test(NAME qld-script-sdk COMMAND qld-script-sdk-test)
+  add_executable(qld-backend-manifest-test tests/backend_manifest.c)
+  target_compile_features(qld-backend-manifest-test PRIVATE c_std_11)
+  target_compile_options(qld-backend-manifest-test PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Werror;-pedantic>)
+  target_link_libraries(qld-backend-manifest-test PRIVATE qld)
+  add_test(NAME qld-backend-manifest COMMAND qld-backend-manifest-test)
+  set_tests_properties(qld-backend-manifest PROPERTIES TIMEOUT 10)
   if(YELLOWSTONE_BUILD_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME qld-script-executable COMMAND "${Python3_EXECUTABLE}"

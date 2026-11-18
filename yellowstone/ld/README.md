@@ -155,6 +155,34 @@ build-yellowstone/ld/qobjld -T yellowstone/ld/examples/memory.lua \
 Both example layouts are compiled, linked and executed by the script tests.
 See [the script manual](../manual/19-scripts.md) for placement rules and limits.
 
+## Portable backend registration manifests
+
+Build generators can call `qld_backend_manifest` from `ld.h` with a
+length-delimited Lua source buffer. This is separate from layout scripts (`-T`):
+it produces registration records, not a native image.
+
+```lua
+local backends = { {'c11', 'register_c11'}, {'mir-c11', 'register_mir_c11'} }
+for _, backend in ipairs(backends) do qld.backend(backend[1], backend[2]) end
+```
+
+On success the caller receives bytes `c11\tregister_c11\nmir-c11\tregister_mir_c11\n`
+(no terminator) and releases them with `qld_free_bytes`. Names and registrar
+identifiers are ASCII and unique in each column. A manifest must contain 1–128
+records, with names at most 64 bytes and registrar identifiers at most 128 bytes.
+No records are published on error. The consumer must check that the complete
+record set is appropriate and that each registrar is a permitted symbol with
+the expected ABI. qobjld does not check symbol existence or call registrars.
+
+Manifest execution is limited to 64 KiB of NUL-free Lua text, approximately
+1 million Lua VM instructions, and 2 MiB of live Lua allocations. The only
+initial globals are `qld` (with `backend`), `assert`, `error`, `ipairs`, and
+`type`. It has no module loader, filesystem/process I/O, protected calls,
+debug library, or coroutines. This is a restricted build-input evaluator,
+not a guarantee against flaws in the embedded Lua implementation. qobjld
+does not write files or launch a linker on this path. The consumer chooses
+how to compile and link the resulting registrations for its target.
+
 ## Native C11 SDK example
 
 `examples/native-sdk.c` links objects/archives using automatic format detection.

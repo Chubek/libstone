@@ -1,3 +1,58 @@
+# Portable backend registration manifest — 2026-11-19
+
+Base revision: `934b6ed029bfea28bbf23b5dc77c476154b0dd0d`. Tested on Linux
+x86-64 with GCC 16.2.1 and Clang 22.1.8. No Windows or Darwin execution tested.
+
+`qld-backend-manifest` exercises `qld_backend_manifest` from a C11 translation
+unit. It checks deterministic call-order records, length-delimited source,
+grammar and uniqueness in both columns, exact size/count boundaries, malformed
+and bytecode inputs, disabled libraries, and instruction/allocation exhaustion.
+Failures after a successful registration still return no output; subsequent
+runs get a fresh Lua state. Existing layout scripts continue to use their own
+Lua runtime.
+
+From the Yellowstone source directory, GCC Debug, tools enabled, all default
+bridges OFF, warnings as errors:
+
+```sh
+export TMPDIR=/mnt/nvme/mulib/build
+B="$TMPDIR/yellowstone-backend-manifest-debug"
+cmake -S . -B "$B" -DCMAKE_BUILD_TYPE=Debug -DQOBJFILE_DOMTERM=OFF \
+  -DQOBJFILE_WERROR=ON -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=ON
+cmake --build "$B" --parallel 6 --target \
+  qld-backend-manifest-test qld-script-sdk-test qld-frontend-test qobjld
+ctest --test-dir "$B" --output-on-failure \
+  -R '^qld-(backend-manifest|script-sdk|frontend|script-executable)$'
+```
+
+All 4 passed. Building the native and format test drivers also gave **7/7**
+for `ctest --test-dir "$B" --output-on-failure -R '^qld-'`. The manifest test
+was also compiled with GCC `-std=c11 -Wall -Wextra -Werror -pedantic`,
+linked directly with `libqld.a` and `liblibstone_script_lua.a`, and passed
+with `PATH=/nonexistent` and `QLD_TOOLCHAIN_BACKEND_ACTIVE=1`.
+
+Clang with ASan, UBSan and leak detection, tools disabled:
+
+```sh
+B="$TMPDIR/yellowstone-backend-manifest-san"
+cmake -S . -B "$B" -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+  '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+  -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined \
+  -DQOBJFILE_DOMTERM=OFF -DQOBJFILE_WERROR=ON \
+  -DYELLOWSTONE_BUILD_TESTS=ON -DYELLOWSTONE_BUILD_TOOLS=OFF
+cmake --build "$B" --parallel 5 --target \
+  qld-backend-manifest-test qld-script-sdk-test qld-frontend-test
+env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir "$B" --output-on-failure -R '^qld-(backend-manifest|script-sdk|frontend)$'
+```
+
+All 3 passed. Manifest generation alone emits no object or image; target
+support and native final linkage are the responsibility of its consumer.
+
+---
+
 # Native dynamic ELF validation — 2026-11-18
 
 Base revision: `d4a073a57c06b55fe91b7c059846e73f2f7a3326`; initial
