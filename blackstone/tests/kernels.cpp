@@ -261,9 +261,9 @@ static SimpleSSAGraph diamond(const std::string& source, bool dominating) {
 int main() {
     try {
         blackstone::Runtime runtime;
-        runtime.load_directory(std::string(BLACKSTONE_SOURCE_DIR)+"/kernels");
+        runtime.load_directory(std::string(BLACKSTONE_SOURCE_DIR)+"/kernels/local");
         auto catalog=runtime.kernels();
-        check(catalog.size()==71,"expected exactly 70 additional kernels plus strength reduction");
+        check(catalog.size()==71,"expected 71 local kernels");
         std::set<std::string> names;
         for (const auto& k : catalog) {
             check(names.insert(k.name).second && !k.documentation.empty() && k.ir=="ssa", "invalid catalog metadata");

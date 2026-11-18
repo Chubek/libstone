@@ -2,6 +2,8 @@
 #include "../lua/runtime.hpp"
 #include <libir/LoopAnalysis.hpp>
 #include <array>
+#include <cstdint>
+#include <limits>
 
 namespace blackstone::lua {
 using namespace firestone::ir;
@@ -32,18 +34,53 @@ static lua_Integer number_field(lua_State* L, int table, const char* key) {
     if (!lua_isinteger(L, -1)) throw std::runtime_error(std::string("expected integer field: ") + key);
     auto result = lua_tointeger(L, -1); lua_pop(L, 1); return result;
 }
+static std::string text_field(lua_State* L, int table, const char* key) {
+    raw_field(L, table, key);
+    std::string result;
+    if (!lua_isnil(L, -1)) {
+        if (lua_type(L, -1) != LUA_TSTRING)
+            throw std::runtime_error(std::string("expected string field: ") + key);
+        size_t size;
+        const char* bytes = lua_tolstring(L, -1, &size);
+        result.assign(bytes, size);
+    }
+    lua_pop(L, 1);
+    return result;
+}
+static std::size_t read_id(lua_State* L, int index, const char* what) {
+    auto id = lua_tointeger(L, index);
+    if (!lua_isinteger(L, index) || id < 0 || static_cast<std::uintmax_t>(id) >= invalid_id)
+        throw std::runtime_error(std::string("invalid ") + what);
+    return static_cast<std::size_t>(id);
+}
+static std::size_t dense_list(lua_State* L, const char* what) {
+    if (!lua_istable(L, -1)) throw std::runtime_error(std::string("expected ") + what + " list");
+    const int table = lua_absindex(L, -1);
+    const auto length = lua_rawlen(L, table);
+    std::size_t count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, table)) {
+        const auto key = lua_tointeger(L, -2);
+        if (!lua_isinteger(L, -2) || key < 1 || static_cast<std::uintmax_t>(key) > length)
+            throw std::runtime_error(std::string("expected dense ") + what + " list");
+        lua_pop(L, 1);
+        ++count;
+    }
+    if (count != length) throw std::runtime_error(std::string("expected dense ") + what + " list");
+    return count;
+}
 static void push_ids(lua_State* L, const std::vector<BlockId>& ids) {
     lua_newtable(L);
     for (size_t n = 0; n < ids.size(); ++n) { lua_pushinteger(L, ids[n]); lua_rawseti(L, -2, n + 1); }
 }
 static std::vector<BlockId> read_ids(lua_State* L, int table, const char* key) {
     raw_field(L, table, key);
-    if (!lua_istable(L, -1)) throw std::runtime_error(std::string("expected list: ") + key);
+    const auto count = dense_list(L, key);
     std::vector<BlockId> result;
-    for (size_t n = 1; n <= lua_rawlen(L, -1); ++n) {
+    result.reserve(count);
+    for (size_t n = 1; n <= count; ++n) {
         lua_rawgeti(L, -1, n);
-        if (!lua_isinteger(L, -1) || lua_tointeger(L, -1) < 0) throw std::runtime_error("invalid block ID");
-        result.push_back(lua_tointeger(L, -1)); lua_pop(L, 1);
+        result.push_back(read_id(L, -1, "block ID")); lua_pop(L, 1);
     }
     lua_pop(L, 1); return result;
 }
@@ -59,11 +96,11 @@ static Type read_type(lua_State* L, int table, std::string kind = {}) {
         if (kind == kind_name(k)) result.kind = k;
     if (result.kind == TypeKind::Unknown && kind != "unknown") throw std::runtime_error("invalid type kind");
     auto bits = number_field(L, table, "bits");
-    if (bits < 0 || bits > 65536) throw std::runtime_error("invalid type width");
+    if (bits < 0 || static_cast<std::uintmax_t>(bits) > std::numeric_limits<unsigned>::max())
+        throw std::runtime_error("invalid type width");
     result.bits = static_cast<unsigned>(bits);
-    raw_field(L, table, "type_name");
-    if (lua_type(L, -1) == LUA_TSTRING) result.name = lua_tostring(L, -1);
-    lua_pop(L, 1); return result;
+    result.name = text_field(L, table, "type_name");
+    return result;
 }
 static void push_operand(lua_State* L, const Operand& operand) {
     lua_newtable(L); push_type(L, operand.type);
@@ -79,8 +116,9 @@ static void push_operand(lua_State* L, const Operand& operand) {
 static Operand read_operand(lua_State* L, int table) {
     auto kind = string_field(L, table, "kind");
     if (kind == "value") {
-        auto id = number_field(L, table, "value");
-        if (id < 0) throw std::runtime_error("invalid value ID");
+        raw_field(L, table, "value");
+        const auto id = read_id(L, -1, "value ID");
+        lua_pop(L, 1);
         return Operand::ref(id);
     }
     if (kind == "integer") return Operand::constant(number_field(L, table, "integer"), read_type(L, table));
@@ -90,9 +128,9 @@ static Operand read_operand(lua_State* L, int table) {
         auto n = lua_tonumber(L, -1); lua_pop(L, 1); return Operand::real(n, read_type(L, table));
     }
     if (kind == "symbol") {
-        auto name = string_field(L, table, "symbol");
+        auto name = text_field(L, table, "symbol");
         auto type = read_type(L, table, string_field(L, table, "type_kind"));
-        return Operand::named(name, type);
+        return Operand::named(std::move(name), std::move(type));
     }
     throw std::runtime_error("invalid operand kind");
 }
@@ -114,18 +152,13 @@ static Instruction read_instruction(lua_State* L, int table) {
     if (found == op_names.end()) throw std::runtime_error("unsupported SSA opcode: " + op);
     inst.opcode = static_cast<Opcode>(found - op_names.begin()); inst.type = read_type(L, table);
     raw_field(L, table, "result_id");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1) || lua_tointeger(L, -1) < 0) throw std::runtime_error("invalid result ID");
-        inst.result = lua_tointeger(L, -1);
-    }
+    if (!lua_isnil(L, -1)) inst.result = read_id(L, -1, "result ID");
     lua_pop(L, 1);
-    raw_field(L, table, "annotation");
-    if (lua_type(L, -1) == LUA_TSTRING) inst.annotation = lua_tostring(L, -1);
-    lua_pop(L, 1);
+    inst.annotation = text_field(L, table, "annotation");
     inst.targets = read_ids(L, table, "targets"); inst.incoming_blocks = read_ids(L, table, "incoming");
     raw_field(L, table, "operands");
-    if (!lua_istable(L, -1)) throw std::runtime_error("expected operand list");
-    auto count = lua_rawlen(L, -1);
+    const auto count = dense_list(L, "operand");
+    inst.operands.reserve(count);
     for (size_t n = 1; n <= count; ++n) {
         lua_rawgeti(L, -1, n);
         if (!lua_istable(L, -1)) throw std::runtime_error("expected operand table");
@@ -177,8 +210,7 @@ void read_ssa_context(lua_State* L, int context, void* raw) {
     auto& graph = *static_cast<SimpleSSAGraph*>(raw);
     context = lua_absindex(L, context);
     raw_field(L, context, "new_types");
-    if (!lua_istable(L, -1)) throw std::runtime_error("expected new_types list");
-    auto count = lua_rawlen(L, -1);
+    const auto count = dense_list(L, "new_types");
     for (size_t n = 1; n <= count; ++n) {
         lua_rawgeti(L, -1, n);
         if (!lua_isinteger(L, -1) || lua_tointeger(L, -1) < 2 || lua_tointeger(L, -1) > 64)
@@ -191,10 +223,19 @@ void read_ssa_context(lua_State* L, int context, void* raw) {
     raw_field(L, context, "blocks");
     if (!lua_istable(L, -1)) throw std::runtime_error("expected blocks table");
     int blocks = lua_absindex(L, -1);
+    lua_pushnil(L);
+    while (lua_next(L, blocks)) {
+        const auto block = read_id(L, -2, "CFG block ID");
+        if (!graph.cfg().graph().contains(block))
+            throw std::runtime_error("kernel added a CFG block");
+        lua_pop(L, 1);
+    }
     for (auto b : graph.cfg().blocks()) {
         lua_rawgeti(L, blocks, b);
         if (!lua_istable(L, -1)) throw std::runtime_error("kernel removed a CFG block");
-        auto size = lua_rawlen(L, -1); std::vector<Instruction> instructions;
+        const auto size = dense_list(L, "instruction");
+        std::vector<Instruction> instructions;
+        instructions.reserve(size);
         for (size_t n = 1; n <= size; ++n) {
             lua_rawgeti(L, -1, n);
             if (!lua_istable(L, -1)) throw std::runtime_error("expected instruction table");

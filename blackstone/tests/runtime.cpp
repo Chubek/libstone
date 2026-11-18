@@ -113,6 +113,98 @@ static size_t count(const SimpleSSAGraph& graph, Opcode opcode) {
 }
 static int push_empty(lua_State* L, void*) { lua_newtable(L); return 1; }
 
+static void pipeline_tests(blackstone::Runtime& runtime, const std::filesystem::path& fixtures) {
+    const auto modular = blackstone::IntegerSemantics::Modular;
+    const std::string local = std::string(BLACKSTONE_SOURCE_DIR) + "/kernels/local";
+    runtime.load_file(local + "/constant-folding/add.lua");
+    runtime.load_file(local + "/algebraic/mul-zero.lua");
+    write(fixtures / "false_edit.lua", kernel("false_edit", "ctx.blocks[0][1].op='invalid'; return false"));
+    write(fixtures / "pipeline_fail.lua", kernel("pipeline_fail",
+        "assert(ctx.blocks[0][1].op=='constant'); error('late pipeline failure')"));
+    write(fixtures / "pipeline_invalid.lua", kernel("pipeline_invalid",
+        "assert(ctx.blocks[0][1].op=='constant'); ctx.blocks[0][1].bits=-2; return true"));
+    for (const char* name : {"false_edit", "pipeline_fail", "pipeline_invalid"})
+        runtime.load_file((fixtures / (std::string(name) + ".lua")).string());
+
+    SimpleSSAGraph input;
+    const auto block = input.cfg().create_block("entry");
+    const auto type = Type::integer(8);
+    const auto x = input.parameter(type);
+    const auto product = input.define(block, Opcode::Mul, type, {Operand::ref(x), Operand::constant(0, type)});
+    const auto sum = input.define(block, Opcode::Add, type, {Operand::ref(product), Operand::constant(5, type)});
+    input.cfg().return_value(block, Operand::ref(sum));
+
+    const std::vector<std::string> names{"false_edit", "fold_add", "mul_zero"};
+    auto graph = input;
+    auto report = runtime.run_pipeline(names, graph, modular, 4);
+    const auto& rewritten = graph.cfg().block(block).instructions;
+    check(report.changed && report.converged && report.rounds == 3 &&
+          report.invalidated == std::set<std::string>{"def_use", "loop_info"} &&
+          graph.verify().empty() && rewritten[1].opcode == Opcode::Constant &&
+          rewritten[1].operands[0].integer == 5, "pipeline did not reach the expected fixed point");
+
+    graph = input;
+    report = runtime.run_pipeline(names, graph, modular);
+    check(report.changed && !report.converged && report.rounds == 1 &&
+          count(graph, Opcode::Constant) == 1 && count(graph, Opcode::Add) == 1,
+          "round bound did not commit exactly one ordered sweep");
+    report = runtime.run_pipeline({"mul_zero", "fold_add", "mul_zero"}, graph, modular, 2);
+    check(report.changed && report.converged && report.rounds == 2 && count(graph, Opcode::Constant) == 2,
+          "pipeline did not resume from partially optimized graph");
+
+    graph = input;
+    report = runtime.run_pipeline(names, graph);
+    check(!report.changed && report.converged && report.rounds == 1 &&
+          report.invalidated.empty() && count(graph, Opcode::Mul) == 1,
+          "no-change round modified the graph or invalidated analyses");
+    report = runtime.run_pipeline({}, graph);
+    check(!report.changed && report.converged && report.rounds == 0 && report.invalidated.empty(),
+          "empty pipeline is not a no-op");
+
+    rejects([&] { runtime.run_pipeline(names, graph, modular, 0); }, "round limit must be positive");
+    rejects([&] { runtime.run_pipeline({"pipeline_fail", "typo"}, graph, modular); }, "unknown kernel: typo");
+    rejects([&] { runtime.run_pipeline({"pipeline_fail", "missing_analysis"}, graph, modular); },
+            "missing required analysis: alias_info");
+    rejects([&] { runtime.run_pipeline({"mul_zero", "pipeline_fail"}, graph, modular); }, "late pipeline failure");
+    rejects([&] { runtime.run_pipeline({"mul_zero", "pipeline_invalid"}, graph, modular); },
+            "pipeline round 1, kernel 'pipeline_invalid': invalid type width");
+    check(count(graph, Opcode::Mul) == 1 && count(graph, Opcode::Add) == 1 && graph.verify().empty(),
+          "failed pipeline partially committed");
+}
+
+static void snapshot_tests(blackstone::Runtime& runtime, const std::filesystem::path& fixtures) {
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"extra_block", "ctx.blocks[99]={}; return true"},
+        {"sparse_instruction", "ctx.blocks[0][99]={}; return true"},
+        {"sparse_operand", "ctx.blocks[0][1].operands[99]={}; return true"},
+        {"bad_target", "ctx.blocks[0][2].targets.comment='extra'; return true"},
+        {"sparse_types", "ctx.new_types[99]=8; return true"},
+        {"update_annotation", "ctx.blocks[0][2].annotation='updated'; return true"}
+    };
+    for (const auto& fixture : cases) {
+        const auto file = fixtures / (fixture.first + ".lua");
+        write(file, kernel(fixture.first, fixture.second));
+        runtime.load_file(file.string());
+    }
+    SimpleSSAGraph graph;
+    auto block = graph.cfg().create_block("entry");
+    const std::string symbol("a\0b", 3), annotation("c\0d", 3);
+    const Type type{TypeKind::Integer, 70000, std::string("t\0x", 3)};
+    const auto id = graph.define(block, Opcode::Constant, type, {Operand::named(symbol, type)}, annotation);
+    graph.cfg().return_value(block, Operand::ref(id));
+    rejects([&] { runtime.run("extra_block", graph); }, "kernel added a CFG block");
+    rejects([&] { runtime.run("sparse_instruction", graph); }, "expected dense instruction list");
+    rejects([&] { runtime.run("sparse_operand", graph); }, "expected dense operand list");
+    rejects([&] { runtime.run("bad_target", graph); }, "expected dense targets list");
+    rejects([&] { runtime.run("sparse_types", graph); }, "expected dense new_types list");
+    check(graph.cfg().block(block).instructions.back().annotation.empty(), "invalid snapshot committed");
+    check(runtime.run("update_annotation", graph).changed && graph.verify().empty(), "could not commit valid snapshot");
+    const auto& instructions = graph.cfg().block(block).instructions;
+    check(instructions[0].type == type && instructions[0].annotation == annotation &&
+          instructions[0].operands[0].symbol == symbol && instructions[0].operands[0].type == type &&
+          instructions[1].annotation == "updated", "unrelated SSA metadata changed during round trip");
+}
+
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "expected test fixture directory");
@@ -194,7 +286,10 @@ int main(int argc, char** argv) {
               std::string(blackstone_last_error(runtime.native_handle())).find("IR") != std::string::npos,
               "wrong host IR accepted");
         check(blackstone_run(runtime.native_handle(), "matching", "ssa", nullptr, 0, push_empty, nullptr, &changed) == 0 && !changed,
-              "generic C execution failed");
+               "generic C execution failed");
+
+        snapshot_tests(runtime, fixtures);
+        pipeline_tests(runtime, fixtures);
 
         auto directory = fixtures / "catalog"; std::filesystem::create_directories(directory);
         write(directory / "b.lua", kernel("b", "assert(private_global==nil); return false"));

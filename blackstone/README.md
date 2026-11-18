@@ -6,9 +6,9 @@ preservation contract and transformation. C/C++ hosts can discover kernels and
 provide execution contexts. The supplied Firestone adapter implements the
 object protocol used by `kernels/local/strength-redudction.lua`.
 
-The catalog now contains **71 executable kernels**: the original strength
-reduction kernel and 70 integer/SSA local optimizations. The complete inventory,
-rewrite patterns and semantic restrictions are in [docs/kernels.md](docs/kernels.md).
+The catalog contains **191 executable kernels**: the 71 original kernels and
+120 extended integer SSA rewrites. See [the kernel inventory](docs/kernels.md)
+and [the extended rule manifest](docs/extended-kernels.json).
 
 ## Build
 
@@ -26,8 +26,8 @@ and vendored Lua sources (`LIBSTONE_LUA_SOURCE_DIR`). The Lua interpreter is
 built locally; configuring never downloads dependencies. Blackstone requires
 C++17 and Lua 5.3 or newer. The installed CMake package exports
 `Blackstone::blackstone`, depends on `Firestone`, and supplies
-`Blackstone_KERNEL_DIR`. Install Firestone into the same dependency search path
-when using a standalone Blackstone installation.
+`Blackstone_KERNEL_DIR`. Both packages must be discoverable by the consumer's
+CMake configuration; they can use separate install prefixes.
 
 ## Kernel format
 
@@ -85,11 +85,33 @@ auto result = runtime.run("strength_reduction", graph,
 
 The adapter verifies input SSA, computes natural loops, definitions and
 dominators, and executes the Lua kernel on an independent snapshot. It commits
-only after the kernel reports a change and the transformed graph passes
-Firestone's verifier. A false result or an exception leaves the original graph
-untouched. The adapter supports instruction/operand rewrites and integer value
-allocation while retaining CFG blocks, edges and terminator kinds. Graph-level
-transformations need a different host context.
+only after the kernel reports a change, the snapshot has a valid structure, and
+the transformed graph passes Firestone's verifier. A false result or an
+exception leaves the original graph untouched. The adapter supports
+instruction/operand rewrites and integer value allocation while retaining CFG
+blocks, edges and terminator kinds. Graph-level transformations need a
+different host context.
+
+### Bounded pipelines
+
+```cpp
+auto report = runtime.run_pipeline({"mul_zero", "fold_add", "ext_zero_minus_x"},
+                                   graph, blackstone::IntegerSemantics::Modular,
+                                   /*max_rounds=*/4);
+```
+
+`run_pipeline` validates the requested kernels before starting and applies them
+in the supplied order, refreshing the SSA snapshot for each invocation.
+`report.invalidated` is the union from kernels that changed the graph.
+`report.rounds` counts completed sweeps and `report.converged` means a full sweep
+reported no changes. The round limit defaults to one and must be positive; if the
+last permitted sweep reports a change, the pipeline commits the verified result
+with `converged == false`. An empty pipeline converges in zero rounds.
+
+An exception rolls back the **entire graph**, including changes from earlier
+kernels in the pipeline. It does not roll back Lua state or external effects.
+As with `run`, convergence relies on kernels correctly reporting whether they
+changed the graph.
 
 ### SSA context protocol
 
@@ -111,8 +133,10 @@ transformations need a different host context.
   copy of the recurrence value in that slot. Live uses refer to the recurrence.
 
 The underlying snapshot contains `blocks`, `loop_list`, `dominators`,
-`next_value`, `new_types` and `integer_semantics`. Kernels using the object
-protocol need not manipulate those tables directly.
+`value_types`, `next_value`, `new_types` and `integer_semantics`. Kernels using the
+object protocol need not manipulate those tables directly. Block IDs are map
+keys; instruction, operand, target, incoming-block and new-type lists must be
+dense one-based arrays.
 
 ### Strength-reduction contract
 
@@ -157,7 +181,7 @@ and malformed patterns produce an error.
 
 ## Integer local kernels
 
-The additional kernels are grouped under `kernels/local/`:
+The 70 original local optimizations are grouped under `kernels/local/`:
 
 | Family | Kernels | Phase |
 | --- | ---: | --- |
@@ -175,7 +199,7 @@ function with `lrewrite.local_rewrite("rule_name")`. The shared factory in
 applicability checks and the named rule. An unknown rule name is a load error.
 This helper is embedded alongside the main Lua library and installed with it.
 
-All new kernels require explicit `IntegerSemantics::Modular`, valid typed SSA,
+These kernels require explicit `IntegerSemantics::Modular`, valid typed SSA,
 and built-in integer types of width 1–64 with no custom type name. The snapshot's
 `value_types` table supplies declared types for both parameters and definitions,
 so a Boolean comparison result does not make its floating-point operands eligible.
@@ -189,13 +213,31 @@ signed/unsigned domain. Right-shift folding requires a clear sign bit; all folde
 shift counts must be within the type width. These restrictions avoid inventing
 signedness or invalid-operation semantics absent from Firestone's types.
 
-Every new kernel preserves CFG and dominators while conservatively invalidating
+Each of these kernels preserves CFG and dominators while conservatively invalidating
 def-use and induction facts. Operand-producing instructions are retained, even
 when their result becomes unused: simplifying multiplication by zero must not
 delete a load, call or potentially trapping input computation. Common-subexpression
 elimination only reuses pure operations with a dominating, earlier definition;
 it excludes memory, calls, division and shifts. These local kernels add no CFG
 rewrites or new values, and error handling uses the existing transactional adapter.
+
+## Extended integer kernels
+
+`kernels/extra/` adds 120 independently loadable rules across arithmetic,
+bitwise simplification, equality comparisons, selects, factoring, constant
+reassociation, and shifts. For example, `ext_factor_bitwise_or_of_ands` rewrites
+`(x & y) | (x & z)` to `x & (y | z)` even if the operands of the nested ANDs
+are commuted. Rules match same-width unnamed integers with explicit modular
+semantics. They retain the original result IDs and operand producers, preserve
+CFG and dominators, and can insert integer intermediates of width 2–64.
+
+The rule generator and differential fixtures can be regenerated from the
+repository root; Python is not required for building or using Blackstone:
+
+```sh
+python3 -B blackstone/tools/extended/generate.py
+python3 -B blackstone/tools/extended/make_tests.py
+```
 
 ## Validation
 
@@ -207,12 +249,16 @@ Differential tests compare original and reduced return values over 8-, 32- and
 Negative cases include unsupported initial values, strides, scales and arithmetic
 semantics. These checks are executable evidence for the supported contract.
 
-`blackstone.kernels` checks all 70 additions individually with positive and
+`blackstone.kernels` checks all 70 original local optimizations with positive and
 nonmatching cases, unknown-semantics rejection, valid output SSA and analysis
 contracts. Differential evaluation compares original and rewritten return values
 at 8-, 32- and 64-bit widths under both signed and unsigned interpretations,
 using boundary bit patterns and deterministic generated inputs. Additional cases
 cover wraparound, minimum values, zero divisors, invalid shifts, commuted operands,
 cross-block CSE dominance, phi ordering, floating-point/NaN-sensitive exclusions,
-custom types and retained effectful inputs. The installation check loads all 71
-kernels through an installed C++20 consumer.
+custom types and retained effectful inputs. `blackstone.extensions.lua` runs
+76,800 signed/unsigned differential checks over all 120 extended rules at 8,
+16, 32, and 64 bits. `blackstone.extensions.ssa` checks representative cases
+through the native adapter, including nested commutation and one-bit rejection
+for a rewrite requiring a temporary. The installation check loads all 191
+kernels and runs a pipeline through an installed C++20 consumer.

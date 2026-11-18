@@ -1,6 +1,8 @@
 #include "runtime.hpp"
 #include "../lrewrite/lrewrite.hpp"
-#include <cstring>
+#include <algorithm>
+#include <iterator>
+#include <string_view>
 
 extern "C" {
 blackstone_runtime* blackstone_create(void) {
@@ -41,28 +43,44 @@ int invoke(lua_State* L) {
     if (!lua_isboolean(L, -1)) return luaL_error(L, "kernel.run must return a boolean");
     return 1;
 }
+
+const blackstone_runtime::Entry& resolve_kernel(const blackstone_runtime& r, std::string_view name,
+                                                const char* ir, const char* const* available,
+                                                size_t count) {
+    auto kernel = std::find_if(r.entries.begin(), r.entries.end(),
+                               [&](const auto& entry) { return entry.info.name == name; });
+    if (kernel == r.entries.end()) throw std::invalid_argument("unknown kernel: " + std::string(name));
+    if (kernel->info.ir != ir) throw std::invalid_argument("kernel IR does not match host IR");
+    for (const auto& requirement : kernel->info.requirements) {
+        bool found = false;
+        for (size_t n = 0; n < count; ++n)
+            if (available[n] && requirement == available[n]) { found = true; break; }
+        if (!found) throw std::invalid_argument("missing required analysis: " + requirement);
+    }
+    return *kernel;
+}
+
+bool invoke_kernel(lua_State* state, const blackstone_runtime::Entry& kernel,
+                   blackstone_push_context push, void* user) {
+    blackstone::lua::StackGuard stack(state);
+    Invocation invocation{push, user, kernel.run};
+    lua_pushcfunction(state, invoke);
+    lua_pushlightuserdata(state, &invocation);
+    blackstone::lua::checked_call(state, 1, 1);
+    return lua_toboolean(state, -1) != 0;
+}
 }
 extern "C" int blackstone_run(blackstone_runtime* r, const char* name, const char* ir,
                               const char* const* available, size_t count,
                               blackstone_push_context push, void* user, int* changed) {
     if (changed) *changed = 0;
     if (!r) return -1;
-    r->error.clear(); blackstone::lua::StackGuard stack(r->state);
+    r->error.clear();
     try {
         if (!name || !ir || !push || !changed || (count && !available)) throw std::invalid_argument("invalid run arguments");
-        const blackstone_runtime::Entry* kernel = nullptr;
-        for (const auto& entry : r->entries) if (entry.info.name == name) kernel = &entry;
-        if (!kernel) throw std::invalid_argument(std::string("unknown kernel: ") + name);
-        if (kernel->info.ir != ir) throw std::invalid_argument("kernel IR does not match host IR");
-        for (const auto& requirement : kernel->info.requirements) {
-            bool found = false;
-            for (size_t n = 0; n < count; ++n) if (available[n] && requirement == available[n]) found = true;
-            if (!found) throw std::invalid_argument("missing required analysis: " + requirement);
-        }
-        Invocation invocation{push, user, kernel->run};
-        lua_pushcfunction(r->state, invoke); lua_pushlightuserdata(r->state, &invocation);
-        blackstone::lua::checked_call(r->state, 1, 1);
-        *changed = lua_toboolean(r->state, -1); return 0;
+        const auto& kernel = resolve_kernel(*r, name, ir, available, count);
+        *changed = invoke_kernel(r->state, kernel, push, user);
+        return 0;
     } catch (const std::exception& e) { r->error = std::string(name ? name : "<null>") + ": " + e.what(); return -1; }
 }
 
@@ -82,6 +100,17 @@ std::vector<Kernel> Runtime::kernels() const {
     return result;
 }
 namespace {
+using firestone::ir::SimpleSSAGraph;
+constexpr const char* ssa_analyses[] = {"loop_info", "def_use", "dominators", "cfg"};
+
+const blackstone_runtime::Entry& resolve_ssa_kernel(const blackstone_runtime& r, const std::string& name) {
+    try {
+        return resolve_kernel(r, name, "ssa", ssa_analyses, std::size(ssa_analyses));
+    } catch (const std::invalid_argument& e) {
+        throw std::invalid_argument(name + ": " + e.what());
+    }
+}
+
 struct SSAInvocation { const firestone::ir::SimpleSSAGraph* graph; bool modular; int context = LUA_NOREF; };
 int push_context(lua_State* L, void* raw) {
     auto& invocation = *static_cast<SSAInvocation*>(raw);
@@ -97,27 +126,86 @@ struct RegistryGuard {
     lua_State* state; SSAInvocation& invocation;
     ~RegistryGuard() { luaL_unref(state, LUA_REGISTRYINDEX, invocation.context); }
 };
-}
-RunResult Runtime::run(const std::string& name, firestone::ir::SimpleSSAGraph& graph, IntegerSemantics semantics) {
-    auto errors = graph.verify();
+
+void verify_input(const SimpleSSAGraph& graph) {
+    const auto errors = graph.verify();
     if (!errors.empty()) throw std::invalid_argument("invalid input SSA: " + errors.front().message);
-    auto working = graph;
-    SSAInvocation invocation{&working, semantics == IntegerSemantics::Modular};
-    RegistryGuard reference{runtime_->state, invocation}; lua::StackGuard stack(runtime_->state);
-    const char* analyses[] = {"loop_info", "def_use", "dominators", "cfg"};
-    int changed = 0;
-    if (blackstone_run(runtime_.get(), name.c_str(), "ssa", analyses, 4, push_context, &invocation, &changed))
-        throw std::runtime_error(blackstone_last_error(runtime_.get()));
-    RunResult result; result.changed = changed != 0;
-    if (!result.changed) return result;
-    lua_rawgeti(runtime_->state, LUA_REGISTRYINDEX, invocation.context);
-    lua::read_ssa_context(runtime_->state, -1, &working);
-    errors = working.verify();
+}
+
+// A pipeline owns a disposable working copy. A single-kernel call can delay
+// copying the graph until the Lua kernel reports a change.
+RunResult rewrite_ssa(lua_State* state, const blackstone_runtime::Entry& kernel,
+                      SimpleSSAGraph& graph, IntegerSemantics semantics, bool disposable) {
+    SSAInvocation invocation{&graph, semantics == IntegerSemantics::Modular};
+    RegistryGuard reference{state, invocation};
+    lua::StackGuard stack(state);
+    if (!invoke_kernel(state, kernel, push_context, &invocation)) return {};
+
+    SimpleSSAGraph copy;
+    if (!disposable) copy = graph;
+    auto& working = disposable ? graph : copy;
+    lua_rawgeti(state, LUA_REGISTRYINDEX, invocation.context);
+    lua::read_ssa_context(state, -1, &working);
+    const auto errors = working.verify();
     if (!errors.empty()) throw std::runtime_error("invalid rewritten SSA: " + errors.front().message);
-    for (const auto& entry : runtime_->entries) if (entry.info.name == name)
-        for (const auto* analysis : analyses)
-            if (std::find(entry.info.preserves.begin(), entry.info.preserves.end(), analysis) == entry.info.preserves.end())
-                result.invalidated.insert(analysis);
-    graph = std::move(working); return result;
+    RunResult result;
+    result.changed = true;
+    const auto& preserves = kernel.info.preserves;
+    for (const auto* analysis : ssa_analyses)
+        if (std::find(preserves.begin(), preserves.end(), analysis) == preserves.end())
+            result.invalidated.insert(analysis);
+    if (!disposable) graph = std::move(copy);
+    return result;
+}
+}
+
+RunResult Runtime::run(const std::string& name, SimpleSSAGraph& graph, IntegerSemantics semantics) {
+    verify_input(graph);
+    runtime_->error.clear();
+    try {
+        const auto& kernel = resolve_kernel(*runtime_, name, "ssa", ssa_analyses, std::size(ssa_analyses));
+        return rewrite_ssa(runtime_->state, kernel, graph, semantics, false);
+    } catch (const std::exception& e) {
+        runtime_->error = name + ": " + e.what();
+        throw std::runtime_error(runtime_->error);
+    }
+}
+
+PipelineResult Runtime::run_pipeline(const std::vector<std::string>& names, SimpleSSAGraph& graph,
+                                     IntegerSemantics semantics, std::size_t max_rounds) {
+    if (!max_rounds) throw std::invalid_argument("pipeline round limit must be positive");
+    verify_input(graph);
+    PipelineResult result;
+    if (names.empty()) {
+        result.converged = true;
+        return result;
+    }
+
+    std::vector<const blackstone_runtime::Entry*> kernels;
+    kernels.reserve(names.size());
+    for (const auto& name : names) kernels.push_back(&resolve_ssa_kernel(*runtime_, name));
+
+    auto working = graph;
+    while (result.rounds < max_rounds) {
+        ++result.rounds;
+        bool changed = false;
+        for (const auto* kernel : kernels) {
+            try {
+                auto step = rewrite_ssa(runtime_->state, *kernel, working, semantics, true);
+                changed |= step.changed;
+                result.invalidated.merge(step.invalidated);
+            } catch (const std::exception& e) {
+                throw std::runtime_error("pipeline round " + std::to_string(result.rounds) +
+                                         ", kernel '" + kernel->info.name + "': " + e.what());
+            }
+        }
+        if (!changed) {
+            result.converged = true;
+            break;
+        }
+        result.changed = true;
+    }
+    if (result.changed) graph = std::move(working);
+    return result;
 }
 } // namespace blackstone

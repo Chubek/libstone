@@ -1,9 +1,11 @@
 # Executable kernel inventory
 
-The catalog contains the original `strength_reduction` kernel and the following
-70 additions. Each identifier is independently loadable, queryable and executable;
-each file declares its own requirements, preservation contract and documentation.
-All additions target `ssa`. Their shared implementation is `lrewrite/local.lua`.
+This page describes the 70 optimizations implemented in `lrewrite/local.lua`.
+The catalog also contains `strength_reduction` (see the
+[strength-reduction contract](../README.md#strength-reduction-contract)) and
+120 extended rules (see the [extended manifest](extended-kernels.json)).
+Each kernel is independently loadable and declares its own requirements,
+preservation contract and documentation. All 191 target `ssa`.
 
 ## Common contract
 
@@ -20,9 +22,9 @@ All additions target `ssa`. Their shared implementation is `lrewrite/local.lua`.
 - Keep existing ValueIds and operand-producing instructions. A replaced result
   becomes a copy or constant; dead definitions are retained. Effects or traps in
   a producing load, call or arithmetic computation are not removed.
-- Each invocation traverses a deterministic snapshot once. Apply another kernel
-  or invoke again to exploit opportunities exposed by a prior transformation;
-  fixed-point scheduling belongs to the host. Profitability is target-dependent.
+- Each invocation traverses a deterministic snapshot once. Hosts can use
+  [`Runtime::run_pipeline`](../README.md#bounded-pipelines) to schedule multiple
+  kernels or repeat them to a bounded fixed point. Profitability is target-dependent.
 
 In the tables, `a` and `b` are proven same-width constants; `x`, `y` and `z`
 denote integer SSA operands; `c` is a Boolean condition; `ones` is the width-bounded

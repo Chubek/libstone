@@ -59,12 +59,14 @@ install(FILES "${LIBSTONE_LUA_SOURCE_DIR}/lua.h" "${LIBSTONE_LUA_SOURCE_DIR}/lua
   "${LIBSTONE_LUA_SOURCE_DIR}/lauxlib.h" "${LIBSTONE_LUA_SOURCE_DIR}/lualib.h"
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/blackstone/lua)
 install(DIRECTORY kernels/ DESTINATION ${CMAKE_INSTALL_DATADIR}/blackstone/kernels FILES_MATCHING PATTERN "*.lua")
-install(FILES lrewrite/lrewrite.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/blackstone)
+install(FILES docs/kernels.md docs/extended-kernels.json DESTINATION ${CMAKE_INSTALL_DATADIR}/blackstone/docs)
+install(FILES README.md lrewrite/lrewrite.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/blackstone)
 install(FILES lrewrite/local.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/blackstone/lrewrite)
 install(EXPORT BlackstoneTargets NAMESPACE Blackstone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Blackstone)
 configure_package_config_file(cmake/BlackstoneConfig.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/BlackstoneConfig.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Blackstone)
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Blackstone
+  PATH_VARS CMAKE_INSTALL_DATADIR)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/BlackstoneConfigVersion.cmake"
   VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/BlackstoneConfig.cmake"
@@ -87,4 +89,18 @@ if(BLACKSTONE_BUILD_TESTS)
     -DFIRESTONE_SOURCE=${BLACKSTONE_FIRESTONE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install.cmake)
   set_tests_properties(blackstone.runtime blackstone.kernels blackstone.install PROPERTIES TIMEOUT 120)
+
+  add_executable(blackstone-extensions-lua tests/extension_runner.cpp)
+  target_link_libraries(blackstone-extensions-lua PRIVATE blackstone_lua)
+  libstone_warnings(blackstone-extensions-lua)
+  add_test(NAME blackstone.extensions.lua
+    COMMAND blackstone-extensions-lua "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extensions.lua")
+  set_tests_properties(blackstone.extensions.lua PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." TIMEOUT 180)
+  add_executable(blackstone-extensions-ssa tests/extension_ssa.cpp)
+  target_link_libraries(blackstone-extensions-ssa PRIVATE blackstone)
+  libstone_warnings(blackstone-extensions-ssa)
+  add_test(NAME blackstone.extensions.ssa
+    COMMAND blackstone-extensions-ssa "${CMAKE_CURRENT_SOURCE_DIR}/kernels")
+  set_tests_properties(blackstone.extensions.ssa PROPERTIES TIMEOUT 180)
 endif()

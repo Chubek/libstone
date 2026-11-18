@@ -1,0 +1,2706 @@
+[
+  {
+    "name": "zero_minus_x",
+    "source": [
+      "sub",
+      0,
+      "X"
+    ],
+    "target": [
+      "neg",
+      "X"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "zero minus x"
+  },
+  {
+    "name": "multiply_negative_one",
+    "source": [
+      "mul",
+      "X",
+      -1
+    ],
+    "target": [
+      "neg",
+      "X"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "multiply negative one"
+  },
+  {
+    "name": "xor_negative_one",
+    "source": [
+      "xor",
+      "X",
+      -1
+    ],
+    "target": [
+      "not",
+      "X"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor negative one"
+  },
+  {
+    "name": "double_add_to_shift",
+    "source": [
+      "add",
+      "X",
+      "X"
+    ],
+    "target": [
+      "shl",
+      "X",
+      1
+    ],
+    "category": "algebraic",
+    "when": "bits >= 2",
+    "doc": "double add to shift"
+  },
+  {
+    "name": "negate_difference",
+    "source": [
+      "neg",
+      [
+        "sub",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "sub",
+      "Y",
+      "X"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate difference"
+  },
+  {
+    "name": "minus_negation_cancel",
+    "source": [
+      "sub",
+      0,
+      [
+        "neg",
+        "X"
+      ]
+    ],
+    "target": "X",
+    "category": "algebraic",
+    "when": "true",
+    "doc": "minus negation cancel"
+  },
+  {
+    "name": "subtract_own_sum",
+    "source": [
+      "sub",
+      "X",
+      [
+        "add",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "neg",
+      "Y"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "subtract own sum"
+  },
+  {
+    "name": "subtract_both_negated",
+    "source": [
+      "sub",
+      [
+        "neg",
+        "X"
+      ],
+      [
+        "neg",
+        "Y"
+      ]
+    ],
+    "target": [
+      "sub",
+      "Y",
+      "X"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "subtract both negated"
+  },
+  {
+    "name": "negated_self_difference",
+    "source": [
+      "sub",
+      [
+        "neg",
+        "X"
+      ],
+      "X"
+    ],
+    "target": [
+      "mul",
+      "X",
+      -2
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negated self difference"
+  },
+  {
+    "name": "subtract_negative_self",
+    "source": [
+      "sub",
+      "X",
+      [
+        "neg",
+        "X"
+      ]
+    ],
+    "target": [
+      "mul",
+      "X",
+      2
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "subtract negative self"
+  },
+  {
+    "name": "negate_double",
+    "source": [
+      "neg",
+      [
+        "add",
+        "X",
+        "X"
+      ]
+    ],
+    "target": [
+      "mul",
+      "X",
+      -2
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate double"
+  },
+  {
+    "name": "negate_sum_with_negative_left",
+    "source": [
+      "neg",
+      [
+        "add",
+        [
+          "neg",
+          "X"
+        ],
+        "Y"
+      ]
+    ],
+    "target": [
+      "sub",
+      "X",
+      "Y"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate sum with negative left"
+  },
+  {
+    "name": "negate_sum_with_negative_right",
+    "source": [
+      "neg",
+      [
+        "add",
+        "X",
+        [
+          "neg",
+          "Y"
+        ]
+      ]
+    ],
+    "target": [
+      "sub",
+      "Y",
+      "X"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate sum with negative right"
+  },
+  {
+    "name": "multiply_two_negatives",
+    "source": [
+      "mul",
+      [
+        "neg",
+        "X"
+      ],
+      [
+        "neg",
+        "Y"
+      ]
+    ],
+    "target": [
+      "mul",
+      "X",
+      "Y"
+    ],
+    "category": "algebraic",
+    "when": "true",
+    "doc": "multiply two negatives"
+  },
+  {
+    "name": "negate_minus_one_product",
+    "source": [
+      "neg",
+      [
+        "mul",
+        "X",
+        -1
+      ]
+    ],
+    "target": "X",
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate minus one product"
+  },
+  {
+    "name": "subtract_negative_double",
+    "source": [
+      "sub",
+      [
+        "neg",
+        "X"
+      ],
+      [
+        "neg",
+        "X"
+      ]
+    ],
+    "target": 0,
+    "category": "algebraic",
+    "when": "true",
+    "doc": "subtract negative double"
+  },
+  {
+    "name": "negate_subtract_from_zero",
+    "source": [
+      "neg",
+      [
+        "sub",
+        0,
+        "X"
+      ]
+    ],
+    "target": "X",
+    "category": "algebraic",
+    "when": "true",
+    "doc": "negate subtract from zero"
+  },
+  {
+    "name": "xor_own_complement",
+    "source": [
+      "xor",
+      "X",
+      [
+        "not",
+        "X"
+      ]
+    ],
+    "target": -1,
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor own complement"
+  },
+  {
+    "name": "and_own_xor_complement",
+    "source": [
+      "and",
+      "X",
+      [
+        "xor",
+        "X",
+        -1
+      ]
+    ],
+    "target": 0,
+    "category": "bitwise",
+    "when": "true",
+    "doc": "and own xor complement"
+  },
+  {
+    "name": "or_own_xor_complement",
+    "source": [
+      "or",
+      "X",
+      [
+        "xor",
+        "X",
+        -1
+      ]
+    ],
+    "target": -1,
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or own xor complement"
+  },
+  {
+    "name": "xor_all_ones_twice",
+    "source": [
+      "xor",
+      [
+        "xor",
+        "X",
+        -1
+      ],
+      -1
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor all ones twice"
+  },
+  {
+    "name": "not_xor_ones",
+    "source": [
+      "not",
+      [
+        "xor",
+        "X",
+        -1
+      ]
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "not xor ones"
+  },
+  {
+    "name": "xor_not_ones",
+    "source": [
+      "xor",
+      [
+        "not",
+        "X"
+      ],
+      -1
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor not ones"
+  },
+  {
+    "name": "or_with_xor_absorption",
+    "source": [
+      "or",
+      "X",
+      [
+        "xor",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or with xor absorption"
+  },
+  {
+    "name": "and_with_xor_reduction",
+    "source": [
+      "and",
+      "X",
+      [
+        "xor",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      [
+        "not",
+        "Y"
+      ]
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "and with xor reduction"
+  },
+  {
+    "name": "xor_with_and_reduction",
+    "source": [
+      "xor",
+      "X",
+      [
+        "and",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      [
+        "not",
+        "Y"
+      ]
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor with and reduction"
+  },
+  {
+    "name": "xor_with_or_reduction",
+    "source": [
+      "xor",
+      "X",
+      [
+        "or",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "and",
+      [
+        "not",
+        "X"
+      ],
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor with or reduction"
+  },
+  {
+    "name": "and_not_or_contradiction",
+    "source": [
+      "and",
+      "X",
+      [
+        "not",
+        [
+          "or",
+          "X",
+          "Y"
+        ]
+      ]
+    ],
+    "target": 0,
+    "category": "bitwise",
+    "when": "true",
+    "doc": "and not or contradiction"
+  },
+  {
+    "name": "or_not_and_tautology",
+    "source": [
+      "or",
+      "X",
+      [
+        "not",
+        [
+          "and",
+          "X",
+          "Y"
+        ]
+      ]
+    ],
+    "target": -1,
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or not and tautology"
+  },
+  {
+    "name": "or_disjoint_and_partition",
+    "source": [
+      "or",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        [
+          "not",
+          "Y"
+        ]
+      ]
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or disjoint and partition"
+  },
+  {
+    "name": "xor_disjoint_and_partition",
+    "source": [
+      "xor",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        [
+          "not",
+          "Y"
+        ]
+      ]
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor disjoint and partition"
+  },
+  {
+    "name": "and_disjoint_or_partition",
+    "source": [
+      "and",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        "X",
+        [
+          "not",
+          "Y"
+        ]
+      ]
+    ],
+    "target": "X",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "and disjoint or partition"
+  },
+  {
+    "name": "xor_disjoint_or_partition",
+    "source": [
+      "xor",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        "X",
+        [
+          "not",
+          "Y"
+        ]
+      ]
+    ],
+    "target": [
+      "not",
+      "X"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor disjoint or partition"
+  },
+  {
+    "name": "or_disjoint_and_other",
+    "source": [
+      "or",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        [
+          "not",
+          "X"
+        ],
+        "Y"
+      ]
+    ],
+    "target": "Y",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or disjoint and other"
+  },
+  {
+    "name": "xor_disjoint_and_other",
+    "source": [
+      "xor",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        [
+          "not",
+          "X"
+        ],
+        "Y"
+      ]
+    ],
+    "target": "Y",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor disjoint and other"
+  },
+  {
+    "name": "and_disjoint_or_other",
+    "source": [
+      "and",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        [
+          "not",
+          "X"
+        ],
+        "Y"
+      ]
+    ],
+    "target": "Y",
+    "category": "bitwise",
+    "when": "true",
+    "doc": "and disjoint or other"
+  },
+  {
+    "name": "xor_disjoint_or_other",
+    "source": [
+      "xor",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        [
+          "not",
+          "X"
+        ],
+        "Y"
+      ]
+    ],
+    "target": [
+      "not",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor disjoint or other"
+  },
+  {
+    "name": "xor_and_or_equals_xor",
+    "source": [
+      "xor",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "xor",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "xor and or equals xor"
+  },
+  {
+    "name": "or_xor_and_equals_or",
+    "source": [
+      "or",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or xor and equals or"
+  },
+  {
+    "name": "or_disjoint_and_xor",
+    "source": [
+      "or",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "or disjoint and xor"
+  },
+  {
+    "name": "subtract_or_and",
+    "source": [
+      "sub",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "xor",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "subtract or and"
+  },
+  {
+    "name": "add_xor_and",
+    "source": [
+      "add",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      "Y"
+    ],
+    "category": "bitwise",
+    "when": "true",
+    "doc": "add xor and"
+  },
+  {
+    "name": "eq_sub_zero",
+    "source": [
+      "eq",
+      [
+        "sub",
+        "X",
+        "Y"
+      ],
+      0
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq sub zero"
+  },
+  {
+    "name": "eq_xor_zero",
+    "source": [
+      "eq",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      0
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq xor zero"
+  },
+  {
+    "name": "eq_xor_own_operand",
+    "source": [
+      "eq",
+      "X",
+      [
+        "xor",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "eq",
+      "Y",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq xor own operand"
+  },
+  {
+    "name": "eq_negative_zero",
+    "source": [
+      "eq",
+      [
+        "neg",
+        "X"
+      ],
+      0
+    ],
+    "target": [
+      "eq",
+      "X",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq negative zero"
+  },
+  {
+    "name": "eq_complement_ones",
+    "source": [
+      "eq",
+      [
+        "not",
+        "X"
+      ],
+      -1
+    ],
+    "target": [
+      "eq",
+      "X",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq complement ones"
+  },
+  {
+    "name": "eq_complement_zero",
+    "source": [
+      "eq",
+      [
+        "not",
+        "X"
+      ],
+      0
+    ],
+    "target": [
+      "eq",
+      "X",
+      -1
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq complement zero"
+  },
+  {
+    "name": "eq_own_complement",
+    "source": [
+      "eq",
+      "X",
+      [
+        "not",
+        "X"
+      ]
+    ],
+    "target": 0,
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq own complement"
+  },
+  {
+    "name": "eq_two_negatives",
+    "source": [
+      "eq",
+      [
+        "neg",
+        "X"
+      ],
+      [
+        "neg",
+        "Y"
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq two negatives"
+  },
+  {
+    "name": "eq_two_complements",
+    "source": [
+      "eq",
+      [
+        "not",
+        "X"
+      ],
+      [
+        "not",
+        "Y"
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq two complements"
+  },
+  {
+    "name": "eq_cancel_add_constant",
+    "source": [
+      "eq",
+      [
+        "add",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "add",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq cancel add constant"
+  },
+  {
+    "name": "eq_cancel_sub_constant",
+    "source": [
+      "eq",
+      [
+        "sub",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "sub",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq cancel sub constant"
+  },
+  {
+    "name": "eq_cancel_xor_constant",
+    "source": [
+      "eq",
+      [
+        "xor",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "xor",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "eq cancel xor constant"
+  },
+  {
+    "name": "eq_cancel_mul_constant",
+    "source": [
+      "eq",
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "mul",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "eq",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "(V(\"K\") & 1) == 1",
+    "doc": "eq cancel mul constant"
+  },
+  {
+    "name": "ne_sub_zero",
+    "source": [
+      "ne",
+      [
+        "sub",
+        "X",
+        "Y"
+      ],
+      0
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne sub zero"
+  },
+  {
+    "name": "ne_xor_zero",
+    "source": [
+      "ne",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      0
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne xor zero"
+  },
+  {
+    "name": "ne_sub_own_operand",
+    "source": [
+      "ne",
+      [
+        "sub",
+        "X",
+        "Y"
+      ],
+      "X"
+    ],
+    "target": [
+      "ne",
+      "Y",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne sub own operand"
+  },
+  {
+    "name": "ne_xor_own_operand",
+    "source": [
+      "ne",
+      "X",
+      [
+        "xor",
+        "X",
+        "Y"
+      ]
+    ],
+    "target": [
+      "ne",
+      "Y",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne xor own operand"
+  },
+  {
+    "name": "ne_negative_zero",
+    "source": [
+      "ne",
+      [
+        "neg",
+        "X"
+      ],
+      0
+    ],
+    "target": [
+      "ne",
+      "X",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne negative zero"
+  },
+  {
+    "name": "ne_complement_ones",
+    "source": [
+      "ne",
+      [
+        "not",
+        "X"
+      ],
+      -1
+    ],
+    "target": [
+      "ne",
+      "X",
+      0
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne complement ones"
+  },
+  {
+    "name": "ne_complement_zero",
+    "source": [
+      "ne",
+      [
+        "not",
+        "X"
+      ],
+      0
+    ],
+    "target": [
+      "ne",
+      "X",
+      -1
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne complement zero"
+  },
+  {
+    "name": "ne_own_complement",
+    "source": [
+      "ne",
+      "X",
+      [
+        "not",
+        "X"
+      ]
+    ],
+    "target": 1,
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne own complement"
+  },
+  {
+    "name": "ne_two_negatives",
+    "source": [
+      "ne",
+      [
+        "neg",
+        "X"
+      ],
+      [
+        "neg",
+        "Y"
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne two negatives"
+  },
+  {
+    "name": "ne_two_complements",
+    "source": [
+      "ne",
+      [
+        "not",
+        "X"
+      ],
+      [
+        "not",
+        "Y"
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne two complements"
+  },
+  {
+    "name": "ne_cancel_add_constant",
+    "source": [
+      "ne",
+      [
+        "add",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "add",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne cancel add constant"
+  },
+  {
+    "name": "ne_cancel_sub_constant",
+    "source": [
+      "ne",
+      [
+        "sub",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "sub",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne cancel sub constant"
+  },
+  {
+    "name": "ne_cancel_xor_constant",
+    "source": [
+      "ne",
+      [
+        "xor",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "xor",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "true",
+    "doc": "ne cancel xor constant"
+  },
+  {
+    "name": "ne_cancel_mul_constant",
+    "source": [
+      "ne",
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "mul",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "ne",
+      "X",
+      "Y"
+    ],
+    "category": "comparison",
+    "when": "(V(\"K\") & 1) == 1",
+    "doc": "ne cancel mul constant"
+  },
+  {
+    "name": "select_equal_choose_right",
+    "source": [
+      "select",
+      [
+        "eq",
+        "X",
+        "Y"
+      ],
+      "X",
+      "Y"
+    ],
+    "target": "Y",
+    "category": "select",
+    "when": "true",
+    "doc": "select equal choose right"
+  },
+  {
+    "name": "select_equal_choose_left",
+    "source": [
+      "select",
+      [
+        "eq",
+        "X",
+        "Y"
+      ],
+      "Y",
+      "X"
+    ],
+    "target": "X",
+    "category": "select",
+    "when": "true",
+    "doc": "select equal choose left"
+  },
+  {
+    "name": "select_unequal_choose_left",
+    "source": [
+      "select",
+      [
+        "ne",
+        "X",
+        "Y"
+      ],
+      "X",
+      "Y"
+    ],
+    "target": "X",
+    "category": "select",
+    "when": "true",
+    "doc": "select unequal choose left"
+  },
+  {
+    "name": "select_unequal_choose_right",
+    "source": [
+      "select",
+      [
+        "ne",
+        "X",
+        "Y"
+      ],
+      "Y",
+      "X"
+    ],
+    "target": "Y",
+    "category": "select",
+    "when": "true",
+    "doc": "select unequal choose right"
+  },
+  {
+    "name": "select_zero_if_equal_else_self",
+    "source": [
+      "select",
+      [
+        "eq",
+        "X",
+        0
+      ],
+      0,
+      "X"
+    ],
+    "target": "X",
+    "category": "select",
+    "when": "true",
+    "doc": "select zero if equal else self"
+  },
+  {
+    "name": "select_self_if_equal_else_zero",
+    "source": [
+      "select",
+      [
+        "eq",
+        "X",
+        0
+      ],
+      "X",
+      0
+    ],
+    "target": 0,
+    "category": "select",
+    "when": "true",
+    "doc": "select self if equal else zero"
+  },
+  {
+    "name": "select_self_if_nonzero_else_zero",
+    "source": [
+      "select",
+      [
+        "ne",
+        "X",
+        0
+      ],
+      "X",
+      0
+    ],
+    "target": "X",
+    "category": "select",
+    "when": "true",
+    "doc": "select self if nonzero else zero"
+  },
+  {
+    "name": "select_zero_if_nonzero_else_self",
+    "source": [
+      "select",
+      [
+        "ne",
+        "X",
+        0
+      ],
+      0,
+      "X"
+    ],
+    "target": 0,
+    "category": "select",
+    "when": "true",
+    "doc": "select zero if nonzero else self"
+  },
+  {
+    "name": "select_nested_then_same_condition",
+    "source": [
+      "select",
+      "C",
+      [
+        "select",
+        "C",
+        "A",
+        "B"
+      ],
+      "D"
+    ],
+    "target": [
+      "select",
+      "C",
+      "A",
+      "D"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select nested then same condition"
+  },
+  {
+    "name": "select_nested_else_same_condition",
+    "source": [
+      "select",
+      "C",
+      "A",
+      [
+        "select",
+        "C",
+        "B",
+        "D"
+      ]
+    ],
+    "target": [
+      "select",
+      "C",
+      "A",
+      "D"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select nested else same condition"
+  },
+  {
+    "name": "select_both_nested_same_condition",
+    "source": [
+      "select",
+      "C",
+      [
+        "select",
+        "C",
+        "A",
+        "B"
+      ],
+      [
+        "select",
+        "C",
+        "D",
+        "E"
+      ]
+    ],
+    "target": [
+      "select",
+      "C",
+      "A",
+      "E"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select both nested same condition"
+  },
+  {
+    "name": "select_negated_condition",
+    "source": [
+      "select",
+      [
+        "not",
+        "C"
+      ],
+      "A",
+      "B"
+    ],
+    "target": [
+      "select",
+      "C",
+      "B",
+      "A"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select negated condition"
+  },
+  {
+    "name": "select_xor_one_condition",
+    "source": [
+      "select",
+      [
+        "xor",
+        "C",
+        1
+      ],
+      "A",
+      "B"
+    ],
+    "target": [
+      "select",
+      "C",
+      "B",
+      "A"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select xor one condition"
+  },
+  {
+    "name": "select_equal_zero_condition",
+    "source": [
+      "select",
+      [
+        "eq",
+        "C",
+        0
+      ],
+      "A",
+      "B"
+    ],
+    "target": [
+      "select",
+      "C",
+      "B",
+      "A"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select equal zero condition"
+  },
+  {
+    "name": "select_unequal_zero_condition",
+    "source": [
+      "select",
+      [
+        "ne",
+        "C",
+        0
+      ],
+      "A",
+      "B"
+    ],
+    "target": [
+      "select",
+      "C",
+      "A",
+      "B"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select unequal zero condition"
+  },
+  {
+    "name": "select_nested_negation_then",
+    "source": [
+      "select",
+      "C",
+      [
+        "select",
+        [
+          "not",
+          "C"
+        ],
+        "A",
+        "B"
+      ],
+      "D"
+    ],
+    "target": [
+      "select",
+      "C",
+      "B",
+      "D"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select nested negation then"
+  },
+  {
+    "name": "select_nested_negation_else",
+    "source": [
+      "select",
+      "C",
+      "A",
+      [
+        "select",
+        [
+          "not",
+          "C"
+        ],
+        "B",
+        "D"
+      ]
+    ],
+    "target": [
+      "select",
+      "C",
+      "A",
+      "B"
+    ],
+    "category": "select",
+    "when": "true",
+    "doc": "select nested negation else"
+  },
+  {
+    "name": "factor_bitwise_or_of_ands",
+    "source": [
+      "or",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Z"
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      [
+        "or",
+        "Y",
+        "Z"
+      ]
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor bitwise or of ands"
+  },
+  {
+    "name": "factor_bitwise_xor_of_ands",
+    "source": [
+      "xor",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      [
+        "and",
+        "X",
+        "Z"
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      [
+        "xor",
+        "Y",
+        "Z"
+      ]
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor bitwise xor of ands"
+  },
+  {
+    "name": "factor_bitwise_and_of_ors",
+    "source": [
+      "and",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      [
+        "or",
+        "X",
+        "Z"
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      [
+        "and",
+        "Y",
+        "Z"
+      ]
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor bitwise and of ors"
+  },
+  {
+    "name": "factor_or_and_constants",
+    "source": [
+      "or",
+      [
+        "and",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      [
+        "and",
+        "X",
+        {
+          "capture": "K2"
+        }
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      {
+        "compute": "V(\"K1\") | V(\"K2\")"
+      }
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor or and constants"
+  },
+  {
+    "name": "factor_xor_and_constants",
+    "source": [
+      "xor",
+      [
+        "and",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      [
+        "and",
+        "X",
+        {
+          "capture": "K2"
+        }
+      ]
+    ],
+    "target": [
+      "and",
+      "X",
+      {
+        "compute": "V(\"K1\") ~ V(\"K2\")"
+      }
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor xor and constants"
+  },
+  {
+    "name": "factor_and_or_constants",
+    "source": [
+      "and",
+      [
+        "or",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      [
+        "or",
+        "X",
+        {
+          "capture": "K2"
+        }
+      ]
+    ],
+    "target": [
+      "or",
+      "X",
+      {
+        "compute": "V(\"K1\") & V(\"K2\")"
+      }
+    ],
+    "category": "factoring",
+    "when": "true",
+    "doc": "factor and or constants"
+  },
+  {
+    "name": "subtract_add_constants",
+    "source": [
+      "sub",
+      [
+        "add",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "add",
+      "X",
+      {
+        "compute": "V(\"K1\")-V(\"K2\")"
+      }
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "subtract add constants"
+  },
+  {
+    "name": "add_subtract_constants",
+    "source": [
+      "add",
+      [
+        "sub",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "add",
+      "X",
+      {
+        "compute": "V(\"K2\")-V(\"K1\")"
+      }
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "add subtract constants"
+  },
+  {
+    "name": "subtract_subtract_constants",
+    "source": [
+      "sub",
+      [
+        "sub",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "sub",
+      "X",
+      {
+        "compute": "V(\"K1\")+V(\"K2\")"
+      }
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "subtract subtract constants"
+  },
+  {
+    "name": "add_const_minus_value",
+    "source": [
+      "add",
+      [
+        "sub",
+        {
+          "capture": "K1"
+        },
+        "X"
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "sub",
+      {
+        "compute": "V(\"K1\")+V(\"K2\")"
+      },
+      "X"
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "add const minus value"
+  },
+  {
+    "name": "subtract_const_minus_value",
+    "source": [
+      "sub",
+      [
+        "sub",
+        {
+          "capture": "K1"
+        },
+        "X"
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "sub",
+      {
+        "compute": "V(\"K1\")-V(\"K2\")"
+      },
+      "X"
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "subtract const minus value"
+  },
+  {
+    "name": "subtract_sum_by_self_constant",
+    "source": [
+      "sub",
+      "X",
+      [
+        "add",
+        "X",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": {
+      "compute": "-V(\"K\")"
+    },
+    "category": "reassociation",
+    "when": "true",
+    "doc": "subtract sum by self constant"
+  },
+  {
+    "name": "multiply_add_common_constants",
+    "source": [
+      "add",
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K2"
+        }
+      ]
+    ],
+    "target": [
+      "mul",
+      "X",
+      {
+        "compute": "V(\"K1\")+V(\"K2\")"
+      }
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "multiply add common constants"
+  },
+  {
+    "name": "multiply_sub_common_constants",
+    "source": [
+      "sub",
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      [
+        "mul",
+        "X",
+        {
+          "capture": "K2"
+        }
+      ]
+    ],
+    "target": [
+      "mul",
+      "X",
+      {
+        "compute": "V(\"K1\")-V(\"K2\")"
+      }
+    ],
+    "category": "reassociation",
+    "when": "true",
+    "doc": "multiply sub common constants"
+  },
+  {
+    "name": "multiply_by_power_of_two",
+    "source": [
+      "mul",
+      "X",
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "shl",
+      "X",
+      {
+        "compute": "ilog2(V(\"K\"))"
+      }
+    ],
+    "category": "shift",
+    "when": "power2(V(\"K\")) and V(\"K\") >= 2 and ilog2(V(\"K\")) < bits",
+    "doc": "multiply by power of two"
+  },
+  {
+    "name": "combine_left_shifts",
+    "source": [
+      "shl",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "shl",
+      "X",
+      {
+        "compute": "V(\"K1\")+V(\"K2\")"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K1\"),bits) and validshift(V(\"K2\"),bits) and V(\"K1\")+V(\"K2\") < bits",
+    "doc": "combine left shifts"
+  },
+  {
+    "name": "overflowing_left_shifts_zero",
+    "source": [
+      "shl",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K1\"),bits) and validshift(V(\"K2\"),bits) and V(\"K1\")+V(\"K2\") >= bits",
+    "doc": "overflowing left shifts zero"
+  },
+  {
+    "name": "combine_right_shifts",
+    "source": [
+      "shr",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K1"
+        }
+      ],
+      {
+        "capture": "K2"
+      }
+    ],
+    "target": [
+      "shr",
+      "X",
+      {
+        "compute": "V(\"K1\")+V(\"K2\")"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K1\"),bits) and validshift(V(\"K2\"),bits) and V(\"K1\")+V(\"K2\") < bits",
+    "doc": "combine right shifts"
+  },
+  {
+    "name": "zero_left_shift",
+    "source": [
+      "shl",
+      0,
+      {
+        "capture": "K"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "zero left shift"
+  },
+  {
+    "name": "zero_right_shift",
+    "source": [
+      "shr",
+      0,
+      {
+        "capture": "K"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "zero right shift"
+  },
+  {
+    "name": "clear_below_shift",
+    "source": [
+      "and",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      {
+        "capture": "MASK"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits) and (V(\"MASK\") & ((1 << V(\"K\"))-1)) == V(\"MASK\")",
+    "doc": "clear below shift"
+  },
+  {
+    "name": "right_shift_cleared_mask",
+    "source": [
+      "shr",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits) and nonnegative(V(\"MASK\"),bits) and (V(\"MASK\") >> V(\"K\")) == 0",
+    "doc": "right shift cleared mask"
+  },
+  {
+    "name": "left_shift_cleared_mask",
+    "source": [
+      "shl",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": 0,
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits) and ((V(\"MASK\") << V(\"K\")) & widthmask(bits)) == 0",
+    "doc": "left shift cleared mask"
+  },
+  {
+    "name": "shift_right_then_left_mask",
+    "source": [
+      "shl",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "and",
+      "X",
+      {
+        "compute": "~((1<<V(\"K\"))-1)"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "shift right then left mask"
+  },
+  {
+    "name": "distribute_shl_and",
+    "source": [
+      "and",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shl",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shl",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shl and"
+  },
+  {
+    "name": "distribute_shr_and",
+    "source": [
+      "and",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shr",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shr",
+      [
+        "and",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shr and"
+  },
+  {
+    "name": "distribute_shl_or",
+    "source": [
+      "or",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shl",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shl",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shl or"
+  },
+  {
+    "name": "distribute_shr_or",
+    "source": [
+      "or",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shr",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shr",
+      [
+        "or",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shr or"
+  },
+  {
+    "name": "distribute_shl_xor",
+    "source": [
+      "xor",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shl",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shl",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shl xor"
+  },
+  {
+    "name": "distribute_shr_xor",
+    "source": [
+      "xor",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      [
+        "shr",
+        "Y",
+        {
+          "capture": "K"
+        }
+      ]
+    ],
+    "target": [
+      "shr",
+      [
+        "xor",
+        "X",
+        "Y"
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "distribute shr xor"
+  },
+  {
+    "name": "mask_before_left_shift",
+    "source": [
+      "shl",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "and",
+      [
+        "shl",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      {
+        "compute": "V(\"MASK\") << V(\"K\")"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits)",
+    "doc": "mask before left shift"
+  },
+  {
+    "name": "mask_before_right_shift",
+    "source": [
+      "shr",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "and",
+      [
+        "shr",
+        "X",
+        {
+          "capture": "K"
+        }
+      ],
+      {
+        "compute": "V(\"MASK\") >> V(\"K\")"
+      }
+    ],
+    "category": "shift",
+    "when": "validshift(V(\"K\"),bits) and nonnegative(V(\"MASK\"),bits)",
+    "doc": "mask before right shift"
+  },
+  {
+    "name": "nonnegative_divide_by_power2",
+    "source": [
+      "div",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "shr",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "compute": "ilog2(V(\"K\"))"
+      }
+    ],
+    "category": "shift",
+    "when": "power2(V(\"K\")) and V(\"K\")>1 and ilog2(V(\"K\")) < bits-1 and nonnegative(V(\"MASK\"),bits)",
+    "doc": "nonnegative divide by power2"
+  },
+  {
+    "name": "nonnegative_mod_by_power2",
+    "source": [
+      "mod",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "capture": "K"
+      }
+    ],
+    "target": [
+      "and",
+      [
+        "and",
+        "X",
+        {
+          "capture": "MASK"
+        }
+      ],
+      {
+        "compute": "V(\"K\")-1"
+      }
+    ],
+    "category": "shift",
+    "when": "power2(V(\"K\")) and V(\"K\")>1 and ilog2(V(\"K\")) < bits-1 and nonnegative(V(\"MASK\"),bits)",
+    "doc": "nonnegative mod by power2"
+  }
+]
