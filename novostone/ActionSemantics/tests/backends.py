@@ -23,7 +23,8 @@ work.mkdir(parents=True, exist_ok=True)
 def run(command, input=None, expected=0):
     r = subprocess.run([str(x) for x in command], input=input, capture_output=True, timeout=45)
     if r.returncode != expected:
-        raise AssertionError(f'{command}: exit {r.returncode}, expected {expected}\n{r.stdout.decode(errors="replace")}\n{r.stderr.decode(errors="replace")}')
+        raise AssertionError(f'{command}: exit {r.returncode}, expected {expected}, input={input!r}\n'
+                             f'{r.stdout.decode(errors="replace")}\n{r.stderr.decode(errors="replace")}')
     return r.stdout.decode()
 
 
@@ -59,7 +60,8 @@ if args.target == 'latex':
     escaped.write_text('language A_b { start E; syntax E = N_x(a_b: integer); rule N_x = give a_b < 42; }')
     compile_spec(escaped, 'escaped')
     if args.dialect == '2':
-        for stem in ('functions', 'closures', 'continuations', 'generators', 'imperative_language'):
+        for stem in ('functions', 'closures', 'continuations', 'generators', 'imperative_language',
+                     'pattern_matching'):
             compile_spec(pathlib.Path(args.source).parent / f'{stem}.acsem', stem)
     sys.exit(0)
 
@@ -293,5 +295,50 @@ if args.dialect == '2':
     cases += generator_cases
     cases += loop_cases
     cases += closure_cases
+    patterns = pathlib.Path(args.source).parent / 'pattern_matching.acsem'
+    pattern_command = compile_spec(patterns, 'pattern_matching', defines=['heap=128'])
+    pattern_cases = [
+        ('Empty()', 'completed variant:Nil'),
+        ((patterns.parent / 'pattern_matching.term').read_text().strip(), 'completed 42'),
+        ('First(Prepend(42,Empty()))', 'completed 42'),
+        ('First(Empty())', 'failed'),
+        ('Reject(Tagged(a))', 'failed'),
+        ('Reject(Prepend(1,Empty()))', 'failed'),
+        ('InvalidConstructor(BoxValue(Empty()))', 'failed'),
+        ('Inspect(Prepend(42,Empty()),1)', 'completed 2 42'),
+        ('Inspect(Prepend(42,Empty()),2)', 'completed 2 variant:Nil'),
+        ('Inspect(Empty(),1)', 'failed'),
+        ('Inspect(Tagged(a),1)', 'failed'),
+        ('Compare(Prepend(1,Empty()),Prepend(1,Empty()))', 'completed 1 0'),
+        ('Compare(Prepend(1,Empty()),Prepend(2,Empty()))', 'completed 0 0'),
+        ('Compare(Empty(),BoxValue(Empty()))', 'completed 0 0'),
+        ('Compare(Tagged(yes),Tagged(yes))', 'completed 1 1'),
+        ('Pick(1,yes)', 'completed 42'),
+        ('Pick(0,yes)', 'completed token:yes'),
+        ('Pick(1,no)', 'completed token:no'),
+        ('Partial(BoxValue(Prepend(42,Empty())))', 'completed 42'),
+        ('Partial(BoxValue(Prepend(42,Prepend(0,Empty()))))', 'failed'),
+        ('Capture(Prepend(42,Empty()))', 'completed 42'),
+        ('Scope()', 'completed 7 42'),
+        ('FallbackGuard()', 'completed 42'),
+        ('Alternatives(Prepend(42,Empty()))', 'completed 42'),
+        ('Alternatives(Prepend(99,Prepend(42,Empty())))', 'completed 42'),
+        ('Alternatives(Empty())', 'failed'),
+        ('Alias(Empty())', 'completed 1'),
+        ('Alias(Prepend(42,Empty()))', 'completed 1'),
+        ('Unpack(Prepend(42,Empty()))', 'completed 42 variant:Nil'),
+        ('Unpack(Empty())', 'completed'),
+        ('Unpack(Tagged(a))', 'failed'),
+        ('Retain(Grow(45))', 'completed 42'),
+        ('Cycle()', 'completed 1'),
+        ('Compare(Grow(45),Grow(45))', 'completed 1 0'),
+    ]
+    for text, expected in pattern_cases:
+        assert run(pattern_command, text.encode(), 0 if expected.startswith('completed') else 1).strip() == expected, text
+    run(pattern_command, b'Compare(Grow(100),Grow(100))', 2)
+    depth_command = compile_spec(patterns, 'pattern_depth', defines=['depth=32'])
+    assert run(depth_command, b'Compare(Grow(5),Grow(5))').strip() == 'completed 1 0'
+    run(depth_command, b'Compare(Grow(45),Grow(45))', 2)
+    cases += pattern_cases
 dialect_note = f' (dialect {args.dialect})' if args.dialect else ''
 print(f'{args.target}{dialect_note}: {len(cases)} semantic/oracle cases, malformed input, resource limits, micro and minimal languages passed')

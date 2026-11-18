@@ -97,6 +97,28 @@ void extended_frontend() {
                       " rule Load = give bound(contents(bound(\"r\")));"
                       " rule Store = put \"x\" in bound(\"r\"); }");
   check(tagged.default_dialect() == Dialect::Two, "tagged cells must be detected before lowering earlier rules");
+  const std::string adt = "language P { start E; syntax E = N();"
+    " data List = Nil() | Cons(integer, List); data Other = Other(datum); rule N = ";
+  auto pattern_spec = [&](std::string_view body) { return adt + std::string(body) + "; }"; };
+  auto data = parse(pattern_spec("construct Nil() then match given(1) of List with {"
+                                 " Nil() => give 0, Cons(x, _) => give bound(\"x\") }"));
+  check(data.default_dialect() == Dialect::Two, "data must select extended mode");
+  check(generate(data, Target::Latex).find("Runtime data sorts") != std::string::npos, "missing data sort equations");
+  rejected(pattern_spec("construct Missing()"), "unknown data constructor");
+  rejected(pattern_spec("construct Cons(0)"), "wrong constructor arity");
+  rejected(pattern_spec("construct Cons(\"token\", given(1))"), "incompatible field type");
+  rejected(pattern_spec("match given(1) with { Cons(x) => fail }"), "wrong pattern arity");
+  rejected(pattern_spec("match given(1) with { Cons(x, x) => fail }"), "duplicate pattern binding");
+  rejected(pattern_spec("match given(1) with { Cons(x, _) | Nil() => fail }"), "or-pattern alternatives must bind the same names");
+  rejected(pattern_spec("match given(1) with { Cons(x, _) as x => fail }"), "duplicate pattern binding");
+  rejected(pattern_spec("match given(1) with { Cons(\"token\", _) => fail }"), "incompatible token pattern");
+  rejected(pattern_spec("match given(1) with { Cons(x, _) => fail, Cons(1, Nil()) => complete }"), "unreachable match arm");
+  rejected(pattern_spec("match given(1) with { _ => complete, Nil() => fail }"), "unreachable match arm");
+  rejected(pattern_spec("match given(1) of List with { Nil() => complete }"), "exhaustiveness not established for Cons");
+  rejected(pattern_spec("match given(1) of List with { Other(_) => complete, _ => fail }"), "incompatible data constructor pattern");
+  rejected("language P { start E; syntax E = N(); data Loop = Loop(Loop); rule N = complete; }", "uninhabited data sort");
+  rejected("language P { start E; syntax E = N(); data T = A(Missing); rule N = complete; }", "unknown data sort");
+  rejected("language P { start E; syntax E = N(); data T = A() | A(integer); rule N = complete; }", "duplicate data constructor");
 }
 }
 int main(int argc, char** argv) {

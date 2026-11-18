@@ -18,7 +18,10 @@ Legend: **Yes** = executable and tested; **partial** = narrower stated subset;
 | Typed action validation | partial | partial | partial | partial | Equations |
 | Callcc combined with generators | Error | Error | Error | Error | Error |
 | Multi-shot, shift/reset, effects, finally/defer | No | No | No | No | No |
-| ADTs, patterns, objects, modules, richer types | No | No | No | No | No |
+| Nominal recursive ADTs, selectors and equality | Yes | Yes | Yes | Yes | Equations |
+| Nested, guarded, or/as action patterns | Yes | Yes | Yes | Yes | Equations |
+| Pattern exhaustiveness and reachability analysis | partial | partial | partial | partial | Contract |
+| Yielder matches, built-in collections, objects, modules, richer types | No | No | No | No | No |
 | Tasks, promises, channels, actors, parallelism | No | No | No | No | No |
 | Search, transactions, reactive execution | No | No | No | No | No |
 | Foreign calls / external capabilities / libuv | No | No | No | No | No |
@@ -30,7 +33,9 @@ remains supported. Unknown syntax fails parsing; the known unsafe combination
 above fails generation with a capability diagnostic. No proposed `--runtime`,
 `--scheduler`, or `--features` flags are accepted yet.
 
-Rich values currently means i32/token/cell/closure/continuation/generator.
+Rich values currently means i32/token/cell/closure/continuation/generator and
+immutable user-defined variants. Pattern analysis covers annotated sum sorts
+conservatively and diagnoses provable single-arm subsumption.
 Currying requires explicit nested closures; no automatic arity machinery exists.
 Static validation checks known scalar tags; bindings/transients remain dynamically
 checked. The Error row is a synthesis capability diagnostic.

@@ -10,16 +10,17 @@
 
 typedef struct { int op, a, b, value, pool, count; } Instruction;
 typedef struct { const char *name; int sort, rule, count, fields[16]; } Constructor;
+typedef struct { const char *name; int sort, fields; } Variant;
 @TABLES@
 
 /* Value kinds: -1 error sentinel, 0 integer, 1 token, 2 cell reference,
-   3 closure. Heap object kinds: 1 transient tuple, 2 bindings, 3 closure. */
-enum { VK_ERROR = -1, VK_INT = 0, VK_TOKEN = 1, VK_REF = 2, VK_CLOSURE = 3, VK_CONT = 4, VK_GEN = 5 };
-enum { HO_DATA = 1, HO_ENV = 2, HO_CLOSURE = 3, HO_CONT = 4, HO_FRAME = 5, HO_GEN = 6 };
+   3 closure, 4 continuation, 5 generator, 6 variant. */
+enum { VK_ERROR = -1, VK_INT, VK_TOKEN, VK_REF, VK_CLOSURE, VK_CONT, VK_GEN, VK_VARIANT };
+enum { HO_DATA = 1, HO_ENV, HO_CLOSURE, HO_CONT, HO_FRAME, HO_GEN, HO_VARIANT };
 typedef struct { int kind; int64_t imm; } Value;
 typedef struct { int pc, node, env, data, state, boundary, scratch, ldata, lbind, rstatus, rdata, renv, logical_depth; } Frame;
 typedef struct {
-    int kind, mark, count;
+    int kind, mark, count, variant;
     Value items[DATA_MAX];
     int keys[BIND_MAX];
     Value values[BIND_MAX];
@@ -29,6 +30,8 @@ typedef struct {
 } Object;
 typedef struct { int status, data, env, has; } Pending;
 typedef struct { int ctor; int64_t fields[16]; } Node;
+typedef struct { const Object *left, *right; int next; } EqualFrame;
+typedef struct { int count, keys[BIND_MAX]; Value values[BIND_MAX]; } Captures;
 typedef struct {
     char input[65538], symbols[SYMBOLS_MAX][65];
     size_t pos, length;
@@ -41,6 +44,7 @@ typedef struct {
     int free_stack[HEAP_MAX], free_top, object_live;
     int work[HEAP_MAX], work_top;
     Frame frames[DEPTH_MAX + 1];
+    EqualFrame equality[DEPTH_MAX];
     int depth, unwind;
     Pending pending, unwind_result;
     int empty_data, empty_env;
@@ -56,7 +60,7 @@ static Value value(int kind, int64_t v) { Value r; r.kind = kind; r.imm = v; ret
    references live in separate monotonic storage, exactly like dialect 1. */
 static void mark(Machine *m, int index);
 static void mark_value(Machine *m, Value v) {
-    if (v.kind == VK_CLOSURE || v.kind == VK_CONT || v.kind == VK_GEN) mark(m, (int)v.imm);
+    if (v.kind >= VK_CLOSURE) mark(m, (int)v.imm);
 }
 static void mark(Machine *m, int index) {
     Object *o;
@@ -85,7 +89,9 @@ static void gc(Machine *m) {
     while (m->work_top) {
         Object *o = m->objects[m->work[--m->work_top]];
         switch (o->kind) {
-        case HO_DATA: for (j = 0; j < o->count; ++j) mark_value(m, o->items[j]); break;
+        case HO_DATA: case HO_VARIANT:
+            for (j = 0; j < o->count; ++j) mark_value(m, o->items[j]);
+            break;
         case HO_ENV: for (j = 0; j < o->count; ++j) mark_value(m, o->values[j]); break;
         case HO_CLOSURE: mark(m, o->closure.env); break;
         case HO_CONT: case HO_GEN: mark(m, o->next); break;
@@ -158,6 +164,67 @@ static void tick(Machine *m, int depth) {
     if (LEGACY_MODE && m->depth)
         depth += m->frames[m->depth - 1].logical_depth - m->depth;
     if (depth > DEPTH_MAX || --m->steps < 0) m->error = 1;
+}
+static int has_type(Machine *m, Value v, int type) {
+    if (v.kind < 0) return 0;
+    if (type == 2) return 1; /* datum */
+    if (type < 2) return v.kind == type;
+    return v.kind == VK_VARIANT && VARIANTS[m->objects[v.imm]->variant].sort == type;
+}
+/* Depth-first equality, with no recursion or allocation. The cursor stack is
+   bounded by depth; each visited pair consumes a step even in a shared DAG. */
+static Value structural_equal(Machine *m, Value x, Value y, int depth) {
+    int n = 0;
+    for (;;) {
+        tick(m, depth + n);
+        if (m->error) return value(VK_ERROR, 0);
+        if (x.kind != y.kind) return value(VK_INT, 0);
+        if (x.imm != y.imm) {
+            const Object *a, *b;
+            if (x.kind != VK_VARIANT) return value(VK_INT, 0);
+            a = m->objects[x.imm]; b = m->objects[y.imm];
+            if (a->variant != b->variant) return value(VK_INT, 0);
+            if (a->count) m->equality[n++] = (EqualFrame){a, b, 0};
+        }
+        while (n > 0 && m->equality[n - 1].next == m->equality[n - 1].left->count) --n;
+        if (!n) return value(VK_INT, 1);
+        {
+            EqualFrame *f = &m->equality[n - 1];
+            x = f->left->items[f->next]; y = f->right->items[f->next++];
+        }
+    }
+}
+static int match_pattern(Machine *m, int index, Value v, Captures *captures, int depth) {
+    Instruction p = PATTERNS[index];
+    int j;
+    tick(m, depth);
+    if (m->error) return 0;
+    switch (p.op) {
+    case 0: return 1;
+    case 1:
+        captures->keys[captures->count] = p.a;
+        captures->values[captures->count++] = v;
+        return 1;
+    case 2: return v.kind == VK_INT && v.imm == p.value;
+    case 3: return v.kind == VK_TOKEN && v.imm == p.a;
+    case 4:
+        if (v.kind != VK_VARIANT || m->objects[v.imm]->variant != p.a) return 0;
+        for (j = 0; j < p.count; ++j)
+            if (!match_pattern(m, POOL[p.pool + j], m->objects[v.imm]->items[j], captures, depth + 1))
+                return 0;
+        return 1;
+    case 5:
+        if (!match_pattern(m, p.a, v, captures, depth + 1)) return 0;
+        captures->keys[captures->count] = p.b;
+        captures->values[captures->count++] = v;
+        return 1;
+    case 6:
+        j = captures->count;
+        if (match_pattern(m, p.a, v, captures, depth + 1)) return 1;
+        captures->count = j;
+        return !m->error && match_pattern(m, p.b, v, captures, depth + 1);
+    default: return 0;
+    }
 }
 static void token(Machine *m, char out[65]) {
     size_t start, n;
@@ -247,7 +314,17 @@ static Value expr(Machine *m, int index, int node, const Object *data, const Obj
             return value(VK_ERROR, 0);
         return m->cells[x.imm];
     }
+    if (i.op == 12)
+        return x.kind == VK_VARIANT ? value(VK_INT, m->objects[x.imm]->count) : value(VK_ERROR, 0);
     y = expr(m, i.b, node, data, env, depth + 1);
+    if (y.kind < 0) return y;
+    if (i.op == 13) {
+        if (x.kind != VK_VARIANT || y.kind != VK_INT || y.imm < 1 || y.imm > m->objects[x.imm]->count)
+            return value(VK_ERROR, 0);
+        return m->objects[x.imm]->items[y.imm - 1];
+    }
+    if (i.op == 14) return structural_equal(m, x, y, depth + 1);
+    if (i.op == 15) return value(VK_INT, x.kind == y.kind && x.imm == y.imm);
     if (x.kind != VK_INT || y.kind != VK_INT) return value(VK_ERROR, 0);
     switch (i.op) {
     case 6: z = x.imm + y.imm; break;
@@ -708,6 +785,72 @@ static Pending run(Machine *m, int root) {
                 m->pending.data = m->empty_data; m->pending.env = m->empty_env;
                 break;
             }
+            case 114: {
+                int j, d;
+                Object *o;
+                f->scratch = obj_alloc(m, HO_VARIANT);
+                if (f->scratch < 0) break;
+                o = m->objects[f->scratch]; o->variant = i.a;
+                for (j = 0; j < i.count; ++j) {
+                    Value v = expr(m, POOL[i.pool + j], f->node, m->objects[f->data],
+                                   m->objects[f->env], m->depth + 1);
+                    if (!has_type(m, v, POOL[VARIANTS[i.a].fields + j])) break;
+                    o->items[o->count++] = v;
+                }
+                if (j != i.count) { finish(m, 1, -1, -1); break; }
+                {
+                    Value v = value(VK_VARIANT, f->scratch);
+                    d = make_data(m, &v, 1);
+                }
+                if (d >= 0) finish(m, 0, d, m->empty_env);
+                break;
+            }
+            case 115: {
+                Value v = expr(m, i.a, f->node, m->objects[f->data], m->objects[f->env], m->depth + 1);
+                int j;
+                if (v.kind < 0 || (i.b >= 0 && !has_type(m, v, i.b))) { finish(m, 1, -1, -1); break; }
+                for (j = 0; j < i.count && !m->error; ++j) {
+                    const int *arm = &POOL[i.pool + 3 * j];
+                    Captures captures;
+                    int env = f->env, k;
+                    captures.count = 0;
+                    f->scratch = -1;
+                    if (!match_pattern(m, arm[0], v, &captures, m->depth + 1)) continue;
+                    if (captures.count) {
+                        const Object *base = m->objects[f->env];
+                        Object *out;
+                        env = f->scratch = obj_alloc(m, HO_ENV);
+                        if (env < 0) break;
+                        out = m->objects[env]; *out = *base;
+                        for (k = 0; k < captures.count; ++k) {
+                            int p = 0;
+                            while (p < out->count && out->keys[p] != captures.keys[k]) ++p;
+                            if (p == BIND_MAX) { m->error = 1; break; }
+                            if (p == out->count) ++out->count;
+                            out->keys[p] = captures.keys[k]; out->values[p] = captures.values[k];
+                        }
+                        if (m->error) break;
+                    }
+                    if (arm[1] >= 0) {
+                        Value guard = expr(m, arm[1], f->node, m->objects[f->data], m->objects[env], m->depth + 1);
+                        if (guard.kind != VK_INT || !guard.imm) continue;
+                    }
+                    f->pc = arm[2]; f->env = env; f->scratch = -1;
+                    break;
+                }
+                if (!m->error && j == i.count) finish(m, 1, -1, -1);
+                break;
+            }
+            case 116: {
+                Value v = expr(m, i.a, f->node, m->objects[f->data], m->objects[f->env], m->depth + 1);
+                const Object *o;
+                int d;
+                if (v.kind != VK_VARIANT) { finish(m, 1, -1, -1); break; }
+                o = m->objects[v.imm];
+                d = make_data(m, o->items, o->count);
+                if (d >= 0) finish(m, 0, d, m->empty_env);
+                break;
+            }
             case 9: case 10: case 11: case 12: case 13: case 14:
                 f->state = 1;
                 push_frame(m, i.a, f->node, f->env, f->data);
@@ -737,6 +880,7 @@ int main(void) {
             else if (v.kind == VK_CLOSURE) printf(" closure");
             else if (v.kind == VK_CONT) printf(" continuation");
             else if (v.kind == VK_GEN) printf(" generator");
+            else if (v.kind == VK_VARIANT) printf(" variant:%s", VARIANTS[m->objects[v.imm]->variant].name);
             else if (v.kind == VK_CONT) printf(" continuation");
             else printf(v.kind == VK_REF ? " cell:%" PRId64 : " %" PRId64, v.imm);
         }

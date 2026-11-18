@@ -34,11 +34,55 @@ std::string expression(const detail::Model& m, const detail::Constructor& c, int
   if (i.op == Given) return "given(" + std::to_string(i.a + 1) + ')';
   auto a = expression(m, c, i.a);
   if (i.op == Bound || i.op == Contents) return std::string(i.op == Bound ? "bound(" : "contents(") + a + ')';
+  if (i.op == Arity) return "arity(" + a + ')';
+  if (i.op >= Component && i.op <= Identical) {
+    static constexpr const char* names[] = {"component", "equal", "identical"};
+    return std::string(names[i.op - Component]) + '(' + a + ", " + expression(m, c, i.b) + ')';
+  }
   static constexpr const char* ops[] = {"+", "-", "*", "/", "==", "<"};
   return '(' + a + ' ' + ops[i.op - Add] + ' ' + expression(m, c, i.b) + ')';
 }
+std::string pattern(const detail::Model& m, int id) {
+  using namespace detail;
+  const auto& p = m.patterns.at(static_cast<std::size_t>(id));
+  if (p.op == AnyPattern) return "_";
+  if (p.op == BindPattern) return m.tokens.at(static_cast<std::size_t>(p.a));
+  if (p.op == IntPattern) return std::to_string(p.value);
+  if (p.op == TokenPattern) return '"' + m.tokens.at(static_cast<std::size_t>(p.a)) + '"';
+  if (p.op == AsPattern) return '(' + pattern(m, p.a) + ") as " + m.tokens.at(static_cast<std::size_t>(p.b));
+  if (p.op == OrPattern) return '(' + pattern(m, p.a) + " | " + pattern(m, p.b) + ')';
+  auto out = m.variants.at(static_cast<std::size_t>(p.a)).name + '(';
+  for (int j = 0; j < p.count; ++j) {
+    if (j) out += ", ";
+    out += pattern(m, m.pool.at(static_cast<std::size_t>(p.pool + j)));
+  }
+  return out + ')';
+}
 std::string action(const detail::Model& m, const detail::Constructor& c, int id) {
+  using namespace detail;
   const auto& i = m.actions.at(static_cast<std::size_t>(id));
+  if (i.op == Construct) {
+    auto out = "construct " + m.variants.at(static_cast<std::size_t>(i.a)).name + '(';
+    for (int j = 0; j < i.count; ++j) {
+      if (j) out += ", ";
+      out += expression(m, c, m.pool.at(static_cast<std::size_t>(i.pool + j)));
+    }
+    return out + ')';
+  }
+  if (i.op == Deconstruct) return "deconstruct " + expression(m, c, i.a);
+  if (i.op == Match) {
+    auto out = "match " + expression(m, c, i.a);
+    if (i.b >= FirstDataSort) out += " of " + m.data_sorts.at(static_cast<std::size_t>(i.b - FirstDataSort));
+    out += " with { ";
+    for (int j = 0; j < i.count; ++j) {
+      if (j) out += ", ";
+      auto base = static_cast<std::size_t>(i.pool + 3 * j);
+      out += pattern(m, m.pool.at(base));
+      if (m.pool.at(base + 1) >= 0) out += " when " + expression(m, c, m.pool.at(base + 1));
+      out += " => " + action(m, c, m.pool.at(base + 2));
+    }
+    return out + " }";
+  }
   if (i.op == 0) return "complete";
   if (i.op == 1) return "fail";
   if (i.op == 7) return "allocate cell";
@@ -130,7 +174,22 @@ std::string generate_model(const detail::Model& m, Target target, Dialect dialec
       }
       out << ")} \\\\\n";
     }
-    out << "\\end{longtable}\n\\section{Semantic equations}\n"
+    out << "\\end{longtable}\n";
+    if (!m.data_sorts.empty()) {
+      out << "\\section{Runtime data sorts}\n\\begin{longtable}{p{0.20\\linewidth}p{0.72\\linewidth}}\n";
+      for (const auto& v : m.variants) {
+        out << "\\texttt{" << latex(m.data_sorts[v.sort - detail::FirstDataSort]) << "} & \\texttt{" << latex(v.name) << '(';
+        for (int j = 0; j < v.arity; ++j) {
+          if (j) out << ", ";
+          int t = m.pool[v.fields + j];
+          out << latex(t == 0 ? "integer" : t == 1 ? "identifier" : t == 2 ? "datum" :
+                       m.data_sorts[t - detail::FirstDataSort]);
+        }
+        out << ")} \\\\\n";
+      }
+      out << "\\end{longtable}\n";
+    }
+    out << "\\section{Semantic equations}\n"
         << "\\begin{longtable}{p{0.20\\linewidth}p{0.72\\linewidth}}\n";
     for (const auto& ctor : m.constructors) {
       out << "$[\\![\\texttt{" << latex(ctor.name) << '(';
@@ -152,6 +211,8 @@ std::string generate_model(const detail::Model& m, Target target, Dialect dialec
         << "Unfolding delimits recursive actions. If selects one branch; while repeats until its integer condition is zero, with scoped break and continue. "
         << "Generators are lazy saved-frame computations. Yield suspends at next; next returns flag 1 followed by the yielded value, "
         << "or flag 0 followed by completion data. Close discards suspended frames. Generator failure and escape propagate. "
+        << "Data constructors check field tags and build immutable values. Match tries patterns and guards in order, "
+        << "with captures scoped to the selected arm. Equal compares structure; identical compares identity. "
         << "Callcc and generators cannot yet be combined in one specification. No asynchronous scheduler or cleanup handlers are implemented. "
         << "The generated interpreter reads constructor-form syntax from standard input.\n"
         << "\\end{document}\n";
@@ -242,6 +303,19 @@ std::string generate_model(const detail::Model& m, Target target, Dialect dialec
     out << (c ? "};\n" : py ? "]\n" : rs ? "];\n" : ");\n");
   };
   instructions(m.expressions, "EXPRS"); instructions(m.actions, "ACTIONS");
+  instructions(m.patterns, "PATTERNS");
+  if (c) out << "static const Variant VARIANTS[] = {\n";
+  if (py) out << "VARIANTS = [\n";
+  if (rs) out << "const VARIANTS: &[Variant] = &[\n";
+  if (pas) out << "  Variants: array[0.." << std::max(m.variants.size(), std::size_t{1}) - 1 << "] of TVariant = (\n";
+  for (std::size_t j = 0, n = std::max(m.variants.size(), (c || pas) ? std::size_t{1} : std::size_t{0}); j < n; ++j) {
+    auto v = j < m.variants.size() ? m.variants[j] : detail::VariantSpec{"", -1, 0, 0};
+    if (c || py) out << (c ? "{" : "(") << '"' << v.name << "\", " << v.sort << ", " << v.fields << (c ? "}" : ")");
+    if (rs) out << "Variant { name: \"" << v.name << "\", sort: " << v.sort << ", fields: " << v.fields << " }";
+    if (pas) out << "(Name: '" << v.name << "'; Sort: " << v.sort << "; Fields: " << v.fields << ')';
+    out << (j + 1 == n ? "\n" : ",\n");
+  }
+  out << (c ? "};\n" : py ? "]\n" : rs ? "];\n" : ");\n");
   {
     if (c) out << "static const int POOL[] = {";
     if (py) out << "POOL = [";

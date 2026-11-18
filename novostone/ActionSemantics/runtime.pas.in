@@ -6,6 +6,7 @@ uses SysUtils;
 type
   TInstruction = record Op, A, B, Pool, Count: LongInt; Number: Int64; end;
   TConstructor = record Name: string[64]; Sort, Rule, Count: LongInt; Fields: array[0..15] of LongInt; end;
+  TVariant = record Name: string[64]; Sort, Fields: LongInt; end;
 const
 @TABLES@
 type
@@ -17,13 +18,19 @@ type
   end;
   PObject = ^TObject;
   TObject = record
-    Kind, Count, Next, State: LongInt;
+    Kind, Count, Next, State, VariantTag: LongInt;
     Mark, Used: Boolean;
     case LongInt of
       1: (Items: array[0..DataMax - 1] of TValue);
       2: (Keys: array[0..BindMax - 1] of Int64; Values: array[0..BindMax - 1] of TValue);
       3: (Pc, FNode, FEnv: LongInt);
       5: (Saved: TFrame);
+  end;
+  TEqualFrame = record Left, Right: PObject; Index: LongInt; end;
+  TCaptures = record
+    Count: LongInt;
+    Keys: array[0..BindMax - 1] of Int64;
+    Values: array[0..BindMax - 1] of TValue;
   end;
 var
   Source: AnsiString;
@@ -43,6 +50,7 @@ var
   MarkBits: array[0..HeapMax - 1] of Boolean;
   FreeStack: array[0..HeapMax - 1] of LongInt;
    Frames: array[0..DepthMax] of TFrame;
+  Equality: array[0..DepthMax - 1] of TEqualFrame;
 
 function Alpha(C: Char): Boolean;
 begin Result := (C in ['a'..'z', 'A'..'Z', '_']); end;
@@ -81,7 +89,7 @@ begin
     FrameRoots(Frames[I]);
   end;
   for I := 0 to RefCount - 1 do
-    if Initialized[I] and (Cells[I].Kind in [3, 4, 5]) then PushRoot(Cells[I].Number);
+    if Initialized[I] and (Cells[I].Kind >= 3) then PushRoot(Cells[I].Number);
   if PendingHas then begin PushRoot(PendingData); PushRoot(PendingEnv); end;
   if Unwinding then begin PushRoot(UnwindData); PushRoot(UnwindEnv); end;
   while WorkTop > 0 do
@@ -89,8 +97,8 @@ begin
     Dec(WorkTop); Idx := WorkList[WorkTop];
     O := Objects[Idx];
     case O^.Kind of
-      1: for J := 0 to O^.Count - 1 do if O^.Items[J].Kind in [3, 4, 5] then PushRoot(O^.Items[J].Number);
-      2: for J := 0 to O^.Count - 1 do if O^.Values[J].Kind in [3, 4, 5] then PushRoot(O^.Values[J].Number);
+      1, 7: for J := 0 to O^.Count - 1 do if O^.Items[J].Kind >= 3 then PushRoot(O^.Items[J].Number);
+      2: for J := 0 to O^.Count - 1 do if O^.Values[J].Kind >= 3 then PushRoot(O^.Values[J].Number);
       3: PushRoot(O^.FEnv);
       4, 6: PushRoot(O^.Next);
       5: begin FrameRoots(O^.Saved); PushRoot(O^.Next); end;
@@ -252,6 +260,71 @@ begin
   if (NodeCount = NodesMax) or Broken then begin Broken := True; Exit; end;
   Result := NodeCount; Nodes[NodeCount] := N; Inc(NodeCount);
 end;
+function HasType(V: TValue; Typ: LongInt): Boolean;
+begin
+  if V.Kind < 0 then Exit(False);
+  if Typ = 2 then Exit(True);
+  if Typ < 2 then Exit(V.Kind = Typ);
+  Result := (V.Kind = 6) and (Variants[Objects[V.Number]^.VariantTag].Sort = Typ);
+end;
+function StructuralEqual(X, Y: TValue; Depth: LongInt): TValue;
+var N: LongInt; A, B: PObject;
+begin
+  N := 0;
+  while True do
+  begin
+    Tick(Depth + N);
+    if Broken then Exit(MakeValue(-1, 0));
+    if X.Kind <> Y.Kind then Exit(MakeValue(0, 0));
+    if X.Number <> Y.Number then
+    begin
+      if X.Kind <> 6 then Exit(MakeValue(0, 0));
+      A := Objects[X.Number]; B := Objects[Y.Number];
+      if A^.VariantTag <> B^.VariantTag then Exit(MakeValue(0, 0));
+      if A^.Count > 0 then
+      begin
+        Equality[N].Left := A; Equality[N].Right := B; Equality[N].Index := 0; Inc(N);
+      end;
+    end;
+    while (N > 0) and (Equality[N - 1].Index = Equality[N - 1].Left^.Count) do Dec(N);
+    if N = 0 then Exit(MakeValue(0, 1));
+    with Equality[N - 1] do
+    begin X := Left^.Items[Index]; Y := Right^.Items[Index]; Inc(Index); end;
+  end;
+end;
+function MatchPattern(Index: LongInt; V: TValue; var Captures: TCaptures; Depth: LongInt): Boolean;
+var P: TInstruction; J: LongInt;
+begin
+  Tick(Depth);
+  if Broken then Exit(False);
+  P := Patterns[Index];
+  case P.Op of
+    0: Exit(True);
+    1: begin
+      Captures.Keys[Captures.Count] := P.A;
+      Captures.Values[Captures.Count] := V; Inc(Captures.Count);
+      Exit(True);
+    end;
+    2: Exit((V.Kind = 0) and (V.Number = P.Number));
+    3: Exit((V.Kind = 1) and (V.Number = P.A));
+    5: begin
+      if not MatchPattern(P.A, V, Captures, Depth + 1) then Exit(False);
+      Captures.Keys[Captures.Count] := P.B;
+      Captures.Values[Captures.Count] := V; Inc(Captures.Count);
+      Exit(True);
+    end;
+    6: begin
+      J := Captures.Count;
+      if MatchPattern(P.A, V, Captures, Depth + 1) then Exit(True);
+      Captures.Count := J;
+      Exit(not Broken and MatchPattern(P.B, V, Captures, Depth + 1));
+    end;
+  end;
+  if (V.Kind <> 6) or (Objects[V.Number]^.VariantTag <> P.A) then Exit(False);
+  for J := 0 to P.Count - 1 do
+    if not MatchPattern(Pool[P.Pool + J], Objects[V.Number]^.Items[J], Captures, Depth + 1) then Exit(False);
+  Result := True;
+end;
 function Expr(Index, Node: LongInt; Data, Env: LongInt; Depth: LongInt): TValue;
 var I: TInstruction; X, Y: TValue; K: LongInt; Z: Int64;
 begin
@@ -280,7 +353,21 @@ begin
       Result := Cells[X.Number];
     Exit;
   end;
+  if I.Op = 12 then
+  begin
+    if X.Kind = 6 then Exit(MakeValue(0, Objects[X.Number]^.Count));
+    Exit;
+  end;
   Y := Expr(I.B, Node, Data, Env, Depth + 1);
+  if Y.Kind < 0 then Exit;
+  if I.Op = 13 then
+  begin
+    if (X.Kind = 6) and (Y.Kind = 0) and (Y.Number >= 1) and (Y.Number <= Objects[X.Number]^.Count) then
+      Exit(Objects[X.Number]^.Items[Y.Number - 1]);
+    Exit;
+  end;
+  if I.Op = 14 then Exit(StructuralEqual(X, Y, Depth + 1));
+  if I.Op = 15 then Exit(MakeValue(0, Ord((X.Kind = Y.Kind) and (X.Number = Y.Number))));
   if (X.Kind <> 0) or (Y.Kind <> 0) then Exit;
   case I.Op of
     6: Z := X.Number + Y.Number;
@@ -318,6 +405,9 @@ var
   F: ^TFrame; I: TInstruction; X, Y, V, Fn: TValue;
   Child, D, J, K, Closure, Pc, FNode, FEnv, Cont, Snapshot, Target, Gen, Base: LongInt;
   Saved: TFrame;
+  Arm, ArmEnv, P: LongInt;
+  O: PObject;
+  Captures: TCaptures;
 begin
   F := @Frames[FrameDepth - 1]; I := Actions[F^.Pc];
   if I.Op = 0 then Finish(0, EmptyData, EmptyEnv)
@@ -545,6 +635,63 @@ begin
     FrameDepth := Target + 1; PendingHas := True;
     if I.Op = 105 then PendingStatus := 5 else PendingStatus := 6;
     PendingData := EmptyData; PendingEnv := EmptyEnv;
+  end
+  else if I.Op = 114 then
+  begin
+    F^.Scratch := Alloc(7);
+    if F^.Scratch < 0 then Exit;
+    O := Objects[F^.Scratch]; O^.VariantTag := I.A;
+    for J := 0 to I.Count - 1 do
+    begin
+      V := Expr(Pool[I.Pool + J], F^.Node, F^.Data, F^.Env, FrameDepth + 1);
+      if not HasType(V, Pool[Variants[I.A].Fields + J]) then begin Finish(1, -1, -1); Exit; end;
+      O^.Items[J] := V; Inc(O^.Count);
+    end;
+    D := MakeData([MakeValue(6, F^.Scratch)], 1);
+    if D >= 0 then Finish(0, D, EmptyEnv);
+  end
+  else if I.Op = 115 then
+  begin
+    V := Expr(I.A, F^.Node, F^.Data, F^.Env, FrameDepth + 1);
+    if (V.Kind < 0) or ((I.B >= 0) and not HasType(V, I.B)) then begin Finish(1, -1, -1); Exit; end;
+    for J := 0 to I.Count - 1 do
+    begin
+      Arm := I.Pool + 3 * J; Captures.Count := 0; F^.Scratch := -1;
+      if not MatchPattern(Pool[Arm], V, Captures, FrameDepth + 1) then
+      begin if Broken then Exit; Continue; end;
+      ArmEnv := F^.Env;
+      if Captures.Count > 0 then
+      begin
+        ArmEnv := Alloc(2); F^.Scratch := ArmEnv;
+        if ArmEnv < 0 then Exit;
+        O := Objects[ArmEnv]; O^ := Objects[F^.Env]^;
+        for K := 0 to Captures.Count - 1 do
+        begin
+          P := 0;
+          while (P < O^.Count) and (O^.Keys[P] <> Captures.Keys[K]) do Inc(P);
+          if P = BindMax then begin Broken := True; Exit; end;
+          if P = O^.Count then Inc(O^.Count);
+          O^.Keys[P] := Captures.Keys[K]; O^.Values[P] := Captures.Values[K];
+        end;
+      end;
+      if Pool[Arm + 1] >= 0 then
+      begin
+        X := Expr(Pool[Arm + 1], F^.Node, F^.Data, ArmEnv, FrameDepth + 1);
+        if Broken then Exit;
+        if (X.Kind <> 0) or (X.Number = 0) then Continue;
+      end;
+      F^.Pc := Pool[Arm + 2]; F^.Env := ArmEnv; F^.Scratch := -1;
+      Exit;
+    end;
+    Finish(1, -1, -1);
+  end
+  else if I.Op = 116 then
+  begin
+    V := Expr(I.A, F^.Node, F^.Data, F^.Env, FrameDepth + 1);
+    if V.Kind <> 6 then begin Finish(1, -1, -1); Exit; end;
+    O := Objects[V.Number];
+    D := MakeData(O^.Items, O^.Count);
+    if D >= 0 then Finish(0, D, EmptyEnv);
   end
   else if I.Op = 110 then
   begin
@@ -789,6 +936,7 @@ begin
         3: Write(' closure');
         4: Write(' continuation');
         5: Write(' generator');
+        6: Write(' variant:', Variants[Objects[V.Number]^.VariantTag].Name);
       end;
     end;
   WriteLn;

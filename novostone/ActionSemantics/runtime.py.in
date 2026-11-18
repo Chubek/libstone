@@ -15,7 +15,12 @@ class Failure(Exception):
     pass
 
 
-VK_INT, VK_TOKEN, VK_REF, VK_CLOSURE, VK_CONT, VK_GEN = 0, 1, 2, 3, 4, 5
+VK_INT, VK_TOKEN, VK_REF, VK_CLOSURE, VK_CONT, VK_GEN, VK_VARIANT = range(7)
+
+
+class Variant:
+    def __init__(self, tag, fields):
+        self.tag, self.fields = tag, fields
 
 
 class Continuation:
@@ -70,7 +75,7 @@ class Machine:
     # Heap: data objects are lists of values, binding objects are dicts,
     # closures are (pc, node, env) tuples.
     def value_roots(self, v):
-        return {v[1]} if v[0] in (VK_CLOSURE, VK_CONT, VK_GEN) else set()
+        return {v[1]} if v[0] >= VK_CLOSURE else set()
 
     def frame_roots(self, f):
         return {i for i in (f.env, f.data, f.ldata, f.lbind, f.rdata, f.renv, f.scratch) if i >= 0}
@@ -116,6 +121,9 @@ class Machine:
             elif isinstance(obj, Snapshot):
                 work |= self.frame_roots(obj.frame)
                 work.add(obj.next)
+            elif isinstance(obj, Variant):
+                for v in obj.fields:
+                    work |= self.value_roots(v)
             else:
                 work.add(obj[2])
         for i in range(HEAP_MAX):
@@ -231,6 +239,65 @@ class Machine:
         self.nodes.append((ci, fields))
         return len(self.nodes) - 1
 
+    def has_type(self, value, typ):
+        if typ == 2:
+            return True
+        if typ < 2:
+            return value[0] == typ
+        return value[0] == VK_VARIANT and VARIANTS[self.objects[value[1]].tag][1] == typ
+
+    def structural_equal(self, x, y, depth):
+        stack = []
+        while True:
+            self.tick(depth + len(stack))
+            if x[0] != y[0]:
+                return False
+            if x[1] != y[1]:
+                if x[0] != VK_VARIANT:
+                    return False
+                left, right = self.objects[x[1]], self.objects[y[1]]
+                if left.tag != right.tag:
+                    return False
+                if left.fields:
+                    stack.append((left.fields, right.fields, 0))
+            while stack and stack[-1][2] == len(stack[-1][0]):
+                stack.pop()
+            if not stack:
+                return True
+            left, right, index = stack[-1]
+            x, y = left[index], right[index]
+            stack[-1] = (left, right, index + 1)
+
+    def matches(self, index, v, captures, depth):
+        self.tick(depth)
+        op, a, b, val, pool, count = PATTERNS[index]
+        if op == 0:
+            return True
+        if op == 1:
+            captures.append((a, v))
+            return True
+        if op == 2:
+            return v == (VK_INT, val)
+        if op == 3:
+            return v == (VK_TOKEN, a)
+        if op == 5:
+            if not self.matches(a, v, captures, depth + 1):
+                return False
+            captures.append((b, v))
+            return True
+        if op == 6:
+            saved = len(captures)
+            if self.matches(a, v, captures, depth + 1):
+                return True
+            del captures[saved:]
+            return self.matches(b, v, captures, depth + 1)
+        if v[0] != VK_VARIANT or self.objects[v[1]].tag != a:
+            return False
+        for j in range(count):
+            if not self.matches(POOL[pool + j], self.objects[v[1]].fields[j], captures, depth + 1):
+                return False
+        return True
+
     def expr(self, index, node, data, env, depth):
         self.tick(depth)
         op, a, b, val, pool, count = EXPRS[index]
@@ -254,7 +321,19 @@ class Machine:
             if x[0] != VK_REF or not 0 <= x[1] < len(self.cells) or not self.initialized[x[1]]:
                 raise Failure()
             return self.cells[x[1]]
+        if op == 12:
+            if x[0] != VK_VARIANT:
+                raise Failure()
+            return (VK_INT, len(self.objects[x[1]].fields))
         y = self.expr(b, node, data, env, depth + 1)
+        if op == 13:
+            if x[0] != VK_VARIANT or y[0] != VK_INT or not 1 <= y[1] <= len(self.objects[x[1]].fields):
+                raise Failure()
+            return self.objects[x[1]].fields[y[1] - 1]
+        if op == 14:
+            return (VK_INT, int(self.structural_equal(x, y, depth + 1)))
+        if op == 15:
+            return (VK_INT, int(x == y))
         if x[0] != VK_INT or y[0] != VK_INT:
             raise Failure()
         x, y = x[1], y[1]
@@ -446,6 +525,45 @@ class Machine:
                 raise Failure()
             self.frames[target + 1:] = []
             self.pending = (5 if op == 105 else 6, self.empty_data, self.empty_env)
+        elif op == 114:
+            fields = []
+            f.scratch = self.alloc(Variant(a, fields))
+            for j in range(count):
+                value = self.expr(POOL[pool + j], f.node, self.objects[f.data], self.objects[f.env], len(self.frames) + 1)
+                if not self.has_type(value, POOL[VARIANTS[a][2] + j]):
+                    raise Failure()
+                fields.append(value)
+            self.finish(0, self.make_data([(VK_VARIANT, f.scratch)]), self.empty_env)
+        elif op == 115:
+            depth = len(self.frames) + 1
+            data, base = self.objects[f.data], self.objects[f.env]
+            value = self.expr(a, f.node, data, base, depth)
+            if b >= 0 and not self.has_type(value, b):
+                raise Failure()
+            for j in range(count):
+                p, guard, body = POOL[pool + 3*j:pool + 3*j + 3]
+                captures = []
+                f.scratch = -1
+                if not self.matches(p, value, captures, depth):
+                    continue
+                env = f.env
+                if captures:
+                    env = f.scratch = self.alloc(bounded(base | dict(captures), BIND_MAX))
+                if guard >= 0:
+                    try:
+                        test = self.expr(guard, f.node, data, self.objects[env], depth)
+                    except Failure:
+                        continue
+                    if test[0] != VK_INT or not test[1]:
+                        continue
+                f.pc, f.env, f.scratch = body, env, -1
+                return
+            raise Failure()
+        elif op == 116:
+            value = self.expr(a, f.node, self.objects[f.data], self.objects[f.env], len(self.frames) + 1)
+            if value[0] != VK_VARIANT:
+                raise Failure()
+            self.finish(0, self.make_data(self.objects[value[1]].fields), self.empty_env)
         elif op == 110:
             gen = Generator()
             f.scratch = self.alloc(gen)
@@ -606,6 +724,8 @@ class Machine:
             return 'continuation'
         if v[0] == VK_GEN:
             return 'generator'
+        if v[0] == VK_VARIANT:
+            return 'variant:' + VARIANTS[self.objects[v[1]].tag][0]
         if v[0] == VK_CONT:
             return 'continuation'
         return 'cell:' + str(v[1])

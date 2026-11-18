@@ -212,11 +212,27 @@ preserved, but generated source is no longer byte-identical to the old runtime.
 | `if y then A else B` | Select one branch by integer truth |
 | `while y do A`, `break`, `continue` | Bounded-frame loops, function-scoped control |
 | `generator A`, `yield_value y`, `next g`, `close g` | Lazy stackless generators |
+| `data Sort = C(T, ...) \| D();` | Declare immutable runtime data after `syntax`, before `rule` |
+| `construct C(x, ...)` | Check arguments and give a fresh variant |
+| `deconstruct y` | Give a variant's fields as transients in declaration order |
+| `match y [of Sort] with { P [when g] => A, ... }` | Run the first matching arm with scoped captures |
+| `arity(y)`, `component(y, n)` | Inspect a variant; component indices start at 1 |
+| `equal(x, y)`, `identical(x, y)` | Structural versus identity equality; return 0 or 1 |
 
 `A`, `B`, `C` above are primitives or parenthesized actions. Functions receive
 arguments as `given(1)`, etc.; use `bind`/`furthermore` for named parameters.
 Bindings are captured by value; captured cells preserve shared mutable identity.
 Nested closures implement currying explicitly, not automatic partial application.
+
+Runtime sorts are separate from constructor-term syntax. Data fields can be
+`integer`, `identifier`, `datum` (any value), or another data sort. Match
+patterns can be `_`, a capture name, an integer, a quoted token, a nested
+constructor, `P as name`, or `P | Q`. Use `bound("name")` to read a capture.
+An optional `of Sort` checks the subject's runtime sort and requires the
+compiler to establish coverage. See [SEMANTICS.md](SEMANTICS.md) for the
+coverage check, guard behavior and equality rules. The
+[pattern matching example](examples/pattern_matching.acsem) sums a recursive
+list: `Sum(Prepend(20,Prepend(22,Empty())))` prints `completed 42`.
 
 `next` returns `1, value` on suspension, `0, completion-data...` on termination,
 and just `0` after termination/close. Failure and escape propagate. Generator
@@ -266,10 +282,10 @@ when unavailable. They are not dependencies of the library or C backend.
 
 This is a specified, executable subset of Action Notation. It implements basic,
 functional, declarative, and imperative facets and selected exception handling.
-It does not yet implement arbitrary concrete grammars, user-defined data
-algebras, nondeterministic choice, concurrent agents, or the complete notation
-from the book. Dialect 2 adds procedural closures, recursive unfolding,
-one-shot continuations and synchronous generators, not a universal runtime.
+It does not yet implement arbitrary concrete grammars, nondeterministic choice,
+concurrent agents, or the complete notation from the book. Dialect 2 adds
+procedural closures, recursive unfolding, one-shot continuations, synchronous
+generators and a nominal algebraic data subset, not a universal runtime.
 Generated artifacts
 are interpreters for the described language, not optimizing native compilers
 for individual input programs. Unknown notation is rejected.

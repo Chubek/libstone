@@ -5,6 +5,7 @@ use std::io::{self, Read};
 #[derive(Clone, Copy)]
 struct Inst { op: i32, a: i32, b: i32, value: i64, pool: i32, count: i32 }
 struct Ctor { name: &'static str, sort: i32, rule: usize, fields: &'static [i32] }
+struct Variant { name: &'static str, sort: i32, fields: usize }
 @TABLES@
 
 const VK_INT: i32 = 0;
@@ -13,10 +14,12 @@ const VK_REF: i32 = 2;
 const VK_CLOSURE: i32 = 3;
 const VK_CONT: i32 = 4;
 const VK_GEN: i32 = 5;
+const VK_VARIANT: i32 = 6;
 #[derive(Clone, Copy)]
 struct Value(i32, i64);
 #[derive(Clone)]
 enum Object {
+    Variant(usize, Vec<Value>),
     Data(Vec<Value>), Env(Vec<(i64, Value)>),
     Closure { pc: usize, node: usize, env: i32 },
     Continuation { head: i32, count: usize, used: bool },
@@ -123,7 +126,7 @@ impl Machine {
             frame_roots(f, &mut work);
         }
         for v in self.cells.iter().flatten() {
-            if matches!(v.0, VK_CLOSURE | VK_CONT | VK_GEN) { root(v.1 as i32, &mut work); }
+            if v.0 >= VK_CLOSURE { root(v.1 as i32, &mut work); }
         }
         if let Some((_, d, e)) = self.pending { root(d, &mut work); root(e, &mut work); }
         if let Some((_, d, e)) = self.unwind_result { root(d, &mut work); root(e, &mut work); }
@@ -131,11 +134,11 @@ impl Machine {
             if i >= HEAP_MAX || marks[i] { continue; }
             marks[i] = true;
             match &self.objects[i] {
-                Some(Object::Data(items)) => {
-                    for v in items { if matches!(v.0, VK_CLOSURE | VK_CONT | VK_GEN) { root(v.1 as i32, &mut work); } }
+                Some(Object::Data(items) | Object::Variant(_, items)) => {
+                    for v in items { if v.0 >= VK_CLOSURE { root(v.1 as i32, &mut work); } }
                 }
                 Some(Object::Env(entries)) => {
-                    for (_, v) in entries { if matches!(v.0, VK_CLOSURE | VK_CONT | VK_GEN) { root(v.1 as i32, &mut work); } }
+                    for (_, v) in entries { if v.0 >= VK_CLOSURE { root(v.1 as i32, &mut work); } }
                 }
                 Some(Object::Closure { env, .. }) => root(*env, &mut work),
                 Some(Object::Continuation { head, .. }) => root(*head, &mut work),
@@ -195,6 +198,72 @@ impl Machine {
         }
         self.alloc(Object::Env(out))
     }
+    fn variant(&self, v: Value) -> Fallible<(usize, &[Value])> {
+        if v.0 != VK_VARIANT { return Err(Fault::Failed); }
+        match self.data_of(v.1 as i32)? {
+            Object::Variant(tag, fields) => Ok((*tag, fields)),
+            _ => Err(Fault::Limit),
+        }
+    }
+    fn has_type(&self, v: Value, typ: i32) -> bool {
+        if typ == 2 { true }
+        else if typ < 2 { v.0 == typ }
+        else { matches!(self.variant(v), Ok((tag, _)) if VARIANTS[tag].sort == typ) }
+    }
+    fn structural_equal(&mut self, mut x: Value, mut y: Value, depth: i32) -> Fallible<bool> {
+        let mut stack: Vec<(Value, Value, usize)> = Vec::new();
+        loop {
+            self.tick(depth + stack.len() as i32)?;
+            if x.0 != y.0 { return Ok(false); }
+            if x.1 != y.1 {
+                if x.0 != VK_VARIANT { return Ok(false); }
+                let (left, fields) = self.variant(x)?;
+                if left != self.variant(y)?.0 { return Ok(false); }
+                if !fields.is_empty() { stack.push((x, y, 0)); }
+            }
+            loop {
+                let Some((left, right, index)) = stack.last_mut() else { return Ok(true); };
+                let fields = self.variant(*left)?.1;
+                if *index < fields.len() {
+                    x = fields[*index]; y = self.variant(*right)?.1[*index];
+                    *index += 1;
+                    break;
+                }
+                stack.pop();
+            }
+        }
+    }
+    fn matches(&mut self, index: usize, v: Value, captures: &mut Vec<(i64, Value)>, depth: i32) -> Fallible<bool> {
+        self.tick(depth)?;
+        let p = PATTERNS[index];
+        match p.op {
+            0 => Ok(true),
+            1 => { captures.push((p.a as i64, v)); Ok(true) }
+            2 => Ok(v.0 == VK_INT && v.1 == p.value),
+            3 => Ok(v.0 == VK_TOKEN && v.1 == p.a as i64),
+            5 => {
+                if !self.matches(p.a as usize, v, captures, depth + 1)? { return Ok(false); }
+                captures.push((p.b as i64, v));
+                Ok(true)
+            }
+            6 => {
+                let saved = captures.len();
+                if self.matches(p.a as usize, v, captures, depth + 1)? { return Ok(true); }
+                captures.truncate(saved);
+                self.matches(p.b as usize, v, captures, depth + 1)
+            }
+            _ => {
+                if v.0 != VK_VARIANT || self.variant(v)?.0 != p.a as usize { return Ok(false); }
+                for j in 0..p.count {
+                    let child = self.variant(v)?.1[j as usize];
+                    if !self.matches(POOL[(p.pool + j) as usize] as usize, child, captures, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
     fn expr(&mut self, index: usize, node: usize, data: i32, env: i32, depth: i32) -> Fallible<Value> {
         self.tick(depth)?;
         let i = EXPRS[index];
@@ -218,7 +287,15 @@ impl Machine {
             if x.0 != VK_REF || x.1 < 0 { return Err(Fault::Failed); }
             return self.cells.get(x.1 as usize).copied().flatten().ok_or(Fault::Failed);
         }
+        if i.op == 12 { return Ok(Value(VK_INT, self.variant(x)?.1.len() as i64)); }
         let y = self.expr(i.b as usize, node, data, env, depth + 1)?;
+        if i.op == 13 {
+            let fields = self.variant(x)?.1;
+            if y.0 != VK_INT || y.1 < 1 || y.1 > fields.len() as i64 { return Err(Fault::Failed); }
+            return Ok(fields[y.1 as usize - 1]);
+        }
+        if i.op == 14 { return Ok(Value(VK_INT, i64::from(self.structural_equal(x, y, depth + 1)?))); }
+        if i.op == 15 { return Ok(Value(VK_INT, i64::from(x.0 == y.0 && x.1 == y.1))); }
         if x.0 != VK_INT || y.0 != VK_INT { return Err(Fault::Failed); }
         let z = match i.op {
             6 => x.1 + y.1,
@@ -466,6 +543,56 @@ impl Machine {
                 self.frames.truncate(target + 1);
                 self.pending = Some((if op == 105 { 5 } else { 6 }, self.empty_data, self.empty_env));
             }
+            114 => {
+                let tag = a as usize;
+                let scratch = self.alloc(Object::Variant(tag, Vec::new()))?;
+                self.frames[fi].scratch = scratch;
+                for j in 0..count {
+                    let v = eval_or!(POOL[(pool + j) as usize]);
+                    if !self.has_type(v, POOL[VARIANTS[tag].fields + j as usize]) { failed!(); }
+                    if let Some(Object::Variant(_, items)) = &mut self.objects[scratch as usize] { items.push(v); }
+                }
+                let d = self.make_data(&[Value(VK_VARIANT, scratch as i64)])?;
+                self.finish(0, d, self.empty_env);
+            }
+            115 => {
+                let v = eval_or!(a);
+                if b >= 0 && !self.has_type(v, b) { failed!(); }
+                for j in 0..count {
+                    let base = (pool + 3 * j) as usize;
+                    let mut captures = Vec::new();
+                    self.frames[fi].scratch = -1;
+                    if !self.matches(POOL[base] as usize, v, &mut captures, depth)? { continue; }
+                    let mut arm_env = env;
+                    if !captures.is_empty() {
+                        let Object::Env(entries) = self.data_of(env)? else { return Err(Fault::Limit); };
+                        let mut bindings = entries.clone();
+                        for (k, v) in captures {
+                            if let Some(e) = bindings.iter_mut().find(|e| e.0 == k) { e.1 = v; }
+                            else { bounded(bindings.len() + 1, BIND_MAX)?; bindings.push((k, v)); }
+                        }
+                        arm_env = self.alloc(Object::Env(bindings))?;
+                        self.frames[fi].scratch = arm_env;
+                    }
+                    if POOL[base + 1] >= 0 {
+                        match self.expr(POOL[base + 1] as usize, node, data, arm_env, depth) {
+                            Ok(Value(VK_INT, x)) if x != 0 => (),
+                            Ok(_) | Err(Fault::Failed) => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    let frame = &mut self.frames[fi];
+                    frame.pc = POOL[base + 2] as usize; frame.env = arm_env; frame.scratch = -1;
+                    return Ok(());
+                }
+                failed!();
+            }
+            116 => {
+                let v = eval_or!(a);
+                let items = self.variant(v)?.1.to_vec();
+                let d = self.make_data(&items)?;
+                self.finish(0, d, self.empty_env);
+            }
             110 => {
                 let gen = self.alloc(Object::Generator { head: -1, count: 1, used: false, state: 0 })?;
                 self.frames[fi].scratch = gen;
@@ -675,6 +802,7 @@ fn run() -> Fallible<i32> {
                     VK_CLOSURE => print!(" closure"),
                     VK_CONT => print!(" continuation"),
                     VK_GEN => print!(" generator"),
+                    VK_VARIANT => print!(" variant:{}", VARIANTS[m.variant(*v)?.0].name),
                     _ => print!(" cell:{}", v.1),
                 }
             }

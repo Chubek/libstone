@@ -11,6 +11,7 @@ All examples automatically select dialect 2; `--target latex` renders equations.
 | continuations | `completed 42` | Escaping saved control, shared store, second-resume rejection |
 | generators | `completed 1 20 1 22 0 99 0` | Two yields, return value, terminal iteration |
 | imperative_language | `completed 5` | Heap mutation, while, continue and break |
+| pattern_matching | `completed 42` | Recursive nominal list data, typed match coverage and scoped destructuring |
 
 `tests/backends.py` additionally exercises scope shadowing, higher-order calls,
 mutable captures, 100000 tail calls, 10000 generator suspensions, nested/recursive

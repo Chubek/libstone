@@ -27,7 +27,7 @@ type incompatibilities fail elaboration; values from transients and bindings
 have dynamic tags and are checked by the target runtime. Constructor fields
 containing syntax nodes can only be evaluated, never forged from integer data.
 
-All constructor names are global, and there is one semantic function (evaluation)
+Syntax constructor names are global, and there is one semantic function (evaluation)
 with one equation per constructor. Multiple mutually referring syntax sorts
 are supported. A finite-term productivity fixed point rejects uninhabited sorts.
 Rules may be written in any order, after the syntax declarations. Source order
@@ -105,6 +105,14 @@ Cells retain identity and can hold arbitrary *implemented* tagged values through
 `put`; legacy `store` still checks integers. Cells are monotonic, not reclaimed.
 Tracing collection follows cells, closures, environments, tuples and saved frames,
 including cycles. The C/Pascal worklists mark on enqueue to bound auxiliary space.
+
+Runtime variants are separate from syntax nodes. Constructor descriptors, nested
+pattern instructions and match-arm triples share the model's immutable operand
+pool. A match evaluates its subject once, tests bounded patterns without
+allocation, then overlays captures for the guard and chosen body. All captured
+values remain reachable from the subject's inputs until that new environment is
+rooted. The chosen arm tail-replaces the match frame. Structural comparison
+uses a depth-bounded cursor stack and does not follow mutable references.
 
 One-shot call/cc copies caller frames into a bounded heap chain, excluding the
 capture action. Resume replaces control state, not store state. Generators use

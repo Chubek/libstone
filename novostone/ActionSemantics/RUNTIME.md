@@ -3,13 +3,16 @@
 Both dialect modes emit standalone immutable tables plus the same target-native
 machine from `runtime.{c,py,rs,pas}.in`.
 Runtime tags are integer (0), token (1), cell (2), closure (3), continuation (4),
-and generator (5). No floats, big integers, user data algebras or objects exist yet.
+generator (5), and immutable variant (6). No floats, big integers or objects
+exist yet.
 Arithmetic is checked signed i32, without coercion. Function/continuation/generator
 values print `closure`, `continuation`, `generator`, without exposing heap indices.
+Variants print `variant:Constructor` without expanding fields; `component`
+and patterns can observe the fields inside the language.
 
 Environments and transient tuples are GC objects. Closures retain defining syntax
 and lexical environments. Saved frames retain all lexical/transient/intermediate
-roots. Cells can form cycles with closures and generators. Mark-sweep traverses
+roots. Cells can form cycles with closures, generators and variants. Mark-sweep traverses
 these edges without recursive host marking. Cells are monotonically allocated
 until interpreter exit; there is no `free`, weak reference or alternate memory
 policy. Live cell contents are roots even if their cell handle becomes unreachable.
@@ -40,6 +43,10 @@ These caps bound generated arrays and prevent overflow or unbounded configuratio
 allocation. They are safety caps, not performance promises.
 Source bytes (65536), token bytes (64), parse depth (128), tuple/map length (64),
 constructors (256), fields (16), lowered instructions (8192) remain fixed.
+Runtime data separately allows 256 sorts and 256 constructors with 16 fields
+each, and 64 arms per match with up to 64 captures per arm. Lowered patterns
+count toward the instruction budget; matching and structural equality consume
+runtime steps and depth.
 Symbols cannot be budgeted below the specification's literal token table.
 
 In extended mode, each dispatch and yielder evaluation consumes steps. Legacy

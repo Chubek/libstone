@@ -97,6 +97,69 @@ close succeeds. Running next/close fails (no reentrancy). Yield without N fails.
 Generators may nest, recurse and retain shared cells, but cannot be combined with
 callcc/resume in one synthesized specification yet.
 
+## Runtime data and patterns
+
+`data S = C(T1, ...) | D();` declares a nominal sort and its constructor
+signatures. Declarations follow `syntax` and precede `rule`. Data constructor
+names are unique among data constructors, independently of syntax constructors.
+Fields have type `integer`, `identifier`, `datum` (unrestricted), or a declared
+data sort. Forward and recursive references are allowed; every sort must have
+a finite inhabitant. There are at most 256 sorts and 256 data constructors,
+with at most 16 fields per constructor.
+
+```text
+construct C(e1,...,en):
+  evaluate e1 through en, checking each against C's declared field type
+  return done([fresh C(v1,...,vn)], {})
+arity(C(v1,...,vn)) = n
+component(C(v1,...,vn), i) = vi   (1 <= i <= n)
+deconstruct C(v1,...,vn) = done([v1,...,vn], {})
+```
+
+Unknown constructors, wrong arities, and statically incompatible operands
+are specification errors. A dynamically incompatible field or selector fails.
+Constructed values are immutable and can contain existing handles, including
+references, functions, and other variants. Direct observation prints
+`variant:C`, not a recursively expanded tree.
+
+`equal(x,y)` compares tags, constructor identity and corresponding fields,
+left-to-right, without following references or invoking closures. On scalar
+values it compares payloads, and on cells, closures, continuations and
+generators it compares handle identity. `identical(x,y)` compares only the
+outer tag and payload/identity, including for variants. Two separately
+constructed `Nil()` values are structurally equal but not identical. Different
+tags compare unequal; neither operation coerces numbers or changes `==`.
+Structural traversal consumes steps and uses a depth-bounded explicit work stack.
+
+`match e [of S] with { P [when g] => A, ... }` evaluates e once. `of S`
+requires the value to belong to S or fails. The first arm with a matching
+pattern and accepting guard executes under the original tuple and the lexical
+environment overlaid by that arm's captures. Captures shadow existing bindings
+but are not implicit output bindings. A selected arm's failure or escape
+propagates; it does not try the next arm.
+
+| Pattern | Match |
+| --- | --- |
+| `_` | Every datum; binds nothing |
+| `x` | Every datum; binds it as `bound("x")` |
+| `-42`, `"foo"` | Equal integer or token, respectively |
+| `C(P1, ..., Pn)` | Same constructor and all child patterns match |
+| `P as x` | Match P and additionally bind the original datum to x |
+| `P \| Q` | Try P, then Q on mismatch with partial captures discarded |
+
+`as` binds more tightly than `|`; parentheses group patterns. An or-pattern's
+alternatives must bind identical name sets, and a successful path cannot bind
+the same name twice. A guard accepts only a nonzero integer; false, a wrong
+tag, or semantic yielder failure skips that arm. It does not retry an or-pattern
+alternative after a guard fails. Resource errors abort the computation. An
+unannotated match can be partial; no selected arm means failure.
+
+The compiler rejects provably shadowed arms using unguarded catch-alls and
+single-pattern subsumption. For `of S`, it requires an unguarded catch-all or
+coverage of every constructor by unguarded patterns with irrefutable field
+patterns. This is deliberately conservative: it does not prove arbitrary
+combinations of nested patterns or analyze guards for coverage.
+
 ## Errors and limits
 
 Dynamic tag mismatch, missing bindings/arguments, repeated resume and invalid

@@ -1,0 +1,63 @@
+language PatternMatching {
+  start E;
+  syntax E = Empty() | Prepend(n: integer, tail: E) | First(xs: E)
+    | Sum(xs: E) | Compare(x: E, y: E) | Inspect(x: E, n: integer)
+    | Pick(n: integer, k: identifier) | Tagged(k: identifier) | BoxValue(x: E)
+    | Partial(x: E) | Reject(xs: E) | Capture(xs: E) | Grow(n: integer)
+    | InvalidConstructor(x: E) | Scope() | FallbackGuard() | Alternatives(xs: E)
+    | Unpack(x: E) | Retain(x: E) | Alias(x: E) | Cycle();
+  data IntList = Nil() | Cons(integer, IntList);
+  data Box = Wrapped(datum);
+
+  rule Empty = construct Nil();
+  rule Prepend = evaluate(tail) then construct Cons(n, given(1));
+  rule First = evaluate(xs) then match given(1) of IntList with {
+    Cons(x, _) => give bound("x"),
+    Nil() => fail
+  };
+  rule Sum = evaluate(xs) then unfolding (match given(1) of IntList with {
+    Nil() => give 0,
+    Cons(x, xs) => (give bound("xs") then unfold) then give given(1) + bound("x")
+  });
+  rule Compare = (evaluate(x) and then evaluate(y)) then
+    (give equal(given(1), given(2)) and then give identical(given(1), given(2)));
+  rule Inspect = evaluate(x) then (give arity(given(1)) and then give component(given(1), n));
+  rule Pick = construct Wrapped(k) then match given(1) with {
+    Wrapped("yes") when n => give 42,
+    Wrapped(x) => give bound("x")
+  };
+  rule Tagged = give k;
+  rule BoxValue = evaluate(x) then construct Wrapped(given(1));
+  rule Partial = evaluate(x) then match given(1) with { Wrapped(Cons(x, Nil())) => give bound("x") };
+  rule Reject = evaluate(xs) then (match given(1) of IntList with { Nil() => give 0, Cons(_, _) => fail });
+  rule Capture = evaluate(xs) then (match given(1) with {
+    Cons(x, _) => closure (give bound("x")),
+    _ => fail
+  }) then apply given(1) to ();
+  rule Grow = allocate cell then (furthermore (bind "r" to given(1)) hence (
+    construct Nil() then (put given(1) in bound("r") and then give n) then unfolding (
+      if given(1) < 1 then give contents(bound("r")) else
+        (((construct Cons(given(1), contents(bound("r"))) then put given(1) in bound("r"))
+           and then give given(1) - 1) then tailunfold)
+    )
+  ));
+  rule InvalidConstructor = evaluate(x) then construct Cons(0, given(1));
+  rule Scope = furthermore (bind "x" to 42) hence
+    ((match 7 with { x => give bound("x") }) and then give bound("x"));
+  rule FallbackGuard = match 42 with { x when bound("unbound") => give 0, 42 => give 42 };
+  // The first alternative may bind x and then fail; the second gets a clean capture set.
+  rule Alternatives = evaluate(xs) then match given(1) with {
+    Cons(x, Nil()) | Cons(_, Cons(x, _)) => give bound("x"),
+    _ => fail
+  };
+  rule Alias = evaluate(x) then match given(1) of IntList with {
+    (Cons(_, _) | Nil()) as whole => give identical(given(1), bound("whole"))
+  };
+  rule Unpack = evaluate(x) then deconstruct given(1);
+  rule Retain = (closure (give 42) then construct Wrapped(given(1))) then
+    (furthermore (bind "box" to given(1)) hence
+      (evaluate(x) then match bound("box") with { Wrapped(f) => apply bound("f") to () }));
+  rule Cycle = allocate cell then (furthermore (bind "r" to given(1)) hence (
+    construct Wrapped(bound("r")) then put given(1) in bound("r") then
+      give identical(component(contents(bound("r")), 1), bound("r"))));
+}

@@ -12,6 +12,7 @@ Action Semantics framework; see the references linked in README.
 | Imperative | cells, contents, integer store, tagged put |
 | Procedural/reflective extensions | closure/abstraction, enact/apply, letrec, unfolding |
 | LibStone control extensions | return/tailcall, tailunfold, callcc/resume, if/while, generators |
+| LibStone data extensions | nominal data constructors, destructuring, action matching, structural and identity equality |
 | Communicative / modern asynchronous | Not implemented |
 
 `otherwise` is deterministic failure fallback, **not** nondeterministic choice.

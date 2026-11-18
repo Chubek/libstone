@@ -1,6 +1,6 @@
 # ActionSemantics delivery — 2026-11-17
 
-**Current status:** see the consolidation checkpoint at the end. Earlier sections
+**Current status:** see the data and patterns checkpoint at the end. Earlier sections
 record previous deliveries and do not describe the current feature boundary.
 
 Baseline LibStone revision: `55755485acaded7c4ed804c0946bc8c7363f6763`.
@@ -342,3 +342,30 @@ ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
 
 This is a consolidation, not new coverage of the unimplemented semantic phases
 listed above. The optional libuv checkout remains untouched.
+
+## Current checkpoint — algebraic data and action patterns
+
+Starting revision: `1e01d0d53`. Its Novostone Debug baseline passed 42/42.
+The unified Aurocks/ASDL frontend and Action Machine now support recursive
+nominal `data`, checked `construct`, `deconstruct`, `arity`, `component`,
+and separate `equal` and `identical` operations. Action `match` supports
+nested constructor, integer, token, wildcard, capture, as-, or-, and guarded
+patterns, with scoped captures, optional typed coverage, and conservative
+unreachable-arm diagnostics. Variant fields are traced by all executable
+runtimes. The LaTeX emitter includes data declarations, patterns, and equations.
+
+`examples/pattern_matching.acsem` and its matching `.term` demonstrate a
+recursive list sum (`completed 42`). Cross-target tests cover shadowing,
+alternative rollback, escaped closures, aliases, cycles through cells,
+garbage collection, malformed specifications, and heap/depth exhaustion.
+
+All 42 Novostone CTests passed with GCC Debug, GCC Release, and Clang
+ASan/UBSan with leak detection. This includes compiled C11, Rust and Pascal,
+Python execution and LaTeX compilation. Builds used the existing Novostone
+configuration with tools and tests enabled; logs are in
+`/mnt/nvme/$USER-acsem-build/{debug,release,sanitize}/Testing/Temporary/LastTest.log`.
+The build directories were placed on the NVMe volume because `/tmp` filled.
+
+This checkpoint does not add match expressions within yielders, richer scalar
+or built-in collection types, a general type system, objects, modules, cleanup
+handlers, algebraic effects, tasks or concurrency. See [BACKENDS.md](BACKENDS.md).

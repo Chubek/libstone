@@ -15,12 +15,17 @@ static novo_as_rule_seq as_rules(void *);
 static novo_as_expr_seq as_operands(void *, void *);
 static novo_as_expr_seq as_expressions(void *);
 static novo_as_binding_seq as_bindings(void *);
+static novo_as_data_sort_seq as_data_sorts(void *);
+static novo_as_variant_seq as_variants(void *);
+static novo_as_data_type_seq as_data_types(void *);
+static novo_as_arm_seq as_arms(void *);
+static novo_as_pattern_seq as_patterns(void *);
 %}
 %%
 %start novo_as_document
 %skip /([ \t\r\n]+|\/\/[^\r\n]*|#[^\r\n]*)+/
-novo_as_document: /language\b/ identifier '{' /start\b/ identifier ';' sorts rules '}'
-  { $$ = novo_as_make_document(as_arena, as_string($2), as_string($5), as_sorts($7), as_rules($8)); };
+novo_as_document: /language\b/ identifier '{' /start\b/ identifier ';' sorts data_decls rules '}'
+  { $$ = novo_as_make_document(as_arena, as_string($2), as_string($5), as_sorts($7), as_data_sorts($8), as_rules($9)); };
 sorts: sorts sort { $$ = as_push($1, $2); } | sort { $$ = as_push(NULL, $1); };
 sort: /syntax\b/ identifier '=' constructors ';'
   { $$ = novo_as_make_sort(as_arena, as_string($2), as_constructors($4), as_offset(save)); };
@@ -29,6 +34,15 @@ constructor: identifier '(' fields ')' { $$ = novo_as_make_constructor(as_arena,
 fields: field_list { $$ = $1; } | %empty { $$ = NULL; };
 field_list: field_list ',' field { $$ = as_push($1, $3); } | field { $$ = as_push(NULL, $1); };
 field: identifier ':' identifier { $$ = novo_as_make_field(as_arena, as_string($1), as_string($3), as_offset(save)); };
+data_decls: data_decls data_decl { $$ = as_push($1, $2); } | %empty { $$ = NULL; };
+data_decl: /data\b/ identifier '=' variants ';'
+  { $$ = novo_as_make_data_sort(as_arena, as_string($2), as_variants($4), as_offset(save)); };
+variants: variants '|' variant { $$ = as_push($1, $3); } | variant { $$ = as_push(NULL, $1); };
+variant: identifier '(' data_fields ')'
+  { $$ = novo_as_make_variant(as_arena, as_string($1), as_data_types($3), as_offset(save)); };
+data_fields: data_field_list { $$ = $1; } | %empty { $$ = NULL; };
+data_field_list: data_field_list ',' data_field { $$ = as_push($1, $3); } | data_field { $$ = as_push(NULL, $1); };
+data_field: identifier { $$ = novo_as_make_data_type(as_arena, as_string($1), as_offset(save)); };
 rules: rules rule { $$ = as_push($1, $2); } | rule { $$ = as_push(NULL, $1); };
 rule: /rule\b/ identifier '=' action ';' { $$ = novo_as_make_rule(as_arena, as_string($2), $4, as_offset(save)); };
 action:
@@ -57,6 +71,10 @@ primitive:
   | /while\b/ expr /do\b/ primitive { $$ = novo_as_While(as_arena, $2, $4, as_offset(save)); }
   | /break\b/ { $$ = novo_as_Break(as_arena, as_offset(save)); }
   | /continue\b/ { $$ = novo_as_Continue(as_arena, as_offset(save)); }
+  | /construct\b/ identifier args { $$ = novo_as_Construct(as_arena, as_string($2), as_expressions($3), as_offset(save)); }
+  | /deconstruct\b/ expr { $$ = novo_as_Deconstruct(as_arena, $2, as_offset(save)); }
+  | /match\b/ expr match_domain /with\b/ '{' arms '}'
+    { $$ = novo_as_Match(as_arena, $2, $3 ? novo_as_data_type_some($3) : novo_as_data_type_none(), as_arms($6), as_offset(save)); }
   | /enact\b/ expr { $$ = novo_as_Enact(as_arena, $2, as_offset(save)); }
   | /apply\b/ expr /to\b/ args { $$ = novo_as_Apply(as_arena, $2, as_expressions($4), as_offset(save)); }
   | /tailcall\b/ expr /to\b/ args { $$ = novo_as_TailCall(as_arena, $2, as_expressions($4), as_offset(save)); }
@@ -77,6 +95,24 @@ expr: sum '==' sum { $$ = novo_as_Binary(as_arena, as_word("=="), $1, $3, as_off
   | sum '<' sum { $$ = novo_as_Binary(as_arena, as_word("<"), $1, $3, as_offset(save)); }
   | sum { $$ = $1; };
 args: '(' ')' { $$ = NULL; } | '(' arglist ')' { $$ = $2; };
+match_domain: /of\b/ data_field { $$ = $2; } | %empty { $$ = NULL; };
+arms: arms ',' arm { $$ = as_push($1, $3); } | arm { $$ = as_push(NULL, $1); };
+arm: pattern guard '=>' action
+  { $$ = novo_as_MatchArm(as_arena, $1, $2 ? novo_as_expr_some($2) : novo_as_expr_none(), $4, as_offset(save)); };
+guard: /when\b/ expr { $$ = $2; } | %empty { $$ = NULL; };
+pattern: pattern '|' as_pattern { $$ = novo_as_OrPattern(as_arena, $1, $3, as_offset(save)); }
+  | as_pattern { $$ = $1; };
+as_pattern: pattern_atom /as\b/ identifier { $$ = novo_as_AsPattern(as_arena, $1, as_string($3), as_offset(save)); }
+  | pattern_atom { $$ = $1; };
+pattern_atom:
+    identifier '(' pattern_args ')' { $$ = novo_as_VariantPattern(as_arena, as_string($1), as_patterns($3), as_offset(save)); }
+  | /_\b/ { $$ = novo_as_Wildcard(as_arena, as_offset(save)); }
+  | identifier { $$ = novo_as_Capture(as_arena, as_string($1), as_offset(save)); }
+  | integer { $$ = novo_as_IntPattern(as_arena, as_string($1), as_offset(save)); }
+  | quoted { $$ = novo_as_TokenPattern(as_arena, as_string($1), as_offset(save)); }
+  | '(' pattern ')' { $$ = $2; };
+pattern_args: pattern_list { $$ = $1; } | %empty { $$ = NULL; };
+pattern_list: pattern_list ',' pattern { $$ = as_push($1, $3); } | pattern { $$ = as_push(NULL, $1); };
 arglist: arglist ',' expr { $$ = as_push($1, $3); } | expr { $$ = as_push(NULL, $1); };
 letrecdefs: letrecdefs ',' letrecdef { $$ = as_push($1, $3); } | letrecdef { $$ = as_push(NULL, $1); };
 letrecdef: quoted '=' /closure\b/ primitive
@@ -91,6 +127,10 @@ atom: integer { $$ = novo_as_Integer(as_arena, as_string($1), as_offset(save)); 
   | /given\b/ '(' integer ')' { $$ = novo_as_Unary(as_arena, as_word("given"), novo_as_Integer(as_arena, as_string($3), as_offset(save)), as_offset(save)); }
   | /bound\b/ '(' expr ')' { $$ = novo_as_Unary(as_arena, as_word("bound"), $3, as_offset(save)); }
   | /contents\b/ '(' expr ')' { $$ = novo_as_Unary(as_arena, as_word("contents"), $3, as_offset(save)); }
+  | /arity\b/ '(' expr ')' { $$ = novo_as_Unary(as_arena, as_word("arity"), $3, as_offset(save)); }
+  | /component\b/ '(' expr ',' expr ')' { $$ = novo_as_Binary(as_arena, as_word("component"), $3, $5, as_offset(save)); }
+  | /equal\b/ '(' expr ',' expr ')' { $$ = novo_as_Binary(as_arena, as_word("equal"), $3, $5, as_offset(save)); }
+  | /identical\b/ '(' expr ',' expr ')' { $$ = novo_as_Binary(as_arena, as_word("identical"), $3, $5, as_offset(save)); }
   | quoted { $$ = novo_as_Token(as_arena, as_string($1), as_offset(save)); }
   | identifier { $$ = novo_as_Field(as_arena, as_string($1), as_offset(save)); }
   | '(' expr ')' { $$ = $2; };
@@ -126,6 +166,11 @@ AS_SEQUENCE(as_fields, field)
 AS_SEQUENCE(as_rules, rule)
 AS_SEQUENCE(as_expressions, expr)
 AS_SEQUENCE(as_bindings, binding)
+AS_SEQUENCE(as_data_sorts, data_sort)
+AS_SEQUENCE(as_variants, variant)
+AS_SEQUENCE(as_data_types, data_type)
+AS_SEQUENCE(as_arms, arm)
+AS_SEQUENCE(as_patterns, pattern)
 #undef AS_SEQUENCE
 static novo_as_expr_seq as_operands(void *a, void *b) {
     novo_as_expr_seq seq = novo_as_expr_seq_new(as_arena, a ? (b ? 2 : 1) : 0);
