@@ -16,7 +16,7 @@ list(TRANSFORM lua_sources APPEND ".c")
 add_library(moonstone_prolific_lua_vendor STATIC ${lua_sources})
 set_target_properties(moonstone_prolific_lua_vendor PROPERTIES POSITION_INDEPENDENT_CODE ON
   C_STANDARD 99 C_STANDARD_REQUIRED YES C_VISIBILITY_PRESET hidden)
-target_include_directories(moonstone_prolific_lua_vendor SYSTEM PUBLIC "${MOONSTONE_VENDOR_ROOT}/lua")
+target_include_directories(moonstone_prolific_lua_vendor SYSTEM PUBLIC "$<BUILD_INTERFACE:${MOONSTONE_VENDOR_ROOT}/lua>")
 if(UNIX)
   target_compile_definitions(moonstone_prolific_lua_vendor PRIVATE LUA_USE_POSIX)
   target_link_libraries(moonstone_prolific_lua_vendor PUBLIC m ${CMAKE_DL_LIBS})
@@ -28,13 +28,14 @@ target_link_libraries(moonstone_prolific PUBLIC moonstone_core PRIVATE Threads::
 target_include_directories(moonstone_prolific SYSTEM PRIVATE
   "${MOONSTONE_VENDOR_ROOT}/lmdbxx" "${PROLIFIC_LMDB_INCLUDE_DIR}")
 target_compile_definitions(moonstone_prolific PUBLIC PROLIFIC_SHARED PRIVATE PROLIFIC_BUILDING)
-set_target_properties(moonstone_prolific PROPERTIES VERSION 1.0.0 SOVERSION 1 WINDOWS_EXPORT_ALL_SYMBOLS ON)
+set_target_properties(moonstone_prolific PROPERTIES EXPORT_NAME Prolific
+  VERSION 1.0.0 SOVERSION 1 WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(moonstone_prolific_lua SHARED LuaProfiler.cpp)
 add_library(Moonstone::ProlificLua ALIAS moonstone_prolific_lua)
 target_link_libraries(moonstone_prolific_lua PUBLIC moonstone_prolific PRIVATE moonstone_prolific_lua_vendor)
 target_include_directories(moonstone_prolific_lua SYSTEM PRIVATE "${MOONSTONE_VENDOR_ROOT}/kaguya/include")
-set_target_properties(moonstone_prolific_lua PROPERTIES VERSION 1.0.0 SOVERSION 1
+set_target_properties(moonstone_prolific_lua PROPERTIES EXPORT_NAME ProlificLua VERSION 1.0.0 SOVERSION 1
   WINDOWS_EXPORT_ALL_SYMBOLS ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
 set(prolific_targets moonstone_prolific moonstone_prolific_lua moonstone_prolific_lua_vendor)
@@ -100,9 +101,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
   endif()
 endif()
-install(TARGETS moonstone_prolific moonstone_prolific_lua
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(TARGET moonstone_prolific_inject)
   install(TARGETS moonstone_prolific_inject LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()

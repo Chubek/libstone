@@ -14,3 +14,4 @@ The following chapters specify its implemented language and extension boundaries
 9. [Diagnostics, testing and limitations](09-testing.md)
 10. [Standard library and imports](10-stdlib-and-imports.md)
 11. [Firestone code-generation plans](11-firestone-codegen.md)
+12. [Libstone SDK components and the Blackstone optimizer](12-collective.md)

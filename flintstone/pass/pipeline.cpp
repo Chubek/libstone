@@ -1,7 +1,6 @@
 #include "../internal.hpp"
 #include <libir/LoopAnalysis.hpp>
 #include <libvm/BytecodeBinary.hpp>
-#include <blackstone.hpp>
 
 namespace flintstone {
 void lower(Module& module, const Registry& registry, Level destination, std::size_t limit) {
@@ -139,29 +138,6 @@ Pass dead_code_elimination() {
                 }
                 changed |= progress;
             } while (progress);
-            return changed;
-        }};
-}
-Pass blackstone_pass(std::string directory, std::vector<std::string> kernels) {
-    return {"blackstone", {"cfg", "dominators", "def_use", "loops"}, {},
-        [directory = std::move(directory), kernels = std::move(kernels)](Module& module, const Registry& registry, AnalysisManager&) {
-            detail::check(module.level != Level::High, "blackstone.level", "lower high-level operations before Blackstone optimization");
-            blackstone::Runtime runtime; runtime.load_directory(directory);
-            bool changed = false;
-            // Validate requested names even for a module with no definitions.
-            const auto catalog = runtime.kernels();
-            for (const auto& name : kernels) detail::check(std::any_of(catalog.begin(), catalog.end(), [&](const auto& k) { return k.name == name && k.ir == "ssa"; }),
-                                                         "blackstone.kernel", "missing SSA kernel " + name);
-            for (auto& function : module.functions) if (!function.external) {
-                auto graph = to_ssa(module, function, registry);
-                bool function_changed = false;
-                for (const auto& kernel : kernels) function_changed |= runtime.run(kernel, graph, blackstone::IntegerSemantics::Modular).changed;
-                if (function_changed) {
-                    auto replacement = detail::from_ssa(graph, function);
-                    // All changes remain private to the outer pass transaction.
-                    function = std::move(replacement); changed = true;
-                }
-            }
             return changed;
         }};
 }

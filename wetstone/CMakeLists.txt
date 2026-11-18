@@ -26,7 +26,11 @@ if(WETSTONE_USE_FLINTSTONE AND EXISTS "${LIBSTONE_ROOT}/flintstone/Flintstone.hp
         $<BUILD_INTERFACE:${LIBSTONE_ROOT}/flintstone>
         $<BUILD_INTERFACE:${LIBSTONE_ROOT}/firestone>)
 endif()
-if(BUILD_TESTING)
+if(NOT DEFINED LIBSTONE_BUILD_TESTS)
+    set(LIBSTONE_BUILD_TESTS "${BUILD_TESTING}")
+endif()
+option(WETSTONE_BUILD_TESTS "Build Wetstone tests" "${LIBSTONE_BUILD_TESTS}")
+if(WETSTONE_BUILD_TESTS)
     foreach(test IN ITEMS core cfg domains interprocedural symbolic pointer soundness typed)
         add_executable(wetstone-${test}-test tests/test_${test}.cpp)
         target_link_libraries(wetstone-${test}-test PRIVATE wetstone)

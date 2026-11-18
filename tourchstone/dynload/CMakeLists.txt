@@ -37,6 +37,7 @@ add_library(Tourchstone::dynload ALIAS tdynload)
 target_compile_features(tdynload PUBLIC cxx_std_20)
 target_include_directories(tdynload PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(tdynload PRIVATE qbfd::qbfd)
 target_compile_definitions(tdynload PUBLIC
@@ -44,7 +45,7 @@ target_compile_definitions(tdynload PUBLIC
 if(CMAKE_DL_LIBS)
   target_link_libraries(tdynload PRIVATE ${CMAKE_DL_LIBS})
 endif()
-set_target_properties(tdynload PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(tdynload PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME dynload)
 libstone_warnings(tdynload)
 
 if(DYNLOAD_BUILD_TOOLS)
@@ -58,7 +59,7 @@ if(DYNLOAD_BUILD_TOOLS)
   libstone_warnings(tdynload_cli)
 endif()
 
-install(TARGETS tdynload
+install(TARGETS tdynload EXPORT TourchstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

@@ -152,7 +152,9 @@ mutable manager/module.
 
 ## Blackstone boundary
 
-Flintstone loads the requested kernel directory through `blackstone::Runtime`.
+Flintstone loads the shipped or explicitly selected kernel directory through
+`blackstone::Runtime`. See [Libstone SDK](12-collective.md) for the default
+pipeline and kernel discovery.
 Names must exist in the SSA catalog; unknown names fail even for an empty
 module. Each function is exported to verified Firestone SSA. Blackstone runs
 with explicitly modular integer semantics, and its own transactional adapter

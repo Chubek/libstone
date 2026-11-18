@@ -7,9 +7,21 @@ if(NOT status EQUAL 0)
   message(FATAL_ERROR "Installation failed: ${output}\n${error}")
 endif()
 file(RENAME "${prefix}" "${relocated}")
+if(BUILD_TOOLS AND NOT IS_ABSOLUTE "${BINDIR}")
+  execute_process(COMMAND "${relocated}/${BINDIR}/flintstone${EXECUTABLE_SUFFIX}" --optimize
+    --run affine --arg 10 "${SOURCE}/examples/affine.flint"
+    RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(NOT status EQUAL 0 OR NOT output STREQUAL "42\n")
+    message(FATAL_ERROR "Relocated CLI optimization failed: ${output}\n${error}")
+  endif()
+endif()
 set(consumer "${PREFIX_ROOT}/consumer-${suffix}")
 file(MAKE_DIRECTORY "${consumer}")
 file(WRITE "${consumer}/CMakeLists.txt" "cmake_minimum_required(VERSION 3.20)\nproject(InstalledConsumer LANGUAGES C CXX)\nfind_package(Flintstone CONFIG REQUIRED COMPONENTS core native codegen)\nadd_executable(consumer main.cpp c.c)\ntarget_link_libraries(consumer PRIVATE Flintstone::native Flintstone::codegen)\n")
+if(BUILD_SDK)
+  file(APPEND "${consumer}/CMakeLists.txt"
+    "find_package(Flintstone CONFIG REQUIRED COMPONENTS sdk)\ninclude(\"${SOURCE}/tests/sdk.cmake\")\nflintstone_sdk_smoke(sdk_consumer \"${SOURCE}/tests/sdk.cpp\")\n")
+endif()
 file(WRITE "${consumer}/c.c" "#include <Flintstone.h>\nint c_header(void) {return flintstone_binding_target_count() == 9;}\n")
 file(WRITE "${consumer}/main.cpp" [=[
 #include <Flintstone.hpp>
@@ -50,4 +62,11 @@ endif()
 execute_process(COMMAND "${consumer}/build/consumer" RESULT_VARIABLE status ERROR_VARIABLE error)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Installed consumer execution failed: ${error}")
+endif()
+if(BUILD_SDK)
+  execute_process(COMMAND "${consumer}/build/sdk_consumer" "${relocated}"
+    RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(NOT status EQUAL 0)
+    message(FATAL_ERROR "Relocated SDK execution failed: ${output}\n${error}")
+  endif()
 endif()

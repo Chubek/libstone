@@ -46,6 +46,7 @@ add_library(qld STATIC
   ScriptSDK.cpp
 )
 add_library(qobjld::qobjld ALIAS qld)
+set_target_properties(qld PROPERTIES EXPORT_NAME qobjld)
 add_dependencies(qld qld-frontend)
 target_include_directories(qld PRIVATE "${_qld_generated}")
 target_compile_features(qld PRIVATE c_std_11)
@@ -75,13 +76,14 @@ if(YELLOWSTONE_ENABLE_ELF_BACKEND)
     QLD_DEFAULT_ELF_LINKER="${YELLOWSTONE_ELF_LINKER}")
 endif()
 target_include_directories(qld PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../qbfd
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/qobjld>
 )
 target_link_libraries(qld PUBLIC qbfd::qbfd)
 target_link_libraries(qld PRIVATE Threads::Threads)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/LibstoneLua.cmake")
-target_link_libraries(qld PRIVATE libstone_kaguya)
+target_link_libraries(qld PRIVATE
+  $<BUILD_INTERFACE:libstone_kaguya> $<INSTALL_INTERFACE:LibstoneLua::libstone_script_lua>)
 install(FILES ScriptSDK.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qobjld)
 
 target_compile_options(qld PRIVATE

@@ -6,6 +6,12 @@ Limestone scheduling and register allocation, Sandstone SymAS encoding, and
 Tourchstone XBind bindings. Native instruction selection and ABI lowering are
 explicit target adapters, not guessed from an ISA name.
 
+`Flintstone::sdk` collects the configured Libstone libraries under one CMake
+package, including Novostone (Datalog, database/query/speculative IR, cost
+models, and ActionSemantics) and Moonstone (language safety and runtimes).
+See [SDK components and the optimizer](manual/12-collective.md) for targets
+and optional components.
+
 Dialects: `arith`, `cf` (with `trap`), `func`, `mem`, `math`, `vector`,
 `tuple`, `ptr`, `atomic`, `vm`. Targets: portable `vm`/`vm-stack` bytecode,
 a generic Sandstone native bridge, shipped `x86-64`/`aarch64`/`riscv64` tiny
@@ -25,7 +31,7 @@ see the [manual](manual/10-stdlib-and-imports.md).
 cmake -S flintstone -B /tmp/opencode/flintstone-build -DCMAKE_BUILD_TYPE=Debug
 cmake --build /tmp/opencode/flintstone-build --parallel 2
 ctest --test-dir /tmp/opencode/flintstone-build --output-on-failure
-/tmp/opencode/flintstone-build/flintstone --run affine --arg 10 flintstone/examples/affine.flint
+/tmp/opencode/flintstone-build/flintstone -O --run affine --arg 10 flintstone/examples/affine.flint
 # 42
 ```
 

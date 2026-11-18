@@ -37,6 +37,8 @@ flintstone_status flintstone_resolve_imports(flintstone_context*, flintstone_mod
 flintstone_status flintstone_lower(flintstone_context*, flintstone_module*, flintstone_level);
 flintstone_status flintstone_optimize(flintstone_context*, flintstone_module*,
                                     const char* kernel_directory, const char* kernel_name);
+/* Use the shipped Blackstone profile and DCE; errors leave the module unchanged. */
+flintstone_status flintstone_optimize_default(flintstone_context*, flintstone_module*);
 /* Text is owned by the module, valid until its next successful mutation/print. */
 flintstone_status flintstone_print(flintstone_module*, const char** text);
 const char* flintstone_module_text(flintstone_module*);

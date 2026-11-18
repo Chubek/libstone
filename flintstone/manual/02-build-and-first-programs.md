@@ -28,6 +28,7 @@ vendored interpreter headers are substantial.
 | `FLINTSTONE_BUILD_TESTS` | `LIBSTONE_BUILD_TESTS` | C/C++, CLI, backend and relocated-installation tests. |
 | `FLINTSTONE_BUILD_TOOLS` | `LIBSTONE_BUILD_TOOLS` | Build/install the textual IL tool. Tests also build it as a helper. |
 | `FLINTSTONE_BUILD_BINDING_TESTS` | Flintstone tests | Check the XBind spec and compile generated signature assertions. |
+| `FLINTSTONE_BUILD_SDK` | `ON` | Include [Libstone SDK targets](12-collective.md). Turn off for the minimal IL build. |
 | `LIBSTONE_THIRD_PARTY_DIR` | repository `third_party` | Override the vendored dependency root. |
 | `LIBSTONE_LUA_SOURCE_DIR` | vendored Lua directory | Individual Lua override. |
 | `XBIND_QAMRPP_ROOT` | vendored `qamrpp` | Individual XBind interpreter override. |
@@ -120,7 +121,9 @@ is a diagnostic, not a returned partial value.
 /tmp/opencode/flintstone-build/flintstone --kernels blackstone/kernels --kernel add_zero flintstone/examples/sum.flint
 ```
 
-`--kernels DIR --kernel NAME` is repeatable. `--kernel` requires `--kernels DIR`;
+`--kernel NAME` is repeatable and uses the shipped catalog unless `--kernels DIR`
+is specified. Use `--list-kernels` to discover names and `-O` for the default
+profile.
 `--arg` requires `--run`. Input is one `FILE` or `-` (stdin, the default);
 only one input file is accepted and input is capped at 16 MiB. Exit code `2`
 means a CLI usage error; `1` means a Flintstone diagnostic or runtime failure.
@@ -178,10 +181,11 @@ the build installs all subdirectory targets, not because Flintstone's own
 dedicated native-integration header and narrow Limestone representation headers;
 its Sandstone library is resolved from the same prefix via `find_library` (see
 `cmake/FlintstoneConfig.cmake.in`) rather than from an exported Sandstone
-package. `sandstone.hpp` itself is not installed by Flintstone. A consumer uses:
+package so core/native consumers don't need the optional assembler/compiler
+dependencies. `sandstone.hpp` itself is not installed by Flintstone. A consumer uses:
 
 ```cmake
-find_package(Flintstone 0.1 CONFIG REQUIRED)
+find_package(Flintstone 0.1 CONFIG REQUIRED COMPONENTS core)
 target_link_libraries(my_compiler PRIVATE Flintstone::flintstone)
 ```
 

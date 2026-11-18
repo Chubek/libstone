@@ -20,6 +20,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(../cmake/LibstoneBuild.cmake)
+include(CMakePackageConfigHelpers)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(SANDSTONE_BUILD_TOOLS "Build Sandstone command-line tools" "${LIBSTONE_BUILD_TOOLS}")
 
@@ -61,6 +62,7 @@ add_library(sandstone STATIC
 )
 # Historical target name kept as an alias.
 add_library(domsymas ALIAS sandstone)
+add_library(Sandstone::sandstone ALIAS sandstone)
 
 target_include_directories(sandstone
   PUBLIC
@@ -83,7 +85,7 @@ find_library(SANDSTONE_ZSTD_LIB zstd)
 find_path(SANDSTONE_ZSTD_INCLUDE zstd.h)
 if(SANDSTONE_ZSTD_LIB AND SANDSTONE_ZSTD_INCLUDE)
   target_link_libraries(sandstone PUBLIC ${SANDSTONE_ZSTD_LIB})
-  target_include_directories(sandstone PUBLIC ${SANDSTONE_ZSTD_INCLUDE})
+  target_include_directories(sandstone PRIVATE ${SANDSTONE_ZSTD_INCLUDE})
   target_compile_definitions(sandstone PUBLIC SANDSTONE_HAS_ZSTD=1)
 endif()
 
@@ -92,7 +94,7 @@ if(Threads_FOUND)
   target_link_libraries(sandstone PUBLIC Threads::Threads)
 endif()
 
-install(TARGETS sandstone
+install(TARGETS sandstone EXPORT SandstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 install(FILES include/sandstone.h include/sandstone.hpp
@@ -111,6 +113,11 @@ endif()
 if(SANDSTONE_BUILD_ASSEMBLER)
   add_subdirectory(assembler)
 endif()
+install(EXPORT SandstoneTargets NAMESPACE Sandstone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Sandstone)
+configure_package_config_file(cmake/SandstoneConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/SandstoneConfig.cmake"
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Sandstone)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/SandstoneConfig.cmake"
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Sandstone)
 
 if(SANDSTONE_BUILD_DOCS)
   add_subdirectory(docs)

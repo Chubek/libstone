@@ -20,6 +20,8 @@ CFG cfg(const Function&, const Registry&);
 firestone::ir::Type firestone_type(const Type&);
 Type from_firestone_type(const firestone::ir::Type&);
 Function from_ssa(const firestone::ir::SimpleSSAGraph&, const Function&);
+std::string ssa_operation_name(firestone::ir::Opcode);
+std::string installed_data_directory(std::string_view relative);
 void install_builtins(Registry&);
 void install_vector_dialect(Registry&);
 void install_tuple_dialect(Registry&);

@@ -10,6 +10,7 @@ set(_lua_sources lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c
   lutf8lib.c lvm.c lzio.c)
 list(TRANSFORM _lua_sources PREPEND "${LIBSTONE_LUA_SOURCE_DIR}/")
 add_library(libstone_script_lua STATIC ${_lua_sources})
+add_library(LibstoneLua::libstone_script_lua ALIAS libstone_script_lua)
 set_target_properties(libstone_script_lua PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(libstone_script_lua SYSTEM PUBLIC
   $<BUILD_INTERFACE:${LIBSTONE_LUA_SOURCE_DIR}>)
@@ -22,4 +23,6 @@ target_include_directories(libstone_kaguya SYSTEM INTERFACE
   $<BUILD_INTERFACE:${LIBSTONE_KAGUYA_SOURCE_DIR}/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>)
 target_link_libraries(libstone_kaguya INTERFACE libstone_script_lua)
-install(TARGETS libstone_script_lua ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(TARGETS libstone_script_lua EXPORT LibstoneLuaTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(EXPORT LibstoneLuaTargets FILE LibstoneLuaConfig.cmake NAMESPACE LibstoneLua::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/LibstoneLua)

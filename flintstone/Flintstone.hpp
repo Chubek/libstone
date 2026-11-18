@@ -292,7 +292,15 @@ private:
     std::map<std::string, AnalysisManager::Factory> analyses_;
 };
 Pass dead_code_elimination(); // Keeps reads, calls and potentially trapping ops.
+// Default data directory (environment override, relocated install, source tree).
+std::string default_kernel_directory();
+std::vector<std::string> blackstone_kernel_names(const std::string& kernel_directory = {});
 Pass blackstone_pass(std::string kernel_directory, std::vector<std::string> kernels);
+// Runs the ordered SSA kernels until stable or up to max_rounds (1..64);
+// verified output at the round limit is valid, but not necessarily a fixed point.
+Pass blackstone_pipeline(std::string kernel_directory, std::vector<std::string> kernels, std::size_t max_rounds);
+// Transactionally lower High -> Core as needed, then run the shipped profile and DCE.
+std::vector<PassReport> optimize(Module&, const Registry&);
 // Unroll vector packs to scalar arithmetic and eliminate tuple aggregates via
 // scalar replacement. Both fail explicitly when a value escapes the function
 // (parameters, results, calls, stores, returns) instead of changing signatures.

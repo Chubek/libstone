@@ -37,6 +37,9 @@ target_link_libraries(sandstone_spec_core PUBLIC sandstone sandstone_symspec)
 libstone_warnings(sandstone_spec_core)
 # Backwards-compatible alias for the historical target name.
 add_library(domsymascc_core ALIAS sandstone_spec_core)
+add_library(Sandstone::spec_core ALIAS sandstone_spec_core)
+set_target_properties(sandstone_spec_core PROPERTIES EXPORT_NAME spec_core)
+set_target_properties(sandstone_symspec PROPERTIES EXPORT_NAME symspec)
 
 # ---- CLI (Lua needed only for original DSL sources) ----
 if(SANDSTONE_BUILD_TOOLS OR SANDSTONE_BUILD_TESTS)
@@ -48,7 +51,7 @@ endif()
 if(SANDSTONE_BUILD_TOOLS)
   install(TARGETS sandstone-spec-compiler RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS sandstone_spec_core
+install(TARGETS sandstone_spec_core sandstone_symspec EXPORT SandstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 install(FILES include/domsymascc/domsymascc.hpp

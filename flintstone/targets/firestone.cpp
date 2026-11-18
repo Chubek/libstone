@@ -29,8 +29,7 @@ Type from_firestone_type(const firestone::ir::Type& type) {
     default: fail("ssa.type", "Firestone type has no Flintstone scalar representation");
     }
 }
-namespace {
-std::string operation_name(firestone::ir::Opcode code) {
+std::string ssa_operation_name(firestone::ir::Opcode code) {
     using O = firestone::ir::Opcode;
     switch (code) {
     case O::Constant: return "arith.constant"; case O::Copy: return "arith.copy";
@@ -46,7 +45,6 @@ std::string operation_name(firestone::ir::Opcode code) {
     case O::Branch: return "cf.branch"; case O::Return: return "func.return";
     }
     fail("ssa.opcode", "unknown Firestone opcode");
-}
 }
 Function from_ssa(const firestone::ir::SimpleSSAGraph& graph, const Function& original) {
     check(graph.verify().empty(), "ssa.invalid", "cannot import invalid SSA");
@@ -109,12 +107,16 @@ Function from_ssa(const firestone::ir::SimpleSSAGraph& graph, const Function& or
         auto block = original.block(lookup_block(id)); block.operations.clear();
         std::size_t position = 0;
         for (const auto& instruction : graph.cfg().block(id).instructions) {
-            Operation op; op.name = operation_name(instruction.opcode);
+            Operation op; op.name = ssa_operation_name(instruction.opcode);
             if (any_vm) op.name = "vm." + op.name.substr(op.name.find('.') + 1);
             if (instruction.result) {
                 auto value = lookup_value(*instruction.result);
-                if (auto found = provenance.find(value); found != provenance.end()) op.location = found->second->location;
-                op.results = {{value, from_firestone_type(instruction.type), op.location}};
+                Location location;
+                if (auto found = provenance.find(value); found != provenance.end()) {
+                    op.location = found->second->location;
+                    location = found->second->results.front().location;
+                }
+                op.results = {{value, from_firestone_type(instruction.type), std::move(location)}};
             } else if (position < original.block(block.id).operations.size()) op.location = original.block(block.id).operations[position].location;
             for (const auto& o : instruction.operands) op.operands.push_back(operand(o));
             for (auto b : instruction.targets) op.successors.push_back(lookup_block(b));

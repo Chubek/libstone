@@ -52,6 +52,10 @@ ExoML requires Perl for repository parser/AST generators. See
 [`exoml/README.md`](exoml/README.md) for auto-binding and DSL-to-compiled-wrapper
 examples. Link `Moonstone::ExoML` for its compiled runtime.
 
+The install provides `find_package(Moonstone CONFIG REQUIRED)` for its enabled
+library targets. To consume those alongside the other Libstone libraries,
+see the [Flintstone SDK](../flintstone/manual/12-collective.md).
+
 ## Using from C++
 
 ```cpp

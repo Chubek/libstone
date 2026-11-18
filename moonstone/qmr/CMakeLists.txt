@@ -15,6 +15,7 @@ option(QMR_SANITIZE "Build QMR targets and tests with AddressSanitizer/Undefined
 
 add_library(moonstone_qmr_compiler STATIC src/Compiler.cpp)
 add_library(Moonstone::QmrCompiler ALIAS moonstone_qmr_compiler)
+set_target_properties(moonstone_qmr_compiler PROPERTIES EXPORT_NAME QmrCompiler)
 target_compile_features(moonstone_qmr_compiler PUBLIC cxx_std_20)
 target_include_directories(moonstone_qmr_compiler PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -40,7 +41,7 @@ else()
   add_library(moonstone_qmr_lua_vendor STATIC ${_qmr_lua_sources})
   set_target_properties(moonstone_qmr_lua_vendor PROPERTIES
     C_STANDARD 99 C_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE ON)
-  target_include_directories(moonstone_qmr_lua_vendor SYSTEM PUBLIC "${_qmr_lua_root}")
+  target_include_directories(moonstone_qmr_lua_vendor SYSTEM PUBLIC "$<BUILD_INTERFACE:${_qmr_lua_root}>")
   if(UNIX)
     target_compile_definitions(moonstone_qmr_lua_vendor PRIVATE LUA_USE_POSIX)
     target_link_libraries(moonstone_qmr_lua_vendor PUBLIC m ${CMAKE_DL_LIBS})
@@ -50,6 +51,7 @@ endif()
 
 add_library(moonstone_qmr STATIC src/Engine.cpp src/Abi.cpp)
 add_library(Moonstone::Qmr ALIAS moonstone_qmr)
+set_target_properties(moonstone_qmr PROPERTIES EXPORT_NAME Qmr)
 target_compile_features(moonstone_qmr PUBLIC cxx_std_20)
 target_link_libraries(moonstone_qmr PUBLIC moonstone_qmr_compiler PRIVATE ${_qmr_lua_target})
 target_include_directories(moonstone_qmr SYSTEM PRIVATE "${_qmr_lua_root}" "${_qmr_kaguya_root}")
@@ -141,9 +143,8 @@ if(QMR_BUILD_TESTS AND (NOT DEFINED MOONSTONE_BUILD_TESTS OR MOONSTONE_BUILD_TES
   endif()
 endif()
 
-install(TARGETS moonstone_qmr moonstone_qmr_compiler
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-if(TARGET moonstone_qmr_lua_vendor)
-  install(TARGETS moonstone_qmr_lua_vendor ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(NOT TARGET moonstone_core)
+  install(TARGETS moonstone_qmr moonstone_qmr_compiler moonstone_qmr_lua_vendor
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
 install(DIRECTORY include/qmr DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

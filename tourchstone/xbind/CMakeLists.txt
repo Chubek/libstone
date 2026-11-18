@@ -34,13 +34,14 @@ target_compile_definitions(xbind PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURC
 libstone_warnings(xbind)
 
 add_library(xbind_qamrpp STATIC xbind_qamrpp.cpp xbind_codegen.cpp)
-set_target_properties(xbind_qamrpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(xbind_qamrpp PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME QaMRppSpec)
 add_library(XBind::QaMRppSpec ALIAS xbind_qamrpp)
 target_compile_features(xbind_qamrpp PUBLIC cxx_std_20)
 target_include_directories(xbind_qamrpp PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/xbind>)
-target_link_libraries(xbind_qamrpp PUBLIC XBind::xbind XBind::QaMRpp)
+target_link_libraries(xbind_qamrpp PUBLIC XBind::xbind
+  PRIVATE $<BUILD_INTERFACE:XBind::QaMRpp> ${CMAKE_DL_LIBS})
 target_compile_definitions(xbind_qamrpp PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 libstone_warnings(xbind_qamrpp)
 
@@ -76,6 +77,8 @@ install(TARGETS xbind xbind_qamrpp EXPORT XBindTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(EXPORT XBindTargets FILE XBindConfig.cmake NAMESPACE XBind::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/XBind)
 install(TARGETS xbind_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(TARGET qamrpp_xbind)
   install(TARGETS qamrpp_xbind LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/qamrpp)

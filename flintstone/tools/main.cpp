@@ -13,7 +13,10 @@ void usage() {
         "  --lower core|machine       Perform verified dialect conversion\n"
         "  --scalarize                Eliminate vector/tuple aggregates (pass)\n"
         "  --dce                      Remove unused pure operations\n"
-        "  --kernels DIR --kernel NAME Run a Blackstone SSA kernel (repeatable)\n"
+        "  -O | --optimize            Run the shipped Blackstone profile and DCE\n"
+        "  --kernel NAME              Run an SSA kernel (repeatable, in order)\n"
+        "  --kernels DIR              Override the Blackstone catalog directory\n"
+        "  --list-kernels             List SSA kernels in the selected catalog\n"
         "  --run FUNCTION --arg VALUE Execute; arguments may be repeated\n"
         "  --budget N                 Execution instruction budget (default 1000000)\n"
         "  --emit FILE --backend NAME  Emit bytecode (default vm) or a tiny native backend\n"
@@ -42,6 +45,7 @@ int main(int argc, char** argv) {
         std::vector<std::string> arguments, kernels, search_dirs;
         std::optional<flintstone::Level> level;
         bool check = false, dce = false, scalarize = false, input_seen = false;
+        bool optimize = false, list_kernels = false;
         std::size_t budget = 1000000;
         for (int i = 1; i < argc; ++i) {
             std::string option = argv[i];
@@ -65,6 +69,8 @@ int main(int argc, char** argv) {
             if (option == "--check") check = true;
             else if (option == "--scalarize") scalarize = true;
             else if (option == "--dce") dce = true;
+            else if (option == "-O" || option == "--optimize") optimize = true;
+            else if (option == "--list-kernels") list_kernels = true;
             else if (option == "--run") run = value();
             else if (option == "--arg") arguments.push_back(value());
             else if (option == "--budget") budget = number<std::size_t>(value());
@@ -84,7 +90,12 @@ int main(int argc, char** argv) {
                 input = option; input_seen = true;
             } else throw std::invalid_argument("unknown option " + option);
         }
-        if (!kernels.empty() && directory.empty()) throw std::invalid_argument("--kernel requires --kernels DIR");
+        if (optimize && (!kernels.empty() || !directory.empty()))
+            throw std::invalid_argument("--optimize uses the default profile; use --kernel for custom pipelines");
+        if (list_kernels) {
+            for (const auto& name : flintstone::blackstone_kernel_names(directory)) std::cout << name << '\n';
+            return 0;
+        }
         if (!arguments.empty() && run.empty()) throw std::invalid_argument("--arg requires --run");
         std::ifstream file;
         if (input != "-") { file.open(input, std::ios::binary); if (!file) throw std::runtime_error("cannot open " + input); }
@@ -115,6 +126,7 @@ int main(int argc, char** argv) {
             scalarizer.run(module, registry);
         }
         if (level) flintstone::lower(module, registry, *level);
+        if (optimize) flintstone::optimize(module, registry);
         if (!kernels.empty()) {
             if (module.level == flintstone::Level::High) flintstone::lower(module, registry, flintstone::Level::Core);
             flintstone::PassManager manager; manager.add(flintstone::blackstone_pass(directory, kernels)); manager.run(module, registry);

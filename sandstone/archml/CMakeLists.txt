@@ -31,6 +31,7 @@ add_library(sandstone-archml STATIC
   ArchML.cpp CAPI.cpp targets/Target.cpp targets/Cpp.cpp targets/Data.cpp
   "${ARCHML_GENERATED}/ArchMLParser.c" "${ARCHML_GENERATED}/ArchMLAST.h")
 add_library(Sandstone::ArchML ALIAS sandstone-archml)
+set_target_properties(sandstone-archml PROPERTIES EXPORT_NAME ArchML)
 target_compile_features(sandstone-archml PUBLIC cxx_std_20 PRIVATE c_std_11)
 set_target_properties(sandstone-archml PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(sandstone-archml
@@ -46,7 +47,7 @@ if(SANDSTONE_BUILD_TOOLS)
   libstone_warnings(archml)
   install(TARGETS archml RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 endif()
-install(TARGETS sandstone-archml ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+install(TARGETS sandstone-archml EXPORT SandstoneTargets ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(FILES ArchML.h ArchML.hpp Target.hpp Runtime.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/sandstone/archml")
 install(DIRECTORY stdspec/ DESTINATION "${CMAKE_INSTALL_DATADIR}/sandstone/archml/stdspec")

@@ -49,13 +49,14 @@ add_library(Tourchstone::dyninvoke ALIAS tdyninvoke)
 target_compile_features(tdyninvoke PUBLIC cxx_std_20)
 target_include_directories(tdyninvoke PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_include_directories(tdyninvoke PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../sandstone/isa)
 target_link_libraries(tdyninvoke PUBLIC qbfd::qbfd)
 target_compile_definitions(tdyninvoke PUBLIC
   $<$<BOOL:${BUILD_SHARED_LIBS}>:TDYNINVOKE_SHARED>)
-set_target_properties(tdyninvoke PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(tdyninvoke PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME dyninvoke)
 if(DEFINED LIBSTONE_SOURCE_DIR)
   target_compile_definitions(tdyninvoke PRIVATE
     DINV_ISA_DIR="${LIBSTONE_SOURCE_DIR}/sandstone/isa")
@@ -83,7 +84,7 @@ if(DYNINVOKE_BUILD_TOOLS)
   libstone_warnings(dinvoke_cli)
 endif()
 
-install(TARGETS tdyninvoke
+install(TARGETS tdyninvoke EXPORT TourchstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

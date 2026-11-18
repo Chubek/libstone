@@ -137,7 +137,7 @@ if(YELLOWSTONE_BUILD_TOOLS)
   install(TARGETS qobjdump qobjsize qobjcp qobjstr qobjstrip qobjnm qobjar qobjld readelf readexe readmacho
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS qld
+install(TARGETS qld EXPORT YellowstoneTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY qbfd/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qbfd
@@ -150,3 +150,5 @@ install(FILES common/qdsl.hpp "${MLVM_METATK_SOURCE_DIR}/DSLtk/DSLtk.hpp"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/common)
 install(FILES ld/ld.h ld/ld.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qobjld)
+install(EXPORT YellowstoneTargets NAMESPACE qobjld:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Yellowstone)
+install(FILES cmake/YellowstoneConfig.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Yellowstone)

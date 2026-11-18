@@ -8,6 +8,8 @@ add_library(sandstone_assembler STATIC
   lua.cpp
   sdk.cpp
 )
+add_library(Sandstone::assembler ALIAS sandstone_assembler)
+set_target_properties(sandstone_assembler PROPERTIES EXPORT_NAME assembler)
 target_include_directories(sandstone_assembler
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -16,7 +18,8 @@ target_include_directories(sandstone_assembler
 target_link_libraries(sandstone_assembler PUBLIC sandstone)
 libstone_warnings(sandstone_assembler)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/LibstoneLua.cmake")
-target_link_libraries(sandstone_assembler PRIVATE libstone_kaguya)
+target_link_libraries(sandstone_assembler PRIVATE
+  $<BUILD_INTERFACE:libstone_kaguya> $<INSTALL_INTERFACE:LibstoneLua::libstone_script_lua>)
 if(TARGET sandstone-archml)
   target_link_libraries(sandstone_assembler PRIVATE sandstone-archml)
   target_compile_definitions(sandstone_assembler PRIVATE SANDSTONE_ASM_ARCHML=1)
@@ -31,7 +34,7 @@ endif()
 if(SANDSTONE_BUILD_TOOLS)
   install(TARGETS sandstone-as RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
-install(TARGETS sandstone_assembler
+install(TARGETS sandstone_assembler EXPORT SandstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 install(FILES assembler.h assembler.hpp sdk.h

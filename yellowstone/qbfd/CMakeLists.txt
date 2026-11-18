@@ -9,8 +9,19 @@ include(QobjDSL)
 add_library(qbfd INTERFACE)
 add_library(qbfd::qbfd ALIAS qbfd)
 target_compile_features(qbfd INTERFACE cxx_std_20)
-target_include_directories(qbfd INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(qbfd INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/qbfd>)
 target_link_libraries(qbfd INTERFACE qobjfile::qdsl)
+set_target_properties(qobjfile_qdsl PROPERTIES EXPORT_NAME qdsl)
+install(TARGETS qbfd qobjfile_qdsl EXPORT qBFDTargets)
+install(EXPORT qBFDTargets FILE qBFDConfig.cmake NAMESPACE qbfd::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qBFD)
+install(DIRECTORY ./ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qbfd
+  FILES_MATCHING PATTERN "q*.hpp" PATTERN "tests" EXCLUDE PATTERN "examples" EXCLUDE)
+install(FILES ../common/qdsl.hpp "${MLVM_METATK_SOURCE_DIR}/DSLtk/DSLtk.hpp"
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/common)
+install(FILES "${MLVM_METATK_SOURCE_DIR}/DSLtk/DSLtk.hpp" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qobjfile)
 message(STATUS "qBFD: qDSL headers from ${qobjfile_qdsl_SOURCE}")
 
 if(DEFINED YELLOWSTONE_BUILD_TESTS)

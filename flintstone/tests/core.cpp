@@ -216,6 +216,44 @@ void modular_and_optimization() {
     PassManager strength; strength.add(blackstone_pass(BLACKSTONE_KERNEL_DIR, {"strength_reduction"}));
     CHECK(strength.run(sum, r)[0].changed);
     for (int limit : {0, 1, 2, 10, 20}) CHECK(run(sum, r, "sum", {std::int64_t(limit)}) == run(original, r, "sum", {std::int64_t(limit)}));
+
+    rejects([&] { blackstone_pipeline("", {"add_zero"}, 0); }, "round limit");
+    PassManager unknown;
+    unknown.add(blackstone_pipeline("", {"add_zero", "no_such_kernel"}, 2));
+    auto empty = parse("module m level core { extern func @f()->i32; }");
+    rejects([&] { unknown.run(empty, r); }, "missing SSA kernel");
+
+    auto fold = parse("module m level core {func @f()->i32"
+                      "{^e:%a:i32=arith.sub(0:i32,42:i32);func.return(%a);}}", "fold.flint");
+    auto one_round = fold;
+    const std::vector<std::string> ordered{"fold_neg", "ext_zero_minus_x"};
+    PassManager once, repeat;
+    once.add(blackstone_pass("", ordered));
+    repeat.add(blackstone_pipeline("", ordered, 2));
+    CHECK(once.run(one_round, r).front().changed);
+    CHECK(repeat.run(fold, r).front().changed);
+    CHECK(print(one_round).find("arith.neg") != std::string::npos);
+    CHECK(print(fold).find("arith.constant") != std::string::npos);
+    CHECK(fold.function("f").blocks[0].operations[0].location.file == "fold.flint");
+    CHECK(run(one_round, r, "f") == -42 && run(fold, r, "f") == -42);
+
+    // An explicit Firestone opcode isn't a contract authorizing Blackstone
+    // to reinterpret an operation belonging to a custom dialect.
+    OperationDefinition custom;
+    custom.name = "special.add"; custom.level = Level::Core;
+    custom.min_results = custom.max_results = 1;
+    custom.min_operands = custom.max_operands = 2;
+    custom.ssa_opcode = firestone::ir::Opcode::Add;
+    DialectDefinition dialect;
+    dialect.name = "special";
+    dialect.operations.push_back(custom);
+    r.add_dialect(std::move(dialect));
+    auto unsupported = parse("module m level high {func @f(%x:i32)->i32"
+                             "{^e:%a:i32=math.scale(%x);%b:i32=special.add(%a,0:i32);func.return(%b);}}");
+    const auto before = print(unsupported);
+    const auto revision = unsupported.revision;
+    rejects([&] { optimize(unsupported, r); }, "special.add");
+    CHECK(print(unsupported) == before && unsupported.level == Level::High && unsupported.revision == revision);
 }
 void aggregate_dialects() {
     Registry r;

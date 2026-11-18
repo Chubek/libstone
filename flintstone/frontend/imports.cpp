@@ -3,7 +3,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
 #endif
 
@@ -118,21 +122,36 @@ Module load_library(const std::string& name, const std::vector<std::string>& dir
 
 } // namespace
 
-std::string default_stdlib_dir() {
-    if (const char* env = std::getenv("FLINTSTONE_STDLIB_DIR"); env && *env) return env;
-#if defined(__linux__) || defined(__APPLE__)
-    // Locate the shared library via dladdr so relocated prefixes find
-    // <prefix>/share/flintstone/stdlib without hard-coded install paths.
+std::string detail::installed_data_directory(std::string_view relative) {
+    std::filesystem::path path;
+#if defined(_WIN32)
+    HMODULE module{};
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&installed_data_directory), &module)) {
+        wchar_t buffer[32768];
+        const auto size = GetModuleFileNameW(module, buffer, 32768);
+        if (size && size < 32768) path = std::wstring_view(buffer, size);
+    }
+#elif defined(__unix__) || defined(__APPLE__)
     Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&default_stdlib_dir), &info) != 0 && info.dli_fname) {
+    if (dladdr(reinterpret_cast<const void*>(&installed_data_directory), &info) != 0 && info.dli_fname)
+        path = info.dli_fname;
+#endif
+    if (!path.empty()) {
         std::error_code ec;
-        const auto lib_path = std::filesystem::weakly_canonical(info.dli_fname, ec);
+        const auto lib_path = std::filesystem::weakly_canonical(path, ec);
         if (!ec) {
-            const auto candidate = lib_path.parent_path().parent_path() / "share" / "flintstone" / "stdlib";
+            const auto candidate = (lib_path.parent_path() / FLINTSTONE_LIB_TO_DATA / relative).lexically_normal();
             if (std::filesystem::is_directory(candidate, ec)) return candidate.string();
         }
     }
-#endif
+    return {};
+}
+
+std::string default_stdlib_dir() {
+    if (const char* env = std::getenv("FLINTSTONE_STDLIB_DIR"); env && *env) return env;
+    if (auto installed = detail::installed_data_directory("flintstone/stdlib"); !installed.empty()) return installed;
     return FLINTSTONE_STDLIB_DIR;
 }
 

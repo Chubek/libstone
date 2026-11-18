@@ -32,17 +32,16 @@ cmake -S libstone/flintstone -B build-flintstone
 
 ## Options
 
-- `LIBSTONE_BUILD_BLACKSTONE`, `LIBSTONE_BUILD_FIRESTONE`,
-  `LIBSTONE_BUILD_LIMESTONE`, `LIBSTONE_BUILD_SANDSTONE`,
-  `LIBSTONE_BUILD_FLINTSTONE`, `LIBSTONE_BUILD_NOVOSTONE`, and `LIBSTONE_BUILD_TOURCHSTONE` select
-  components in the aggregate build.
-- Yellowstone has moved to `.decomissioned/` and is not built by default.
-  `LIBSTONE_BUILD_YELLOWSTONE=ON` requires a Yellowstone directory in the active
-  tree. Tourchstone's qBFD-dependent native facilities default off without it;
-  XBind remains available. The move is not undone by the build.
+- `LIBSTONE_BUILD_<COMPONENT>` selects Blackstone, Firestone, Limestone,
+  Sandstone, Yellowstone, Tourchstone, Novostone, Wetstone, Weighstone,
+  Moonstone, and Flintstone in the aggregate build.
+- `LIBSTONE_BUILD_YELLOWSTONE=ON` enables the active Yellowstone linker and
+  object tools. The full suite is off by default; Tourchstone can still use
+  the standalone qBFD reader when its native facilities are enabled.
 - Flintstone provides parametric dialects/types/targets, verified high-to-core-to-VM
   lowering, Blackstone optimization, Firestone execution, Limestone/Sandstone
-  native backend handoffs and a C ABI. See [its manual](flintstone/manual/README.md).
+  native backend handoffs and a C ABI. The [Flintstone SDK](flintstone/manual/12-collective.md)
+  groups the configured Libstone component libraries for CMake consumers.
 - Novostone provides Datalog and CCDB foundations, database/query/speculative IRs,
   verified rewrites, resumable deoptimization, and learned cost ranking. See
   [its component guide](novostone/README.md).

@@ -5,6 +5,10 @@ include(CMakePackageConfigHelpers)
 option(FLINTSTONE_BUILD_TESTS "Build Flintstone contract and integration tests" "${LIBSTONE_BUILD_TESTS}")
 option(FLINTSTONE_BUILD_TOOLS "Build the Flintstone IL tool" "${LIBSTONE_BUILD_TOOLS}")
 option(FLINTSTONE_BUILD_BINDING_TESTS "Validate the Tourchstone XBind specification" "${FLINTSTONE_BUILD_TESTS}")
+option(FLINTSTONE_BUILD_SDK "Provide the collective Libstone SDK targets" ON)
+if(FLINTSTONE_BUILD_SDK)
+  include(cmake/StandaloneSDK.cmake)
+endif()
 
 # Standalone builds use the same libraries as aggregate builds. Never fetch or
 # search for machine-specific snapshots. Only default options we own as a host.
@@ -24,8 +28,11 @@ if(NOT TARGET Blackstone::blackstone)
   add_subdirectory(../blackstone dependencies/blackstone)
 endif()
 if(NOT TARGET sandstone)
-  foreach(option IN ITEMS SANDSTONE_BUILD_TESTS SANDSTONE_BUILD_TOOLS
-      SANDSTONE_BUILD_COMPILER SANDSTONE_BUILD_ASSEMBLER SANDSTONE_BUILD_SANDSLAB)
+  set(flintstone_sandstone_options SANDSTONE_BUILD_TESTS SANDSTONE_BUILD_TOOLS)
+  if(NOT FLINTSTONE_BUILD_SDK)
+    list(APPEND flintstone_sandstone_options SANDSTONE_BUILD_COMPILER SANDSTONE_BUILD_ASSEMBLER SANDSTONE_BUILD_SANDSLAB)
+  endif()
+  foreach(option IN LISTS flintstone_sandstone_options)
     if(NOT DEFINED ${option})
       set(${option} OFF CACHE BOOL "Optional standalone Sandstone facilities")
     endif()
@@ -66,11 +73,19 @@ endif()
 add_library(flintstone SHARED Flintstone.cpp Flinestone.c ir.cpp
   dialects/builtin.cpp dialects/vector.cpp dialects/tuple.cpp dialects/ptr.cpp
   frontend/parser.cpp frontend/semantic_analysis.cpp frontend/imports.cpp
-  pass/pipeline.cpp pass/scalarize.cpp
+  pass/pipeline.cpp pass/scalarize.cpp pass/blackstone.cpp
   targets/firestone.cpp targets/firestone_codegen.cpp targets/native.cpp targets/sandstone_targets.cpp)
 add_library(Flintstone::flintstone ALIAS flintstone)
 target_compile_features(flintstone PUBLIC cxx_std_20)
-target_compile_definitions(flintstone PRIVATE FLINTSTONE_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
+set(flintstone_library_dir "${CMAKE_INSTALL_FULL_LIBDIR}")
+if(WIN32)
+  set(flintstone_library_dir "${CMAKE_INSTALL_FULL_BINDIR}")
+endif()
+file(RELATIVE_PATH flintstone_lib_to_data "${flintstone_library_dir}" "${CMAKE_INSTALL_FULL_DATADIR}")
+target_compile_definitions(flintstone PRIVATE
+  FLINTSTONE_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
+  FLINTSTONE_KERNEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../blackstone/kernels"
+  FLINTSTONE_LIB_TO_DATA="${flintstone_lib_to_data}")
 target_include_directories(flintstone PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/flintstone>)
@@ -80,7 +95,9 @@ target_link_libraries(flintstone PUBLIC Firestone::ir Firestone::vm
     Blackstone::blackstone sandstone XBind::xbind ${flintstone_limestone_libraries} ${CMAKE_DL_LIBS})
 set_target_properties(flintstone PROPERTIES CXX_EXTENSIONS OFF VERSION ${PROJECT_VERSION}
   SOVERSION 0 WINDOWS_EXPORT_ALL_SYMBOLS ON)
-if(UNIX AND NOT APPLE)
+if(APPLE)
+  set_property(TARGET flintstone PROPERTY INSTALL_RPATH "@loader_path")
+elseif(UNIX)
   set_property(TARGET flintstone PROPERTY INSTALL_RPATH "$ORIGIN")
 endif()
 libstone_warnings(flintstone)
@@ -106,6 +123,12 @@ if(FLINTSTONE_BUILD_TOOLS OR FLINTSTONE_BUILD_TESTS)
   libstone_warnings(flintstone-cli)
 endif()
 if(FLINTSTONE_BUILD_TOOLS)
+  file(RELATIVE_PATH flintstone_bin_to_lib "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
+  if(APPLE)
+    set_property(TARGET flintstone-cli PROPERTY INSTALL_RPATH "@loader_path/${flintstone_bin_to_lib}")
+  elseif(UNIX)
+    set_property(TARGET flintstone-cli PROPERTY INSTALL_RPATH "$ORIGIN/${flintstone_bin_to_lib}")
+  endif()
   install(TARGETS flintstone-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 install(TARGETS flintstone flintstone_native flintstone_codegen EXPORT FlintstoneTargets
@@ -136,6 +159,9 @@ set(FLINTSTONE_HAS_ZSTD OFF)
 if(SANDSTONE_ZSTD_LIB AND SANDSTONE_ZSTD_INCLUDE)
   set(FLINTSTONE_HAS_ZSTD ON)
 endif()
+if(FLINTSTONE_BUILD_SDK)
+  include(cmake/Collective.cmake)
+endif()
 configure_package_config_file(cmake/FlintstoneConfig.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/FlintstoneConfig.cmake"
   INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Flintstone)
@@ -147,6 +173,11 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FlintstoneConfig.cmake"
 
 if(FLINTSTONE_BUILD_TESTS)
   enable_testing()
+  if(FLINTSTONE_BUILD_SDK)
+    include(tests/sdk.cmake)
+    flintstone_sdk_smoke(flintstone-sdk-test tests/sdk.cpp)
+    add_test(NAME flintstone.sdk COMMAND flintstone-sdk-test)
+  endif()
   foreach(header IN ITEMS Flintstone.hpp frontend/ast.hpp frontend/visitor.hpp targets/Native.hpp targets/SandstoneTargets.hpp targets/Firestone.hpp)
     string(MAKE_C_IDENTIFIER "${header}" identifier)
     set(source "${CMAKE_CURRENT_BINARY_DIR}/headers/${identifier}.cpp")
@@ -205,7 +236,10 @@ if(FLINTSTONE_BUILD_TESTS)
     add_test(NAME flintstone.lua COMMAND flintstone-lua-test)
   endif()
   add_test(NAME flintstone.install COMMAND ${CMAKE_COMMAND}
-    -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DBINARY=${CMAKE_CURRENT_BINARY_DIR}
+    -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DBINARY=${CMAKE_BINARY_DIR}
+    "-DBUILD_SDK=${FLINTSTONE_BUILD_SDK}"
+    "-DBUILD_TOOLS=${FLINTSTONE_BUILD_TOOLS}" "-DBINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
     -DPREFIX_ROOT=${CMAKE_CURRENT_BINARY_DIR} -DGENERATOR=${CMAKE_GENERATOR}
     -DCC=${CMAKE_C_COMPILER} -DCXX=${CMAKE_CXX_COMPILER}
     "-DC_FLAGS=${CMAKE_C_FLAGS}" "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}"

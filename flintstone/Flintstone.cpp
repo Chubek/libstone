@@ -88,6 +88,10 @@ flintstone_status flintstone_optimize(flintstone_context* context, flintstone_mo
         manager.run(candidate, context->registry); module->module = std::move(candidate); module->text.clear();
     });
 }
+flintstone_status flintstone_optimize_default(flintstone_context* context, flintstone_module* module) {
+    if (!context || !module) return invalid();
+    return protect([&] { flintstone::optimize(module->module, context->registry); module->text.clear(); });
+}
 flintstone_status flintstone_print(flintstone_module* module, const char** text) {
     if (text) *text = nullptr;
     if (!module || !text) return invalid();

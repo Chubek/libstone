@@ -1,0 +1,5 @@
+include(CMakeFindDependencyMacro)
+find_dependency(qBFD CONFIG)
+find_dependency(Threads)
+find_dependency(LibstoneLua CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/YellowstoneTargets.cmake")
