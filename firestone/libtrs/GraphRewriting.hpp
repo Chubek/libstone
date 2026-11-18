@@ -24,14 +24,19 @@ public:
         if (it != index_.end()) return it->second;
         auto id = nodes_.size();
         nodes_.push_back({std::move(op), std::move(children)});
-        index_.emplace(std::move(key), id);
+        try { index_.emplace(std::move(key), id); }
+        catch (...) { nodes_.pop_back(); throw; }
         return id;
     }
     GraphId from_term(const Term& term) {
         validate_term(term);
-        std::vector<GraphId> children;
-        for (const auto& child : term.children) children.push_back(from_term(child));
-        return add(term.op, std::move(children));
+        auto build = [&](const auto& self, const Term& node) -> GraphId {
+            std::vector<GraphId> children;
+            children.reserve(node.children.size());
+            for (const auto& child : node.children) children.push_back(self(self, child));
+            return add(node.op, std::move(children));
+        };
+        return build(build, term);
     }
     Term to_term(GraphId root) const {
         const auto& n = node(root);

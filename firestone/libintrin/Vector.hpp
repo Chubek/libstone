@@ -67,6 +67,18 @@ public:
         if (!destination || count < N) throw std::invalid_argument("short vector store");
         for (std::size_t i = 0; i < N; ++i) destination[i] = lanes_[i];
     }
+    // Tail operations touch only the first count lanes. A null pointer is
+    // permitted if no lanes are active.
+    static Vector load_partial(const T* source, std::size_t count, T fill = T{}) {
+        if (count > N || (count && !source)) throw std::invalid_argument("invalid partial vector load");
+        Vector result(fill);
+        for (std::size_t i = 0; i < count; ++i) result[i] = source[i];
+        return result;
+    }
+    void store_partial(T* destination, std::size_t count) const {
+        if (count > N || (count && !destination)) throw std::invalid_argument("invalid partial vector store");
+        for (std::size_t i = 0; i < count; ++i) destination[i] = lanes_[i];
+    }
     friend Vector operator+(const Vector& a, const Vector& b) {
         Vector result; for (std::size_t i = 0; i < N; ++i) result[i] = detail::arithmetic(a[i], b[i], [](auto x, auto y) { return x + y; }); return result;
     }

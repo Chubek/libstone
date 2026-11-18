@@ -25,10 +25,17 @@ struct Frame {
     Extent extent;
     std::size_t stride = 0;
     PixelFormat format = PixelFormat::RGBA8;
-    void validate() const {
+    // Native adapters may read padding in every row, including the last.
+    std::size_t required_bytes() const {
         extent.validate();
+        if (stride < extent.width * 4) throw std::invalid_argument("invalid display frame stride");
+        if (extent.height > std::numeric_limits<std::size_t>::max() / stride)
+            throw std::invalid_argument("display frame storage size overflows");
+        return extent.height * stride;
+    }
+    void validate() const {
         if (format != PixelFormat::RGBA8 && format != PixelFormat::BGRA8) throw std::invalid_argument("unsupported pixel format");
-        if (!data || stride < extent.width * 4 || extent.height > std::numeric_limits<std::size_t>::max() / stride || bytes < extent.height * stride)
+        if (!data || bytes < required_bytes())
             throw std::invalid_argument("invalid display frame storage");
     }
 };

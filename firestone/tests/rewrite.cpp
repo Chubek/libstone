@@ -7,6 +7,10 @@ int main() { return test_main([] {
     for (const auto& invalid : {"", "()", "(add x", "x y", "\"unterminated", "(x))", "(x () y)"}) throws<std::invalid_argument>([&] { parse(invalid); });
     CHECK(match(parse("(add ?x ?x)"), parse("(add z z)")));
     CHECK(!match(parse("(add ?x ?x)"), parse("(add z y)")));
+    auto pattern = parse("(f (g ?z ?z) (h ?a))");
+    CHECK(variables(pattern) == std::set<std::string>({"?a", "?z"}));
+    auto substitution = match(pattern, parse("(f (g x x) (h y))"));
+    CHECK(substitution && substitute(parse("(h ?a (g ?z))"), *substitution) == parse("(h y (g x))"));
     throws<std::invalid_argument>([] { Rule("bad", parse("?x"), parse("?y")); });
     throws<std::invalid_argument>([] { match(parse("(?x y)"), parse("(a y)")); });
     Rewriter rewriter; rewriter.add_rule({"mul-one", parse("(mul ?x 1)"), parse("?x")}); rewriter.add_rule({"add-zero", parse("(add ?x 0)"), parse("?x")});

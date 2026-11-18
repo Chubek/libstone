@@ -81,6 +81,15 @@ int main() { return test_main([] {
     Graph slots; slots.add(pure); slots.add(op("branch"));
     auto delay = DelaySlotSched{}.fill(slots, {0,1}, 1, 2); CHECK(delay.order == std::vector<NodeId>({1,0})); CHECK(delay.slots[0] == 0); CHECK(!delay.slots[1]);
     slots.depend(0, 1, 1); CHECK(!DelaySlotSched{}.fill(slots, {0,1}, 1, 1).slots[0]);
+    Graph chain;
+    chain.add(pure); chain.add(pure); chain.add(op("branch")); chain.add(op("user"));
+    chain.depend(0, 1, 1); chain.depend(1, 3, 1);
+    CHECK(DelaySlotSched{}.fill(chain, {0,1,2,3}, 2, 1).order == std::vector<NodeId>({0,2,1,3}));
+    auto filled = DelaySlotSched{}.fill(chain, {0,1,2,3}, 2, 2);
+    CHECK(filled.order == std::vector<NodeId>({2,0,1,3}));
+    CHECK(filled.slots == std::vector<std::optional<NodeId>>({0,1}));
+    chain.depend(1, 2, 1);
+    CHECK(!DelaySlotSched{}.fill(chain, {0,1,2,3}, 2, 2).slots[0]);
     firestone::ir::SimpleSSAGraph ssa; auto block = ssa.cfg().create_block("entry");
     auto param = ssa.parameter(firestone::ir::Type::integer());
     auto value = ssa.define(block, firestone::ir::Opcode::Add, firestone::ir::Type::integer(), {firestone::ir::Operand::ref(param), firestone::ir::Operand::constant(1)});

@@ -27,9 +27,13 @@ public:
     std::size_t size() const { return nodes_.size(); }
     NodeId import(const rewrite::Term& term) {
         rewrite::validate_term(term);
-        std::vector<NodeId> children;
-        for (const auto& c : term.children) children.push_back(import(c));
-        return add(term.op, std::move(children));
+        auto build = [&](const auto& self, const rewrite::Term& node) -> NodeId {
+            std::vector<NodeId> children;
+            children.reserve(node.children.size());
+            for (const auto& c : node.children) children.push_back(self(self, c));
+            return add(node.op, std::move(children));
+        };
+        return build(build, term);
     }
 private:
     std::vector<Node> nodes_;
@@ -130,11 +134,12 @@ struct Problem {
     std::vector<Tile> tiles;
     std::map<NodeId, std::vector<std::size_t>> at_root;
     Problem(const Graph& g, const Rules& r, std::vector<NodeId> outputs) : graph(g), rules(r), roots(std::move(outputs)) {
-        std::function<void(NodeId)> mark = [&](NodeId id) {
+        std::vector<NodeId> pending = roots;
+        while (!pending.empty()) {
+            auto id = pending.back(); pending.pop_back();
             const auto& n = graph.node(id);
-            if (live.insert(id).second) for (auto child : n.inputs) mark(child);
-        };
-        for (auto id : roots) mark(id);
+            if (live.insert(id).second) pending.insert(pending.end(), n.inputs.begin(), n.inputs.end());
+        }
         std::map<NodeId, std::set<NodeId>> users;
         for (auto id : live) for (auto child : graph.node(id).inputs) users[child].insert(id);
         for (auto id : live) for (std::size_t ri = 0; ri < rules.size(); ++ri) {

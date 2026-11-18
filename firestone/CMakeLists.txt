@@ -77,7 +77,7 @@ if(FIRESTONE_BUILD_TESTS)
   foreach(header IN LISTS firestone_headers)
     string(MAKE_C_IDENTIFIER ${header} header_id)
     set(source ${CMAKE_CURRENT_BINARY_DIR}/headers/${header_id}.cpp)
-    file(WRITE ${source} "#include \"${header}\"\n")
+    file(GENERATE OUTPUT "${source}" CONTENT "#include \"${header}\"\n")
     list(APPEND header_sources ${source})
   endforeach()
   add_library(firestone_header_check OBJECT ${header_sources})
@@ -88,5 +88,7 @@ if(FIRESTONE_BUILD_TESTS)
   endif()
   add_test(NAME firestone.install COMMAND ${CMAKE_COMMAND}
     -DFIRESTONE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DFIRESTONE_BINARY=${CMAKE_CURRENT_BINARY_DIR}
+    "-DFIRESTONE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" "-DFIRESTONE_CONFIG=$<CONFIG>"
+    "-DFIRESTONE_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install.cmake)
 endif()

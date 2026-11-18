@@ -32,6 +32,14 @@ int main() { return test_main([] {
     CHECK(cache.size() == 1);
     auto other = vm::encode(adder(vm::VMModel::Stack)); auto second = cache.load(other); CHECK(cache.size() == 1);
     CHECK(cache.load(bytes) != first); CHECK(first->size() == 1 && second->size() == 1);
+    cache.set_capacity(2);
+    auto recent = cache.load(bytes); auto older = cache.load(other);
+    CHECK(cache.load(bytes) == recent && cache.size() == 2);
+    cache.set_capacity(1);
+    CHECK(cache.capacity() == 1 && cache.size() == 1 && cache.load(bytes) == recent);
+    CHECK(cache.load(other) != older);
+    cache.set_capacity(0);
+    CHECK(cache.size() == 0 && cache.load(bytes) != cache.load(bytes));
     vm::Loader loader; auto loaded = loader.load("math", bytes);
     CHECK(loaded == loader.get("math")); loader.unload("math");
     vm_error("vm.module", [&] { loader.get("math"); });

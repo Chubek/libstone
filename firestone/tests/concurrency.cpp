@@ -52,6 +52,11 @@ int main() { return test_main([] {
     scheduler.run(); CHECK(order == std::vector<int>({1, 2, 1, 3})); CHECK(!scheduler.pending());
     auto cancelled = scheduler.spawn([] { throw std::runtime_error("cancelled task ran"); return FiberStep::Complete; });
     CHECK(scheduler.cancel(cancelled)); scheduler.run(); CHECK(!scheduler.pending());
+    static_assert(!std::is_copy_constructible<GreenThread>::value, "each scheduler owns its tasks");
+    scheduler.spawn([&]() -> FiberStep { scheduler.run(); return FiberStep::Complete; });
+    scheduler.spawn([&] { order.push_back(4); return FiberStep::Complete; });
+    throws<std::logic_error>([&] { scheduler.run(); });
+    CHECK(scheduler.pending() == 1 && scheduler.run() == 1 && order.back() == 4);
     scheduler.spawn([]() -> FiberStep { throw std::runtime_error("failed task"); });
     throws<std::runtime_error>([&] { scheduler.run(); }); CHECK(!scheduler.pending());
     if (CThreads::available()) {

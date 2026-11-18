@@ -203,7 +203,9 @@ preserve signed zero and NaN encodings.
 
 `BytecodeCache` is entry-count-bounded LRU storage keyed by exact bytes and decode
 policy. Cache hits return shared immutable modules. Eviction does not invalidate
-existing shared owners. `Loader` installs named modules transactionally and can
+existing shared owners. `set_capacity` trims least-recently-used entries
+immediately without resetting hit/miss counts; zero disables retention. `Loader`
+installs named modules transactionally and can
 check all native declarations against an `Environment` using `link`. Native
 calls also check their binding signatures at runtime.
 

@@ -90,6 +90,10 @@ int main() { return test_main([] {
     CHECK(reduced.stop == RewriteStop::NormalForm);
     throws<std::invalid_argument>([&] { combinator(combinators, "Z"); });
     auto z = combinators.from_term(parse("(long (tail a))"));
+    CHECK(combinators.from_term(parse("(long (tail a))")) == z);
+    auto node_count = combinators.size();
+    throws<std::invalid_argument>([&] { combinators.from_term(Term("pair", {Term("new"), Term{}})); });
+    CHECK(combinators.size() == node_count);
     auto shared = apply(combinators, apply(combinators, apply(combinators, s, i), i), z);
     auto one_step = reduce_combinators(combinators, shared, 1);
     CHECK(one_step.stop == RewriteStop::IterationLimit);

@@ -23,6 +23,15 @@ int main() { return test_main([] {
     throws<std::overflow_error>([] { (void)(Vector<int, 1>(std::numeric_limits<int>::min()) / Vector<int, 1>(-1)); });
     int storage[4]{}; lanes.store(storage); CHECK((Vector<int, 4>::load(storage) == lanes).all());
     throws<std::invalid_argument>([&] { lanes.store(storage, 3); });
+    int tail[]{7, 8, 99};
+    auto loaded_tail = Vector<int, 4>::load_partial(tail, 2, -1);
+    CHECK((loaded_tail == Vector<int, 4>{7, 8, -1, -1}).all());
+    lanes.store_partial(tail, 2);
+    CHECK(tail[0] == 1 && tail[1] == 2 && tail[2] == 99);
+    CHECK((Vector<int, 4>::load_partial(nullptr, 0) == Vector<int, 4>(0)).all());
+    lanes.store_partial(nullptr, 0);
+    throws<std::invalid_argument>([&] { lanes.store_partial(tail, 5); });
+    throws<std::invalid_argument>([&] { Vector<int, 4>::load_partial(nullptr, 1); });
     auto nan = std::numeric_limits<double>::quiet_NaN();
     CHECK(!(Vector<double, 1>(nan) <= Vector<double, 1>(0)).any());
     CHECK(supported(InstructionSet::Scalar));

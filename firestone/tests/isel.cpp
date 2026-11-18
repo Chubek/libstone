@@ -100,6 +100,13 @@ int main() { return test_main([] {
     auto adapted = from_dataflow(dataflow);
     CHECK(adapted.node(a).source->operands[0].integer == 7);
     CHECK(adapted.node(c).inputs == std::vector<NodeId>({a, b}));
+    auto previous_size = adapted.size();
+    throws<std::invalid_argument>([&] { adapted.import(firestone::rewrite::Term("f", {parse("x"), {}})); });
+    CHECK(adapted.size() == previous_size);
+    Graph deep;
+    auto tip = deep.add("x");
+    for (std::size_t id = 0; id < 32768; ++id) tip = deep.add("f", {tip});
+    CHECK(Problem(deep, Rules{}, {tip}).live.size() == deep.size());
     firestone::eqsat::EGraph eg; auto er = eg.add(parse("(add x x)"));
     auto extraction = firestone::eqsat::extract_dag(eg, er); auto imported = from_extraction(extraction);
     CHECK(imported.node(extraction.root).inputs[0] == imported.node(extraction.root).inputs[1]);

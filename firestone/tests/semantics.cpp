@@ -46,6 +46,9 @@ int main() { return test_main([] {
     cfg.jump(no, join); cfg.return_value(join, Operand::ref(0));
     CHECK(has_code(check_definite_assignment(cfg).diagnostics, "assignment.undefined"));
     CHECK(check_definite_assignment(cfg, {0}).diagnostics.empty());
+    auto bounded = check_definite_assignment(cfg, {0}, 0);
+    CHECK(!bounded.states.converged && bounded.states.evaluations == 0);
+    CHECK(has_code(bounded.diagnostics, "assignment.limit"));
     CHECK(check_returns(cfg, Type::integer(), [](ValueId) { return Type::integer(); }).empty());
     CHECK(has_code(check_returns(cfg, Type::void_type(), [](ValueId) { return Type::integer(); }), "return.arity"));
 
@@ -57,6 +60,12 @@ int main() { return test_main([] {
     edge_phi.cfg().return_value(phi_join, Operand::ref(selected));
     CHECK(edge_phi.verify().empty());
     CHECK(check_definite_assignment(edge_phi.cfg(), {parameter}).diagnostics.empty());
+    ControlFlowGraph malformed;
+    auto predecessor = malformed.create_block(), merge = malformed.create_block();
+    malformed.jump(predecessor, merge);
+    malformed.append(merge, {Opcode::Phi, ValueId{1}, Type::integer(), {Operand::constant(1)}, {}, {merge}, {}});
+    malformed.return_value(merge);
+    CHECK(has_code(check_definite_assignment(malformed).diagnostics, "assignment.phi"));
 
     SimpleSSAGraph ssa;
     auto block = ssa.cfg().create_block("calls");

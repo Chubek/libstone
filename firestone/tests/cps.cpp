@@ -27,7 +27,7 @@ int main() { return test_main([] {
     recursive.graph().bind(loop, Opcode::Mul, Type::integer(), {Operand::ref(next), Operand::constant(5)});
     recursive.graph().effect(loop, Opcode::Call, {}, "observe");
     recursive.branch(loop, recursive.parameter(loop, 1), loop, {Operand::ref(next), Operand::constant(0, Type::boolean())}, exit, {Operand::ref(next)});
-    recursive.graph().halt(exit, recursive.parameter(exit, 0));
+    recursive.halt(exit, recursive.parameter(exit, 0));
     auto recursive_graph = recursive.finish();
     live = analyze_liveness(recursive_graph);
     CHECK(live.dead_bindings.at(loop) == std::set<std::size_t>{1});
@@ -50,4 +50,12 @@ int main() { return test_main([] {
     throws<std::invalid_argument>([&] { scoped.branch(from, scoped.parameter(to, 0), to, {Operand::constant(1, Type::boolean())},
                                                    to, {Operand::constant(0, Type::boolean())}); });
     CHECK(!scoped.graph().continuation(from).tail);
+    throws<std::invalid_argument>([&] { scoped.halt(from, scoped.parameter(to, 0)); });
+    throws<std::invalid_argument>([&] {
+        scoped.graph().terminate(from, {static_cast<TailKind>(99), {}, {to, to}, {{}, {}}});
+    });
+    CHECK(!scoped.graph().continuation(from).tail && scoped.graph().graph().edges().empty());
+    scoped.halt(from);
+    scoped.halt(to, scoped.parameter(to, 0));
+    CHECK(scoped.finish().verify().empty());
 }); }

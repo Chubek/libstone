@@ -47,4 +47,13 @@ int main() { return test_main([] {
     }});
     EGraph guard_graph; auto safe = guard_graph.add(parse("(f safe)")), unsafe = guard_graph.add(parse("(f unsafe)"));
     CHECK(guarded.run(guard_graph).stop == SaturationStop::Saturated); CHECK(guard_graph.extract(safe).term == Term("safe")); CHECK(guard_graph.extract(unsafe).term == parse("(f unsafe)"));
+    DAGExtraction shared{{{"x", {}}, {"f", {0, 0}}}, 1};
+    CHECK(expand(shared, 3) == parse("(f x x)"));
+    throws<std::length_error>([&] { expand(shared, 2); });
+    for (std::size_t id = 2; id < 100; ++id) shared.nodes.push_back({"f", {id - 1, id - 1}});
+    CHECK(expand(shared, 3) == parse("(f x x)")); // Unreachable sharing is not expanded.
+    shared.root = shared.nodes.size() - 1;
+    throws<std::length_error>([&] { expand(shared, 1000); });
+    shared.nodes[1].children[0] = 1;
+    throws<std::invalid_argument>([&] { expand(shared); });
 }); }

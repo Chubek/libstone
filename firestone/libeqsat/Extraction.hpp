@@ -26,19 +26,41 @@ inline DAGExtraction extract_dag(EGraph& graph, EClassId root, std::function<dou
     result.root = build(extracted.term); return result;
 }
 
-inline rewrite::Term expand(const DAGExtraction& extraction) {
+// Budget counts expanded tree nodes (shared children count once per occurrence).
+inline rewrite::Term expand(const DAGExtraction& extraction,
+                           std::size_t node_limit = std::numeric_limits<std::size_t>::max()) {
     if (extraction.root >= extraction.nodes.size()) throw std::invalid_argument("invalid extraction root");
-    std::vector<rewrite::Term> terms;
     for (std::size_t id = 0; id < extraction.nodes.size(); ++id) {
         const auto& node = extraction.nodes[id];
-        std::vector<rewrite::Term> children;
-        for (auto child : node.children) {
-            if (child >= id) throw std::invalid_argument("extraction nodes must be topologically ordered");
-            children.push_back(terms[child]);
-        }
-        terms.emplace_back(node.op, std::move(children));
+        if (node.op.empty()) throw std::invalid_argument("empty extraction operator");
+        for (auto child : node.children) if (child >= id)
+            throw std::invalid_argument("extraction nodes must be topologically ordered");
     }
-    return terms[extraction.root];
+    // Count occurrences by propagating the root multiplicity down the DAG.
+    // Unreachable nodes are validated above but not counted or materialized.
+    std::vector<std::size_t> occurrences(extraction.root + 1);
+    occurrences.back() = 1;
+    auto remaining = node_limit;
+    for (std::size_t next = occurrences.size(); next != 0;) {
+        auto id = --next;
+        auto count = occurrences[id];
+        if (count > remaining) throw std::length_error("extraction expansion exceeds node limit");
+        remaining -= count;
+        if (!count) continue;
+        for (auto child : extraction.nodes[id].children) {
+            if (count > remaining || occurrences[child] > remaining - count)
+                throw std::length_error("extraction expansion exceeds node limit");
+            occurrences[child] += count;
+        }
+    }
+    auto build = [&](const auto& self, std::size_t id) -> rewrite::Term {
+        const auto& node = extraction.nodes[id];
+        std::vector<rewrite::Term> children;
+        children.reserve(node.children.size());
+        for (auto child : node.children) children.push_back(self(self, child));
+        return {node.op, std::move(children)};
+    };
+    return build(build, extraction.root);
 }
 
 } // namespace firestone::eqsat

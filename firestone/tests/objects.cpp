@@ -13,6 +13,8 @@ int main() { return test_main([] {
     throws<std::logic_error>([&] { hierarchy.add_field(base, "later", firestone::type::Type::atomic(Type::integer())); });
     CHECK(hierarchy.define_method(derived, {"compute", "Derived.compute", Type::integer(), {Type::integer()}}) == slot);
     throws<std::invalid_argument>([&] { hierarchy.define_method(derived, {"compute", "bad", Type::floating(), {Type::integer()}}); });
+    CHECK(hierarchy.define_method(derived, {"other", "Derived.other", Type::void_type(), {}}) == slot + 1);
+    CHECK(hierarchy.get(derived).vtable.method(slot).target == "Derived.compute");
     throws<std::invalid_argument>([&] { hierarchy.add_field(derived, "tag", firestone::type::Type::atomic(Type::integer())); });
     hierarchy.add_field(derived, "number", firestone::type::Type::atomic(Type::integer()));
     auto layout = object_layout(hierarchy, derived);

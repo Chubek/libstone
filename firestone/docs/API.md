@@ -148,6 +148,9 @@ default cost is one per tree node. Equal costs prefer smaller trees, then stable
 operator/child ordering, preventing zero-cost cycle selection. Extraction returns
 a finite tree, duplicating shared subexpressions as necessary. Rules and costs
 are caller-controlled; operators carry no implicit arithmetic or effect semantics.
+`expand(dag, node_limit)` counts every occurrence in the expanded tree before
+materializing it. It throws `std::length_error` if the caller's limit is exceeded.
+Unreachable DAG nodes are validated but do not count toward the limit.
 
 Mutable handles require external synchronization when shared between threads.
 
@@ -194,7 +197,8 @@ Tail operands are checked for scalar/literal validity as well as local scope.
 types, literals, and availability in the source continuation's local scope.
 `CPSBuilder` assigns unique nonempty names and checks jump/branch transfer
 signatures before construction. `finish` validates and returns an owning graph
-copy. `graph()` exposes low-level binding, effect, halt, and entry construction.
+copy. `CPSBuilder::halt` validates the optional result against local scope before
+installing the tail. `graph()` exposes low-level binding, effect, and entry construction.
 
 `analyze_liveness` propagates demands through tail arguments to a fixed point,
 including continuation cycles. Its `required_parameters` sets identify demanded
@@ -328,7 +332,8 @@ blocks using a supplied set of initially assigned values. It checks uses in
 instruction order, accounts for simultaneous phi definitions, and checks phi
 operands on predecessor edges. It supports reassigned registers; SSA dominance
 remains a separate, stronger contract. The result includes per-block states and
-positioned diagnostics.
+positioned diagnostics. Use the optional evaluation limit (default 100,000) to
+bound solver work; exhaustion reports `assignment.limit` and leaves partial states.
 
 `EffectPolicy` controls reads, writes, and unsummarized calls. Unknown calls
 conservatively have all three effects. A named empty summary declares a pure

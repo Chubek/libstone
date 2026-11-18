@@ -84,4 +84,22 @@ int main() { return test_main([] {
     calls.call(f, g); calls.call(g, f); calls.call(f, external);
     CHECK(calls.recursive_functions() == std::set<NodeId>({f, g})); CHECK(calls.find("puts") == external);
     throws<std::invalid_argument>([&] { calls.function("puts"); });
+
+    DirectedGraph<int> large;
+    constexpr NodeId count = 4096;
+    for (NodeId id = 0; id <= count; ++id) large.add_node();
+    large.remove_node(1);
+    large.add_edge(0, 2, EdgeKind::Data, 0);
+    large.add_edge(0, 2, EdgeKind::Data, 1);
+    for (NodeId id = 2; id < count; ++id) large.add_edge(id, id + 1, EdgeKind::Control);
+    CHECK(large.topological_order().size() == count);
+    CHECK(large.shortest_path(0, count).size() == count);
+    CHECK(large.shortest_path(0, count, EdgeKind::Control).empty());
+    CHECK(large.reverse_postorder(count, true).back() == 0);
+    CHECK(large.strongly_connected_components().size() == count);
+    large.add_edge(count, 2);
+    auto components = large.strongly_connected_components();
+    CHECK(components.size() == 2 && components[0] == std::vector<NodeId>{0});
+    CHECK(components[1].size() == count - 1 && components[1].front() == 2);
+    throws<std::logic_error>([&] { large.topological_order(); });
 }); }

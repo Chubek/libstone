@@ -14,6 +14,10 @@ int main() { return test_main([] {
     throws<std::overflow_error>([&] { ft::layout(ft::Type::array(i32, std::numeric_limits<std::size_t>::max())); });
     throws<std::invalid_argument>([&] { ft::Type::record({{"x", i8}, {"x", i32}}); });
     throws<std::invalid_argument>([&] { ft::layout(ft::Type::atomic(Type::memory())); });
+    auto aligned_empty = ft::Type::record({{"empty", ft::Type::array(i32, 0)}});
+    auto empty_layout = ft::layout(aligned_empty);
+    CHECK(empty_layout.size == 4 && empty_layout.alignment == 4);
+    CHECK(ft::layout(ft::Type::array(aligned_empty, 3)).size == 12);
     CHECK(ft::classify_conversion(Type::integer(8), Type::integer(32)) == ft::Conversion::IntegerWidening);
     CHECK(!ft::implicit_conversion(Type::integer(64), Type::floating(64)));
 

@@ -122,6 +122,14 @@ public:
     // Quotient truncates toward zero; remainder has the dividend's sign.
     friend std::pair<BigInt, BigInt> divmod(const BigInt& a, const BigInt& b) {
         if (b.is_zero()) throw std::domain_error("integer division by zero");
+        if (compare_magnitude(a, b) < 0) return {BigInt{}, a};
+        if (b.limbs_.size() == 1) {
+            auto quotient = a;
+            auto remainder = quotient.divide_small(b.limbs_[0]);
+            quotient.negative_ = !quotient.is_zero() && a.negative_ != b.negative_;
+            auto signed_remainder = static_cast<std::int64_t>(remainder);
+            return {std::move(quotient), BigInt(a.negative_ ? -signed_remainder : signed_remainder)};
+        }
         BigInt quotient, remainder; auto divisor = b.abs();
         quotient.limbs_.resize(a.limbs_.size());
         for (auto i = a.bit_length(); i > 0; --i) {

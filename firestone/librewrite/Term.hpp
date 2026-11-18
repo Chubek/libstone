@@ -54,8 +54,12 @@ inline void validate_term(const Term& term, bool pattern = false) {
 inline std::set<std::string> variables(const Pattern& p) {
     validate_term(p, true);
     std::set<std::string> out;
-    if (is_variable(p)) out.insert(p.op);
-    for (const auto& c : p.children) { auto v = variables(c); out.insert(v.begin(), v.end()); }
+    std::vector<const Pattern*> pending{&p};
+    while (!pending.empty()) {
+        auto node = pending.back(); pending.pop_back();
+        if (is_variable(*node)) out.insert(node->op);
+        else for (const auto& child : node->children) pending.push_back(&child);
+    }
     return out;
 }
 
@@ -77,7 +81,6 @@ inline bool match_into(const Pattern& pattern, const Term& term, Substitution& s
 }
 
 inline std::optional<Substitution> match(const Pattern& pattern, const Term& term) {
-    validate_term(pattern, true); validate_term(term);
     Substitution substitution;
     if (!match_into(pattern, term, substitution)) return {};
     return substitution;
@@ -85,14 +88,18 @@ inline std::optional<Substitution> match(const Pattern& pattern, const Term& ter
 
 inline Term substitute(const Pattern& pattern, const Substitution& substitution) {
     validate_term(pattern, true);
-    if (is_variable(pattern)) {
-        auto it = substitution.find(pattern.op);
-        if (it == substitution.end()) throw std::invalid_argument("unbound replacement variable: " + pattern.op);
-        return it->second;
-    }
-    std::vector<Term> children;
-    for (const auto& c : pattern.children) children.push_back(substitute(c, substitution));
-    return {pattern.op, std::move(children)};
+    auto build = [&](const auto& self, const Pattern& node) -> Term {
+        if (is_variable(node)) {
+            auto it = substitution.find(node.op);
+            if (it == substitution.end()) throw std::invalid_argument("unbound replacement variable: " + node.op);
+            return it->second;
+        }
+        std::vector<Term> children;
+        children.reserve(node.children.size());
+        for (const auto& c : node.children) children.push_back(self(self, c));
+        return {node.op, std::move(children)};
+    };
+    return build(build, pattern);
 }
 
 inline Term parse(const std::string& source) {
@@ -159,11 +166,15 @@ inline std::string to_string(const Term& term) {
         }
         return out + '"';
     };
-    auto out = quote(term.op);
-    if (term.children.empty()) return out;
-    out = '(' + out;
-    for (const auto& c : term.children) out += ' ' + to_string(c);
-    return out + ')';
+    std::string out;
+    auto print = [&](const auto& self, const Term& node) -> void {
+        if (!node.children.empty()) out += '(';
+        out += quote(node.op);
+        for (const auto& child : node.children) { out += ' '; self(self, child); }
+        if (!node.children.empty()) out += ')';
+    };
+    print(print, term);
+    return out;
 }
 
 } // namespace firestone::rewrite

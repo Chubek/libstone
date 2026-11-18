@@ -139,7 +139,7 @@ Time arithmetic is checked for overflow.
 | `TraceSched.hpp` | Profile-guided acyclic hot-path discovery and conservative trace-region scheduling with block boundaries retained. |
 | `SuperblockSched.hpp` | Single-entry hot-path discovery and checked region scheduling; allows explicitly safe speculative motion. |
 | `HyperblockSched.hpp` | Scheduling of caller-if-converted regions with explicit predicates; retains predicates and removes eligible control edges. |
-| `DelaySlotSched.hpp` | Moves independent, explicitly nontrapping operations from before a branch into architectural delay slots; unfilled slots are explicit optionals. |
+| `DelaySlotSched.hpp` | Moves explicitly nontrapping operations from before a branch into delay slots, preserving dependency order even when several dependent operations move together. It does not model cycle timing; unfilled slots are explicit optionals. |
 
 Regional APIs return plans; they do not perform tail duplication, compensation
 code insertion, if-conversion, or CFG rewriting. Trace regions with side entrances

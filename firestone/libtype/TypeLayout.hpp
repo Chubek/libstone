@@ -12,10 +12,8 @@ struct LayoutPolicy {
     std::size_t pointer_size = 8, pointer_alignment = 8, maximum_scalar_alignment = 8;
 };
 
-inline Layout layout(const Type& type, LayoutPolicy policy = {}) {
-    validate(type);
-    if (!policy.pointer_size || !memory::valid_alignment(policy.pointer_alignment) ||
-        !memory::valid_alignment(policy.maximum_scalar_alignment)) throw std::invalid_argument("invalid layout policy");
+namespace detail {
+inline Layout layout_validated(const Type& type, const LayoutPolicy& policy) {
     auto scalar = [&](std::size_t bytes) {
         std::size_t alignment = 1;
         while (alignment < bytes && alignment < policy.maximum_scalar_alignment) alignment *= 2;
@@ -31,22 +29,31 @@ inline Layout layout(const Type& type, LayoutPolicy policy = {}) {
     }
     if (type.kind == Kind::Variable) throw std::invalid_argument("unresolved type has no storage layout");
     if (type.kind == Kind::Array) {
-        auto element = layout(type.parts[0], policy);
+        auto element = layout_validated(type.parts[0], policy);
         if (element.size && type.count > std::numeric_limits<std::size_t>::max() / element.size)
             throw std::overflow_error("array layout overflows");
         return {element.size * type.count, element.alignment, {}};
     }
     Layout result;
     for (const auto& field : type.parts) {
-        auto field_layout = layout(field, policy);
+        auto field_layout = layout_validated(field, policy);
         auto offset = memory::align_up(result.size, field_layout.alignment);
         if (field_layout.size > std::numeric_limits<std::size_t>::max() - offset) throw std::overflow_error("record layout overflows");
         result.offsets.push_back(offset); result.size = offset + field_layout.size;
         result.alignment = std::max(result.alignment, field_layout.alignment);
     }
-    result.size = memory::align_up(result.size, result.alignment);
-    if (type.kind == Kind::Record && result.size == 0) result.size = 1;
+    // Empty records still occupy storage, including records made of aligned
+    // zero-length arrays. Their size must be a valid array stride.
+    result.size = memory::align_up(std::max(result.size, std::size_t{1}), result.alignment);
     return result;
+}
+} // namespace detail
+
+inline Layout layout(const Type& type, LayoutPolicy policy = {}) {
+    validate(type);
+    if (!policy.pointer_size || !memory::valid_alignment(policy.pointer_alignment) ||
+        !memory::valid_alignment(policy.maximum_scalar_alignment)) throw std::invalid_argument("invalid layout policy");
+    return detail::layout_validated(type, policy);
 }
 
 } // namespace firestone::type

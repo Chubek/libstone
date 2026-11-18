@@ -1,8 +1,8 @@
 #pragma once
 #include "Fiber.hpp"
 #include <cstddef>
-#include <deque>
 #include <limits>
+#include <list>
 #include <map>
 #include <memory>
 
@@ -12,6 +12,9 @@ namespace firestone::concurrency {
 class GreenThread {
 public:
     using TaskId = std::size_t;
+    GreenThread() = default;
+    GreenThread(const GreenThread&) = delete;
+    GreenThread& operator=(const GreenThread&) = delete;
     TaskId spawn(std::function<FiberStep()> step) {
         if (next_ == std::numeric_limits<TaskId>::max()) throw std::overflow_error("task IDs exhausted");
         auto fiber = std::make_shared<Fiber>(std::move(step)); auto id = next_;
@@ -33,19 +36,17 @@ public:
                 auto found = tasks_.find(id);
                 if (found == tasks_.end()) { ready_.pop_front(); continue; }
                 auto fiber = found->second;
-                // Keep the queue entry until resume succeeds, including allocation failures.
                 try { fiber->resume(); } catch (...) { ready_.pop_front(); tasks_.erase(id); throw; }
                 ++steps;
-                if (!fiber->done()) ready_.push_back(id);
-                ready_.pop_front();
-                if (fiber->done()) tasks_.erase(id);
+                if (fiber->done()) { ready_.pop_front(); tasks_.erase(id); }
+                else ready_.splice(ready_.end(), ready_, ready_.begin());
             }
         } catch (...) { running_ = false; throw; }
         running_ = false; return steps;
     }
 private:
     std::map<TaskId, std::shared_ptr<Fiber>> tasks_;
-    std::deque<TaskId> ready_;
+    std::list<TaskId> ready_;
     TaskId next_ = 0;
     bool running_ = false;
 };

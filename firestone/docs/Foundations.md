@@ -121,7 +121,8 @@ cancelling a running fiber throw. A failed fiber retains its exception; subseque
 resume rethrows. Terminal successful/cancelled fibers are not invoked again.
 
 `GreenThread` schedules fibers round-robin on the calling thread. `spawn` returns
-a monotonically increasing task ID. `run(budget)` executes at most that many
+a monotonically increasing task ID. The scheduler owns its tasks and is not
+copyable or movable. `run(budget)` executes at most that many
 queued steps and returns the number executed. Tasks may spawn new tasks or cancel
 other tasks. Cancelled tasks are removed when dequeued. `pending()` counts tasks
 until removed, including cancelled tasks. A failed task is removed and its error
@@ -156,8 +157,11 @@ for scalar broadcast. `Mask<N>` supports `all`, `any`, `count`, `!`, `&`, and `|
   without signed C++ overflow. Integer division by zero or minimum/-1 throws.
 - Floating operations retain scalar C++/IEEE behavior; NaN comparisons remain
   unordered. Reduction folds left-to-right. FP compiler flags still apply.
-- Pointer operations require at least N actual elements; an optional count checks
-  caller-provided bounds. Masked selection does not evaluate memory accesses.
+- `load` and `store` require at least N actual elements. `load_partial` and
+  `store_partial` touch only the first `count` elements, up to N, and accept a
+  null pointer when `count` is zero. `load_partial` fills the remaining lanes
+  with a caller-supplied value (zero by default). Masked selection performs no
+  memory accesses of its own.
 - `SSE4`, `AVX2`, `AVX512`, and `NEON` expose `Pack<T>` for 128/256/512/128-bit
   storage widths. Lane execution is portable regardless of ISA availability.
 - `available()` is a hardware/OS feature query, not an indication of the chosen
@@ -213,8 +217,9 @@ returning zero from allocation/compilation fails. Release callbacks must not thr
   representation. Callers and adapters establish device ABI/layout agreement.
   `Argument::buffer` retains its buffer. `Argument::local` declares scratch bytes;
   backend-specific local-memory limits and argument signatures belong to the adapter.
-- Dispatch rejects kernels and buffer arguments from a different context, even
-  when the native device is identical. Copies of one backend share a context.
+- Dispatch rejects empty arguments, as well as kernels and buffer arguments from
+  a different context, even when the native device is identical. Copies of one
+  backend share a context.
 - Callback exceptions propagate. Adapter implementations must clean up native
   allocations made before throwing and provide any required thread synchronization.
 
@@ -243,7 +248,8 @@ callback captures. Default adapters report unavailable.
 `Surface` is move-only and retains the adapter after the backend object dies.
 Frames support RGBA8/BGRA8, explicit dimensions, byte counts and row strides.
 Validation requires storage for every complete stride and a matching surface
-extent. A resize event updates the expected extent. Present must finish consuming
+extent. `Frame::required_bytes()` checks the dimensions and stride and gives
+the minimum storage size. A resize event updates the expected extent. Present must finish consuming
 the supplied memory before returning. Poll is nonblocking and returns an empty
 optional when idle. Destroy callbacks must not throw; native event-loop/thread
 affinity and synchronization rules remain the adapter's responsibility.

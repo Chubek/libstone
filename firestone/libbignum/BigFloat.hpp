@@ -79,8 +79,16 @@ public:
         return make(std::move(qr.first), std::int64_t(a.exponent_) - b.exponent_ - scale, precision);
     }
     friend int compare(const BigFloat& a, const BigFloat& b) {
-        auto exponent = std::min(a.exponent_, b.exponent_);
-        return compare(a.coefficient_ * power10(a.exponent_ - exponent), b.coefficient_ * power10(b.exponent_ - exponent));
+        auto sign = a.coefficient_.sign(), other_sign = b.coefficient_.sign();
+        if (sign != other_sign) return sign < other_sign ? -1 : 1;
+        if (!sign || a.exponent_ == b.exponent_) return compare(a.coefficient_, b.coefficient_);
+        auto left = a.coefficient_.abs().to_string(), right = b.coefficient_.abs().to_string();
+        auto left_order = std::int64_t(a.exponent_) + static_cast<std::int64_t>(left.size());
+        auto right_order = std::int64_t(b.exponent_) + static_cast<std::int64_t>(right.size());
+        if (left_order != right_order) return left_order < right_order ? -sign : sign;
+        // Normalized coefficients have no trailing zeroes, so if one string
+        // is a prefix, the longer one is larger even after conceptual padding.
+        return left == right ? 0 : left < right ? -sign : sign;
     }
     friend bool operator==(const BigFloat& a, const BigFloat& b) { return compare(a, b) == 0; }
     friend bool operator!=(const BigFloat& a, const BigFloat& b) { return compare(a, b) != 0; }

@@ -247,6 +247,16 @@ int main() { return test_main([] {
         for (auto c : moves) CHECK(memory.at(std::make_pair(c.to.kind, c.to.index)) == before.at(std::make_pair(c.from.kind, c.from.index)));
     }
     throws<std::invalid_argument>([] { ParallelCopyResolution{}.resolve({{Location::reg(0), Location::reg(1)}}, Location::reg(0)); });
+    throws<std::invalid_argument>([] { ParallelCopyResolution{}.resolve({}, Location::stack(invalid_id)); });
+    throws<std::invalid_argument>([] {
+        ParallelCopyResolution{}.resolve({{Location::reg(0), Location::reg(0)}, {Location::reg(1), Location::reg(0)}}, Location::stack(0));
+    });
+    std::vector<Copy> long_chain;
+    for (std::size_t n = 0; n < 2048; ++n) long_chain.push_back({Location::reg(n), Location::reg(n + 1)});
+    auto reversed_chain = ParallelCopyResolution{}.resolve(long_chain, Location::stack(0));
+    CHECK(reversed_chain.size() == long_chain.size());
+    for (std::size_t n = 0; n < long_chain.size(); ++n)
+        CHECK(reversed_chain[n].from == long_chain[long_chain.size() - 1 - n].from);
     // Simulate local loads/stores and verify every read sees its original SSA value.
     std::vector<LocalAccess> local{{{}, {0}}, {{0}, {1}}, {{1}, {2}}, {{0, 2}, {}}, {{1}, {}}};
     auto local_result = LocalNextUseRegalloc{}.allocate(local, 3, 2, {0, 1, 2}); CHECK(local_result.feasible);

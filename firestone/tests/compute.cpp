@@ -70,7 +70,12 @@ template<class Device> void exercise() {
         throws<std::invalid_argument>([&] { device.launch(kernel, range, {Argument::buffer(other)}); });
         throws<std::invalid_argument>([&] { foreign.launch(kernel, range); });
         throws<std::invalid_argument>([] { (void)Argument::local(0); });
-        auto copy = device; copy.launch(kernel, range, {Argument::buffer(buffer), Argument::scalar(1)});
+        auto buffer_arg = Argument::buffer(buffer);
+        auto retained_arg = std::move(buffer_arg);
+        throws<std::invalid_argument>([&] { device.launch(kernel, range, {buffer_arg}); });
+        throws<std::invalid_argument>([&] { device.launch(kernel, range, {Argument{}}); });
+        CHECK(state->launches == 1);
+        auto copy = device; copy.launch(kernel, range, {retained_arg, Argument::scalar(1)});
         survivor = buffer;
     }
     CHECK(state->kernels.empty() && state->buffers.size() == 1);

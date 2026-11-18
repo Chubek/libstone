@@ -75,7 +75,7 @@ int main() { return test_main([] {
     heap.set_references(a, {b});
     auto garbage = heap.allocate(std::make_unique<Traced>(destroyed));
     heap.pin(a);
-    auto collection = heap.collect();
+    auto collection = heap.collect({a, b, a});
     CHECK(collection.retained == 2 && collection.reclaimed == 1 && destroyed == 1);
     CHECK(!heap.contains(garbage));
     throws<std::out_of_range>([&] { heap.collect({garbage}); });

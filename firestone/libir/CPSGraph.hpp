@@ -23,8 +23,16 @@ public:
         if (name.empty()) throw std::invalid_argument("continuation name is empty");
         for (const auto& t : parameters) if (!t.valid_value()) throw std::invalid_argument("continuation parameter has no value type");
         Continuation c; c.name = std::move(name);
-        for (auto& type : parameters) { c.parameters.push_back(types_.size()); types_.push_back(std::move(type)); }
-        auto id = graph_.add_node(std::move(c));
+        c.parameters.reserve(parameters.size());
+        const auto value_count = types_.size();
+        NodeId id;
+        try {
+            for (auto& type : parameters) { c.parameters.push_back(types_.size()); types_.push_back(std::move(type)); }
+            id = graph_.add_node(std::move(c));
+        } catch (...) {
+            types_.resize(value_count);
+            throw;
+        }
         if (!entry_) entry_ = id;
         return id;
     }
@@ -43,17 +51,24 @@ public:
         return id;
     }
     void terminate(NodeId continuation, CPSTail tail) {
-        graph_.node(continuation);
-        if (graph_.node(continuation).tail) throw std::logic_error("continuation already terminated");
+        auto& c = graph_.node(continuation);
+        if (c.tail) throw std::logic_error("continuation already terminated");
+        if (tail.kind != TailKind::Halt && tail.kind != TailKind::Jump && tail.kind != TailKind::Branch)
+            throw std::invalid_argument("invalid CPS tail kind");
         for (auto t : tail.targets) graph_.node(t);
         auto expected = tail.kind == TailKind::Halt ? 0u : tail.kind == TailKind::Jump ? 1u : 2u;
         if (tail.targets.size() != expected || tail.arguments.size() != expected ||
             (tail.kind == TailKind::Branch && !tail.value) || (tail.kind == TailKind::Jump && tail.value))
             throw std::invalid_argument("invalid CPS tail shape");
-        auto edges = tail.targets.size();
-        graph_.node(continuation).tail = std::move(tail);
-        try { for (std::size_t p = 0; p < edges; ++p) graph_.add_edge(continuation, graph_.node(continuation).tail->targets[p], EdgeKind::Control, p); }
-        catch (...) { graph_.node(continuation).tail.reset(); throw; }
+        c.tail = std::move(tail);
+        std::size_t p = 0;
+        try {
+            for (; p < c.tail->targets.size(); ++p) graph_.add_edge(continuation, c.tail->targets[p], EdgeKind::Control, p);
+        } catch (...) {
+            while (p != 0) { --p; graph_.remove_edge({continuation, c.tail->targets[p], EdgeKind::Control, p}); }
+            c.tail.reset();
+            throw;
+        }
     }
     void effect(NodeId continuation, Opcode opcode, std::vector<Operand> operands, std::string annotation = {}) {
         auto& c = graph_.node(continuation);

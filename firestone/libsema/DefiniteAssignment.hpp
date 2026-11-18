@@ -8,7 +8,8 @@ struct DefiniteAssignment {
     ir::Diagnostics diagnostics;
 };
 
-inline DefiniteAssignment check_definite_assignment(const ir::ControlFlowGraph& cfg, std::set<ir::ValueId> parameters = {}) {
+inline DefiniteAssignment check_definite_assignment(const ir::ControlFlowGraph& cfg, std::set<ir::ValueId> parameters = {},
+                                                      std::size_t evaluation_limit = 100000) {
     std::set<ir::ValueId> universe = parameters;
     for (auto block : cfg.blocks()) for (const auto& instruction : cfg.block(block).instructions) {
         if (instruction.result) universe.insert(*instruction.result);
@@ -27,7 +28,8 @@ inline DefiniteAssignment check_definite_assignment(const ir::ControlFlowGraph& 
         return state;
     };
     DefiniteAssignment result;
-    result.states = ir::solve_dataflow(cfg, universe, meet, transfer, {{cfg.entry(), parameters}});
+    result.states = ir::solve_dataflow(cfg, universe, meet, transfer, {{cfg.entry(), parameters}},
+                                      ir::FlowDirection::Forward, evaluation_limit);
     if (!result.states.converged) { ir::diagnose(result.diagnostics, "assignment.limit", "definite assignment did not converge"); return result; }
     for (const auto& item : result.states.in) {
         auto block = item.first;

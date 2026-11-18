@@ -39,6 +39,15 @@ int main() { return test_main([] {
         CHECK(BigInt(wide.to_string(16), 16) == wide);
     }
     CHECK(BigFloat("0.1") + BigFloat("0.2") == BigFloat("0.3"));
+    auto word = BigInt("4294967295");
+    auto parts = divmod(-(word * BigInt(13) + BigInt(42)), -word);
+    CHECK(parts.first == BigInt(13) && parts.second == BigInt(-42));
+    CHECK(divmod(BigInt(-7), word) == std::make_pair(BigInt(), BigInt(-7)));
+    CHECK(BigFloat("1e-100000") < BigFloat("1e100000"));
+    CHECK(BigFloat("-1e-100000") < BigFloat());
+    CHECK(BigFloat("12") < BigFloat("12.01"));
+    CHECK(BigFloat("-12") > BigFloat("-12.01"));
+    CHECK(BigFloat("9.9") < BigFloat("10"));
     CHECK(BigFloat("123456789012345678901234567890.123456789") - BigFloat("123456789012345678901234567890") == BigFloat("0.123456789"));
     CHECK(BigFloat("1.245", 3) == BigFloat("1.24"));
     CHECK(BigFloat("1.255", 3) == BigFloat("1.26"));

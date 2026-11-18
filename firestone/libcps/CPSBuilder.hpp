@@ -8,11 +8,21 @@ public:
     ir::NodeId create(std::string name, std::vector<ir::Type> parameters = {}) {
         if (name.empty() || names_.count(name)) throw std::invalid_argument("continuation name must be unique and nonempty");
         for (const auto& type : parameters) if (!type.valid_value()) throw std::invalid_argument("invalid continuation parameter type");
-        auto id = graph_.continuation(name, std::move(parameters)); names_[std::move(name)] = id; return id;
+        auto entry = names_.emplace(name, ir::invalid_id).first;
+        try { entry->second = graph_.continuation(std::move(name), std::move(parameters)); }
+        catch (...) { names_.erase(entry); throw; }
+        return entry->second;
     }
     ir::NodeId lookup(const std::string& name) const { return names_.at(name); }
     ir::Operand parameter(ir::NodeId continuation, std::size_t index) const {
         return ir::Operand::ref(graph_.continuation(continuation).parameters.at(index));
+    }
+    void halt(ir::NodeId source, std::optional<ir::Operand> value = {}) {
+        if (value) {
+            auto errors = check_local_operand(graph_, source, *value);
+            if (!errors.empty()) throw std::invalid_argument(errors.front().message);
+        }
+        graph_.halt(source, std::move(value));
     }
     void jump(ir::NodeId source, ir::NodeId target, std::vector<ir::Operand> arguments) {
         require_transfer(source, target, arguments); graph_.jump(source, target, std::move(arguments));

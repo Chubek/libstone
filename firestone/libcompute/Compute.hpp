@@ -173,7 +173,13 @@ public:
         if (!kernel.resource_ || kernel.resource_->context != context_) throw std::invalid_argument("foreign compute kernel");
         range.validate(device()); std::vector<NativeArgument> native; native.reserve(arguments.size());
         for (const auto& argument : arguments) {
-            if (argument.owner_ && argument.owner_->context != context_) throw std::invalid_argument("foreign compute buffer argument");
+            const auto& value = argument.native_;
+            if (value.kind == NativeArgument::Kind::Buffer) {
+                if (!argument.owner_ || argument.owner_->context != context_)
+                    throw std::invalid_argument("empty or foreign compute buffer argument");
+            } else if (!value.bytes || (value.kind == NativeArgument::Kind::Scalar && value.bytes != value.scalar.size())) {
+                throw std::invalid_argument("empty or invalid compute argument");
+            }
             native.push_back(argument.native_);
         }
         context_->functions.launch(kernel.native_handle(), range, native);

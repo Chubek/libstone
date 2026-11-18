@@ -27,6 +27,8 @@ arithmetic/rounding, channel shutdown and scheduling, vector overflow semantics,
 compute/display resource lifetimes, SPIR-V framing, cross-component hardening
 contracts, and relocated installed-package consumers.
 Every public header is also compiled independently in C++17 mode.
+Set `-DFIRESTONE_ENABLE_OPENMP=ON` to test the native OpenMP path as well as the
+default serial fallback in a separate build.
 
 ## Embedding
 
@@ -141,7 +143,7 @@ auto finish = builder.create("finish", {Type::integer()});
 auto value = builder.graph().bind(entry, Opcode::Add, Type::integer(),
     {builder.parameter(entry, 0), Operand::constant(1)});
 builder.jump(entry, finish, {Operand::ref(value)});
-builder.graph().halt(finish, builder.parameter(finish, 0));
+builder.halt(finish, builder.parameter(finish, 0));
 auto lowered = firestone::cps::lower_to_ssa(builder.finish());
 auto errors = lowered.ssa.verify(); // empty
 ```

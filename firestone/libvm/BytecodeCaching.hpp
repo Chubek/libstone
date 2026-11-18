@@ -18,11 +18,13 @@ public:
         ++misses_;
         if (capacity_) {
             entries_.push_front({bytes, decoded, limits});
-            if (entries_.size() > capacity_) entries_.pop_back();
+            trim();
         }
         return decoded;
     }
     Index size() const { return entries_.size(); }
+    Index capacity() const noexcept { return capacity_; }
+    void set_capacity(Index capacity) noexcept { capacity_ = capacity; trim(); }
     Index hits() const { return hits_; }
     Index misses() const { return misses_; }
     void clear() { entries_.clear(); hits_ = 0; misses_ = 0; }
@@ -30,6 +32,7 @@ private:
     struct Entry { BytecodeBytes bytes; std::shared_ptr<const Module> module; BinaryLimits limits; };
     Index capacity_, hits_ = 0, misses_ = 0;
     std::list<Entry> entries_;
+    void trim() noexcept { while (entries_.size() > capacity_) entries_.pop_back(); }
 };
 
 } // namespace firestone::vm

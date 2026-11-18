@@ -35,16 +35,20 @@ public:
     }
     Collection collect(const std::vector<Handle>& roots = {}) {
         check_references(roots);
-        std::set<Handle> marked = pinned_;
-        std::vector<Handle> pending(pinned_.begin(), pinned_.end());
-        for (auto root : roots) if (marked.insert(root).second) pending.push_back(root);
+        std::vector<bool> marked(slots_.size());
+        std::vector<Handle> pending;
+        auto mark = [&](Handle handle) {
+            if (!marked[handle]) { marked[handle] = true; pending.push_back(handle); }
+        };
+        for (auto handle : pinned_) mark(handle);
+        for (auto root : roots) mark(root);
         while (!pending.empty()) {
             auto handle = pending.back(); pending.pop_back();
-            for (auto child : references(handle)) if (marked.insert(child).second) pending.push_back(child);
+            for (auto child : references(handle)) mark(child);
         }
         Collection result;
         for (Handle handle = 0; handle < slots_.size(); ++handle) if (contains(handle)) {
-            if (marked.count(handle)) ++result.retained;
+            if (marked[handle]) ++result.retained;
             else { slots_[handle].reset(); ++result.reclaimed; }
         }
         return result;

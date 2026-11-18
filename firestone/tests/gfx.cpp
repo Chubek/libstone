@@ -67,5 +67,13 @@ int main() { return test_main([] {
     words = module.words(); words[4] = 1; throws<std::invalid_argument>([&] { SPIRV::from_words(words); });
     words = module.words(); words[1] = 0x00010700; throws<std::invalid_argument>([&] { SPIRV::from_words(words); });
     throws<std::invalid_argument>([] { SPIRV::from_words({}); });
+    std::byte padded[24]{};
+    Frame frame{padded, sizeof(padded), {2, 2}, 12};
+    CHECK(frame.required_bytes() == sizeof(padded));
+    frame.validate();
+    --frame.bytes;
+    throws<std::invalid_argument>([&] { frame.validate(); });
+    frame.stride = std::numeric_limits<std::size_t>::max();
+    throws<std::invalid_argument>([&] { frame.required_bytes(); });
     exercise_display<Wayland>(); exercise_display<X11>(); exercise_display<DRM>();
 }); }

@@ -27,7 +27,10 @@ public:
             methods_[found->second] = std::move(method); return found->second;
         }
         auto slot = methods_.size();
-        methods_.push_back(std::move(method)); slots_[methods_.back().name] = slot; return slot;
+        auto entry = slots_.emplace(method.name, slot).first;
+        try { methods_.push_back(std::move(method)); }
+        catch (...) { slots_.erase(entry); throw; }
+        return slot;
     }
     bool contains(const std::string& name) const { return slots_.count(name) != 0; }
     std::size_t slot(const std::string& name) const { return slots_.at(name); }

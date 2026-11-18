@@ -34,7 +34,9 @@ public:
         for (NodeId i = 0; i < nodes_.size(); ++i) if (contains(i)) out.push_back(i);
         return out;
     }
-    std::size_t size() const { return nodes().size(); }
+    std::size_t size() const {
+        return static_cast<std::size_t>(std::count_if(nodes_.begin(), nodes_.end(), [](const auto& n) { return n.has_value(); }));
+    }
     const std::vector<Edge>& edges() const { return edges_; }
     bool add_edge(NodeId from, NodeId to, EdgeKind kind = EdgeKind::Data, std::size_t port = 0) {
         check(from); check(to);
@@ -55,21 +57,24 @@ public:
     }
     std::set<NodeId> reachable(NodeId start, bool reverse = false, std::optional<EdgeKind> kind = {}) const {
         check(start);
+        auto adjacent = adjacency(reverse, kind);
         std::set<NodeId> seen{start};
         std::vector<NodeId> pending{start};
         while (!pending.empty()) {
             auto id = pending.back(); pending.pop_back();
-            for (auto next : neighbors(id, reverse, kind)) if (seen.insert(next).second) pending.push_back(next);
+            for (auto next : adjacent[id]) if (seen.insert(next).second) pending.push_back(next);
         }
         return seen;
     }
     std::vector<NodeId> shortest_path(NodeId start, NodeId finish, std::optional<EdgeKind> kind = {}) const {
         check(start); check(finish);
+        if (start == finish) return {start};
+        auto adjacent = adjacency(false, kind);
         std::map<NodeId, NodeId> parent{{start, start}};
         std::deque<NodeId> pending{start};
         while (!pending.empty() && !parent.count(finish)) {
             auto id = pending.front(); pending.pop_front();
-            for (auto next : successors(id, kind)) if (parent.emplace(next, id).second) pending.push_back(next);
+            for (auto next : adjacent[id]) if (parent.emplace(next, id).second) pending.push_back(next);
         }
         if (!parent.count(finish)) return {};
         std::vector<NodeId> path{finish};
@@ -78,50 +83,41 @@ public:
     }
     std::vector<NodeId> reverse_postorder(NodeId start, bool reverse = false, std::optional<EdgeKind> kind = {}) const {
         check(start);
-        std::set<NodeId> seen{start};
-        struct Frame { NodeId id; std::vector<NodeId> neighbors; std::size_t next = 0; };
-        std::vector<Frame> stack{{start, neighbors(start, reverse, kind), 0}};
+        auto adjacent = adjacency(reverse, kind);
+        std::vector<bool> seen(nodes_.size());
         std::vector<NodeId> order;
-        while (!stack.empty()) {
-            auto& frame = stack.back();
-            if (frame.next == frame.neighbors.size()) { order.push_back(frame.id); stack.pop_back(); continue; }
-            auto next = frame.neighbors[frame.next++];
-            if (seen.insert(next).second) stack.push_back({next, neighbors(next, reverse, kind), 0});
-        }
+        postorder(start, adjacent, seen, order);
         std::reverse(order.begin(), order.end()); return order;
     }
     std::vector<NodeId> topological_order() const {
-        std::map<NodeId, std::size_t> degrees;
+        auto adjacent = adjacency(false);
+        std::vector<std::size_t> degrees(nodes_.size());
+        for (const auto& list : adjacent) for (auto to : list) ++degrees[to];
         std::set<NodeId> ready;
-        for (auto id : nodes()) { degrees[id] = predecessors(id).size(); if (degrees[id] == 0) ready.insert(id); }
+        auto live = nodes();
+        for (auto id : live) if (degrees[id] == 0) ready.insert(id);
         std::vector<NodeId> order;
         while (!ready.empty()) {
             auto id = *ready.begin(); ready.erase(ready.begin()); order.push_back(id);
-            for (auto next : successors(id)) if (--degrees[next] == 0) ready.insert(next);
+            for (auto next : adjacent[id]) if (--degrees[next] == 0) ready.insert(next);
         }
-        if (order.size() != size()) throw std::logic_error("graph contains a cycle");
+        if (order.size() != live.size()) throw std::logic_error("graph contains a cycle");
         return order;
     }
     std::vector<std::vector<NodeId>> strongly_connected_components() const {
-        std::map<NodeId, std::size_t> index, low;
-        std::set<NodeId> active;
-        std::vector<NodeId> stack;
+        auto forward = adjacency(false);
+        auto backward = adjacency(true);
+        std::vector<bool> seen(nodes_.size());
+        std::vector<NodeId> order;
+        for (auto id : nodes()) if (!seen[id]) postorder(id, forward, seen, order);
+        std::fill(seen.begin(), seen.end(), false);
         std::vector<std::vector<NodeId>> result;
-        std::size_t counter = 0;
-        std::function<void(NodeId)> visit = [&](NodeId v) {
-            index[v] = low[v] = counter++; stack.push_back(v); active.insert(v);
-            for (auto w : successors(v)) {
-                if (!index.count(w)) { visit(w); low[v] = std::min(low[v], low[w]); }
-                else if (active.count(w)) low[v] = std::min(low[v], index[w]);
-            }
-            if (low[v] == index[v]) {
-                std::vector<NodeId> component;
-                NodeId w;
-                do { w = stack.back(); stack.pop_back(); active.erase(w); component.push_back(w); } while (w != v);
-                std::sort(component.begin(), component.end()); result.push_back(std::move(component));
-            }
-        };
-        for (auto id : nodes()) if (!index.count(id)) visit(id);
+        // Decreasing finish time separates the components in the transposed graph.
+        for (auto id = order.rbegin(); id != order.rend(); ++id) if (!seen[*id]) {
+            auto& component = result.emplace_back();
+            postorder(*id, backward, seen, component);
+            std::sort(component.begin(), component.end());
+        }
         std::sort(result.begin(), result.end()); return result;
     }
     std::string to_dot(const std::function<std::string(const Payload&)>& label) const {
@@ -138,6 +134,28 @@ public:
 private:
     std::vector<std::optional<Payload>> nodes_;
     std::vector<Edge> edges_;
+    using Adjacency = std::vector<std::vector<NodeId>>;
+    Adjacency adjacency(bool reverse, std::optional<EdgeKind> kind = {}) const {
+        Adjacency result(nodes_.size());
+        for (const auto& e : edges_) if (!kind || e.kind == *kind)
+            result[reverse ? e.to : e.from].push_back(reverse ? e.from : e.to);
+        for (auto& list : result) {
+            std::sort(list.begin(), list.end());
+            list.erase(std::unique(list.begin(), list.end()), list.end());
+        }
+        return result;
+    }
+    static void postorder(NodeId start, const Adjacency& adjacent, std::vector<bool>& seen, std::vector<NodeId>& order) {
+        struct Frame { NodeId id; std::size_t next = 0; };
+        std::vector<Frame> stack{{start}};
+        seen[start] = true;
+        while (!stack.empty()) {
+            auto& frame = stack.back();
+            if (frame.next == adjacent[frame.id].size()) { order.push_back(frame.id); stack.pop_back(); continue; }
+            auto next = adjacent[frame.id][frame.next++];
+            if (!seen[next]) { seen[next] = true; stack.push_back({next}); }
+        }
+    }
     void check(NodeId id) const { if (!contains(id)) throw std::out_of_range("invalid graph node"); }
     std::vector<NodeId> neighbors(NodeId id, bool reverse, std::optional<EdgeKind> kind) const {
         check(id); std::set<NodeId> out;
