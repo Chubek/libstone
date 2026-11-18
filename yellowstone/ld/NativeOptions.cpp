@@ -38,6 +38,16 @@ bool externalBackendRequested(const LinkOptions& o, Backend kind) {
 void parseNativeArguments(LinkOptions& o, Backend kind) {
   const auto args = toolchain::expandArguments(config(o, kind).arguments,
       kind == Backend::PE ? toolchain::Quoting::Windows : toolchain::Quoting::GNU);
+  // GNU-style ELF library search is dynamic by default; --static/-Bstatic
+  // switch it back to archives. Other formats retain their native defaults.
+  bool dynamicLibraries =
+      kind == Backend::ELF ? !o.staticLink : o.preferSharedLibraries;
+  if (o.librariesDynamic.size() < o.libs.size())
+    o.librariesDynamic.resize(o.libs.size(), dynamicLibraries);
+  auto library = [&](std::string name) {
+    o.libs.push_back(std::move(name));
+    o.librariesDynamic.push_back(dynamicLibraries);
+  };
   for (size_t i = 0; i < args.size(); ++i) {
     const auto& a = args[i];
     const auto low = toolchain::lower(a);
@@ -59,9 +69,9 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
     else if (a == "-L" || a == "--library-path") o.libPaths.push_back(value());
     else if (a.starts_with("-L")) o.libPaths.push_back(a.substr(2));
     else if (a.starts_with("--library-path=")) o.libPaths.push_back(a.substr(15));
-    else if (a == "-l" || a == "--library") o.libs.push_back(value());
-    else if (a.starts_with("-l")) o.libs.push_back(a.substr(2));
-    else if (a.starts_with("--library=")) o.libs.push_back(a.substr(10));
+    else if (a == "-l" || a == "--library") library(value());
+    else if (a.starts_with("-l")) library(a.substr(2));
+    else if (a.starts_with("--library=")) library(a.substr(10));
     else if (a == "-Map" || a == "--Map") o.mapFile = value();
     else if (a.starts_with("-Map=") || a.starts_with("--Map=")) o.mapFile = a.substr(a.find('=') + 1);
     else if (a == "-T" || a == "--script") o.script = value();
@@ -74,14 +84,62 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
       o.base = number(a == "--image-base" ? value() : a.substr(13)); o.hasBase = true;
     } else if (a == "-m" || a == "--emulation" || (kind == Backend::MachO && a == "-arch"))
       o.emulator = value();
-    else if (a == "--static" || a == "-static" || a == "-Bstatic") {}
+    else if (a == "--static" || a == "-static") {
+      o.staticLink = true;
+      dynamicLibraries = false;
+    } else if (a == "-Bstatic" || a == "-dn" || a == "-non_shared") {
+      dynamicLibraries = false;
+    } else if (a == "-Bdynamic" || a == "-dy" || a == "-call_shared") {
+      dynamicLibraries = true;
+      o.preferSharedLibraries = true;
+    }
     else if (a == "--shared" || a == "-shared" || (kind == Backend::PE && low == "/dll") ||
-             (kind == Backend::MachO && a == "-dylib")) o.mode = Mode::Shared;
+              (kind == Backend::MachO && a == "-dylib")) o.mode = Mode::Shared;
     else if (a == "--pie" || a == "-pie") o.pie = true;
+    else if (a == "--no-pie" || a == "-no-pie") o.pie = false;
     else if (a == "-r" || a == "--relocatable") o.mode = Mode::Relocatable;
     else if (a == "--gc-sections") o.gcSections = true;
     else if (a == "--strip-debug" || a == "-s") o.stripDebug = true;
     else if (a == "--allow-undefined") o.allowUndefined = true;
+    else if (kind == Backend::ELF && (a == "--no-undefined" || a == "-zdefs"))
+      o.noUndefined = true;
+    else if (kind == Backend::ELF && (a == "-E" || a == "--export-dynamic"))
+      o.exportDynamic = true;
+    else if (kind == Backend::ELF && (a == "--soname" || a == "-soname" || a == "-h"))
+      o.soname = value();
+    else if (kind == Backend::ELF && (a.starts_with("--soname=") || a.starts_with("-soname=")))
+      o.soname = a.substr(a.find('=') + 1);
+    else if (kind == Backend::ELF && (a == "--rpath" || a == "-rpath"))
+      o.runpath = value();
+    else if (kind == Backend::ELF && (a.starts_with("--rpath=") || a.starts_with("-rpath=")))
+      o.runpath = a.substr(a.find('=') + 1);
+    else if (kind == Backend::ELF && (a == "--dynamic-linker" || a == "-dynamic-linker" ||
+                                      a == "-I"))
+      o.dynamicLinker = value();
+    else if (kind == Backend::ELF &&
+             (a.starts_with("--dynamic-linker=") || a.starts_with("-dynamic-linker=")))
+      o.dynamicLinker = a.substr(a.find('=') + 1);
+    else if (kind == Backend::ELF && (a == "--hash-style" || a.starts_with("--hash-style="))) {
+      auto style = a == "--hash-style" ? value() : a.substr(13);
+      if (style == "sysv") o.hashStyle = LinkOptions::HashStyle::SysV;
+      else if (style == "gnu") o.hashStyle = LinkOptions::HashStyle::GNU;
+      else if (style == "both") o.hashStyle = LinkOptions::HashStyle::Both;
+      else throw std::runtime_error("unsupported native ELF hash style: " + style);
+    } else if (kind == Backend::ELF && a == "--enable-new-dtags") o.newDtags = true;
+    else if (kind == Backend::ELF && a == "--disable-new-dtags") o.newDtags = false;
+    else if (kind == Backend::ELF && a == "--as-needed") o.asNeeded = true;
+    else if (kind == Backend::ELF && a == "--no-as-needed") o.asNeeded = false;
+    else if (kind == Backend::ELF && a == "-z") {
+      auto z = value();
+      if (z == "now") o.bindNow = true;
+      else if (z == "lazy") o.bindNow = false;
+      else if (z == "relro") o.relro = true;
+      else if (z == "norelro") o.relro = false;
+      else if (z == "defs") o.noUndefined = true;
+      else if (z == "undefs") o.noUndefined = false;
+      else if (z == "noexecstack") {}
+      else throw std::runtime_error("unsupported native ELF -z option: " + z);
+    }
     else if (a == "--verbose" || a == "-v") o.verbose = true;
     else if (kind == Backend::PE && low.starts_with("/entry:")) {
       o.entry = a.substr(7); o.hasEntry = true;
@@ -99,9 +157,15 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
       throw std::runtime_error("unsupported native linker option: " + a);
     else o.inputs.push_back(a);
   }
-  if (o.mode == Mode::Shared || o.pie)
-    throw std::runtime_error("native linker does not yet support shared/PIE images or dynamic imports; "
-                             "no external linker was invoked");
+  if (kind != Backend::ELF && (o.mode == Mode::Shared || o.pie))
+    throw std::runtime_error("native PE/Mach-O linker does not yet support shared/PIE images");
+  if (o.mode == Mode::Relocatable && o.pie)
+    throw std::runtime_error("native linker cannot combine relocatable and PIE output");
+  if (o.mode == Mode::Shared && o.pie)
+    throw std::runtime_error("native linker cannot combine shared and PIE output");
+  if (o.staticLink && (o.mode == Mode::Shared || o.pie))
+    throw std::runtime_error("native ELF cannot combine --static with shared/PIE output");
+  o.preferSharedLibraries = dynamicLibraries;
   if (kind != Backend::ELF && (o.scriptIsText || !o.script.empty()))
     throw std::runtime_error("native PE/Mach-O linker does not support ELF linker scripts");
 }

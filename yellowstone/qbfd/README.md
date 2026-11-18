@@ -127,7 +127,9 @@ auto offset = object.fileOffsetForAddress(address);
 `bytesAtAddress()` refuses BSS/NOBITS and truncated file-backed ranges, while
 `symbolAtAddress()` ignores undefined symbols and prefers the most specific
 covering definition. `findSymbol()` searches both the static and dynamic
-symbol collections.
+symbol collections. `neededLibraries()` reports runtime dependencies and
+`soname()` returns an ELF `DT_SONAME` when the image records one; linkers should
+prefer that identity over an input pathname.
 
 ## Native C++ DSL
 

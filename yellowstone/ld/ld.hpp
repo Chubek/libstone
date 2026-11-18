@@ -28,8 +28,9 @@ inline constexpr const char* kVersion = "1.0";
 
 enum class Mode : uint8_t { Exec = 0, Shared = 1, Relocatable = 2 };
 
-// Ordered GNU-compatible arguments; shared/PIE and library links automatically
-// use the configured backend. enabled also selects it for an ordinary exec.
+// Ordered GNU-compatible arguments. A NULL/empty executable selects the native
+// backend, including bounded ELF64 x86-64 shared/PIE linking. A non-empty
+// executable explicitly selects the optional compatibility bridge.
 struct ElfOptions {
   bool enabled = false;
   std::string linker;

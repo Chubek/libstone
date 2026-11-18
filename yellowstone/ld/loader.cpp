@@ -95,10 +95,17 @@ bool openOneObject(LinkState& state, std::vector<uint8_t> bytes,
 }
 
 std::string resolveLib(const LinkState& state, const std::string& name,
-                       std::string& error) {
+                       size_t index, std::string& error) {
   std::vector<std::string> candidates;
   if (name.starts_with(':')) candidates.push_back(name.substr(1));
   else {
+    bool dynamic = !state.options.staticLink &&
+        (index < state.options.librariesDynamic.size()
+             ? state.options.librariesDynamic[index]
+             : (state.options.mode == Mode::Shared || state.options.pie ||
+                state.options.preferSharedLibraries));
+    if (dynamic && state.format == qbfd::Format::ELF)
+      candidates.push_back("lib" + name + ".so");
     candidates.push_back("lib" + name + ".a");
     if (state.format == qbfd::Format::COFF) {
       candidates.push_back(name + ".lib");
@@ -150,8 +157,9 @@ bool loadInputs(LinkState& state, std::string& error) {
   // It is kept in options; loader only handles file inputs here.
   std::vector<std::string> queue = state.options.inputs;
   // -l libraries resolve to files and join the queue in order.
-  for (const auto& lib : state.options.libs) {
-    std::string resolved = resolveLib(state, lib, error);
+  for (size_t i = 0; i < state.options.libs.size(); ++i) {
+    const auto& lib = state.options.libs[i];
+    std::string resolved = resolveLib(state, lib, i, error);
     if (resolved.empty()) return false;
     queue.push_back(resolved);
   }
@@ -225,8 +233,14 @@ bool loadInputs(LinkState& state, std::string& error) {
       error = o.label + ": input format mismatch";
       return false;
     }
-    if (o.object->fileType() != qbfd::FileType::Relocatable) {
-      error = o.label + ": native linker requires relocatable inputs (dynamic imports are unsupported)";
+    auto type = o.object->fileType();
+    bool dynamicInput = type == qbfd::FileType::SharedObject &&
+                        state.format == qbfd::Format::ELF &&
+                        !state.options.staticLink &&
+                        state.options.mode != Mode::Relocatable;
+    if (type != qbfd::FileType::Relocatable && !dynamicInput) {
+      error = o.label + ": native linker requires a relocatable object"
+              " (or an ELF shared object for a dynamic link)";
       return false;
     }
     if (o.object->is64Bit() != state.wide) {

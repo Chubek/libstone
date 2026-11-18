@@ -32,6 +32,19 @@ void addObjectSymbols(LinkState& state, size_t objectIndex,
                       std::vector<std::string>& errors) {
   const auto& obj = state.objects[objectIndex];
   if (obj.isScript || !obj.object) return;
+  if (obj.object->fileType() == qbfd::FileType::SharedObject) {
+    state.dynamicObjects.push_back(objectIndex);
+    for (const auto& s : obj.object->dynamicSymbols()) {
+      if (s.name.empty() || (s.flags & qbfd::sym::Undefined) ||
+          (s.flags & qbfd::sym::Hidden) ||
+          (s.binding != qbfd::SymbolBinding::Global &&
+           s.binding != qbfd::SymbolBinding::Weak &&
+           s.binding != qbfd::SymbolBinding::Unique))
+        continue;
+      state.dynamicDefs.try_emplace(s.name, objectIndex);
+    }
+    return;
+  }
   for (const auto& s : obj.object->symbols()) {
     if (!isGlobal(s)) continue;
     // Skip absolute debug/file artifacts that never participate.

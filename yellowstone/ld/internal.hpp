@@ -56,6 +56,20 @@ struct LinkOptions {
   bool verbose = false;                 // --verbose
   bool allowUndefined = false;          // --allow-undefined / -z undefs
   bool deterministic = true;            // -D not yet; placeholder
+  bool staticLink = false;               // --static / current -Bstatic state
+  bool preferSharedLibraries = false;    // current -Bdynamic state
+  std::vector<bool> librariesDynamic;    // parallel to libs when specified
+  std::string soname;                    // DT_SONAME
+  std::string runpath;                   // DT_RUNPATH / DT_RPATH
+  std::string dynamicLinker;             // PT_INTERP
+  enum class HashStyle : uint8_t { SysV, GNU, Both };
+  HashStyle hashStyle = HashStyle::Both;
+  bool newDtags = true;                  // RUNPATH rather than legacy RPATH
+  bool bindNow = false;                  // -z now
+  bool relro = false;                    // -z relro
+  bool noUndefined = false;              // -z defs / --no-undefined
+  bool exportDynamic = false;            // -E / --export-dynamic
+  bool asNeeded = false;                 // --as-needed (global native subset)
   std::string mapFile;                  // -M / -Map
   std::string emulator;                 // -m (accepted, selects arch check)
   ElfOptions elf;
@@ -135,6 +149,11 @@ struct LinkState {
   std::vector<LoadedArchive> archives;  // archives seen (for -M reporting)
   std::vector<InputSection> inputSections;
   std::map<std::string, Def> defs;      // global symbol table
+  // Dynamic providers never contribute loadable sections.  The map identifies
+  // the first DSO exporting each symbol; dynamicObjects preserves input order
+  // for deterministic DT_NEEDED emission.
+  std::map<std::string, size_t> dynamicDefs;
+  std::vector<size_t> dynamicObjects;
   std::vector<std::string> undefined;   // ordered undefined externals
   std::vector<OutputSection> outSections;
   std::map<std::string, uint64_t> symAddr; // resolved absolute addresses
@@ -209,6 +228,8 @@ bool emitExecutable(const LinkState& state,
                     std::vector<uint8_t>& out, std::string& error);
 bool emitRelocatable(const LinkState& state, std::vector<uint8_t>& out,
                      std::string& error);
+bool emitDynamicElf(LinkState& state, std::vector<uint8_t>& out,
+                    std::string& error);
 
 // Mode drivers (static.cpp / shared.cpp).
 bool linkStatic(LinkState& state, std::vector<uint8_t>& out,

@@ -20,10 +20,13 @@ int main(int argc, char **argv) try {
   uint8_t *bytes = nullptr;
   size_t size = 0;
   char *error = nullptr;
-  // Automatic selection must never delegate shared linking to an executable.
+  // Automatic selection uses the in-process dynamic emitter and must never
+  // delegate shared linking to an executable.
   int rc = qld_link_bytes(&opts, &bytes, &size, &error);
-  require(rc != 0 && !bytes && !size, "shared link implicitly used toolchain");
-  qld_free_string(error); error = nullptr;
+  require(rc == 0, error);
+  image(bytes, size);
+  qld_free_bytes(bytes, size);
+  qld_free_string(error); error = nullptr; bytes = nullptr; size = 0;
   qld_elf_options_t elf;
   qld_elf_options_init(&elf);
   elf.linker = qld_elf_linker();

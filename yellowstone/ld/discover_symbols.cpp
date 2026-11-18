@@ -77,6 +77,22 @@ bool openCandidate(LinkState& state, ArchiveCandidate& cand,
   return true;
 }
 
+bool weakUndefinedOnly(const LinkState& state, const std::string& name) {
+  bool found = false;
+  for (const auto& input : state.objects) {
+    if (!input.object ||
+        input.object->fileType() != qbfd::FileType::Relocatable)
+      continue;
+    for (const auto& symbol : input.object->symbols()) {
+      if (symbol.name != name || !(symbol.flags & qbfd::sym::Undefined))
+        continue;
+      found = true;
+      if (symbol.binding != qbfd::SymbolBinding::Weak) return false;
+    }
+  }
+  return found;
+}
+
 }  // namespace
 
 bool discoverSymbols(LinkState& state, std::string& error) {
@@ -181,11 +197,17 @@ bool discoverSymbols(LinkState& state, std::string& error) {
   if (!resolveCommons(state, error)) return false;
 
   // Final undefined check (deferred so --allow-undefined can pass).
-  if (!state.options.allowUndefined && state.options.mode != Mode::Relocatable) {
-    // Shared links may leave dynamic undefined symbols; executables may not.
+  bool requireDefined = state.options.noUndefined ||
+      (state.options.mode == Mode::Exec && !state.options.allowUndefined);
+  if (requireDefined && state.options.mode != Mode::Relocatable) {
+    // A DSO export satisfies link-time resolution but deliberately does not
+    // acquire an address until the runtime loader processes the image.
     std::vector<std::string> missing;
     for (const auto& u : state.undefined) {
-      if (state.defs.count(u) || state.scriptSymbols.count(u)) continue;
+      if (state.defs.count(u) || state.dynamicDefs.count(u) ||
+          state.scriptSymbols.count(u))
+        continue;
+      if (weakUndefinedOnly(state, u)) continue;
       missing.push_back(u);
     }
     if (!missing.empty()) {

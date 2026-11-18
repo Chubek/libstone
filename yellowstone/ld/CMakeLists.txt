@@ -32,6 +32,7 @@ add_library(qld STATIC
   MachOBackend.cpp
   NativeOptions.cpp
   NativeImage.cpp
+  DynamicElf.cpp
   ld.c
   ld.cpp
   ldscript.cpp
@@ -99,17 +100,31 @@ if(YELLOWSTONE_BUILD_TESTS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(qld-native-api-test tests/native_api.cpp)
     target_link_libraries(qld-native-api-test PRIVATE qld)
+    add_executable(qld-native-dynamic-api-test tests/native_dynamic_api.cpp)
+    target_link_libraries(qld-native-dynamic-api-test PRIVATE qld)
     add_executable(qld-native-c-example examples/native-sdk.c)
     target_compile_features(qld-native-c-example PRIVATE c_std_11)
     target_compile_options(qld-native-c-example PRIVATE
       $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Werror;-pedantic>)
     target_link_libraries(qld-native-c-example PRIVATE qld)
+    add_executable(qld-native-dynamic-c-example examples/dynamic-sdk.c)
+    target_compile_features(qld-native-dynamic-c-example PRIVATE c_std_11)
+    target_compile_options(qld-native-dynamic-c-example PRIVATE
+      $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Werror;-pedantic>)
+    target_link_libraries(qld-native-dynamic-c-example PRIVATE qld)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
       add_test(NAME qld-native COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/native.py" "$<TARGET_FILE:qobjld>"
         "${CMAKE_C_COMPILER}" "$<TARGET_FILE:qld-native-api-test>"
         "$<TARGET_FILE:qld-native-c-example>")
       set_tests_properties(qld-native PROPERTIES TIMEOUT 60
+        ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
+      add_test(NAME qld-native-dynamic COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_dynamic.py"
+        "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}"
+        "$<TARGET_FILE:qld-native-dynamic-api-test>"
+        "$<TARGET_FILE:qld-native-dynamic-c-example>")
+      set_tests_properties(qld-native-dynamic PROPERTIES TIMEOUT 60
         ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
     endif()
     add_executable(qld-formats-api-test tests/formats_api.cpp)
@@ -137,12 +152,8 @@ if(YELLOWSTONE_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/backend_hardening.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
       add_executable(qld-elf-api-test tests/elf_api.cpp)
       target_link_libraries(qld-elf-api-test PRIVATE qld)
-      add_executable(qld-elf-c-example examples/dynamic-sdk.c)
-      target_compile_features(qld-elf-c-example PRIVATE c_std_11)
-      target_compile_options(qld-elf-c-example PRIVATE -Wall -Wextra -Werror -pedantic)
-      target_link_libraries(qld-elf-c-example PRIVATE qld)
       add_test(NAME qld-dynamic COMMAND "${Python3_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/dynamic.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}" "$<TARGET_FILE:qld-elf-api-test>" "$<TARGET_FILE:qld-elf-c-example>")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/dynamic.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}" "$<TARGET_FILE:qld-elf-api-test>" "$<TARGET_FILE:qld-native-dynamic-c-example>")
       set_tests_properties(qld-dynamic PROPERTIES TIMEOUT 120)
     endif()
   endif()

@@ -62,8 +62,10 @@ with tempfile.TemporaryDirectory(prefix="qld-native-") as tmp:
         assert p.returncode and contains in p.stderr, (args, p.stderr)
         assert image.read_bytes() == b"preserved"
 
-    fail("--shared", obj, contains="native")
-    fail("--pie", start, obj, contains="native")
+    run(ld, "--shared", obj, "-o", image, env=isolated)
+    assert image.read_bytes()[16:18] == b"\x03\x00"
+    run(ld, "--pie", start, obj, "-o", image, env=isolated)
+    run(image, env=isolated, expected=42)
     fail("--imaginary-native-option", obj, contains="option")
     fail("--format=elf", "-m", "elf_i386", start, obj, contains="mismatch")
     fail("--static", start, obj, "-Map", image, contains="collide")

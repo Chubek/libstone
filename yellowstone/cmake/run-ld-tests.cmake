@@ -138,20 +138,17 @@ if(NOT code EQUAL 7)
   message(FATAL_ERROR "script link exited ${code}, expected 7")
 endif()
 
-# Fixture 5: --shared emits ET_DYN.
-if(NOT DEFINED ELF_BACKEND_ENABLED OR ELF_BACKEND_ENABLED)
-ld_check(COMMAND "${LD}" --dynamic --shared -o "${WORK}/libt.so" "${WORK}/add.o")
+# Fixture 5: native --shared emits ET_DYN.  When the optional bridge exists,
+# --dynamic independently exercises that compatibility path.
+ld_check(COMMAND "${LD}" --shared -o "${WORK}/libt.so" "${WORK}/add.o")
 execute_process(COMMAND sh -c "readelf -h '${WORK}/libt.so' | grep -q DYN"
-                RESULT_VARIABLE status)
+                 RESULT_VARIABLE status)
 if(NOT status EQUAL 0)
-  message(FATAL_ERROR "--shared did not emit a shared object")
+  message(FATAL_ERROR "native --shared did not emit a shared object")
 endif()
-else()
-execute_process(COMMAND "${LD}" --shared -o "${WORK}/libt.so" "${WORK}/add.o"
-                ERROR_VARIABLE disabled_error RESULT_VARIABLE status)
-if(status EQUAL 0 OR NOT disabled_error MATCHES "native linker does not yet support")
-  message(FATAL_ERROR "disabled dynamic backend was not diagnosed: ${disabled_error}")
-endif()
+if(NOT DEFINED ELF_BACKEND_ENABLED OR ELF_BACKEND_ENABLED)
+  ld_check(COMMAND "${LD}" --dynamic --shared
+                   -o "${WORK}/libt-external.so" "${WORK}/add.o")
 endif()
 
 # Fixture 6: undefined symbols fail, --allow-undefined passes.

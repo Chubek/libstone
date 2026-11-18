@@ -70,16 +70,6 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
       }
     }
   }
-  // A DSO hidden inside a native INPUT/GROUP script must never be copied as
-  // relocatable sections. Explicit dynamic mode preserves GNU script semantics.
-  for (const auto& object : state.objects) {
-    const auto& h = object.bytes;
-    if (h.size() >= 18 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F' &&
-        ((h[5] == 1 && h[16] == 3 && h[17] == 0) || (h[5] == 2 && h[16] == 0 && h[17] == 3))) {
-      error = object.label + ": dynamic input in native script; select --dynamic / qld_link_elf";
-      return false;
-    }
-  }
   if (!discoverSymbols(state, error)) return false;
   if (state.format == qbfd::Format::ELF) {
     if (!state.options.emulator.empty()) {
@@ -94,6 +84,17 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
     }
     for (const auto& input : state.objects) {
       if (!input.object) continue;
+      if (input.object->fileType() == qbfd::FileType::SharedObject) {
+        for (const auto& section : input.object->sections())
+          if (section.name == ".gnu.version" ||
+              section.name == ".gnu.version_d" ||
+              section.name == ".gnu.version_r") {
+            error = input.label +
+                ": native ELF symbol-version dependencies are not yet supported";
+            return false;
+          }
+        continue;
+      }
       for (const auto& section : input.object->sections()) {
         if ((section.flags & qbfd::sec::Tls) || section.nativeType == 17) {
           error = input.label + ": native ELF TLS/COMDAT processing is not yet supported";
@@ -101,6 +102,11 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
         }
       }
       for (const auto& symbol : input.object->symbols()) {
+        if (symbol.name.find('@') != std::string::npos) {
+          error = input.label +
+              ": native ELF symbol-version aliases are not yet supported";
+          return false;
+        }
         if (symbol.kind == qbfd::SymbolKind::Indirect) {
           error = input.label + ": native ELF IFUNC processing is not yet supported";
           return false;
@@ -112,7 +118,11 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
   if (state.format != qbfd::Format::ELF) {
     ok = linkNativeImage(state, out, error);
   } else switch (state.options.mode) {
-    case Mode::Exec: ok = linkStatic(state, out, error); break;
+    case Mode::Exec:
+      ok = state.options.pie || !state.dynamicObjects.empty()
+               ? linkShared(state, out, error)
+               : linkStatic(state, out, error);
+      break;
     case Mode::Shared: ok = linkShared(state, out, error); break;
     case Mode::Relocatable: ok = linkRelocatable(state, out, error); break;
   }

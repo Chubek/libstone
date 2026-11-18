@@ -77,6 +77,9 @@ bool assignAddresses(LinkState& state, std::string& error) {
   for (size_t oi = 0; oi < state.objects.size(); ++oi) {
     const auto& obj = state.objects[oi];
     if (obj.isScript || !obj.object) continue;
+    // Shared inputs provide dynamic symbols and DT_NEEDED entries only.  Their
+    // already-linked sections must never be merged into the new image.
+    if (obj.object->fileType() == qbfd::FileType::SharedObject) continue;
     for (const auto& s : obj.object->sections()) {
       if (skipSection(s, state.options)) continue;
       InputSection in;

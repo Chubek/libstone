@@ -87,8 +87,8 @@ QLD_API int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
                     size_t* out_size, char** errmsg);
 
 /* ELF backend v1. qld_options_t keeps its original ABI. A NULL linker uses
- * Yellowstone's native static/partial linker, including -L/-l searches.
- * Shared/PIE and dynamic imports are currently unsupported natively.
+ * Yellowstone's native static/partial linker or its bounded ELF64 x86-64
+ * shared/PIE/dynamic emitter, including -L/-l searches.
  * A non-NULL linker explicitly selects the optional external compatibility
  * bridge; merely selecting a format never invokes an external executable.
  * Arguments are individual argv tokens, appended after the structured options
@@ -96,7 +96,9 @@ QLD_API int qld_link_bytes(const qld_options_t* opts, uint8_t** out_bytes,
  * Response files use GNU quoting. -o/--output overrides opts->output; absent
  * either, the result stays in memory. -T scripts use the ScriptSDK, including
  * Lua. All pointers are borrowed during a call, copied by qld_set_elf_options.
- * External compatibility bridges are disabled by default at build time. */
+ * Native dynamic TLS, IFUNC, versions, copy relocations and dynamic scripts
+ * remain explicit errors. External compatibility bridges are disabled by
+ * default at build time. */
 #define QLD_ELF_OPTIONS_VERSION 1
 typedef struct qld_elf_options {
   size_t struct_size;                  /* sizeof(qld_elf_options_t) */

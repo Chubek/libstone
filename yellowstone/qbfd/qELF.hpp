@@ -75,6 +75,7 @@ class ELFFile final : public ObjectFile {
   }
   const std::vector<Segment>& segments() const override { return segments_; }
   std::vector<std::string> neededLibraries() const override { return needed_; }
+  std::optional<std::string> soname() const override { return soname_; }
   Expected<std::span<const uint8_t>> sectionContents(
       const Section& section) const override {
     if (section.index >= sections_.size())
@@ -357,6 +358,7 @@ class ELFFile final : public ObjectFile {
       else
         detail::malformed("invalid ELF symbol section");
       if ((other & 3) == 1 || (other & 3) == 2) s.flags |= sym::Hidden;
+      else if ((other & 3) == 3) s.flags |= sym::Protected;
       if (h.type == k::Dynsym && s.binding != SymbolBinding::Local)
         s.flags |= section ? sym::Exported : sym::Imported;
       out.push_back(std::move(s));
@@ -502,6 +504,8 @@ class ELFFile final : public ObjectFile {
       if (!tag) return;
       if (tag == 1)
         needed_.push_back(string(raw_[h.link], word(o + (wide_ ? 8 : 4))));
+      if (tag == 14)
+        soname_ = string(raw_[h.link], word(o + (wide_ ? 8 : 4)));
     }
     detail::malformed("unterminated ELF dynamic table");
   }
@@ -554,6 +558,7 @@ class ELFFile final : public ObjectFile {
   std::vector<Symbol> symbols_, dynamic_;
   std::vector<Segment> segments_;
   std::vector<std::string> needed_;
+  std::optional<std::string> soname_;
   std::unordered_map<uint32_t, uint32_t> symbolBases_;
   std::vector<std::vector<Relocation>> relocs_;
 };

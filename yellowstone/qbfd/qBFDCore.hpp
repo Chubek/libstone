@@ -160,6 +160,7 @@ enum Flags : uint32_t {
   Imported = 1u << 4,   // PE import / undefined dynamic
   Synthetic = 1u << 5,  // created by qBFD (e.g. PLT stub names)
   Debug = 1u << 6,
+  Protected = 1u << 7,  // ELF STV_PROTECTED: exported, locally bound
 };
 }  // namespace sym
 
@@ -352,6 +353,9 @@ class ObjectFile {
 
   // Shared-library dependencies (DT_NEEDED, PE imports, LC_LOAD_DYLIB)
   virtual std::vector<std::string> neededLibraries() const { return {}; }
+  // Runtime identity recorded by a shared object (ELF DT_SONAME, where
+  // available).  Linkers use this rather than the input path for DT_NEEDED.
+  virtual std::optional<std::string> soname() const { return std::nullopt; }
 
   // Address <-> file offset helpers built on sections()
   std::optional<uint64_t> vmaToFileOffset(uint64_t vma) const {

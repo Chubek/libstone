@@ -1,4 +1,78 @@
-# Native-default linker validation — 2026-11-18
+# Native dynamic ELF validation — 2026-11-18
+
+Base revision: `d4a073a57c06b55fe91b7c059846e73f2f7a3326`; initial
+worktree clean. Linux x86-64, GCC 16.2.1, Clang 22.1.8, Python
+3.14.7. No LLVM/LLD library dependency or vendor modification was introduced.
+
+## Implemented and exercised
+
+- `DynamicElf.cpp` emits in-process little-endian ELF64 x86-64 shared objects,
+  PIEs and fixed-address dynamic executables. Outputs contain loader-consumable
+  PHDR/INTERP/LOAD/DYNAMIC/STACK/RELRO program headers, dynamic symbols and
+  strings, SysV/GNU hashes, GOT/PLT, RELA and dynamic tags.
+- PIC handling covers GOTPCREL/GOTPCRELX/REX_GOTPCRELX, PLT32, local PC32/PC64,
+  writable absolute references, RELATIVE, GLOB_DAT and JUMP_SLOT. Invalid
+  address-dependent 32-bit/text forms fail with a PIC diagnostic.
+- ELF DSO inputs participate in symbol resolution without having their linked
+  sections copied. `DT_NEEDED` prefers parsed `DT_SONAME`; `-L/-l`, shared
+  library preference, `--as-needed`, SONAME, RUNPATH/RPATH, hash style,
+  bind-now, RELRO, init/fini arrays and protected/hidden/weak symbols are
+  covered.
+- `PT_PHDR` is emitted for runtime-loader address discovery. A real glibc loader
+  executes both native PIE and dynamic ET_EXEC fixtures. `ctypes.CDLL` loads
+  native DSOs and verifies constructors, imported function/data, relative
+  pointers and weak unresolved behavior.
+- CLI, strict C11, C++ one-shot, C one-shot and incremental APIs all select the
+  native emitter with a NULL backend executable. `PATH` is invalid and
+  `QLD_TOOLCHAIN_BACKEND_ACTIVE=1` during native tests, proving no subprocess
+  linker is reached. The all-bridges build separately preserves explicit
+  `--dynamic` compatibility behavior.
+- qBFD now exposes ELF SONAME and distinguishes STV_PROTECTED from hidden
+  visibility so the linker can preserve protected exports and local binding.
+
+## Verified commands
+
+```sh
+cmake --build /tmp/opencode/qld-native-debug --parallel 5
+ctest --test-dir /tmp/opencode/qld-native-debug --output-on-failure
+
+cmake --build /tmp/opencode/qld-native-bridges --parallel 5
+ctest --test-dir /tmp/opencode/qld-native-bridges --output-on-failure
+
+cmake --build /tmp/opencode/qld-native-sanitize --parallel 5
+env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir /tmp/opencode/qld-native-sanitize --output-on-failure
+```
+
+| Configuration | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| GCC Debug, native defaults, warnings as errors | 19 | 0 | 1 |
+| Clang Release, all explicit bridges ON, warnings as errors | 21 | 0 | 1 |
+| Clang ASan/UBSan/leak detection, native defaults | 19 | 0 | 1 |
+
+The skip is the existing `qbfd_source_notes` test: its binutils source snapshot
+is unavailable. `qld-native-dynamic` is the new bridge-free runtime regression;
+the existing external `qld-dynamic` suite also passes in the all-bridges
+configuration.
+
+An installed strict C11 consumer was compiled from `examples/dynamic-sdk.c`
+against `/tmp/opencode/qld-dynamic-install`, run with an invalid `PATH` and the
+subprocess recursion guard set, and produced a DSO whose exported `leaf()`
+returned 7 through `ctypes.CDLL`.
+
+## Deliberate limits
+
+Native dynamic output is currently ELF64 little-endian x86-64 only. TLS, IFUNC,
+symbol versions, copy relocations, COMDAT/LTO, dynamic linker scripts and
+unsupported relocation encodings fail explicitly. Non-PIE dynamic ET_EXEC is
+covered for function/GOT imports but does not implement copy relocations for
+traditional direct external-data references. The existing external ELF bridge
+remains the opt-in path for those features and compiler-driver parity. No
+non-Linux loader or cross-architecture dynamic runtime claim is made.
+
+---
+
+# Previous native-default static-slice validation — 2026-11-18
 
 Base revision: `5d1721a422d6310f2727d6f04b1d6bac58904e07`; initial worktree clean.
 Linux x86-64, GCC 16.2.1, Clang 22.1.8, Python 3.14.7. No vendor changes or
@@ -28,14 +102,15 @@ LLVM/LLD library dependency was introduced.
   bias. ELF executables execute through Linux's actual loader; ELF partial
   links are relinked and executed. ELF32 archive-only and PE32 images are
   structurally checked, not executed.
-- Negative cases cover unsupported shared/PIE/partial modes, formats and
+- Negative cases covered unsupported shared/PIE/partial modes, formats and
   emulations, duplicate/undefined symbols, output collisions, TLS, COFF
   directives/COMDAT, unsupported Mach-O GOT relocations and oversized images.
   Failed links preserve the existing destination.
 
 This is a **limited native static slice**, not feature parity with the former
-automatic external backends. Native shared/PIE/dynamic imports are still
-unimplemented. PE COMDAT/weak/TLS/CRT, Mach-O ARM64/unwind/initializers/signing,
+automatic external backends. At that revision native shared/PIE/dynamic imports
+were still unimplemented. PE COMDAT/weak/TLS/CRT,
+Mach-O ARM64/unwind/initializers/signing,
 and other unsupported relocations require further native work. The complete
 supported subset and compatibility opt-in are documented in `README.md`.
 No Windows/Darwin OS-loader execution, full root build or cross-host build is

@@ -1,15 +1,16 @@
 # qobjld link backends
 
 `qobjld` defaults to its **own in-process linker**, not a toolchain subprocess.
-Static ELF executables/partial links, PE x86/x64 executables, and static Mach-O
-x86-64 executables can be built from objects and static archives without `ld`,
-LLD, LLVM libraries, a compiler, or any tools on `PATH` at link time.
+Static ELF executables/partial links, native ELF64 x86-64 dynamic images,
+PE x86/x64 executables, and static Mach-O x86-64 executables can be built
+without `ld`, LLD, LLVM libraries, a compiler, or any tools on `PATH` at link
+time.
 
 This is a bounded native implementation, **not full GNU ld/LLD parity**:
 
 | Native format | Implemented | Explicitly unsupported |
 | --- | --- | --- |
-| ELF | Existing static/partial emitter, scripts, `-L/-l`, exact `-l:filename`, archive extraction | Shared/PIE, DSOs, TLS, IFUNC, COMDAT; unsupported relocations |
+| ELF | Static/partial emitter and scripts; ELF64 x86-64 shared objects, PIE and fixed-address dynamic executables; PIC GOT/PLT, runtime RELA, DSO imports, `DT_NEEDED`/SONAME/RUNPATH/RPATH, SysV/GNU hashes, init/fini arrays, `-z now` and RELRO; static archives and `-L/-l` | Native dynamic TLS, IFUNC, symbol versions, copy relocations, dynamic linker scripts, COMDAT/LTO and non-x86-64 dynamic output; unsupported relocations |
 | PE/COFF | x86/x64 fixed-base console images, static archives, absolute/relative/RVA/section relocations, x64 `.pdata` ordering | DLLs/imports/exports, COMDAT, weak externals, TLS/CRT directives, ASLR, partial links, section GC |
 | Mach-O | x86-64 fixed-base `MH_EXECUTE`, `LC_UNIXTHREAD`, segments, symbols, static archives, unsigned/signed/branch relocations | Dylibs/imports, PIE, ARM64, GOT/TLV/subtractor relocations, unwind/initializers, code signing, partial links, section GC |
 
@@ -49,8 +50,10 @@ ctest --test-dir build-yellowstone --output-on-failure
 | `YELLOWSTONE_MACHO_LINKER` | `ld64.lld` |
 
 `--elf-linker`, `--pe-linker`, and `--macho-linker` explicitly request external
-execution. `--dynamic` explicitly requests the configured external linker for
-the selected format. Build the relevant `YELLOWSTONE_ENABLE_*_BACKEND=ON` first.
+execution. For compatibility, `--dynamic` still means “use the configured
+external linker”; it is not required for native dynamic ELF output. Use
+`--shared`, `--pie`, or an explicit ELF DSO input for the native path. Build the
+relevant `YELLOWSTONE_ENABLE_*_BACKEND=ON` before selecting an external bridge.
 Setting those CMake options alone does **not** change native defaults.
 An unavailable executable or disabled bridge produces an error. PE and Mach-O
 process launch uses POSIX spawning or Windows `CreateProcessW`, without a shell;
@@ -62,14 +65,56 @@ arena-owned AST from `ldscript.g` and `ldscript.asdl`. These are build-time
 dependencies only. Lua 5.5 and Kaguya come from `third_party` through
 `cmake/LibstoneLua.cmake`, not a separately installed Lua ABI.
 
-## Native ELF and script mapping
+## Native dynamic ELF
+
+The in-process dynamic backend currently targets little-endian ELF64 x86-64.
+It emits genuine loader metadata rather than changing `e_type` on a static
+image:
+
+- `PT_PHDR`, `PT_INTERP`, `PT_LOAD`, `PT_DYNAMIC`, `PT_GNU_STACK`, and optional
+  `PT_GNU_RELRO`;
+- `.dynsym`/`.dynstr`, SysV and/or GNU hash tables, `.dynamic`,
+  `.rela.dyn`/`.rela.plt`, GOT and traditional x86-64 PLT entries;
+- `R_X86_64_GOTPCREL`, `GOTPCRELX`, `REX_GOTPCRELX`, `PLT32`, `PC32`, `PC64`,
+  and safe `64`/`RELATIVE` runtime relocation paths;
+- DSO SONAME-based dependencies, `-L/-l` shared-library discovery,
+  `--as-needed`, RUNPATH/RPATH, constructors/destructors, lazy or eager PLT
+  binding, and shared/PIE symbol preemption.
+
+For a shared object:
+
+```sh
+cc -fPIC -c provider.c -o provider.o
+qobjld --shared --soname=libprovider.so --hash-style=both \
+  provider.o -o libprovider.so
+```
+
+For a PIE or fixed-address dynamic executable, pass DSOs directly or through
+`-L/-l`. PIE defaults to `/lib64/ld-linux-x86-64.so.2`; override it with
+`--dynamic-linker` when targeting a different x86-64 Linux runtime:
+
+```sh
+cc -fPIE -c start.s -o start.o
+qobjld --pie -z now -z relro --rpath='$ORIGIN' \
+  start.o -L. -lprovider -o program
+```
+
+Non-PIC absolute/32-bit relocations that cannot remain correct after load-base
+selection are rejected with a “recompile as PIC/PIE” diagnostic. Dynamic TLS,
+IFUNC, symbol versioning, copy relocations, text relocations and native dynamic
+linker scripts are deliberately unsupported rather than approximated. Use the
+explicit external bridge when those features are required. ELF library search
+prefers `.so` by default; `--static` or `-Bstatic` selects archives.
+
+## Native static ELF and script mapping
 
 The optional `ElfBackend.cpp` implements the external contract in `Backend.hpp`; ELF, PE, and
 Mach-O share bounded response expansion, process execution, diagnostic handling,
 and auxiliary-output collision/publication helpers. `ElfBackend.hpp` remains a
 compatibility include. ELF validates the requested output kind after a successful
 toolchain exit; explicitly static output must have no interpreter/dependencies.
-This is a native toolchain bridge, not a new in-process dynamic linker.
+This remains a toolchain compatibility bridge, separate from `DynamicElf.cpp`'s
+bounded in-process dynamic linker.
 
 The in-process static frontend supports `MEMORY`, `REGION_ALIAS`, `SECTIONS`,
 `NOLOAD`, section `ALIGN`, ordered data directives, and `*(COMMON)` allocation.

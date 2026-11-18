@@ -1,16 +1,19 @@
 // shared.cpp - shared-object / PIE / relocatable drivers.
 //
-// Shared/PIE output is not implemented natively. -r uses the native
-// relocatable emitter in binarizer.cpp.
+// ELF shared objects, PIEs and dynamically linked executables use the native
+// dynamic emitter. -r uses the native relocatable emitter in binarizer.cpp.
 #include "internal.hpp"
 
 namespace qld::detail {
 
 bool linkShared(LinkState& state, std::vector<uint8_t>& out,
                 std::string& error) {
-  (void)state; (void)out;
-  error = "native shared/PIE linking is not yet supported";
-  return false;
+  if (hasScript(state)) {
+    error = "native dynamic ELF linker scripts are not yet supported";
+    return false;
+  }
+  if (!assignAddresses(state, error)) return false;
+  return emitDynamicElf(state, out, error);
 }
 
 bool linkRelocatable(LinkState& state, std::vector<uint8_t>& out,
