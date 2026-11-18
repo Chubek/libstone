@@ -12,6 +12,17 @@ The bridges are OFF by default; their executables default to `lld-link` and
 built ON. ELF has the equivalent `YELLOWSTONE_ENABLE_ELF_BACKEND` switch.
 See [backend build and usage](../ld/README.md).
 
+## Analysis libraries
+
+The `qdwarf`, `binrev`, `qwasm`, and `rtmbin` C++20 libraries build with
+Yellowstone. `YELLOWSTONE_BUILD_TOOLS` controls whether their CLIs are built,
+and `YELLOWSTONE_BUILD_TESTS` controls their tests.
+
+After installing Yellowstone, use `find_package(Yellowstone CONFIG REQUIRED)`
+and link the target you need: `qdwarf::qdwarf`, `binrev::binrev`,
+`qwasm::qwasm`, or `rtmbin::rtmbin`. These names also work when using
+`add_subdirectory(yellowstone)`.
+
 ## Scope
 
 This chapter is part of the qobjfile manual and documents the public behavior that callers can rely on. Examples should be checked against the current headers and test suite.

@@ -57,6 +57,13 @@ if(NOT TARGET qbfd::qbfd)
   add_subdirectory(qbfd)
 endif()
 
+# Analysis libraries and their optional command-line front ends.
+foreach(component IN ITEMS qdwarf binrev qwasm rtmbin)
+  add_subdirectory(${component})
+  install(EXPORT ${component}Targets NAMESPACE ${component}::
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Yellowstone)
+endforeach()
+
 # Directory names differ from tool names (dump -> qobjdump, ...), so the
 # mapping is explicit rather than assumed.
 if(YELLOWSTONE_BUILD_TOOLS)

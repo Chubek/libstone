@@ -102,3 +102,16 @@ CLI/C/C++/incremental paths with PATH empty and the subprocess recursion guard
 set; `tests/native_image.py` independently maps freestanding x86-64 output code.
 This is not evidence of Windows/Darwin loader compatibility. Retain the
 explicit-bridge regression suite in an all-bridges-ON configuration.
+
+## Analysis libraries
+
+`qdwarf`, `binrev`, `qwasm`, and `rtmbin` build as C++20 libraries with optional
+CLI front ends. Their `*Targets` exports are loaded by `YellowstoneConfig.cmake`;
+test installed consumers as well as in-tree targets when changing public APIs.
+The format-specific limits and examples are linked from `manual/11-tools.md`.
+
+Keep file offsets, linked virtual addresses, and runtime addresses distinct.
+DWARF line lookup must not present unrelocated records as linked addresses.
+Wasm inspection is not full module validation. Runtime image geometry is not a
+claim about instruction boundaries or live process permissions, and Wetstone
+analysis of an explicit model must not be presented as analysis of image code.

@@ -5,6 +5,7 @@ This manual contains 26 chapters covering qbfd, qld, command line tools, ISA met
 ## Reading order
 
 - Chapters 1–11 introduce the object model, format readers, archives, queries, and command line tools.
+- [Analysis tools](11-tools.md#analysis-tools) links to the DWARF, native binary, WebAssembly, and offline runtime analysis guides.
 - Chapters 12–24 describe qld, linker scripts, layout, relocation, emission, and link modes.
 - Chapters 25–26 cover verification and extension work.
 

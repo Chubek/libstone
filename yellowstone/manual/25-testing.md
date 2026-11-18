@@ -21,3 +21,18 @@ build/qobjdump -d --isa-dir infobank/isa sample.o
 ```
 
 A missing or malformed `.isa` file is reported with its path while object inspection continues far enough to show the unavailable architecture. This lets format tests distinguish an object-reader failure from an ISA-database failure.
+
+## Analysis tools
+
+Build and test the standalone Yellowstone suite with its command-line tools
+enabled:
+
+```sh
+cmake -S yellowstone -B build-yellowstone \
+  -DYELLOWSTONE_BUILD_TOOLS=ON -DYELLOWSTONE_BUILD_TESTS=ON
+cmake --build build-yellowstone --parallel
+ctest --test-dir build-yellowstone --output-on-failure
+```
+
+See each [analysis tool's README](11-tools.md#analysis-tools) for its input
+formats and supported operations.

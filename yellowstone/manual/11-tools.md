@@ -70,6 +70,25 @@ canonical section and symbol model and accept `--tui`, `--no-color`, and
 from the input magic and render section and symbol tables through the same
 DomTERM pager.
 
+## Analysis tools
+
+| Tool | Use |
+| --- | --- |
+| [`qdwarf`](../qdwarf/README.md) | List DWARF unit headers and look up source lines in ELF, PE/COFF, and thin Mach-O. |
+| [`binrev`](../binrev/README.md) | Inspect the structure of ELF, PE, and Mach-O without loading or running the image. |
+| [`qwasm`](../qwasm/README.md) | Inspect sections, imports, and exports in core WebAssembly modules without executing them. |
+| [`rtmbin`](../rtmbin/README.md) | Map runtime PCs to executable file ranges, summarize profiles, and verify caller-selected spans offline. |
+
+The linked READMEs document the supported subsets and give CLI and library
+examples.
+
+```sh
+qdwarf --units --lines program
+binrev --sections --symbols program
+qwasm module.wasm
+rtmbin layout program
+```
+
 ## Binscript
 
 `binscript` is the binary manipulation language companion to Termscript. Its
