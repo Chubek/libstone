@@ -1,0 +1,13 @@
+from dataclasses import dataclass
+import select
+
+from domainlet.vmm.seams import EventSubscriber
+
+@dataclass
+class EventLoop:
+    _epoll: select.epoll
+    _subscribers: dict[int, EventSubscriber]
+    def register(self, subscriber: EventSubscriber, events: int = ...) -> None: ...
+    def unregister(self, subscriber: EventSubscriber) -> None: ...
+    def run_once(self, timeout: float | None = ...) -> int: ...
+    def close(self) -> None: ...

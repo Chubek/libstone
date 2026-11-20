@@ -1,0 +1,9 @@
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class PciBar:
+    index: int
+    size: int
+    address: int = ...
+    is_io: bool = ...
+    prefetchable: bool = ...

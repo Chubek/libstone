@@ -1,0 +1,19 @@
+; A paravirtual personal-computer platform with the DomIOS boot ABI.
+; This is not an SBSA/UEFI machine or an assertion of full Arm ISA coverage.
+(machine archvirt-pc
+  (isa arm64)
+  (kind personal-computer)
+  (boot domios-v1)
+  (elf-machine 183)
+  (ram-base 0)
+  (kernel-base 0x200000)
+  (stack-top 0x700000)
+  (boot-info 0x10000)
+  (initrd-base 0x800000)
+  (firmware-base 0x2000000)
+  (console-base 0xb8000)
+  (console-columns 80)
+  (console-rows 25)
+  (serial-kind mmio)
+  (serial-base 0x10000000)
+  (interrupt-controller polled))

@@ -1,0 +1,6 @@
+image_format_version = 2
+plugin_abi_major = 1
+plugin_abi_minor = 0
+plugin_abi_patch = 0
+boot_protocol = "domios-v1"
+machines = ["x86_64", "aarch64", "riscv64"]

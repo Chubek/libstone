@@ -1,0 +1,6 @@
+from dataclasses import dataclass
+
+@dataclass
+class ConsoleSink:
+    stream: object = ...
+    def write(self, data: bytes) -> int: ...

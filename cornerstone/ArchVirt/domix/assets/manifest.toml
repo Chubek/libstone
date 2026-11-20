@@ -1,0 +1,7 @@
+image_format_version = 1
+kernel_name = "domix-kernel"
+rootfs_label = "domix-rootfs"
+default_shell = "/bin/sh"
+architecture = "@ARCH@"
+boot_protocol = "domios-v1"
+shell_kind = "resident"

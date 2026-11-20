@@ -1,0 +1,18 @@
+; ArchVirt machine extension, appended to ArchML's amd64 compiler profile.
+(machine archvirt-pc
+  (isa amd64)
+  (kind personal-computer)
+  (boot domios-v1)
+  (elf-machine 62)
+  (ram-base 0)
+  (kernel-base 0x200000)
+  (stack-top 0x700000)
+  (boot-info 0x10000)
+  (initrd-base 0x800000)
+  (firmware-base 0x2000000)
+  (console-base 0xb8000)
+  (console-columns 80)
+  (console-rows 25)
+  (serial-kind port)
+  (serial-base 0x3f8)
+  (interrupt-controller apic))

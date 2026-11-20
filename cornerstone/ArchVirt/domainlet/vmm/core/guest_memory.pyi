@@ -1,0 +1,26 @@
+from dataclasses import dataclass
+
+PAGE_SIZE: int
+
+def align_up(value: int, align: int = ...) -> int: ...
+
+@dataclass(frozen=True, slots=True)
+class GuestAddress:
+    value: int
+
+@dataclass(frozen=True, slots=True)
+class MemoryRegion:
+    slot: int
+    guest_phys_addr: int
+    memory_size: int
+    flags: int = ...
+
+@dataclass
+class GuestMemoryMmap:
+    size: int
+    regions: tuple[MemoryRegion, ...] = ...
+    def close(self) -> None: ...
+    def translate(self, addr: int) -> memoryview: ...
+    def read(self, addr: int, size: int) -> bytes: ...
+    def write(self, addr: int, data: bytes | bytearray | memoryview) -> int: ...
+    def register_with_vm(self, vm: object) -> None: ...
