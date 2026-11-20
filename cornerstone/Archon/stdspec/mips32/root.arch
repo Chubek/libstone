@@ -1,0 +1,8 @@
+architecture MIPS32 {
+    description = "MIPS32 little-endian non-trapping integer subset";
+    endian = little;
+    parameter XLEN: nat in {32} = 32;
+    address_width = XLEN;
+    feature Base = enabled;
+    import integer;
+}

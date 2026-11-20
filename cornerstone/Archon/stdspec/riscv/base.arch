@@ -1,0 +1,338 @@
+module Base {
+    type Word = bits<XLEN>;
+
+    register_file IntegerRegisters {
+        count = 32;
+        width = XLEN;
+        register x[0..31];
+        zero = 0;
+
+        alias zero = x[0];
+        alias ra = x[1];
+        alias sp = x[2];
+        alias gp = x[3];
+        alias tp = x[4];
+        alias t0 = x[5];
+        alias t1 = x[6];
+        alias t2 = x[7];
+        alias s0 = x[8];
+        alias fp = x[8];
+        alias s1 = x[9];
+        alias a0 = x[10];
+        alias a1 = x[11];
+        alias a2 = x[12];
+        alias a3 = x[13];
+        alias a4 = x[14];
+        alias a5 = x[15];
+        alias a6 = x[16];
+        alias a7 = x[17];
+        alias s2 = x[18];
+        alias s3 = x[19];
+        alias s4 = x[20];
+        alias s5 = x[21];
+        alias s6 = x[22];
+        alias s7 = x[23];
+        alias s8 = x[24];
+        alias s9 = x[25];
+        alias s10 = x[26];
+        alias s11 = x[27];
+        alias t3 = x[28];
+        alias t4 = x[29];
+        alias t5 = x[30];
+        alias t6 = x[31];
+    }
+
+    register_class GPR {
+        members = IntegerRegisters.*;
+    }
+
+    format RType: bits<32> {
+        field opcode: bits<7> @ [6:0];
+        field rd: bits<5> @ [11:7];
+        field funct3: bits<3> @ [14:12];
+        field rs1: bits<5> @ [19:15];
+        field rs2: bits<5> @ [24:20];
+        field funct7: bits<7> @ [31:25];
+    }
+
+    format IType: bits<32> {
+        field opcode: bits<7> @ [6:0];
+        field rd: bits<5> @ [11:7];
+        field funct3: bits<3> @ [14:12];
+        field rs1: bits<5> @ [19:15];
+        field imm: sint<12> @ [31:20];
+    }
+
+    format UType: bits<32> {
+        field opcode: bits<7> @ [6:0];
+        field rd: bits<5> @ [11:7];
+        field imm: uint<20> @ [31:12];
+    }
+
+    instruction ADD {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b000;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "add {rd}, {rs1}, {rs2}";
+        semantics {
+            write(rd, read(rs1) +% read(rs2));
+        }
+    }
+
+    instruction SUB {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b000;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0100000;
+        }
+        assembly "sub {rd}, {rs1}, {rs2}";
+        semantics {
+            write(rd, read(rs1) -% read(rs2));
+        }
+    }
+
+    instruction XOR {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b100;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "xor {rd}, {rs1}, {rs2}";
+        semantics {
+            write(rd, read(rs1) ^ read(rs2));
+        }
+    }
+
+    instruction OR {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b110;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "or {rd}, {rs1}, {rs2}";
+        semantics {
+            write(rd, read(rs1) | read(rs2));
+        }
+    }
+
+    instruction AND {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b111;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "and {rd}, {rs1}, {rs2}";
+        semantics {
+            write(rd, read(rs1) & read(rs2));
+        }
+    }
+
+    instruction ADDI {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in imm: imm<sint<12>>;
+        }
+        encoding IType {
+            opcode = 0x13;
+            rd = encode_register(rd);
+            funct3 = 0b000;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "addi {rd}, {rs1}, {imm}";
+        semantics {
+            write(rd, read(rs1) +% sext<XLEN>(imm));
+        }
+    }
+
+    instruction XORI {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in imm: imm<sint<12>>;
+        }
+        encoding IType {
+            opcode = 0x13;
+            rd = encode_register(rd);
+            funct3 = 0b100;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "xori {rd}, {rs1}, {imm}";
+        semantics {
+            write(rd, read(rs1) ^ sext<XLEN>(imm));
+        }
+    }
+
+    instruction ORI {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in imm: imm<sint<12>>;
+        }
+        encoding IType {
+            opcode = 0x13;
+            rd = encode_register(rd);
+            funct3 = 0b110;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "ori {rd}, {rs1}, {imm}";
+        semantics {
+            write(rd, read(rs1) | sext<XLEN>(imm));
+        }
+    }
+
+    instruction ANDI {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in imm: imm<sint<12>>;
+        }
+        encoding IType {
+            opcode = 0x13;
+            rd = encode_register(rd);
+            funct3 = 0b111;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "andi {rd}, {rs1}, {imm}";
+        semantics {
+            write(rd, read(rs1) & sext<XLEN>(imm));
+        }
+    }
+
+    instruction LUI {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in imm: imm<uint<20>>;
+        }
+        encoding UType {
+            opcode = 0x37;
+            rd = encode_register(rd);
+            imm = imm;
+        }
+        assembly "lui {rd}, {imm}";
+        semantics {
+            let word32 = zext<32>(imm) << 12;
+            write(rd, sext<XLEN>(word32));
+        }
+    }
+
+    instruction SLL {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b001;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "sll {rd}, {rs1}, {rs2}";
+        semantics { write(rd, read(rs1) << trunc<SHAMT>(read(rs2))); }
+    }
+
+    instruction SRL {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b101;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0000000;
+        }
+        assembly "srl {rd}, {rs1}, {rs2}";
+        semantics { write(rd, read(rs1) >> trunc<SHAMT>(read(rs2))); }
+    }
+
+    instruction SRA {
+        requires feature(I);
+        operands {
+            out rd: GPR;
+            in rs1: GPR;
+            in rs2: GPR;
+        }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0b101;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0b0100000;
+        }
+        assembly "sra {rd}, {rs1}, {rs2}";
+        semantics {
+            let value = read(rs1);
+            let count = trunc<SHAMT>(read(rs2));
+            // The largest masked count is XLEN-1. For a negative operand,
+            // complement around the logical shift to get one-fill.
+            let sign_fill = 0 -% (value >> ~trunc<SHAMT>(0));
+            write(rd, ((value ^ sign_fill) >> count) ^ sign_fill);
+        }
+    }
+}

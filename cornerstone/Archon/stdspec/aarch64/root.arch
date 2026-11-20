@@ -1,0 +1,8 @@
+architecture AArch64 {
+    description = "AArch64 little-endian X-register integer subset without flag updates";
+    endian = little;
+    parameter XLEN: nat in {64} = 64;
+    address_width = XLEN;
+    feature Base = enabled;
+    import integer;
+}

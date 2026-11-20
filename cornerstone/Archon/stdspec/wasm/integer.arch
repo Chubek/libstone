@@ -1,0 +1,245 @@
+module Integer {
+    // These operators require validated i32/i64 stack types. The current
+    // straight-line ArchSem cannot enforce those type preconditions or model
+    // integer division traps, so all remain explicitly encoding-only.
+
+    // i32 tests and comparisons
+    instruction I32_EQZ {
+        encoding Opcode { opcode = 0x45; }
+        assembly "i32.eqz";
+    }
+    instruction I32_EQ {
+        encoding Opcode { opcode = 0x46; }
+        assembly "i32.eq";
+    }
+    instruction I32_NE {
+        encoding Opcode { opcode = 0x47; }
+        assembly "i32.ne";
+    }
+    instruction I32_LT_S {
+        encoding Opcode { opcode = 0x48; }
+        assembly "i32.lt_s";
+    }
+    instruction I32_LT_U {
+        encoding Opcode { opcode = 0x49; }
+        assembly "i32.lt_u";
+    }
+    instruction I32_GT_S {
+        encoding Opcode { opcode = 0x4A; }
+        assembly "i32.gt_s";
+    }
+    instruction I32_GT_U {
+        encoding Opcode { opcode = 0x4B; }
+        assembly "i32.gt_u";
+    }
+    instruction I32_LE_S {
+        encoding Opcode { opcode = 0x4C; }
+        assembly "i32.le_s";
+    }
+    instruction I32_LE_U {
+        encoding Opcode { opcode = 0x4D; }
+        assembly "i32.le_u";
+    }
+    instruction I32_GE_S {
+        encoding Opcode { opcode = 0x4E; }
+        assembly "i32.ge_s";
+    }
+    instruction I32_GE_U {
+        encoding Opcode { opcode = 0x4F; }
+        assembly "i32.ge_u";
+    }
+
+    // i64 tests and comparisons
+    instruction I64_EQZ {
+        encoding Opcode { opcode = 0x50; }
+        assembly "i64.eqz";
+    }
+    instruction I64_EQ {
+        encoding Opcode { opcode = 0x51; }
+        assembly "i64.eq";
+    }
+    instruction I64_NE {
+        encoding Opcode { opcode = 0x52; }
+        assembly "i64.ne";
+    }
+    instruction I64_LT_S {
+        encoding Opcode { opcode = 0x53; }
+        assembly "i64.lt_s";
+    }
+    instruction I64_LT_U {
+        encoding Opcode { opcode = 0x54; }
+        assembly "i64.lt_u";
+    }
+    instruction I64_GT_S {
+        encoding Opcode { opcode = 0x55; }
+        assembly "i64.gt_s";
+    }
+    instruction I64_GT_U {
+        encoding Opcode { opcode = 0x56; }
+        assembly "i64.gt_u";
+    }
+    instruction I64_LE_S {
+        encoding Opcode { opcode = 0x57; }
+        assembly "i64.le_s";
+    }
+    instruction I64_LE_U {
+        encoding Opcode { opcode = 0x58; }
+        assembly "i64.le_u";
+    }
+    instruction I64_GE_S {
+        encoding Opcode { opcode = 0x59; }
+        assembly "i64.ge_s";
+    }
+    instruction I64_GE_U {
+        encoding Opcode { opcode = 0x5A; }
+        assembly "i64.ge_u";
+    }
+
+    // i32 unary and binary operators
+    instruction I32_CLZ {
+        encoding Opcode { opcode = 0x67; }
+        assembly "i32.clz";
+    }
+    instruction I32_CTZ {
+        encoding Opcode { opcode = 0x68; }
+        assembly "i32.ctz";
+    }
+    instruction I32_POPCNT {
+        encoding Opcode { opcode = 0x69; }
+        assembly "i32.popcnt";
+    }
+    instruction I32_ADD {
+        encoding Opcode { opcode = 0x6A; }
+        assembly "i32.add";
+    }
+    instruction I32_SUB {
+        encoding Opcode { opcode = 0x6B; }
+        assembly "i32.sub";
+    }
+    instruction I32_MUL {
+        encoding Opcode { opcode = 0x6C; }
+        assembly "i32.mul";
+    }
+    instruction I32_DIV_S {
+        encoding Opcode { opcode = 0x6D; }
+        assembly "i32.div_s";
+    }
+    instruction I32_DIV_U {
+        encoding Opcode { opcode = 0x6E; }
+        assembly "i32.div_u";
+    }
+    instruction I32_REM_S {
+        encoding Opcode { opcode = 0x6F; }
+        assembly "i32.rem_s";
+    }
+    instruction I32_REM_U {
+        encoding Opcode { opcode = 0x70; }
+        assembly "i32.rem_u";
+    }
+    instruction I32_AND {
+        encoding Opcode { opcode = 0x71; }
+        assembly "i32.and";
+    }
+    instruction I32_OR {
+        encoding Opcode { opcode = 0x72; }
+        assembly "i32.or";
+    }
+    instruction I32_XOR {
+        encoding Opcode { opcode = 0x73; }
+        assembly "i32.xor";
+    }
+    instruction I32_SHL {
+        encoding Opcode { opcode = 0x74; }
+        assembly "i32.shl";
+    }
+    instruction I32_SHR_S {
+        encoding Opcode { opcode = 0x75; }
+        assembly "i32.shr_s";
+    }
+    instruction I32_SHR_U {
+        encoding Opcode { opcode = 0x76; }
+        assembly "i32.shr_u";
+    }
+    instruction I32_ROTL {
+        encoding Opcode { opcode = 0x77; }
+        assembly "i32.rotl";
+    }
+    instruction I32_ROTR {
+        encoding Opcode { opcode = 0x78; }
+        assembly "i32.rotr";
+    }
+
+    // i64 unary and binary operators
+    instruction I64_CLZ {
+        encoding Opcode { opcode = 0x79; }
+        assembly "i64.clz";
+    }
+    instruction I64_CTZ {
+        encoding Opcode { opcode = 0x7A; }
+        assembly "i64.ctz";
+    }
+    instruction I64_POPCNT {
+        encoding Opcode { opcode = 0x7B; }
+        assembly "i64.popcnt";
+    }
+    instruction I64_ADD {
+        encoding Opcode { opcode = 0x7C; }
+        assembly "i64.add";
+    }
+    instruction I64_SUB {
+        encoding Opcode { opcode = 0x7D; }
+        assembly "i64.sub";
+    }
+    instruction I64_MUL {
+        encoding Opcode { opcode = 0x7E; }
+        assembly "i64.mul";
+    }
+    instruction I64_DIV_S {
+        encoding Opcode { opcode = 0x7F; }
+        assembly "i64.div_s";
+    }
+    instruction I64_DIV_U {
+        encoding Opcode { opcode = 0x80; }
+        assembly "i64.div_u";
+    }
+    instruction I64_REM_S {
+        encoding Opcode { opcode = 0x81; }
+        assembly "i64.rem_s";
+    }
+    instruction I64_REM_U {
+        encoding Opcode { opcode = 0x82; }
+        assembly "i64.rem_u";
+    }
+    instruction I64_AND {
+        encoding Opcode { opcode = 0x83; }
+        assembly "i64.and";
+    }
+    instruction I64_OR {
+        encoding Opcode { opcode = 0x84; }
+        assembly "i64.or";
+    }
+    instruction I64_XOR {
+        encoding Opcode { opcode = 0x85; }
+        assembly "i64.xor";
+    }
+    instruction I64_SHL {
+        encoding Opcode { opcode = 0x86; }
+        assembly "i64.shl";
+    }
+    instruction I64_SHR_S {
+        encoding Opcode { opcode = 0x87; }
+        assembly "i64.shr_s";
+    }
+    instruction I64_SHR_U {
+        encoding Opcode { opcode = 0x88; }
+        assembly "i64.shr_u";
+    }
+    instruction I64_ROTL {
+        encoding Opcode { opcode = 0x89; }
+        assembly "i64.rotl";
+    }
+    instruction I64_ROTR {
+        encoding Opcode { opcode = 0x8A; }
+        assembly "i64.rotr";
+    }
+}

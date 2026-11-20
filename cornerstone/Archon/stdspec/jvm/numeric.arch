@@ -1,0 +1,64 @@
+module Numeric {
+    // JVM numeric operations require verified computational types and stack
+    // categories that the current straight-line ArchSem cannot enforce.
+    instruction IADD { encoding Opcode { opcode = 0x60; } assembly "iadd"; }
+    instruction LADD { encoding Opcode { opcode = 0x61; } assembly "ladd"; }
+    instruction FADD { encoding Opcode { opcode = 0x62; } assembly "fadd"; }
+    instruction DADD { encoding Opcode { opcode = 0x63; } assembly "dadd"; }
+    instruction ISUB { encoding Opcode { opcode = 0x64; } assembly "isub"; }
+    instruction LSUB { encoding Opcode { opcode = 0x65; } assembly "lsub"; }
+    instruction FSUB { encoding Opcode { opcode = 0x66; } assembly "fsub"; }
+    instruction DSUB { encoding Opcode { opcode = 0x67; } assembly "dsub"; }
+    instruction IMUL { encoding Opcode { opcode = 0x68; } assembly "imul"; }
+    instruction LMUL { encoding Opcode { opcode = 0x69; } assembly "lmul"; }
+    instruction FMUL { encoding Opcode { opcode = 0x6A; } assembly "fmul"; }
+    instruction DMUL { encoding Opcode { opcode = 0x6B; } assembly "dmul"; }
+    instruction IDIV { encoding Opcode { opcode = 0x6C; } assembly "idiv"; }
+    instruction LDIV { encoding Opcode { opcode = 0x6D; } assembly "ldiv"; }
+    instruction FDIV { encoding Opcode { opcode = 0x6E; } assembly "fdiv"; }
+    instruction DDIV { encoding Opcode { opcode = 0x6F; } assembly "ddiv"; }
+    instruction IREM { encoding Opcode { opcode = 0x70; } assembly "irem"; }
+    instruction LREM { encoding Opcode { opcode = 0x71; } assembly "lrem"; }
+    instruction FREM { encoding Opcode { opcode = 0x72; } assembly "frem"; }
+    instruction DREM { encoding Opcode { opcode = 0x73; } assembly "drem"; }
+    instruction INEG { encoding Opcode { opcode = 0x74; } assembly "ineg"; }
+    instruction LNEG { encoding Opcode { opcode = 0x75; } assembly "lneg"; }
+    instruction FNEG { encoding Opcode { opcode = 0x76; } assembly "fneg"; }
+    instruction DNEG { encoding Opcode { opcode = 0x77; } assembly "dneg"; }
+
+    instruction ISHL  { encoding Opcode { opcode = 0x78; } assembly "ishl"; }
+    instruction LSHL  { encoding Opcode { opcode = 0x79; } assembly "lshl"; }
+    instruction ISHR  { encoding Opcode { opcode = 0x7A; } assembly "ishr"; }
+    instruction LSHR  { encoding Opcode { opcode = 0x7B; } assembly "lshr"; }
+    instruction IUSHR { encoding Opcode { opcode = 0x7C; } assembly "iushr"; }
+    instruction LUSHR { encoding Opcode { opcode = 0x7D; } assembly "lushr"; }
+    instruction IAND  { encoding Opcode { opcode = 0x7E; } assembly "iand"; }
+    instruction LAND  { encoding Opcode { opcode = 0x7F; } assembly "land"; }
+    instruction IOR   { encoding Opcode { opcode = 0x80; } assembly "ior"; }
+    instruction LOR   { encoding Opcode { opcode = 0x81; } assembly "lor"; }
+    instruction IXOR  { encoding Opcode { opcode = 0x82; } assembly "ixor"; }
+    instruction LXOR  { encoding Opcode { opcode = 0x83; } assembly "lxor"; }
+
+    // 0x84 is iinc, which carries a local index and an immediate.
+    instruction I2L { encoding Opcode { opcode = 0x85; } assembly "i2l"; }
+    instruction I2F { encoding Opcode { opcode = 0x86; } assembly "i2f"; }
+    instruction I2D { encoding Opcode { opcode = 0x87; } assembly "i2d"; }
+    instruction L2I { encoding Opcode { opcode = 0x88; } assembly "l2i"; }
+    instruction L2F { encoding Opcode { opcode = 0x89; } assembly "l2f"; }
+    instruction L2D { encoding Opcode { opcode = 0x8A; } assembly "l2d"; }
+    instruction F2I { encoding Opcode { opcode = 0x8B; } assembly "f2i"; }
+    instruction F2L { encoding Opcode { opcode = 0x8C; } assembly "f2l"; }
+    instruction F2D { encoding Opcode { opcode = 0x8D; } assembly "f2d"; }
+    instruction D2I { encoding Opcode { opcode = 0x8E; } assembly "d2i"; }
+    instruction D2L { encoding Opcode { opcode = 0x8F; } assembly "d2l"; }
+    instruction D2F { encoding Opcode { opcode = 0x90; } assembly "d2f"; }
+    instruction I2B { encoding Opcode { opcode = 0x91; } assembly "i2b"; }
+    instruction I2C { encoding Opcode { opcode = 0x92; } assembly "i2c"; }
+    instruction I2S { encoding Opcode { opcode = 0x93; } assembly "i2s"; }
+
+    instruction LCMP  { encoding Opcode { opcode = 0x94; } assembly "lcmp"; }
+    instruction FCMPL { encoding Opcode { opcode = 0x95; } assembly "fcmpl"; }
+    instruction FCMPG { encoding Opcode { opcode = 0x96; } assembly "fcmpg"; }
+    instruction DCMPL { encoding Opcode { opcode = 0x97; } assembly "dcmpl"; }
+    instruction DCMPG { encoding Opcode { opcode = 0x98; } assembly "dcmpg"; }
+}

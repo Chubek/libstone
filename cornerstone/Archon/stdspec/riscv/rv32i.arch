@@ -1,0 +1,10 @@
+architecture RISCV32 {
+    description = "RV32I base integer ALU subset";
+    endian = little;
+    parameter XLEN: nat in {32} = 32;
+    parameter SHAMT: nat in {5} = 5;
+    address_width = XLEN;
+    feature I = enabled;
+
+    import base;
+}

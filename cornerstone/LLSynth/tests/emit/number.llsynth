@@ -1,0 +1,16 @@
+.language "EmitNumber"
+.summary "Check emission for a café-themed calculator"
+.start Input
+.skip /\s+/
+.token NUMBER: Float64 = /[0-9]+/
+
+.ir Calc
+.op PUSH_F64(value: Float64): () -> (Float64)
+.op ADD: (Float64, Float64) -> (Float64)
+.end
+
+.rule Input
+'syntax: left:NUMBER "+" right:NUMBER EOF
+'semantics: return $left + $right;
+'lower: return [Calc.PUSH_F64($left), Calc.PUSH_F64($right), Calc.ADD()];
+..

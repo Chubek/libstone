@@ -1,0 +1,133 @@
+architecture CIL {
+    description = "ECMA-335 CIL single-byte stack and numeric opcode subset";
+    version = "6";
+    endian = little;
+    address_width = 32;
+    import numeric;
+
+    // Values use the widest integer representation. The parallel kind stack
+    // records int32, int64, native int, F and O as 1 through 5.
+    type StackValue = bits<64>;
+    type ValueKind = uint<8>;
+    stack EvaluationStack: StackValue { capacity = 1024; }
+    stack ValueKinds: ValueKind { capacity = 1024; }
+
+    format Opcode: bits<8> {
+        field opcode: bits<8> @ [7:0];
+    }
+
+    instruction NOP {
+        encoding Opcode { opcode = 0x00; }
+        assembly "nop";
+        semantics {}
+    }
+
+    // These loads encode their constant in the opcode, not in a following byte.
+    instruction LDNULL {
+        encoding Opcode { opcode = 0x14; }
+        assembly "ldnull";
+        semantics {
+            push(EvaluationStack, zext<64>(0));
+            push(ValueKinds, trunc<8>(5));
+        }
+    }
+    instruction LDC_I4_M1 {
+        encoding Opcode { opcode = 0x15; }
+        assembly "ldc.i4.m1";
+        semantics {
+            push(EvaluationStack, zext<64>(trunc<32>(~0)));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_0 {
+        encoding Opcode { opcode = 0x16; }
+        assembly "ldc.i4.0";
+        semantics {
+            push(EvaluationStack, zext<64>(0));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_1 {
+        encoding Opcode { opcode = 0x17; }
+        assembly "ldc.i4.1";
+        semantics {
+            push(EvaluationStack, zext<64>(1));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_2 {
+        encoding Opcode { opcode = 0x18; }
+        assembly "ldc.i4.2";
+        semantics {
+            push(EvaluationStack, zext<64>(2));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_3 {
+        encoding Opcode { opcode = 0x19; }
+        assembly "ldc.i4.3";
+        semantics {
+            push(EvaluationStack, zext<64>(3));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_4 {
+        encoding Opcode { opcode = 0x1A; }
+        assembly "ldc.i4.4";
+        semantics {
+            push(EvaluationStack, zext<64>(4));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_5 {
+        encoding Opcode { opcode = 0x1B; }
+        assembly "ldc.i4.5";
+        semantics {
+            push(EvaluationStack, zext<64>(5));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_6 {
+        encoding Opcode { opcode = 0x1C; }
+        assembly "ldc.i4.6";
+        semantics {
+            push(EvaluationStack, zext<64>(6));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_7 {
+        encoding Opcode { opcode = 0x1D; }
+        assembly "ldc.i4.7";
+        semantics {
+            push(EvaluationStack, zext<64>(7));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+    instruction LDC_I4_8 {
+        encoding Opcode { opcode = 0x1E; }
+        assembly "ldc.i4.8";
+        semantics {
+            push(EvaluationStack, zext<64>(8));
+            push(ValueKinds, trunc<8>(1));
+        }
+    }
+
+    instruction DUP {
+        encoding Opcode { opcode = 0x25; }
+        assembly "dup";
+        semantics {
+            let kind = peek(ValueKinds);
+            let value = peek(EvaluationStack);
+            push(EvaluationStack, value);
+            push(ValueKinds, kind);
+        }
+    }
+    instruction POP {
+        encoding Opcode { opcode = 0x26; }
+        assembly "pop";
+        semantics {
+            let kind = pop(ValueKinds);
+            let value = pop(EvaluationStack);
+        }
+    }
+}

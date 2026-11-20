@@ -1,0 +1,10 @@
+architecture RISCV64 {
+    description = "RV64I base integer ALU subset";
+    endian = little;
+    parameter XLEN: nat in {64} = 64;
+    parameter SHAMT: nat in {6} = 6;
+    address_width = XLEN;
+    feature I = enabled;
+
+    import base;
+}

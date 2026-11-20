@@ -1,0 +1,79 @@
+module Numeric {
+    // Floating-point operations and numeric conversions have no immediates.
+    // All operands, results and possible traps depend on Wasm VM state.
+    template NumericOpcode<Name: string, Byte: bits<8>> {
+        instruction self {
+            encoding Opcode { opcode = Byte; }
+            assembly "{Name}";
+        }
+    }
+
+    def F32_EQ = NumericOpcode<"f32.eq", 0x5B>;
+    def F32_NE = NumericOpcode<"f32.ne", 0x5C>;
+    def F32_LT = NumericOpcode<"f32.lt", 0x5D>;
+    def F32_GT = NumericOpcode<"f32.gt", 0x5E>;
+    def F32_LE = NumericOpcode<"f32.le", 0x5F>;
+    def F32_GE = NumericOpcode<"f32.ge", 0x60>;
+    def F64_EQ = NumericOpcode<"f64.eq", 0x61>;
+    def F64_NE = NumericOpcode<"f64.ne", 0x62>;
+    def F64_LT = NumericOpcode<"f64.lt", 0x63>;
+    def F64_GT = NumericOpcode<"f64.gt", 0x64>;
+    def F64_LE = NumericOpcode<"f64.le", 0x65>;
+    def F64_GE = NumericOpcode<"f64.ge", 0x66>;
+
+    def F32_ABS = NumericOpcode<"f32.abs", 0x8B>;
+    def F32_NEG = NumericOpcode<"f32.neg", 0x8C>;
+    def F32_CEIL = NumericOpcode<"f32.ceil", 0x8D>;
+    def F32_FLOOR = NumericOpcode<"f32.floor", 0x8E>;
+    def F32_TRUNC = NumericOpcode<"f32.trunc", 0x8F>;
+    def F32_NEAREST = NumericOpcode<"f32.nearest", 0x90>;
+    def F32_SQRT = NumericOpcode<"f32.sqrt", 0x91>;
+    def F32_ADD = NumericOpcode<"f32.add", 0x92>;
+    def F32_SUB = NumericOpcode<"f32.sub", 0x93>;
+    def F32_MUL = NumericOpcode<"f32.mul", 0x94>;
+    def F32_DIV = NumericOpcode<"f32.div", 0x95>;
+    def F32_MIN = NumericOpcode<"f32.min", 0x96>;
+    def F32_MAX = NumericOpcode<"f32.max", 0x97>;
+    def F32_COPYSIGN = NumericOpcode<"f32.copysign", 0x98>;
+
+    def F64_ABS = NumericOpcode<"f64.abs", 0x99>;
+    def F64_NEG = NumericOpcode<"f64.neg", 0x9A>;
+    def F64_CEIL = NumericOpcode<"f64.ceil", 0x9B>;
+    def F64_FLOOR = NumericOpcode<"f64.floor", 0x9C>;
+    def F64_TRUNC = NumericOpcode<"f64.trunc", 0x9D>;
+    def F64_NEAREST = NumericOpcode<"f64.nearest", 0x9E>;
+    def F64_SQRT = NumericOpcode<"f64.sqrt", 0x9F>;
+    def F64_ADD = NumericOpcode<"f64.add", 0xA0>;
+    def F64_SUB = NumericOpcode<"f64.sub", 0xA1>;
+    def F64_MUL = NumericOpcode<"f64.mul", 0xA2>;
+    def F64_DIV = NumericOpcode<"f64.div", 0xA3>;
+    def F64_MIN = NumericOpcode<"f64.min", 0xA4>;
+    def F64_MAX = NumericOpcode<"f64.max", 0xA5>;
+    def F64_COPYSIGN = NumericOpcode<"f64.copysign", 0xA6>;
+
+    def I32_WRAP_I64 = NumericOpcode<"i32.wrap_i64", 0xA7>;
+    def I32_TRUNC_F32_S = NumericOpcode<"i32.trunc_f32_s", 0xA8>;
+    def I32_TRUNC_F32_U = NumericOpcode<"i32.trunc_f32_u", 0xA9>;
+    def I32_TRUNC_F64_S = NumericOpcode<"i32.trunc_f64_s", 0xAA>;
+    def I32_TRUNC_F64_U = NumericOpcode<"i32.trunc_f64_u", 0xAB>;
+    def I64_EXTEND_I32_S = NumericOpcode<"i64.extend_i32_s", 0xAC>;
+    def I64_EXTEND_I32_U = NumericOpcode<"i64.extend_i32_u", 0xAD>;
+    def I64_TRUNC_F32_S = NumericOpcode<"i64.trunc_f32_s", 0xAE>;
+    def I64_TRUNC_F32_U = NumericOpcode<"i64.trunc_f32_u", 0xAF>;
+    def I64_TRUNC_F64_S = NumericOpcode<"i64.trunc_f64_s", 0xB0>;
+    def I64_TRUNC_F64_U = NumericOpcode<"i64.trunc_f64_u", 0xB1>;
+    def F32_CONVERT_I32_S = NumericOpcode<"f32.convert_i32_s", 0xB2>;
+    def F32_CONVERT_I32_U = NumericOpcode<"f32.convert_i32_u", 0xB3>;
+    def F32_CONVERT_I64_S = NumericOpcode<"f32.convert_i64_s", 0xB4>;
+    def F32_CONVERT_I64_U = NumericOpcode<"f32.convert_i64_u", 0xB5>;
+    def F32_DEMOTE_F64 = NumericOpcode<"f32.demote_f64", 0xB6>;
+    def F64_CONVERT_I32_S = NumericOpcode<"f64.convert_i32_s", 0xB7>;
+    def F64_CONVERT_I32_U = NumericOpcode<"f64.convert_i32_u", 0xB8>;
+    def F64_CONVERT_I64_S = NumericOpcode<"f64.convert_i64_s", 0xB9>;
+    def F64_CONVERT_I64_U = NumericOpcode<"f64.convert_i64_u", 0xBA>;
+    def F64_PROMOTE_F32 = NumericOpcode<"f64.promote_f32", 0xBB>;
+    def I32_REINTERPRET_F32 = NumericOpcode<"i32.reinterpret_f32", 0xBC>;
+    def I64_REINTERPRET_F64 = NumericOpcode<"i64.reinterpret_f64", 0xBD>;
+    def F32_REINTERPRET_I32 = NumericOpcode<"f32.reinterpret_i32", 0xBE>;
+    def F64_REINTERPRET_I64 = NumericOpcode<"f64.reinterpret_i64", 0xBF>;
+}

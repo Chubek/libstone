@@ -1,0 +1,19 @@
+# bytes (little-endian hex)	assembly
+21084300	addu r1, r2, r3
+2320a600	subu r4, r5, r6
+24380901	and r7, r8, r9
+25506c01	or r10, r11, r12
+2668cf01	xor r13, r14, r15
+f9ff3026	addiu r16, r17, -7
+00800224	addiu r2, r0, -32768
+ff7f8324	addiu r3, r4, 32767
+21002200	addu r0, r1, r2
+2728c700	nor r5, r6, r7
+ffff2831	andi r8, r9, 65535
+00800a34	ori r10, r0, 32768
+01808b39	xori r11, r12, 32769
+ffff0d3c	lui r13, 65535
+c0770f00	sll r14, r15, 31
+02801100	srl r16, r17, 0
+c3971300	sra r18, r19, 31
+00000000	sll r0, r0, 0

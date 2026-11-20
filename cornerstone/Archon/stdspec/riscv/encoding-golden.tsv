@@ -1,0 +1,19 @@
+# bytes (little-endian hex)	assembly
+b3003100	add x1, x2, x3
+b30f1040	sub x31, x0, x1
+33c20f01	xor x4, x31, x16
+33e47701	or x8, x15, x23
+33f88301	and x16, x7, x24
+9302f37f	addi x5, x6, 2047
+930f0080	addi x31, x0, -2048
+13800f00	addi x0, x31, 0
+13caf4ff	xori x20, x9, -1
+93663112	ori x13, x2, 291
+13f505ff	andi x10, x11, -16
+3305f401	add a0, fp, t6
+3305f401	add a0, s0, t6
+b70f0080	lui x31, 0x80000
+b7f0ffff	lui x1, 0xfffff
+b3127300	sll x5, x6, x7
+33d4a400	srl x8, x9, x10
+b355d640	sra x11, x12, x13

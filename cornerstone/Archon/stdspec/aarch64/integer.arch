@@ -1,0 +1,225 @@
+module Integer {
+    type Word = bits<XLEN>;
+
+    register_file IntegerRegisters {
+        count = 32;
+        width = XLEN;
+        register x[0..31];
+        zero = 31;
+        alias xzr = x[31];
+    }
+
+    register_class GPR {
+        members = IntegerRegisters.*;
+    }
+
+    format ShiftedRegister: bits<32> {
+        field opcode:       bits<8> @ [31:24];
+        field modifier:     bits<3> @ [23:21];
+        field rm:           bits<5> @ [20:16];
+        field shift_amount: bits<6> @ [15:10];
+        field rn:           bits<5> @ [9:5];
+        field rd:           bits<5> @ [4:0];
+    }
+
+    format MultiplyAdd: bits<32> {
+        field opcode:   bits<11> @ [31:21];
+        field rm:       bits<5>  @ [20:16];
+        field subtract: bits<1>  @ [15:15];
+        field ra:       bits<5>  @ [14:10];
+        field rn:       bits<5>  @ [9:5];
+        field rd:       bits<5>  @ [4:0];
+    }
+
+    instruction ADD {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0x8B;
+            modifier = 0;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "add {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) +% read(rm)); }
+    }
+
+    instruction SUB {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0xCB;
+            modifier = 0;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "sub {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) -% read(rm)); }
+    }
+
+    instruction AND {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0x8A;
+            modifier = 0;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "and {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) & read(rm)); }
+    }
+
+    instruction ORR {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0xAA;
+            modifier = 0;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "orr {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) | read(rm)); }
+    }
+
+    instruction EOR {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0xCA;
+            modifier = 0;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "eor {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) ^ read(rm)); }
+    }
+
+    instruction BIC {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0x8A;
+            modifier = 1; // LSL, with the second source inverted.
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "bic {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) & ~read(rm)); }
+    }
+
+    instruction ORN {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0xAA;
+            modifier = 1;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "orn {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) | ~read(rm)); }
+    }
+
+    instruction EON {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+        }
+        encoding ShiftedRegister {
+            opcode = 0xCA;
+            modifier = 1;
+            rm = encode_register(rm);
+            shift_amount = 0;
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "eon {rd}, {rn}, {rm}";
+        semantics { write(rd, read(rn) ^ ~read(rm)); }
+    }
+
+    instruction MADD {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+            in ra: GPR;
+        }
+        encoding MultiplyAdd {
+            opcode = 0b10011011000;
+            rm = encode_register(rm);
+            subtract = 0;
+            ra = encode_register(ra);
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "madd {rd}, {rn}, {rm}, {ra}";
+        semantics { write(rd, read(ra) +% (read(rn) *% read(rm))); }
+    }
+
+    instruction MSUB {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rn: GPR;
+            in rm: GPR;
+            in ra: GPR;
+        }
+        encoding MultiplyAdd {
+            opcode = 0b10011011000;
+            rm = encode_register(rm);
+            subtract = 1;
+            ra = encode_register(ra);
+            rn = encode_register(rn);
+            rd = encode_register(rd);
+        }
+        assembly "msub {rd}, {rn}, {rm}, {ra}";
+        semantics { write(rd, read(ra) -% (read(rn) *% read(rm))); }
+    }
+}

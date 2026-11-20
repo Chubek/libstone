@@ -1,0 +1,72 @@
+architecture Toy8 {
+    description = "An eight-register machine illustrating the Archon integer subset";
+    version = "1.0";
+    endian = little;
+    parameter XLEN: nat in {8} = 8;
+    address_width = XLEN;
+    feature Base = enabled;
+    type Word = bits<XLEN>;
+
+    register_file Registers {
+        count = 8;
+        width = XLEN;
+        register r[0..7];
+        zero = 0;
+        alias zero = r[0];
+    }
+    register_class GPR { members = Registers.*; }
+
+    format Reg: bits<16> {
+        field opcode: bits<7> @ [15:9];
+        field dst: bits<3> @ [8:6];
+        field lhs: bits<3> @ [5:3];
+        field rhs: bits<3> @ [2:0];
+    }
+
+    format Pair: bits<16> {
+        field opcode: bits<10> @ [15:6];
+        field lhs: bits<3> @ [5:3];
+        field rhs: bits<3> @ [2:0];
+    }
+
+    format Imm: bits<16> {
+        field opcode: bits<5> @ [15:11];
+        field dst: bits<3> @ [10:8];
+        field value: sint<8> @ [7:0];
+    }
+
+    template Sum<Name: string, Opcode: bits<7>> {
+        instruction self {
+            requires feature(Base);
+            operands { out dst: GPR; in lhs: GPR; in rhs: GPR; }
+            encoding Reg { opcode = Opcode; dst = dst; lhs = lhs; rhs = rhs; }
+            assembly "{Name} {dst}, {lhs}, {rhs}";
+            semantics {
+                let sum: Word = read(lhs) +% read(rhs);
+                write(dst, sum);
+            }
+        }
+    }
+    def ADD = Sum<"add", 1>;
+
+    instruction SWAP {
+        requires feature(Base);
+        operands { inout lhs: GPR; inout rhs: GPR; }
+        encoding Pair { opcode = 0x10; lhs = lhs; rhs = rhs; }
+        assembly "swap {lhs}, {rhs}";
+        semantics {
+            parallel {
+                lhs := read(rhs);
+                rhs := read(lhs);
+            }
+        }
+    }
+
+    instruction MOVI {
+        requires feature(Base);
+        operands { out dst: GPR; in value: imm<sint<8>>; }
+        encoding Imm { opcode = 0x10; dst = dst; value = value; }
+        assembly "movi {dst}, {value}";
+        semantics { write(dst, value); }
+    }
+}

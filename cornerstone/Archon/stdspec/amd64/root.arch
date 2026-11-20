@@ -1,0 +1,8 @@
+architecture AMD64 {
+    description = "AMD64 long-mode, three-byte classic GPR subset";
+    endian = little;
+    parameter XLEN: nat in {64} = 64;
+    address_width = XLEN;
+    feature Base = enabled;
+    import integer;
+}

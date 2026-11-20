@@ -1,0 +1,114 @@
+architecture JVM {
+    description = "Java Virtual Machine single-byte stack and numeric opcode subset";
+    version = "21";
+    endian = big;
+    address_width = 32;
+    import numeric;
+
+    // Values use the widest integer representation. The parallel kind stack
+    // records int and long as 1 and 2; those are JVM categories 1 and 2.
+    type StackValue = bits<64>;
+    type ValueKind = uint<8>;
+    stack OperandStack: StackValue { capacity = 1024; }
+    stack OperandKinds: ValueKind { capacity = 1024; }
+
+    format Opcode: bits<8> {
+        field opcode: bits<8> @ [7:0];
+    }
+
+    // The value of each constant is implicit in its opcode.
+    instruction NOP {
+        encoding Opcode { opcode = 0x00; }
+        assembly "nop";
+        semantics {}
+    }
+    instruction ACONST_NULL { encoding Opcode { opcode = 0x01; } assembly "aconst_null"; }
+    instruction ICONST_M1 {
+        encoding Opcode { opcode = 0x02; }
+        assembly "iconst_m1";
+        semantics {
+            push(OperandStack, zext<64>(trunc<32>(~0)));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_0 {
+        encoding Opcode { opcode = 0x03; }
+        assembly "iconst_0";
+        semantics {
+            push(OperandStack, zext<64>(0));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_1 {
+        encoding Opcode { opcode = 0x04; }
+        assembly "iconst_1";
+        semantics {
+            push(OperandStack, zext<64>(1));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_2 {
+        encoding Opcode { opcode = 0x05; }
+        assembly "iconst_2";
+        semantics {
+            push(OperandStack, zext<64>(2));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_3 {
+        encoding Opcode { opcode = 0x06; }
+        assembly "iconst_3";
+        semantics {
+            push(OperandStack, zext<64>(3));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_4 {
+        encoding Opcode { opcode = 0x07; }
+        assembly "iconst_4";
+        semantics {
+            push(OperandStack, zext<64>(4));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction ICONST_5 {
+        encoding Opcode { opcode = 0x08; }
+        assembly "iconst_5";
+        semantics {
+            push(OperandStack, zext<64>(5));
+            push(OperandKinds, trunc<8>(1));
+        }
+    }
+    instruction LCONST_0 {
+        encoding Opcode { opcode = 0x09; }
+        assembly "lconst_0";
+        semantics {
+            push(OperandStack, zext<64>(0));
+            push(OperandKinds, trunc<8>(2));
+        }
+    }
+    instruction LCONST_1 {
+        encoding Opcode { opcode = 0x0A; }
+        assembly "lconst_1";
+        semantics {
+            push(OperandStack, zext<64>(1));
+            push(OperandKinds, trunc<8>(2));
+        }
+    }
+    instruction FCONST_0    { encoding Opcode { opcode = 0x0B; } assembly "fconst_0"; }
+    instruction FCONST_1    { encoding Opcode { opcode = 0x0C; } assembly "fconst_1"; }
+    instruction FCONST_2    { encoding Opcode { opcode = 0x0D; } assembly "fconst_2"; }
+    instruction DCONST_0    { encoding Opcode { opcode = 0x0E; } assembly "dconst_0"; }
+    instruction DCONST_1    { encoding Opcode { opcode = 0x0F; } assembly "dconst_1"; }
+
+    // Polymorphic stack manipulation remains encoding-only.
+    instruction POP     { encoding Opcode { opcode = 0x57; } assembly "pop"; }
+    instruction POP2    { encoding Opcode { opcode = 0x58; } assembly "pop2"; }
+    instruction DUP     { encoding Opcode { opcode = 0x59; } assembly "dup"; }
+    instruction DUP_X1  { encoding Opcode { opcode = 0x5A; } assembly "dup_x1"; }
+    instruction DUP_X2  { encoding Opcode { opcode = 0x5B; } assembly "dup_x2"; }
+    instruction DUP2    { encoding Opcode { opcode = 0x5C; } assembly "dup2"; }
+    instruction DUP2_X1 { encoding Opcode { opcode = 0x5D; } assembly "dup2_x1"; }
+    instruction DUP2_X2 { encoding Opcode { opcode = 0x5E; } assembly "dup2_x2"; }
+    instruction SWAP    { encoding Opcode { opcode = 0x5F; } assembly "swap"; }
+}

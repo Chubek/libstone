@@ -1,0 +1,16 @@
+# bytes (little-endian hex)	assembly
+4100038b	add x1, x2, x3
+a40006cb	sub x4, x5, x6
+0701098a	and x7, x8, x9
+6a010caa	orr x10, x11, x12
+cd010fca	eor x13, x14, x15
+3f00028b	add xzr, x1, x2
+e30304cb	sub x3, xzr, x4
+e50306aa	orr x5, xzr, x6
+3002328a	bic x16, x17, x18
+930235aa	orn x19, x20, x21
+f60238ca	eon x22, x23, x24
+ff033e8a	bic xzr, xzr, x30
+59731b9b	madd x25, x26, x27, x28
+dd871f9b	msub x29, x30, xzr, x1
+3f7c029b	madd xzr, x1, x2, xzr

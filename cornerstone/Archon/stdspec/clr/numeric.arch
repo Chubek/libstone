@@ -1,0 +1,66 @@
+module Numeric {
+    // These operators are overloaded across CIL stack types. The current
+    // straight-line ArchSem cannot dispatch on or validate the kind tags, and
+    // cannot model division or overflow traps, so all remain encoding-only.
+    instruction ADD    { encoding Opcode { opcode = 0x58; } assembly "add"; }
+    instruction SUB    { encoding Opcode { opcode = 0x59; } assembly "sub"; }
+    instruction MUL    { encoding Opcode { opcode = 0x5A; } assembly "mul"; }
+    instruction DIV    { encoding Opcode { opcode = 0x5B; } assembly "div"; }
+    instruction DIV_UN { encoding Opcode { opcode = 0x5C; } assembly "div.un"; }
+    instruction REM    { encoding Opcode { opcode = 0x5D; } assembly "rem"; }
+    instruction REM_UN { encoding Opcode { opcode = 0x5E; } assembly "rem.un"; }
+    instruction AND    { encoding Opcode { opcode = 0x5F; } assembly "and"; }
+    instruction OR     { encoding Opcode { opcode = 0x60; } assembly "or"; }
+    instruction XOR    { encoding Opcode { opcode = 0x61; } assembly "xor"; }
+    instruction SHL    { encoding Opcode { opcode = 0x62; } assembly "shl"; }
+    instruction SHR    { encoding Opcode { opcode = 0x63; } assembly "shr"; }
+    instruction SHR_UN { encoding Opcode { opcode = 0x64; } assembly "shr.un"; }
+    instruction NEG    { encoding Opcode { opcode = 0x65; } assembly "neg"; }
+    instruction NOT    { encoding Opcode { opcode = 0x66; } assembly "not"; }
+
+    instruction CONV_I1   { encoding Opcode { opcode = 0x67; } assembly "conv.i1"; }
+    instruction CONV_I2   { encoding Opcode { opcode = 0x68; } assembly "conv.i2"; }
+    instruction CONV_I4   { encoding Opcode { opcode = 0x69; } assembly "conv.i4"; }
+    instruction CONV_I8   { encoding Opcode { opcode = 0x6A; } assembly "conv.i8"; }
+    instruction CONV_R4   { encoding Opcode { opcode = 0x6B; } assembly "conv.r4"; }
+    instruction CONV_R8   { encoding Opcode { opcode = 0x6C; } assembly "conv.r8"; }
+    instruction CONV_U4   { encoding Opcode { opcode = 0x6D; } assembly "conv.u4"; }
+    instruction CONV_U8   { encoding Opcode { opcode = 0x6E; } assembly "conv.u8"; }
+    instruction CONV_R_UN { encoding Opcode { opcode = 0x76; } assembly "conv.r.un"; }
+
+    // Overflow-checking conversions from unsigned inputs.
+    instruction CONV_OVF_I1_UN { encoding Opcode { opcode = 0x82; } assembly "conv.ovf.i1.un"; }
+    instruction CONV_OVF_I2_UN { encoding Opcode { opcode = 0x83; } assembly "conv.ovf.i2.un"; }
+    instruction CONV_OVF_I4_UN { encoding Opcode { opcode = 0x84; } assembly "conv.ovf.i4.un"; }
+    instruction CONV_OVF_I8_UN { encoding Opcode { opcode = 0x85; } assembly "conv.ovf.i8.un"; }
+    instruction CONV_OVF_U1_UN { encoding Opcode { opcode = 0x86; } assembly "conv.ovf.u1.un"; }
+    instruction CONV_OVF_U2_UN { encoding Opcode { opcode = 0x87; } assembly "conv.ovf.u2.un"; }
+    instruction CONV_OVF_U4_UN { encoding Opcode { opcode = 0x88; } assembly "conv.ovf.u4.un"; }
+    instruction CONV_OVF_U8_UN { encoding Opcode { opcode = 0x89; } assembly "conv.ovf.u8.un"; }
+    instruction CONV_OVF_I_UN  { encoding Opcode { opcode = 0x8A; } assembly "conv.ovf.i.un"; }
+    instruction CONV_OVF_U_UN  { encoding Opcode { opcode = 0x8B; } assembly "conv.ovf.u.un"; }
+
+    instruction CONV_OVF_I1 { encoding Opcode { opcode = 0xB3; } assembly "conv.ovf.i1"; }
+    instruction CONV_OVF_U1 { encoding Opcode { opcode = 0xB4; } assembly "conv.ovf.u1"; }
+    instruction CONV_OVF_I2 { encoding Opcode { opcode = 0xB5; } assembly "conv.ovf.i2"; }
+    instruction CONV_OVF_U2 { encoding Opcode { opcode = 0xB6; } assembly "conv.ovf.u2"; }
+    instruction CONV_OVF_I4 { encoding Opcode { opcode = 0xB7; } assembly "conv.ovf.i4"; }
+    instruction CONV_OVF_U4 { encoding Opcode { opcode = 0xB8; } assembly "conv.ovf.u4"; }
+    instruction CONV_OVF_I8 { encoding Opcode { opcode = 0xB9; } assembly "conv.ovf.i8"; }
+    instruction CONV_OVF_U8 { encoding Opcode { opcode = 0xBA; } assembly "conv.ovf.u8"; }
+
+    instruction CONV_U2    { encoding Opcode { opcode = 0xD1; } assembly "conv.u2"; }
+    instruction CONV_U1    { encoding Opcode { opcode = 0xD2; } assembly "conv.u1"; }
+    instruction CONV_I     { encoding Opcode { opcode = 0xD3; } assembly "conv.i"; }
+    instruction CONV_OVF_I { encoding Opcode { opcode = 0xD4; } assembly "conv.ovf.i"; }
+    instruction CONV_OVF_U { encoding Opcode { opcode = 0xD5; } assembly "conv.ovf.u"; }
+
+    instruction ADD_OVF    { encoding Opcode { opcode = 0xD6; } assembly "add.ovf"; }
+    instruction ADD_OVF_UN { encoding Opcode { opcode = 0xD7; } assembly "add.ovf.un"; }
+    instruction MUL_OVF    { encoding Opcode { opcode = 0xD8; } assembly "mul.ovf"; }
+    instruction MUL_OVF_UN { encoding Opcode { opcode = 0xD9; } assembly "mul.ovf.un"; }
+    instruction SUB_OVF    { encoding Opcode { opcode = 0xDA; } assembly "sub.ovf"; }
+    instruction SUB_OVF_UN { encoding Opcode { opcode = 0xDB; } assembly "sub.ovf.un"; }
+
+    instruction CONV_U { encoding Opcode { opcode = 0xE0; } assembly "conv.u"; }
+}

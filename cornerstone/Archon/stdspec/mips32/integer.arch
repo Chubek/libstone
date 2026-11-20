@@ -1,0 +1,298 @@
+module Integer {
+    type Word = bits<XLEN>;
+
+    register_file IntegerRegisters {
+        count = 32;
+        width = XLEN;
+        register r[0..31];
+        zero = 0;
+        alias zero = r[0];
+    }
+
+    register_class GPR {
+        members = IntegerRegisters.*;
+    }
+
+    format RType: bits<32> {
+        field opcode:       bits<6> @ [31:26];
+        field rs:           bits<5> @ [25:21];
+        field rt:           bits<5> @ [20:16];
+        field rd:           bits<5> @ [15:11];
+        field shift_amount: bits<5> @ [10:6];
+        field funct:        bits<6> @ [5:0];
+    }
+
+    format IType: bits<32> {
+        field opcode:    bits<6>  @ [31:26];
+        field rs:        bits<5>  @ [25:21];
+        field rt:        bits<5>  @ [20:16];
+        field immediate: sint<16> @ [15:0];
+    }
+
+    format UnsignedIType: bits<32> {
+        field opcode:    bits<6>  @ [31:26];
+        field rs:        bits<5>  @ [25:21];
+        field rt:        bits<5>  @ [20:16];
+        field immediate: uint<16> @ [15:0];
+    }
+
+    instruction ADDU {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x21;
+        }
+        assembly "addu {rd}, {rs}, {rt}";
+        semantics { write(rd, read(rs) +% read(rt)); }
+    }
+
+    instruction SUBU {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x23;
+        }
+        assembly "subu {rd}, {rs}, {rt}";
+        semantics { write(rd, read(rs) -% read(rt)); }
+    }
+
+    instruction AND {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x24;
+        }
+        assembly "and {rd}, {rs}, {rt}";
+        semantics { write(rd, read(rs) & read(rt)); }
+    }
+
+    instruction OR {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x25;
+        }
+        assembly "or {rd}, {rs}, {rt}";
+        semantics { write(rd, read(rs) | read(rt)); }
+    }
+
+    instruction XOR {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x26;
+        }
+        assembly "xor {rd}, {rs}, {rt}";
+        semantics { write(rd, read(rs) ^ read(rt)); }
+    }
+
+    instruction ADDIU {
+        requires feature(Base);
+        operands {
+            out rt: GPR;
+            in rs: GPR;
+            in immediate: imm<sint<16>>;
+        }
+        encoding IType {
+            opcode = 0x09;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            immediate = immediate;
+        }
+        assembly "addiu {rt}, {rs}, {immediate}";
+        semantics { write(rt, read(rs) +% sext<XLEN>(immediate)); }
+    }
+
+    instruction NOR {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rs: GPR;
+            in rt: GPR;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = 0;
+            funct = 0x27;
+        }
+        assembly "nor {rd}, {rs}, {rt}";
+        semantics { write(rd, ~(read(rs) | read(rt))); }
+    }
+
+    instruction ANDI {
+        requires feature(Base);
+        operands {
+            out rt: GPR;
+            in rs: GPR;
+            in immediate: imm<uint<16>>;
+        }
+        encoding UnsignedIType {
+            opcode = 0x0C;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            immediate = immediate;
+        }
+        assembly "andi {rt}, {rs}, {immediate}";
+        semantics { write(rt, read(rs) & zext<XLEN>(immediate)); }
+    }
+
+    instruction ORI {
+        requires feature(Base);
+        operands {
+            out rt: GPR;
+            in rs: GPR;
+            in immediate: imm<uint<16>>;
+        }
+        encoding UnsignedIType {
+            opcode = 0x0D;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            immediate = immediate;
+        }
+        assembly "ori {rt}, {rs}, {immediate}";
+        semantics { write(rt, read(rs) | zext<XLEN>(immediate)); }
+    }
+
+    instruction XORI {
+        requires feature(Base);
+        operands {
+            out rt: GPR;
+            in rs: GPR;
+            in immediate: imm<uint<16>>;
+        }
+        encoding UnsignedIType {
+            opcode = 0x0E;
+            rs = encode_register(rs);
+            rt = encode_register(rt);
+            immediate = immediate;
+        }
+        assembly "xori {rt}, {rs}, {immediate}";
+        semantics { write(rt, read(rs) ^ zext<XLEN>(immediate)); }
+    }
+
+    instruction LUI {
+        requires feature(Base);
+        operands {
+            out rt: GPR;
+            in immediate: imm<uint<16>>;
+        }
+        encoding UnsignedIType {
+            opcode = 0x0F;
+            rs = 0;
+            rt = encode_register(rt);
+            immediate = immediate;
+        }
+        assembly "lui {rt}, {immediate}";
+        semantics { write(rt, zext<XLEN>(immediate) << 16); }
+    }
+
+    instruction SLL {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rt: GPR;
+            in count: imm<uint<5>>;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = 0;
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = count;
+            funct = 0x00;
+        }
+        assembly "sll {rd}, {rt}, {count}";
+        semantics { write(rd, read(rt) << count); }
+    }
+
+    instruction SRL {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rt: GPR;
+            in count: imm<uint<5>>;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = 0;
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = count;
+            funct = 0x02;
+        }
+        assembly "srl {rd}, {rt}, {count}";
+        semantics { write(rd, read(rt) >> count); }
+    }
+
+    instruction SRA {
+        requires feature(Base);
+        operands {
+            out rd: GPR;
+            in rt: GPR;
+            in count: imm<uint<5>>;
+        }
+        encoding RType {
+            opcode = 0;
+            rs = 0;
+            rt = encode_register(rt);
+            rd = encode_register(rd);
+            shift_amount = count;
+            funct = 0x03;
+        }
+        assembly "sra {rd}, {rt}, {count}";
+        semantics {
+            let value = read(rt);
+            // Complement around the logical shift to get one-fill if negative.
+            let sign_fill = 0 -% (value >> 31);
+            write(rd, ((value ^ sign_fill) >> count) ^ sign_fill);
+        }
+    }
+}

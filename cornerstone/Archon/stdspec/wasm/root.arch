@@ -1,0 +1,49 @@
+architecture Wasm32 {
+    description = "WebAssembly 1.0 single-byte numeric, parametric and control opcode subset";
+    version = "1.0";
+    endian = little;
+    address_width = 32;
+    import integer;
+    import numeric;
+
+    // A value slot carries the widest MVP numeric bit pattern. The parallel
+    // type stack distinguishes i32, i64, f32 and f64 as 1, 2, 3 and 4.
+    type StackValue = bits<64>;
+    type ValueType = uint<8>;
+    stack OperandStack: StackValue { capacity = 1024; }
+    stack OperandTypes: ValueType { capacity = 1024; }
+
+    format Opcode: bits<8> {
+        field opcode: bits<8> @ [7:0];
+    }
+
+    instruction UNREACHABLE {
+        encoding Opcode { opcode = 0x00; }
+        assembly "unreachable";
+    }
+
+    instruction NOP {
+        encoding Opcode { opcode = 0x01; }
+        assembly "nop";
+        semantics {}
+    }
+
+    instruction RETURN {
+        encoding Opcode { opcode = 0x0F; }
+        assembly "return";
+    }
+
+    instruction DROP {
+        encoding Opcode { opcode = 0x1A; }
+        assembly "drop";
+        semantics {
+            let type = pop(OperandTypes);
+            let value = pop(OperandStack);
+        }
+    }
+
+    instruction SELECT {
+        encoding Opcode { opcode = 0x1B; }
+        assembly "select";
+    }
+}

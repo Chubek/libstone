@@ -1,0 +1,21 @@
+%{
+#define CALC_FIXTURE_VERSION 1
+static inline size_t int_hashfn(intmax_t key) {
+    return (size_t)(uintmax_t)key;
+}
+%}
+%prefix calc
+%%
+module Calculator {
+    document = (expr+ forms, identifier name);
+    expr = Number(int value)
+         | Binary(op operator, expr left, expr right)
+         | Text(string? value)
+         | Index(map[int,expr] values)
+         | Pair(array[expr,2] values)
+         | Group(list[expr] values)
+         attributes (int? offset);
+    op = Plus | Minus;
+}
+%%
+_Static_assert(CALC_FIXTURE_VERSION == 1, "ASDL prologue is visible");

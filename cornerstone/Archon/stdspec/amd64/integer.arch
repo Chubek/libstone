@@ -1,0 +1,109 @@
+module Integer {
+    register_file IntegerRegisters {
+        count = 8;
+        width = XLEN;
+        register gpr[0..7];
+        alias rax = gpr[0];
+        alias rcx = gpr[1];
+        alias rdx = gpr[2];
+        alias rbx = gpr[3];
+        alias rsp = gpr[4];
+        alias rbp = gpr[5];
+        alias rsi = gpr[6];
+        alias rdi = gpr[7];
+    }
+
+    register_class GPR {
+        members = IntegerRegisters.*;
+    }
+
+    // The little-endian encoding word puts the first byte (REX) in bits 7:0.
+    format RegisterDirect: bits<24> {
+        field rex:    bits<8> @ [7:0];
+        field opcode: bits<8> @ [15:8];
+        field rm:     bits<3> @ [18:16];
+        field reg:    bits<3> @ [21:19];
+        field mod:    bits<2> @ [23:22];
+    }
+
+    format OpcodeRegister: bits<24> {
+        field rex:       bits<8> @ [7:0];
+        field escape:    bits<8> @ [15:8];
+        field reg:       bits<3> @ [18:16];
+        field opcode_hi: bits<5> @ [23:19];
+    }
+
+    instruction MOV {
+        requires feature(Base);
+        operands {
+            out dst: GPR;
+            in src: GPR;
+        }
+        encoding RegisterDirect {
+            rex = 0x48;
+            opcode = 0x89;
+            mod = 0b11;
+            reg = encode_register(src);
+            rm = encode_register(dst);
+        }
+        assembly "mov {dst}, {src}";
+        semantics { write(dst, read(src)); }
+    }
+
+    instruction NOT {
+        requires feature(Base);
+        operands { inout dst: GPR; }
+        encoding RegisterDirect {
+            rex = 0x48;
+            opcode = 0xF7;
+            mod = 0b11;
+            reg = 2; // /2 opcode extension, not a register operand.
+            rm = encode_register(dst);
+        }
+        assembly "not {dst}";
+        semantics { write(dst, ~read(dst)); }
+    }
+
+    instruction BSWAP {
+        requires feature(Base);
+        operands { inout dst: GPR; }
+        encoding OpcodeRegister {
+            rex = 0x48;
+            escape = 0x0F;
+            opcode_hi = 0b11001; // C8 through CF with the register in bits 2:0.
+            reg = encode_register(dst);
+        }
+        assembly "bswap {dst}";
+        semantics {
+            let original = read(dst);
+            let low_bytes = 0x00FF00FF00FF00FF;
+            let pairs = ((original & low_bytes) << 8) | ((original >> 8) & low_bytes);
+            let low_pairs = 0x0000FFFF0000FFFF;
+            let quads = ((pairs & low_pairs) << 16) | ((pairs >> 16) & low_pairs);
+            write(dst, (quads << 32) | (quads >> 32));
+        }
+    }
+
+    instruction XCHG {
+        requires feature(Base);
+        operands {
+            inout lhs: GPR;
+            inout rhs: GPR;
+        }
+        encoding RegisterDirect {
+            rex = 0x48;
+            opcode = 0x87;
+            mod = 0b11;
+            reg = encode_register(rhs);
+            rm = encode_register(lhs);
+        }
+        assembly "xchg {lhs}, {rhs}";
+        semantics {
+            // Both results come from the pre-instruction register state.
+            let old_lhs = read(lhs);
+            let old_rhs = read(rhs);
+            write(lhs, old_rhs);
+            write(rhs, old_lhs);
+        }
+    }
+}

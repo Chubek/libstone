@@ -1,0 +1,15 @@
+# hex bytes	Intel assembly
+4889d8	mov rax, rbx
+4889ec	mov rsp, rbp
+4889f7	mov rdi, rsi
+4889c9	mov rcx, rcx
+48f7d2	not rdx
+48f7d4	not rsp
+48f7d7	not rdi
+480fc8	bswap rax
+480fce	bswap rsi
+480fcf	bswap rdi
+4887d1	xchg rcx, rdx
+4887ca	xchg rdx, rcx
+4887fc	xchg rsp, rdi
+4887ed	xchg rbp, rbp

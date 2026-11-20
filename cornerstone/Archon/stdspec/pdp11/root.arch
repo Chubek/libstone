@@ -1,0 +1,827 @@
+architecture PDP11 {
+    description = "DEC PDP-11 register-direct and fixed-word subset";
+    endian = little;
+    parameter XLEN: nat in {16} = 16;
+    address_width = XLEN;
+
+    type Word = bits<16>;
+    type Byte = bits<8>;
+    type Flag = bits<1>;
+
+    // The low four PSW condition codes are independently visible state.
+    state N: Flag;
+    state Z: Flag;
+    state V: Flag;
+    state C: Flag;
+
+    // Register-direct data operations do not access memory, but declaring the
+    // architectural address space makes that non-effect explicit and testable.
+    memory MainMemory {
+        size = 65536;
+    }
+
+    register_file Registers {
+        count = 8;
+        width = XLEN;
+        register r[0..7];
+        alias sp = r[6];
+        alias pc = r[7];
+    }
+    register_class GPR { members = Registers.*; }
+
+    format Fixed: bits<16> {
+        field word: bits<16> @ [15:0];
+    }
+
+    format Single: bits<16> {
+        field opcode:   bits<10> @ [15:6];
+        field dst_mode: bits<3>  @ [5:3];
+        field dst:      bits<3>  @ [2:0];
+    }
+
+    format Double: bits<16> {
+        field opcode:   bits<4> @ [15:12];
+        field src_mode: bits<3> @ [11:9];
+        field src:      bits<3> @ [8:6];
+        field dst_mode: bits<3> @ [5:3];
+        field dst:      bits<3> @ [2:0];
+    }
+
+    // These require processor modes, interrupt arbitration, device state, or
+    // a complete PSW/trap transition. They remain encoding-only rather than
+    // pretending that their externally visible effects are no-ops.
+    template FixedWord<Name: string, Word: bits<16>> {
+        instruction self {
+            encoding Fixed { word = Word; }
+            assembly "{Name}";
+        }
+    }
+    def HALT  = FixedWord<"halt",  0x0000>;
+    def WAIT  = FixedWord<"wait",  0x0001>;
+    def RTI   = FixedWord<"rti",   0x0002>;
+    def BPT   = FixedWord<"bpt",   0x0003>;
+    def IOT   = FixedWord<"iot",   0x0004>;
+    def RESET = FixedWord<"reset", 0x0005>;
+
+    instruction NOP {
+        encoding Fixed { word = 0x00a0; } // DEC octal 000240
+        assembly "nop";
+        semantics {}
+    }
+
+    instruction CLC {
+        encoding Fixed { word = 0x00a1; }
+        assembly "clc";
+        semantics { C := trunc<1>(0); }
+    }
+    instruction CLV {
+        encoding Fixed { word = 0x00a2; }
+        assembly "clv";
+        semantics { V := trunc<1>(0); }
+    }
+    instruction CLZ {
+        encoding Fixed { word = 0x00a4; }
+        assembly "clz";
+        semantics { Z := trunc<1>(0); }
+    }
+    instruction CLN {
+        encoding Fixed { word = 0x00a8; }
+        assembly "cln";
+        semantics { N := trunc<1>(0); }
+    }
+    instruction CCC {
+        encoding Fixed { word = 0x00af; }
+        assembly "ccc";
+        semantics {
+            parallel {
+                N := trunc<1>(0);
+                Z := trunc<1>(0);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+    instruction SEC {
+        encoding Fixed { word = 0x00b1; }
+        assembly "sec";
+        semantics { C := trunc<1>(1); }
+    }
+    instruction SEV {
+        encoding Fixed { word = 0x00b2; }
+        assembly "sev";
+        semantics { V := trunc<1>(1); }
+    }
+    instruction SEZ {
+        encoding Fixed { word = 0x00b4; }
+        assembly "sez";
+        semantics { Z := trunc<1>(1); }
+    }
+    instruction SEN {
+        encoding Fixed { word = 0x00b8; }
+        assembly "sen";
+        semantics { N := trunc<1>(1); }
+    }
+    instruction SCC {
+        encoding Fixed { word = 0x00bf; }
+        assembly "scc";
+        semantics {
+            parallel {
+                N := trunc<1>(1);
+                Z := trunc<1>(1);
+                V := trunc<1>(1);
+                C := trunc<1>(1);
+            }
+        }
+    }
+
+    instruction SWAB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x003; dst_mode = 0; dst = dst; }
+        assembly "swab {dst}";
+        semantics {
+            let original = read(dst);
+            let result = concat(extract(original, 7, 0), extract(original, 15, 8));
+            let low = extract(result, 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := result;
+                N := extract(low, 7, 7);
+                Z := extract(~(low | (zero -% low)), 7, 7);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction CLR {
+        operands { out dst: GPR; }
+        encoding Single { opcode = 0x028; dst_mode = 0; dst = dst; }
+        assembly "clr {dst}";
+        semantics {
+            parallel {
+                dst := 0;
+                N := trunc<1>(0);
+                Z := trunc<1>(1);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction COM {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x029; dst_mode = 0; dst = dst; }
+        assembly "com {dst}";
+        semantics {
+            let result = ~read(dst);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+                C := trunc<1>(1);
+            }
+        }
+    }
+
+    instruction INC {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x02a; dst_mode = 0; dst = dst; }
+        assembly "inc {dst}";
+        semantics {
+            let original = read(dst);
+            let result = original +% 1;
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract(~original & result, 15, 15);
+            }
+        }
+    }
+
+    instruction DEC {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x02b; dst_mode = 0; dst = dst; }
+        assembly "dec {dst}";
+        semantics {
+            let original = read(dst);
+            let result = original -% 1;
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract(original & ~result, 15, 15);
+            }
+        }
+    }
+
+    instruction NEG {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x02c; dst_mode = 0; dst = dst; }
+        assembly "neg {dst}";
+        semantics {
+            let original = read(dst);
+            let result = 0 -% original;
+            let is_zero = extract(~(result | (0 -% result)), 15, 15);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := is_zero;
+                V := extract(original & result, 15, 15);
+                C := ~is_zero;
+            }
+        }
+    }
+
+    instruction ADC {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x02d; dst_mode = 0; dst = dst; }
+        assembly "adc {dst}";
+        semantics {
+            let original = read(dst);
+            let carry = read_state(C);
+            let result = original +% zext<16>(carry);
+            let wide = zext<17>(original) +% zext<17>(carry);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract(~original & result, 15, 15);
+                C := extract(wide, 16, 16);
+            }
+        }
+    }
+
+    instruction SBC {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x02e; dst_mode = 0; dst = dst; }
+        assembly "sbc {dst}";
+        semantics {
+            let original = read(dst);
+            let carry = read_state(C);
+            let result = original -% zext<16>(carry);
+            let wide = zext<17>(original) -% zext<17>(carry);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract(original & ~result, 15, 15);
+                C := extract(wide, 16, 16);
+            }
+        }
+    }
+
+    instruction TST {
+        operands { in dst: GPR; }
+        encoding Single { opcode = 0x02f; dst_mode = 0; dst = dst; }
+        assembly "tst {dst}";
+        semantics {
+            let result = read(dst);
+            parallel {
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction ROR {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x030; dst_mode = 0; dst = dst; }
+        assembly "ror {dst}";
+        semantics {
+            let original = read(dst);
+            let carry = read_state(C);
+            let result = (original >> 1) | (zext<16>(carry) << 15);
+            let negative = extract(result, 15, 15);
+            let next_carry = extract(original, 0, 0);
+            parallel {
+                dst := result;
+                N := negative;
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ROL {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x031; dst_mode = 0; dst = dst; }
+        assembly "rol {dst}";
+        semantics {
+            let original = read(dst);
+            let carry = read_state(C);
+            let result = (original << 1) | zext<16>(carry);
+            let negative = extract(result, 15, 15);
+            let next_carry = extract(original, 15, 15);
+            parallel {
+                dst := result;
+                N := negative;
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ASR {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x032; dst_mode = 0; dst = dst; }
+        assembly "asr {dst}";
+        semantics {
+            let original = read(dst);
+            let result = (original >> 1) | (original & 0x8000);
+            let negative = extract(result, 15, 15);
+            let next_carry = extract(original, 0, 0);
+            parallel {
+                dst := result;
+                N := negative;
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ASL {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x033; dst_mode = 0; dst = dst; }
+        assembly "asl {dst}";
+        semantics {
+            let original = read(dst);
+            let result = original << 1;
+            let negative = extract(result, 15, 15);
+            let next_carry = extract(original, 15, 15);
+            parallel {
+                dst := result;
+                N := negative;
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction CLRB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x228; dst_mode = 0; dst = dst; }
+        assembly "clrb {dst}";
+        semantics {
+            let original = read(dst);
+            let result = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := trunc<1>(0);
+                Z := trunc<1>(1);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction COMB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x229; dst_mode = 0; dst = dst; }
+        assembly "comb {dst}";
+        semantics {
+            let original = read(dst);
+            let result = ~extract(original, 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+                C := trunc<1>(1);
+            }
+        }
+    }
+
+    instruction INCB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x22a; dst_mode = 0; dst = dst; }
+        assembly "incb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let result = low +% trunc<8>(1);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := extract(~low & result, 7, 7);
+            }
+        }
+    }
+
+    instruction DECB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x22b; dst_mode = 0; dst = dst; }
+        assembly "decb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let result = low -% trunc<8>(1);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := extract(low & ~result, 7, 7);
+            }
+        }
+    }
+
+    instruction NEGB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x22c; dst_mode = 0; dst = dst; }
+        assembly "negb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let zero = trunc<8>(0);
+            let result = zero -% low;
+            let is_zero = extract(~(result | (zero -% result)), 7, 7);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := is_zero;
+                V := extract(low & result, 7, 7);
+                C := ~is_zero;
+            }
+        }
+    }
+
+    instruction ADCB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x22d; dst_mode = 0; dst = dst; }
+        assembly "adcb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let carry = read_state(C);
+            let result = low +% zext<8>(carry);
+            let wide = zext<9>(low) +% zext<9>(carry);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := extract(~low & result, 7, 7);
+                C := extract(wide, 8, 8);
+            }
+        }
+    }
+
+    instruction SBCB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x22e; dst_mode = 0; dst = dst; }
+        assembly "sbcb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let carry = read_state(C);
+            let result = low -% zext<8>(carry);
+            let wide = zext<9>(low) -% zext<9>(carry);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := extract(low & ~result, 7, 7);
+                C := extract(wide, 8, 8);
+            }
+        }
+    }
+
+    instruction TSTB {
+        operands { in dst: GPR; }
+        encoding Single { opcode = 0x22f; dst_mode = 0; dst = dst; }
+        assembly "tstb {dst}";
+        semantics {
+            let result = extract(read(dst), 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+                C := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction RORB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x230; dst_mode = 0; dst = dst; }
+        assembly "rorb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let carry = read_state(C);
+            let result = (low >> trunc<8>(1)) | (zext<8>(carry) << trunc<8>(7));
+            let negative = extract(result, 7, 7);
+            let next_carry = extract(low, 0, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := negative;
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ROLB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x231; dst_mode = 0; dst = dst; }
+        assembly "rolb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let carry = read_state(C);
+            let result = (low << trunc<8>(1)) | zext<8>(carry);
+            let negative = extract(result, 7, 7);
+            let next_carry = extract(low, 7, 7);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := negative;
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ASRB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x232; dst_mode = 0; dst = dst; }
+        assembly "asrb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let result = (low >> trunc<8>(1)) | (low & trunc<8>(0x80));
+            let negative = extract(result, 7, 7);
+            let next_carry = extract(low, 0, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := negative;
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction ASLB {
+        operands { inout dst: GPR; }
+        encoding Single { opcode = 0x233; dst_mode = 0; dst = dst; }
+        assembly "aslb {dst}";
+        semantics {
+            let original = read(dst);
+            let low = extract(original, 7, 0);
+            let result = low << trunc<8>(1);
+            let negative = extract(result, 7, 7);
+            let next_carry = extract(low, 7, 7);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := negative;
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := negative ^ next_carry;
+                C := next_carry;
+            }
+        }
+    }
+
+    instruction MOV {
+        operands { in src: GPR; out dst: GPR; }
+        encoding Double {
+            opcode = 0x1; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "mov {src}, {dst}";
+        semantics {
+            let result = read(src);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction CMP {
+        operands { in src: GPR; in dst: GPR; }
+        encoding Double {
+            opcode = 0x2; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "cmp {src}, {dst}";
+        semantics {
+            // CMP computes source minus destination, unlike SUB.
+            let left = read(src);
+            let right = read(dst);
+            let result = left -% right;
+            let wide = zext<17>(left) -% zext<17>(right);
+            parallel {
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract((left ^ right) & (left ^ result), 15, 15);
+                C := extract(wide, 16, 16);
+            }
+        }
+    }
+
+    instruction BIT {
+        operands { in src: GPR; in dst: GPR; }
+        encoding Double {
+            opcode = 0x3; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bit {src}, {dst}";
+        semantics {
+            let result = read(src) & read(dst);
+            parallel {
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction BIC {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0x4; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bic {src}, {dst}";
+        semantics {
+            let result = read(dst) & ~read(src);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction BIS {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0x5; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bis {src}, {dst}";
+        semantics {
+            let result = read(dst) | read(src);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction ADD {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0x6; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "add {src}, {dst}";
+        semantics {
+            let left = read(dst);
+            let right = read(src);
+            let result = left +% right;
+            let wide = zext<17>(left) +% zext<17>(right);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract(~(left ^ right) & (left ^ result), 15, 15);
+                C := extract(wide, 16, 16);
+            }
+        }
+    }
+
+    instruction MOVB {
+        operands { in src: GPR; out dst: GPR; }
+        encoding Double {
+            opcode = 0x9; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "movb {src}, {dst}";
+        semantics {
+            let result = extract(read(src), 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                // MOVB is the exception: a register destination is sign-extended.
+                dst := sext<16>(result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction CMPB {
+        operands { in src: GPR; in dst: GPR; }
+        encoding Double {
+            opcode = 0xa; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "cmpb {src}, {dst}";
+        semantics {
+            let left = extract(read(src), 7, 0);
+            let right = extract(read(dst), 7, 0);
+            let result = left -% right;
+            let wide = zext<9>(left) -% zext<9>(right);
+            let zero = trunc<8>(0);
+            parallel {
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := extract((left ^ right) & (left ^ result), 7, 7);
+                C := extract(wide, 8, 8);
+            }
+        }
+    }
+
+    instruction BITB {
+        operands { in src: GPR; in dst: GPR; }
+        encoding Double {
+            opcode = 0xb; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bitb {src}, {dst}";
+        semantics {
+            let result = extract(read(src), 7, 0) & extract(read(dst), 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction BICB {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0xc; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bicb {src}, {dst}";
+        semantics {
+            let original = read(dst);
+            let result = extract(original, 7, 0) & ~extract(read(src), 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction BISB {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0xd; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "bisb {src}, {dst}";
+        semantics {
+            let original = read(dst);
+            let result = extract(original, 7, 0) | extract(read(src), 7, 0);
+            let zero = trunc<8>(0);
+            parallel {
+                dst := concat(extract(original, 15, 8), result);
+                N := extract(result, 7, 7);
+                Z := extract(~(result | (zero -% result)), 7, 7);
+                V := trunc<1>(0);
+            }
+        }
+    }
+
+    instruction SUB {
+        operands { in src: GPR; inout dst: GPR; }
+        encoding Double {
+            opcode = 0xe; src_mode = 0; src = src; dst_mode = 0; dst = dst;
+        }
+        assembly "sub {src}, {dst}";
+        semantics {
+            let left = read(dst);
+            let right = read(src);
+            let result = left -% right;
+            let wide = zext<17>(left) -% zext<17>(right);
+            parallel {
+                dst := result;
+                N := extract(result, 15, 15);
+                Z := extract(~(result | (0 -% result)), 15, 15);
+                V := extract((left ^ right) & (left ^ result), 15, 15);
+                C := extract(wide, 16, 16);
+            }
+        }
+    }
+}

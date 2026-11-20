@@ -1,0 +1,58 @@
+cmake_minimum_required(VERSION 3.20)
+
+file(MAKE_DIRECTORY "${WORK_DIR}")
+set(input "${WORK_DIR}/invalid.nfa")
+set(output "${WORK_DIR}/output.dfa")
+
+function(expect_failure nfa diagnostic)
+  file(WRITE "${input}" "${nfa}")
+  file(WRITE "${output}" "untouched")
+  execute_process(COMMAND "${HELPER}" "${input}" "${output}"
+    RESULT_VARIABLE result ERROR_VARIABLE error)
+  if(NOT result MATCHES "^[1-9][0-9]*$" OR NOT error MATCHES "${diagnostic}")
+    message(FATAL_ERROR "Expected '${diagnostic}', got (${result}): ${error}")
+  endif()
+  file(READ "${output}" actual)
+  if(NOT actual STREQUAL "untouched")
+    message(FATAL_ERROR "Invalid input modified output")
+  endif()
+endfunction()
+
+expect_failure("" "missing state count")
+expect_failure("0 0" "state count")
+expect_failure("16385 0" "state count")
+expect_failure("18446744073709551616 0" "state count")
+expect_failure("1x 0" "state count")
+expect_failure("1 1\n0 0" "start state")
+expect_failure("1 -1\n0 0" "start state")
+expect_failure("1 0\n2 0" "acceptance flag")
+expect_failure("1 0\n0 131073" "edge count")
+expect_failure("1 0\n0 1 1 -" "edge target")
+expect_failure("1 0\n0 1 0" "missing edge label")
+expect_failure("1 0\n0 1 0 f" "edge label")
+string(REPEAT "F" 64 upper)
+expect_failure("1 0\n0 1 0 ${upper}" "lowercase hex")
+string(REPEAT "0" 65 overlong)
+expect_failure("1 0\n0 1 0 ${overlong}" "token too long")
+expect_failure("1 0\n0 0\n1 0" "unexpected trailing data")
+string(REPEAT " " 16777216 padding)
+expect_failure("1 0\n0 0\n${padding}" "input size limit exceeded")
+
+execute_process(COMMAND "${HELPER}" "${input}/missing" "${output}"
+  RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result MATCHES "^[1-9][0-9]*$" OR NOT error MATCHES "cannot open input")
+  message(FATAL_ERROR "Expected input path diagnostic, got (${result}): ${error}")
+endif()
+
+execute_process(COMMAND "${HELPER}" "${input}"
+  RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result MATCHES "^[1-9][0-9]*$" OR NOT error MATCHES "usage:")
+  message(FATAL_ERROR "Expected usage diagnostic, got (${result}): ${error}")
+endif()
+
+file(WRITE "${input}" "1 0\n0 0\n")
+execute_process(COMMAND "${HELPER}" "${input}" "${output}/invalid"
+  RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result MATCHES "^[1-9][0-9]*$" OR NOT error MATCHES "cannot open output")
+  message(FATAL_ERROR "Expected output path diagnostic, got (${result}): ${error}")
+endif()

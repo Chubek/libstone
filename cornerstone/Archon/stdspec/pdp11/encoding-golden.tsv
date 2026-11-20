@@ -1,0 +1,57 @@
+0000	halt
+0100	wait
+0200	rti
+0300	bpt
+0400	iot
+0500	reset
+a000	nop
+a100	clc
+a200	clv
+a400	clz
+a800	cln
+af00	ccc
+b100	sec
+b200	sev
+b400	sez
+b800	sen
+bf00	scc
+c500	swab r5
+000a	clr r0
+410a	com r1
+820a	inc r2
+c30a	dec r3
+040b	neg r4
+450b	adc r5
+860b	sbc r6
+c70b	tst r7
+000c	ror r0
+410c	rol r1
+820c	asr r2
+c30c	asl r3
+048a	clrb r4
+458a	comb r5
+868a	incb r6
+c78a	decb r7
+008b	negb r0
+418b	adcb r1
+828b	sbcb r2
+c38b	tstb r3
+048c	rorb r4
+458c	rolb r5
+868c	asrb r6
+c78c	aslb r7
+4210	mov r1, r2
+8320	cmp r2, r3
+c430	bit r3, r4
+0541	bic r4, r5
+4651	bis r5, r6
+8061	add r6, r0
+c091	movb r7, r0
+07a0	cmpb r0, r7
+46b0	bitb r1, r6
+85c0	bicb r2, r5
+c4d0	bisb r3, r4
+03e1	sub r4, r3
+8711	mov r6, r7
+0060	add r0, r0
+c7e1	sub r7, r7

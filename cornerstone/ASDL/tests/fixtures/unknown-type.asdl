@@ -1,0 +1,5 @@
+%prefix broken
+%%
+module Broken {
+    item = Value(missing value)
+}
