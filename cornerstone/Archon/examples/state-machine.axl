@@ -1,0 +1,7 @@
+G:Table.new P
+{
+   Type = :Program,
+   Name = "StateMachine",
+   Summary = "A Mealy state machine generator",
+   environ = G:Environ.derive(R:GetEnviron)
+}

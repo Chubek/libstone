@@ -1,0 +1,4 @@
+/* Linear-scan scheduler facts, schema v1. */
+SCHEDULED_INSTRUCTION(0, 0)
+SCHEDULED_INSTRUCTION(1, 1)
+SCHEDULED_INSTRUCTION(2, 2)

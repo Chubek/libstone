@@ -1,0 +1,1170 @@
+"""C99 Sea-of-Nodes IR generator.
+
+The generated API is deliberately target independent.  Nodes are append-only,
+so an ``ArchonIRNodeId`` is stable for the lifetime of a graph.  Inputs carry an
+explicit data/control/effect kind and regions, merges, and phis are represented
+without relying on an opcode naming convention.
+"""
+
+import re
+from collections.abc import Mapping
+
+from ..diagnostics import ArchonError
+
+
+NAME = "sea-of-nodes"
+ALIASES = ("sea", "sea_of_nodes", "son")
+
+
+def emit_ir(context):
+    """Return the files implementing the Sea-of-Nodes representation.
+
+    The representation ABI is target-independent; selected instruction names
+    are nevertheless published as stable opcode constants so ``Program.i`` and
+    the rewrite pattern banks agree without a runtime name table.
+    """
+
+    architectures = _architectures(context)
+    opcode_rows = []
+    architecture_rows = []
+    used = set()
+    opcode_claims = {}
+    for architecture in architectures:
+        name = str(architecture.get("architecture", "architecture"))
+        architecture_rows.append(_c_string(name))
+        for instruction in sorted(
+            (
+                row
+                for row in architecture.get("instructions", ())
+                if isinstance(row, Mapping)
+            ),
+            key=lambda row: str(row.get("name", "")),
+        ):
+            base = (
+                f"ARCHON_IR_OP_{_identifier(name)}_"
+                f"{_identifier(instruction.get('name', ''))}"
+            )
+            constant = base
+            suffix = 2
+            while constant in used:
+                constant = f"{base}_{suffix}"
+                suffix += 1
+            used.add(constant)
+            key = f"target:{name}:{instruction.get('name', '')}"
+            opcode = _hash(key)
+            previous = opcode_claims.get(opcode)
+            if previous is not None and previous != key:
+                raise ArchonError(
+                    f"Sea-of-Nodes opcode collision between "
+                    f"{previous!r} and {key!r}"
+                )
+            opcode_claims[opcode] = key
+            opcode_rows.append(f"#define {constant} UINT32_C(0x{opcode:08x})")
+    replacements = {
+        "@TARGET_OPCODES@": "\n".join(opcode_rows)
+        or "/* No target instruction opcodes were selected. */",
+        "@ARCHITECTURE_COUNT@": str(len(architecture_rows)),
+        "@ARCHITECTURE_ROWS@": ",\n".join(
+            f"    {row}" for row in architecture_rows
+        )
+        or '    ""',
+    }
+
+    def render(template):
+        for marker, value in replacements.items():
+            template = template.replace(marker, value)
+        return template
+
+    return {"IR.h": render(_HEADER), "IR.c": render(_SOURCE)}
+
+
+def _architectures(context):
+    if context is None:
+        return []
+    if isinstance(context, Mapping):
+        if "architecture" in context and "instructions" in context:
+            raw = [context]
+        else:
+            raw = next(
+                (
+                    context[key]
+                    for key in ("architectures", "archdbs", "databases")
+                    if key in context
+                ),
+                (),
+            )
+    elif isinstance(context, (list, tuple)):
+        raw = context
+    else:
+        raise ArchonError(
+            "Sea-of-Nodes generation requires an IR context or ArchDB sequence"
+        )
+    if isinstance(raw, Mapping):
+        if "architecture" in raw and "instructions" in raw:
+            raw = [raw]
+        else:
+            raw = raw.values()
+    try:
+        rows = list(raw)
+    except TypeError as exc:
+        raise ArchonError(
+            "Sea-of-Nodes architectures must be an iterable of ArchDB mappings"
+        ) from exc
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ArchonError(
+                f"Sea-of-Nodes architectures[{index}] must be an ArchDB mapping"
+            )
+    return rows
+
+
+def _identifier(value):
+    text = re.sub(r"[^A-Za-z0-9_]", "_", str(value)).upper()
+    if not text or text[0].isdigit():
+        text = "_" + text
+    return text
+
+
+def _c_string(value):
+    pieces = ['"']
+    for byte in str(value).encode("utf-8"):
+        if byte == 34:
+            pieces.append(r"\"")
+        elif byte == 92:
+            pieces.append(r"\\")
+        elif byte == 10:
+            pieces.append(r"\n")
+        elif byte == 13:
+            pieces.append(r"\r")
+        elif byte == 9:
+            pieces.append(r"\t")
+        elif 32 <= byte < 127 and byte != 63:
+            pieces.append(chr(byte))
+        else:
+            pieces.append(f"\\{byte:03o}")
+    pieces.append('"')
+    return "".join(pieces)
+
+
+def _hash(text):
+    value = 2166136261
+    for byte in text.encode("utf-8"):
+        value ^= byte
+        value = (value * 16777619) & 0xFFFFFFFF
+    return value or 1
+
+
+_HEADER = r"""/* Generated by Archon: target-independent Sea-of-Nodes IR. */
+#ifndef ARCHON_GENERATED_IR_H
+#define ARCHON_GENERATED_IR_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef uint32_t ArchonIRNodeId;
+#define ARCHON_IR_NODE_NONE UINT32_MAX
+#define ARCHON_IR_PROGRAM_SCHEMA 1u
+
+@TARGET_OPCODES@
+
+typedef enum ArchonIRStatus {
+    ARCHON_IR_OK = 0,
+    ARCHON_IR_INVALID_ARGUMENT,
+    ARCHON_IR_OUT_OF_MEMORY,
+    ARCHON_IR_RESOURCE_LIMIT,
+    ARCHON_IR_MALFORMED_GRAPH,
+    ARCHON_IR_MALFORMED_PROGRAM,
+    ARCHON_IR_IO_ERROR,
+    ARCHON_IR_PROGRAM_UNAVAILABLE
+} ArchonIRStatus;
+
+typedef enum ArchonIRInputKind {
+    ARCHON_IR_INPUT_DATA = 1,
+    ARCHON_IR_INPUT_CONTROL = 2,
+    ARCHON_IR_INPUT_EFFECT = 3
+} ArchonIRInputKind;
+
+typedef enum ArchonIRNodeKind {
+    ARCHON_IR_NODE_GENERIC = 0,
+    ARCHON_IR_NODE_START,
+    ARCHON_IR_NODE_END,
+    ARCHON_IR_NODE_REGION,
+    ARCHON_IR_NODE_MERGE,
+    ARCHON_IR_NODE_PHI,
+    ARCHON_IR_NODE_EFFECT_PHI,
+    ARCHON_IR_NODE_CONSTANT
+} ArchonIRNodeKind;
+
+typedef enum ArchonIRNodeFlags {
+    ARCHON_IR_FLAG_NONE = 0u,
+    ARCHON_IR_FLAG_PURE = 1u << 0,
+    ARCHON_IR_FLAG_PINNED = 1u << 1,
+    ARCHON_IR_FLAG_MAY_TRAP = 1u << 2,
+    ARCHON_IR_FLAG_TERMINATOR = 1u << 3
+} ArchonIRNodeFlags;
+
+typedef struct ArchonIRInput {
+    ArchonIRNodeId source;
+    uint8_t kind;
+    uint8_t reserved[3];
+} ArchonIRInput;
+
+typedef struct ArchonIRNode {
+    ArchonIRNodeId id;
+    ArchonIRNodeId region;
+    uint32_t opcode;
+    uint32_t flags;
+    uint64_t payload;
+    size_t first_input;
+    size_t input_count;
+    uint8_t kind;
+    uint8_t reserved[7];
+} ArchonIRNode;
+
+typedef struct ArchonIRLimits {
+    size_t max_nodes;
+    size_t max_inputs;
+    size_t max_inputs_per_node;
+} ArchonIRLimits;
+
+typedef struct ArchonIRGraph {
+    ArchonIRNode *nodes;
+    ArchonIRInput *inputs;
+    size_t node_count;
+    size_t node_capacity;
+    size_t input_count;
+    size_t input_capacity;
+    ArchonIRNodeId next_id;
+    ArchonIRLimits limits;
+} ArchonIRGraph;
+
+typedef struct ArchonIRBuilder {
+    ArchonIRGraph *graph;
+    ArchonIRNodeId region;
+    ArchonIRNodeId control;
+    ArchonIRNodeId effect;
+} ArchonIRBuilder;
+
+/*
+ * Program.i is a declarative include fragment.  A producer must emit only the
+ * following calls, in node-ID order:
+ *
+ *   ARCHON_IR_PROGRAM_BEGIN(ARCHON_IR_PROGRAM_SCHEMA, node_count, input_count)
+ *   ARCHON_IR_NODE(id, kind, opcode, flags, region, payload, arity)
+ *   ARCHON_IR_INPUT(id, slot, input_kind, source_id)
+ *   ARCHON_IR_ROOT(id)
+ *   ARCHON_IR_PROGRAM_END()
+ *
+ * Defining ARCHON_IR_PROGRAM_FILE to a quoted include path while compiling
+ * IR.c enables archon_ir_decode_program() and archon_ir_load_program_i().
+ * ARCHON_IR_INCLUDE_PROGRAM retains the convenient default "Program.i".
+ * The decoder validates every macro argument and commits only after full
+ * verification.
+ */
+typedef struct ArchonIRProgramDecoder {
+    ArchonIRGraph *destination;
+    ArchonIRGraph scratch;
+    ArchonIRNodeId root;
+    size_t expected_nodes;
+    size_t expected_inputs;
+    size_t supplied_inputs;
+    int active;
+    int finished;
+} ArchonIRProgramDecoder;
+
+ArchonIRLimits archon_ir_default_limits(void);
+const char *archon_ir_status_string(ArchonIRStatus status);
+size_t archon_ir_architecture_count(void);
+const char *archon_ir_architecture_name(size_t index);
+
+ArchonIRStatus archon_ir_graph_init(
+    ArchonIRGraph *graph, const ArchonIRLimits *limits);
+void archon_ir_graph_clear(ArchonIRGraph *graph);
+void archon_ir_graph_destroy(ArchonIRGraph *graph);
+const ArchonIRNode *archon_ir_node(
+    const ArchonIRGraph *graph, ArchonIRNodeId id);
+const ArchonIRInput *archon_ir_node_inputs(
+    const ArchonIRGraph *graph, ArchonIRNodeId id, size_t *count);
+
+ArchonIRStatus archon_ir_add_node(
+    ArchonIRGraph *graph,
+    ArchonIRNodeKind kind,
+    uint32_t opcode,
+    uint32_t flags,
+    ArchonIRNodeId region,
+    uint64_t payload,
+    const ArchonIRInput *inputs,
+    size_t input_count,
+    ArchonIRNodeId *result);
+ArchonIRStatus archon_ir_set_input(
+    ArchonIRGraph *graph,
+    ArchonIRNodeId node,
+    size_t slot,
+    ArchonIRInputKind kind,
+    ArchonIRNodeId source);
+ArchonIRStatus archon_ir_add_region(
+    ArchonIRGraph *graph,
+    const ArchonIRNodeId *predecessors,
+    size_t predecessor_count,
+    ArchonIRNodeId *result);
+ArchonIRStatus archon_ir_add_merge(
+    ArchonIRGraph *graph,
+    const ArchonIRNodeId *predecessors,
+    size_t predecessor_count,
+    ArchonIRNodeId *result);
+ArchonIRStatus archon_ir_add_phi(
+    ArchonIRGraph *graph,
+    ArchonIRNodeId region,
+    const ArchonIRNodeId *values,
+    size_t value_count,
+    ArchonIRNodeId *result);
+ArchonIRStatus archon_ir_add_effect_phi(
+    ArchonIRGraph *graph,
+    ArchonIRNodeId region,
+    const ArchonIRNodeId *effects,
+    size_t effect_count,
+    ArchonIRNodeId *result);
+
+void archon_ir_builder_init(ArchonIRBuilder *builder, ArchonIRGraph *graph);
+ArchonIRStatus archon_ir_builder_position(
+    ArchonIRBuilder *builder,
+    ArchonIRNodeId region,
+    ArchonIRNodeId control,
+    ArchonIRNodeId effect);
+ArchonIRStatus archon_ir_builder_emit(
+    ArchonIRBuilder *builder,
+    ArchonIRNodeKind kind,
+    uint32_t opcode,
+    uint32_t flags,
+    uint64_t payload,
+    const ArchonIRNodeId *data,
+    size_t data_count,
+    ArchonIRNodeId *result);
+
+ArchonIRStatus archon_ir_verify(
+    const ArchonIRGraph *graph, ArchonIRNodeId root);
+
+ArchonIRStatus archon_ir_program_begin(
+    ArchonIRProgramDecoder *decoder,
+    ArchonIRGraph *destination,
+    unsigned schema,
+    size_t node_count,
+    size_t input_count);
+ArchonIRStatus archon_ir_program_node(
+    ArchonIRProgramDecoder *decoder,
+    ArchonIRNodeId id,
+    unsigned kind,
+    uint32_t opcode,
+    uint32_t flags,
+    ArchonIRNodeId region,
+    uint64_t payload,
+    size_t arity);
+ArchonIRStatus archon_ir_program_input(
+    ArchonIRProgramDecoder *decoder,
+    ArchonIRNodeId node,
+    size_t slot,
+    unsigned kind,
+    ArchonIRNodeId source);
+ArchonIRStatus archon_ir_program_root(
+    ArchonIRProgramDecoder *decoder, ArchonIRNodeId root);
+ArchonIRStatus archon_ir_program_end(ArchonIRProgramDecoder *decoder);
+void archon_ir_program_abort(ArchonIRProgramDecoder *decoder);
+ArchonIRStatus archon_ir_emit_program_i(
+    FILE *output, const ArchonIRGraph *graph, ArchonIRNodeId root);
+ArchonIRStatus archon_ir_decode_program(
+    ArchonIRGraph *graph, ArchonIRNodeId *root);
+ArchonIRStatus archon_ir_load_program_i(
+    ArchonIRGraph *graph, ArchonIRNodeId *root);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+
+
+_SOURCE = r"""/* Generated by Archon: target-independent Sea-of-Nodes IR. */
+#include "IR.h"
+
+#include <inttypes.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *const archon_ir_architectures[] = {
+@ARCHITECTURE_ROWS@
+};
+
+static int archon_ir_valid_kind(unsigned kind) {
+    return kind <= (unsigned)ARCHON_IR_NODE_CONSTANT;
+}
+
+static int archon_ir_valid_input_kind(unsigned kind) {
+    return kind >= (unsigned)ARCHON_IR_INPUT_DATA
+        && kind <= (unsigned)ARCHON_IR_INPUT_EFFECT;
+}
+
+static int archon_ir_valid_flags(uint32_t flags) {
+    const uint32_t known = ARCHON_IR_FLAG_PURE
+        | ARCHON_IR_FLAG_PINNED
+        | ARCHON_IR_FLAG_MAY_TRAP
+        | ARCHON_IR_FLAG_TERMINATOR;
+    return (flags & ~known) == 0u;
+}
+
+static int archon_ir_add_overflows(size_t a, size_t b) {
+    return b > SIZE_MAX - a;
+}
+
+static ArchonIRStatus archon_ir_reserve_nodes(
+        ArchonIRGraph *graph, size_t needed) {
+    ArchonIRNode *memory;
+    size_t capacity;
+    if (needed <= graph->node_capacity)
+        return ARCHON_IR_OK;
+    if (needed > graph->limits.max_nodes)
+        return ARCHON_IR_RESOURCE_LIMIT;
+    capacity = graph->node_capacity ? graph->node_capacity : 16u;
+    if (capacity > graph->limits.max_nodes)
+        capacity = graph->limits.max_nodes;
+    while (capacity < needed) {
+        size_t next = capacity <= SIZE_MAX / 2u ? capacity * 2u : needed;
+        if (next < capacity || next > graph->limits.max_nodes)
+            next = graph->limits.max_nodes;
+        if (next < needed)
+            return ARCHON_IR_RESOURCE_LIMIT;
+        capacity = next;
+    }
+    if (capacity > SIZE_MAX / sizeof(*memory))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    memory = (ArchonIRNode *)realloc(graph->nodes, capacity * sizeof(*memory));
+    if (!memory)
+        return ARCHON_IR_OUT_OF_MEMORY;
+    graph->nodes = memory;
+    graph->node_capacity = capacity;
+    return ARCHON_IR_OK;
+}
+
+static ArchonIRStatus archon_ir_reserve_inputs(
+        ArchonIRGraph *graph, size_t needed) {
+    ArchonIRInput *memory;
+    size_t capacity;
+    if (needed <= graph->input_capacity)
+        return ARCHON_IR_OK;
+    if (needed > graph->limits.max_inputs)
+        return ARCHON_IR_RESOURCE_LIMIT;
+    capacity = graph->input_capacity ? graph->input_capacity : 32u;
+    if (capacity > graph->limits.max_inputs)
+        capacity = graph->limits.max_inputs;
+    while (capacity < needed) {
+        size_t next = capacity <= SIZE_MAX / 2u ? capacity * 2u : needed;
+        if (next < capacity || next > graph->limits.max_inputs)
+            next = graph->limits.max_inputs;
+        if (next < needed)
+            return ARCHON_IR_RESOURCE_LIMIT;
+        capacity = next;
+    }
+    if (capacity > SIZE_MAX / sizeof(*memory))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    memory = (ArchonIRInput *)realloc(
+        graph->inputs, capacity * sizeof(*memory));
+    if (!memory)
+        return ARCHON_IR_OUT_OF_MEMORY;
+    graph->inputs = memory;
+    graph->input_capacity = capacity;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRLimits archon_ir_default_limits(void) {
+    ArchonIRLimits limits;
+    limits.max_nodes = 1048576u;
+    limits.max_inputs = 4194304u;
+    limits.max_inputs_per_node = 65536u;
+    return limits;
+}
+
+const char *archon_ir_status_string(ArchonIRStatus status) {
+    switch (status) {
+    case ARCHON_IR_OK: return "ok";
+    case ARCHON_IR_INVALID_ARGUMENT: return "invalid argument";
+    case ARCHON_IR_OUT_OF_MEMORY: return "out of memory";
+    case ARCHON_IR_RESOURCE_LIMIT: return "resource limit";
+    case ARCHON_IR_MALFORMED_GRAPH: return "malformed graph";
+    case ARCHON_IR_MALFORMED_PROGRAM: return "malformed Program.i";
+    case ARCHON_IR_IO_ERROR: return "I/O error";
+    case ARCHON_IR_PROGRAM_UNAVAILABLE: return "Program.i unavailable";
+    default: return "unknown IR status";
+    }
+}
+
+size_t archon_ir_architecture_count(void) {
+    return (size_t)@ARCHITECTURE_COUNT@;
+}
+
+const char *archon_ir_architecture_name(size_t index) {
+    if (index >= archon_ir_architecture_count())
+        return NULL;
+    return archon_ir_architectures[index];
+}
+
+ArchonIRStatus archon_ir_graph_init(
+        ArchonIRGraph *graph, const ArchonIRLimits *limits) {
+    ArchonIRLimits selected;
+    if (!graph)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    selected = limits ? *limits : archon_ir_default_limits();
+    if (!selected.max_nodes || !selected.max_inputs
+            || !selected.max_inputs_per_node
+            || selected.max_nodes > (size_t)UINT32_MAX)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    memset(graph, 0, sizeof(*graph));
+    graph->limits = selected;
+    return ARCHON_IR_OK;
+}
+
+void archon_ir_graph_clear(ArchonIRGraph *graph) {
+    if (!graph)
+        return;
+    graph->node_count = 0u;
+    graph->input_count = 0u;
+    graph->next_id = 0u;
+}
+
+void archon_ir_graph_destroy(ArchonIRGraph *graph) {
+    if (!graph)
+        return;
+    free(graph->nodes);
+    free(graph->inputs);
+    memset(graph, 0, sizeof(*graph));
+}
+
+const ArchonIRNode *archon_ir_node(
+        const ArchonIRGraph *graph, ArchonIRNodeId id) {
+    if (!graph || (size_t)id >= graph->node_count)
+        return NULL;
+    return &graph->nodes[id];
+}
+
+const ArchonIRInput *archon_ir_node_inputs(
+        const ArchonIRGraph *graph, ArchonIRNodeId id, size_t *count) {
+    const ArchonIRNode *node = archon_ir_node(graph, id);
+    if (!node) {
+        if (count)
+            *count = 0u;
+        return NULL;
+    }
+    if (count)
+        *count = node->input_count;
+    return node->input_count ? &graph->inputs[node->first_input] : NULL;
+}
+
+ArchonIRStatus archon_ir_add_node(
+        ArchonIRGraph *graph,
+        ArchonIRNodeKind kind,
+        uint32_t opcode,
+        uint32_t flags,
+        ArchonIRNodeId region,
+        uint64_t payload,
+        const ArchonIRInput *inputs,
+        size_t input_count,
+        ArchonIRNodeId *result) {
+    ArchonIRStatus status;
+    ArchonIRNode node;
+    size_t i, next_inputs;
+    if (!graph || !result || !archon_ir_valid_kind((unsigned)kind)
+            || !archon_ir_valid_flags(flags)
+            || (input_count && !inputs))
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (graph->node_count != (size_t)graph->next_id)
+        return ARCHON_IR_MALFORMED_GRAPH;
+    if (graph->node_count >= graph->limits.max_nodes
+            || graph->next_id == ARCHON_IR_NODE_NONE
+            || input_count > graph->limits.max_inputs_per_node
+            || archon_ir_add_overflows(graph->input_count, input_count))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    next_inputs = graph->input_count + input_count;
+    if (next_inputs > graph->limits.max_inputs)
+        return ARCHON_IR_RESOURCE_LIMIT;
+    if (region != ARCHON_IR_NODE_NONE
+            && (size_t)region >= graph->node_count)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    for (i = 0u; i < input_count; ++i) {
+        if (!archon_ir_valid_input_kind(inputs[i].kind)
+                || inputs[i].reserved[0] || inputs[i].reserved[1]
+                || inputs[i].reserved[2]
+                || (inputs[i].source != ARCHON_IR_NODE_NONE
+                    && (size_t)inputs[i].source >= graph->node_count))
+            return ARCHON_IR_INVALID_ARGUMENT;
+    }
+    status = archon_ir_reserve_nodes(graph, graph->node_count + 1u);
+    if (status != ARCHON_IR_OK)
+        return status;
+    status = archon_ir_reserve_inputs(graph, next_inputs);
+    if (status != ARCHON_IR_OK)
+        return status;
+    node.id = graph->next_id;
+    node.region = region;
+    node.opcode = opcode;
+    node.flags = flags;
+    node.payload = payload;
+    node.first_input = graph->input_count;
+    node.input_count = input_count;
+    node.kind = (uint8_t)kind;
+    memset(node.reserved, 0, sizeof(node.reserved));
+    if (input_count)
+        memcpy(&graph->inputs[graph->input_count], inputs,
+               input_count * sizeof(*inputs));
+    graph->nodes[graph->node_count++] = node;
+    graph->input_count = next_inputs;
+    ++graph->next_id;
+    *result = node.id;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_set_input(
+        ArchonIRGraph *graph,
+        ArchonIRNodeId node_id,
+        size_t slot,
+        ArchonIRInputKind kind,
+        ArchonIRNodeId source) {
+    ArchonIRNode *node;
+    ArchonIRInput *input;
+    if (!graph || !archon_ir_valid_input_kind((unsigned)kind)
+            || source == ARCHON_IR_NODE_NONE
+            || (size_t)source >= graph->node_count
+            || (size_t)node_id >= graph->node_count)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    node = &graph->nodes[node_id];
+    if (slot >= node->input_count)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    input = &graph->inputs[node->first_input + slot];
+    input->source = source;
+    input->kind = (uint8_t)kind;
+    memset(input->reserved, 0, sizeof(input->reserved));
+    return ARCHON_IR_OK;
+}
+
+static ArchonIRStatus archon_ir_add_join(
+        ArchonIRGraph *graph,
+        ArchonIRNodeKind kind,
+        const ArchonIRNodeId *values,
+        size_t value_count,
+        ArchonIRInputKind input_kind,
+        ArchonIRNodeId region,
+        ArchonIRNodeId *result) {
+    ArchonIRInput *inputs = NULL;
+    ArchonIRStatus status;
+    size_t i;
+    if (value_count && !values)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (value_count > SIZE_MAX / sizeof(*inputs))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    if (value_count) {
+        inputs = (ArchonIRInput *)malloc(value_count * sizeof(*inputs));
+        if (!inputs)
+            return ARCHON_IR_OUT_OF_MEMORY;
+    }
+    for (i = 0u; i < value_count; ++i) {
+        inputs[i].source = values[i];
+        inputs[i].kind = (uint8_t)input_kind;
+        memset(inputs[i].reserved, 0, sizeof(inputs[i].reserved));
+    }
+    status = archon_ir_add_node(
+        graph, kind, 0u, ARCHON_IR_FLAG_PINNED, region, 0u,
+        inputs, value_count, result);
+    free(inputs);
+    return status;
+}
+
+ArchonIRStatus archon_ir_add_region(
+        ArchonIRGraph *graph,
+        const ArchonIRNodeId *predecessors,
+        size_t predecessor_count,
+        ArchonIRNodeId *result) {
+    return archon_ir_add_join(
+        graph, ARCHON_IR_NODE_REGION, predecessors, predecessor_count,
+        ARCHON_IR_INPUT_CONTROL, ARCHON_IR_NODE_NONE, result);
+}
+
+ArchonIRStatus archon_ir_add_merge(
+        ArchonIRGraph *graph,
+        const ArchonIRNodeId *predecessors,
+        size_t predecessor_count,
+        ArchonIRNodeId *result) {
+    if (predecessor_count < 2u)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    return archon_ir_add_join(
+        graph, ARCHON_IR_NODE_MERGE, predecessors, predecessor_count,
+        ARCHON_IR_INPUT_CONTROL, ARCHON_IR_NODE_NONE, result);
+}
+
+ArchonIRStatus archon_ir_add_phi(
+        ArchonIRGraph *graph,
+        ArchonIRNodeId region,
+        const ArchonIRNodeId *values,
+        size_t value_count,
+        ArchonIRNodeId *result) {
+    const ArchonIRNode *join = archon_ir_node(graph, region);
+    if (!join
+            || (join->kind != ARCHON_IR_NODE_REGION
+                && join->kind != ARCHON_IR_NODE_MERGE)
+            || value_count != join->input_count)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    return archon_ir_add_join(
+        graph, ARCHON_IR_NODE_PHI, values, value_count,
+        ARCHON_IR_INPUT_DATA, region, result);
+}
+
+ArchonIRStatus archon_ir_add_effect_phi(
+        ArchonIRGraph *graph,
+        ArchonIRNodeId region,
+        const ArchonIRNodeId *effects,
+        size_t effect_count,
+        ArchonIRNodeId *result) {
+    const ArchonIRNode *join = archon_ir_node(graph, region);
+    if (!join
+            || (join->kind != ARCHON_IR_NODE_REGION
+                && join->kind != ARCHON_IR_NODE_MERGE)
+            || effect_count != join->input_count)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    return archon_ir_add_join(
+        graph, ARCHON_IR_NODE_EFFECT_PHI, effects, effect_count,
+        ARCHON_IR_INPUT_EFFECT, region, result);
+}
+
+void archon_ir_builder_init(ArchonIRBuilder *builder, ArchonIRGraph *graph) {
+    if (!builder)
+        return;
+    builder->graph = graph;
+    builder->region = ARCHON_IR_NODE_NONE;
+    builder->control = ARCHON_IR_NODE_NONE;
+    builder->effect = ARCHON_IR_NODE_NONE;
+}
+
+ArchonIRStatus archon_ir_builder_position(
+        ArchonIRBuilder *builder,
+        ArchonIRNodeId region,
+        ArchonIRNodeId control,
+        ArchonIRNodeId effect) {
+    const ArchonIRNode *region_node;
+    if (!builder || !builder->graph)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    region_node = region == ARCHON_IR_NODE_NONE
+        ? NULL : archon_ir_node(builder->graph, region);
+    if ((region != ARCHON_IR_NODE_NONE
+            && (!region_node
+                || (region_node->kind != ARCHON_IR_NODE_REGION
+                    && region_node->kind != ARCHON_IR_NODE_MERGE)))
+            || (control != ARCHON_IR_NODE_NONE
+                && !archon_ir_node(builder->graph, control))
+            || (effect != ARCHON_IR_NODE_NONE
+                && !archon_ir_node(builder->graph, effect)))
+        return ARCHON_IR_INVALID_ARGUMENT;
+    builder->region = region;
+    builder->control = control;
+    builder->effect = effect;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_builder_emit(
+        ArchonIRBuilder *builder,
+        ArchonIRNodeKind kind,
+        uint32_t opcode,
+        uint32_t flags,
+        uint64_t payload,
+        const ArchonIRNodeId *data,
+        size_t data_count,
+        ArchonIRNodeId *result) {
+    ArchonIRInput *inputs;
+    ArchonIRStatus status;
+    size_t count, cursor = 0u, i;
+    if (!builder || !builder->graph || !result || (data_count && !data))
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (archon_ir_add_overflows(
+            data_count, (builder->control != ARCHON_IR_NODE_NONE)
+                + (builder->effect != ARCHON_IR_NODE_NONE)))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    count = data_count + (builder->control != ARCHON_IR_NODE_NONE)
+        + (builder->effect != ARCHON_IR_NODE_NONE);
+    if (count > SIZE_MAX / sizeof(*inputs))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    inputs = count ? (ArchonIRInput *)malloc(count * sizeof(*inputs)) : NULL;
+    if (count && !inputs)
+        return ARCHON_IR_OUT_OF_MEMORY;
+#define ARCHON_IR_APPEND_INPUT(SOURCE, KIND) do { \
+    inputs[cursor].source = (SOURCE); \
+    inputs[cursor].kind = (uint8_t)(KIND); \
+    memset(inputs[cursor].reserved, 0, sizeof(inputs[cursor].reserved)); \
+    ++cursor; \
+} while (0)
+    if (builder->control != ARCHON_IR_NODE_NONE)
+        ARCHON_IR_APPEND_INPUT(builder->control, ARCHON_IR_INPUT_CONTROL);
+    if (builder->effect != ARCHON_IR_NODE_NONE)
+        ARCHON_IR_APPEND_INPUT(builder->effect, ARCHON_IR_INPUT_EFFECT);
+    for (i = 0u; i < data_count; ++i)
+        ARCHON_IR_APPEND_INPUT(data[i], ARCHON_IR_INPUT_DATA);
+#undef ARCHON_IR_APPEND_INPUT
+    status = archon_ir_add_node(
+        builder->graph, kind, opcode, flags, builder->region, payload,
+        inputs, count, result);
+    free(inputs);
+    return status;
+}
+
+ArchonIRStatus archon_ir_verify(
+        const ArchonIRGraph *graph, ArchonIRNodeId root) {
+    size_t i, j, expected_input = 0u;
+    if (!graph || (graph->node_count && !graph->nodes)
+            || (graph->input_count && !graph->inputs)
+            || !graph->limits.max_nodes || !graph->limits.max_inputs
+            || !graph->limits.max_inputs_per_node
+            || graph->limits.max_nodes > (size_t)UINT32_MAX
+            || graph->node_count > graph->node_capacity
+            || graph->input_count > graph->input_capacity
+            || graph->node_count != (size_t)graph->next_id
+            || graph->node_count > graph->limits.max_nodes
+            || graph->input_count > graph->limits.max_inputs)
+        return ARCHON_IR_MALFORMED_GRAPH;
+    if (root != ARCHON_IR_NODE_NONE && (size_t)root >= graph->node_count)
+        return ARCHON_IR_MALFORMED_GRAPH;
+    for (i = 0u; i < graph->node_count; ++i) {
+        const ArchonIRNode *node = &graph->nodes[i];
+        const ArchonIRNode *region = NULL;
+        if (node->id != (ArchonIRNodeId)i
+                || !archon_ir_valid_kind(node->kind)
+                || !archon_ir_valid_flags(node->flags)
+                || node->reserved[0] || node->reserved[1]
+                || node->reserved[2] || node->reserved[3]
+                || node->reserved[4] || node->reserved[5]
+                || node->reserved[6]
+                || node->input_count > graph->limits.max_inputs_per_node
+                || node->first_input != expected_input
+                || node->input_count > graph->input_count - node->first_input)
+            return ARCHON_IR_MALFORMED_GRAPH;
+        expected_input += node->input_count;
+        if (node->region != ARCHON_IR_NODE_NONE) {
+            if ((size_t)node->region >= graph->node_count
+                    || node->region == node->id)
+                return ARCHON_IR_MALFORMED_GRAPH;
+            region = &graph->nodes[node->region];
+            if (region->kind != ARCHON_IR_NODE_REGION
+                    && region->kind != ARCHON_IR_NODE_MERGE)
+                return ARCHON_IR_MALFORMED_GRAPH;
+        }
+        if ((node->kind == ARCHON_IR_NODE_REGION
+                || node->kind == ARCHON_IR_NODE_MERGE)
+                && node->region != ARCHON_IR_NODE_NONE)
+            return ARCHON_IR_MALFORMED_GRAPH;
+        if (node->kind == ARCHON_IR_NODE_MERGE && node->input_count < 2u)
+            return ARCHON_IR_MALFORMED_GRAPH;
+        if (node->kind == ARCHON_IR_NODE_START && node->input_count)
+            return ARCHON_IR_MALFORMED_GRAPH;
+        if (node->kind == ARCHON_IR_NODE_CONSTANT && node->input_count)
+            return ARCHON_IR_MALFORMED_GRAPH;
+        if ((node->kind == ARCHON_IR_NODE_PHI
+                || node->kind == ARCHON_IR_NODE_EFFECT_PHI)
+                && (!region || node->input_count != region->input_count))
+            return ARCHON_IR_MALFORMED_GRAPH;
+        for (j = 0u; j < node->input_count; ++j) {
+            const ArchonIRInput *input =
+                &graph->inputs[node->first_input + j];
+            unsigned expected = 0u;
+            if (!archon_ir_valid_input_kind(input->kind)
+                    || input->reserved[0] || input->reserved[1]
+                    || input->reserved[2]
+                    || input->source == ARCHON_IR_NODE_NONE
+                    || (size_t)input->source >= graph->node_count
+                    || input->source == node->id)
+                return ARCHON_IR_MALFORMED_GRAPH;
+            if (node->kind == ARCHON_IR_NODE_REGION
+                    || node->kind == ARCHON_IR_NODE_MERGE)
+                expected = ARCHON_IR_INPUT_CONTROL;
+            else if (node->kind == ARCHON_IR_NODE_PHI)
+                expected = ARCHON_IR_INPUT_DATA;
+            else if (node->kind == ARCHON_IR_NODE_EFFECT_PHI)
+                expected = ARCHON_IR_INPUT_EFFECT;
+            if (expected && input->kind != expected)
+                return ARCHON_IR_MALFORMED_GRAPH;
+        }
+    }
+    if (expected_input != graph->input_count)
+        return ARCHON_IR_MALFORMED_GRAPH;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_program_begin(
+        ArchonIRProgramDecoder *decoder,
+        ArchonIRGraph *destination,
+        unsigned schema,
+        size_t node_count,
+        size_t input_count) {
+    ArchonIRStatus status;
+    if (!decoder || !destination || schema != ARCHON_IR_PROGRAM_SCHEMA
+            || node_count > (size_t)UINT32_MAX
+            || node_count > destination->limits.max_nodes
+            || input_count > destination->limits.max_inputs)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    memset(decoder, 0, sizeof(*decoder));
+    status = archon_ir_graph_init(&decoder->scratch, &destination->limits);
+    if (status != ARCHON_IR_OK)
+        return status;
+    decoder->destination = destination;
+    decoder->root = ARCHON_IR_NODE_NONE;
+    decoder->expected_nodes = node_count;
+    decoder->expected_inputs = input_count;
+    decoder->active = 1;
+    status = archon_ir_reserve_nodes(&decoder->scratch, node_count);
+    if (status == ARCHON_IR_OK)
+        status = archon_ir_reserve_inputs(&decoder->scratch, input_count);
+    if (status != ARCHON_IR_OK)
+        archon_ir_program_abort(decoder);
+    return status;
+}
+
+ArchonIRStatus archon_ir_program_node(
+        ArchonIRProgramDecoder *decoder,
+        ArchonIRNodeId id,
+        unsigned kind,
+        uint32_t opcode,
+        uint32_t flags,
+        ArchonIRNodeId region,
+        uint64_t payload,
+        size_t arity) {
+    ArchonIRInput *inputs = NULL;
+    ArchonIRStatus status;
+    ArchonIRNodeId actual;
+    size_t i;
+    if (!decoder || !decoder->active || decoder->finished
+            || !archon_ir_valid_kind(kind)
+            || !archon_ir_valid_flags(flags)
+            || id != decoder->scratch.next_id
+            || (size_t)id >= decoder->expected_nodes
+            || (region != ARCHON_IR_NODE_NONE
+                && (size_t)region >= decoder->expected_nodes)
+            || arity > decoder->scratch.limits.max_inputs_per_node
+            || decoder->scratch.input_count > decoder->expected_inputs
+            || arity > decoder->expected_inputs
+                - decoder->scratch.input_count)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    if (arity > SIZE_MAX / sizeof(*inputs))
+        return ARCHON_IR_RESOURCE_LIMIT;
+    if (arity) {
+        inputs = (ArchonIRInput *)malloc(arity * sizeof(*inputs));
+        if (!inputs)
+            return ARCHON_IR_OUT_OF_MEMORY;
+    }
+    for (i = 0u; i < arity; ++i) {
+        inputs[i].source = ARCHON_IR_NODE_NONE;
+        inputs[i].kind = ARCHON_IR_INPUT_DATA;
+        memset(inputs[i].reserved, 0, sizeof(inputs[i].reserved));
+    }
+    /*
+     * archon_ir_add_node normally requires an already-created region.  Program.i
+     * may contain loop regions, so add without a region and restore the declared
+     * ID for final whole-graph validation.
+     */
+    status = archon_ir_add_node(
+        &decoder->scratch, (ArchonIRNodeKind)kind, opcode, flags,
+        ARCHON_IR_NODE_NONE, payload, inputs, arity, &actual);
+    free(inputs);
+    if (status != ARCHON_IR_OK)
+        return status;
+    decoder->scratch.nodes[actual].region = region;
+    return actual == id ? ARCHON_IR_OK : ARCHON_IR_MALFORMED_PROGRAM;
+}
+
+ArchonIRStatus archon_ir_program_input(
+        ArchonIRProgramDecoder *decoder,
+        ArchonIRNodeId node_id,
+        size_t slot,
+        unsigned kind,
+        ArchonIRNodeId source) {
+    ArchonIRNode *node;
+    ArchonIRInput *input;
+    if (!decoder || !decoder->active || decoder->finished
+            || !archon_ir_valid_input_kind(kind)
+            || (size_t)node_id >= decoder->scratch.node_count
+            || (size_t)source >= decoder->expected_nodes)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    node = &decoder->scratch.nodes[node_id];
+    if (slot >= node->input_count)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    input = &decoder->scratch.inputs[node->first_input + slot];
+    if (input->source != ARCHON_IR_NODE_NONE)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    input->source = source;
+    input->kind = (uint8_t)kind;
+    memset(input->reserved, 0, sizeof(input->reserved));
+    ++decoder->supplied_inputs;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_program_root(
+        ArchonIRProgramDecoder *decoder, ArchonIRNodeId root) {
+    if (!decoder || !decoder->active || decoder->finished
+            || decoder->root != ARCHON_IR_NODE_NONE
+            || (size_t)root >= decoder->expected_nodes)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    decoder->root = root;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_program_end(ArchonIRProgramDecoder *decoder) {
+    ArchonIRStatus status;
+    ArchonIRGraph old;
+    if (!decoder || !decoder->active || decoder->finished
+            || decoder->scratch.node_count != decoder->expected_nodes
+            || decoder->scratch.input_count != decoder->expected_inputs
+            || decoder->supplied_inputs != decoder->expected_inputs
+            || (decoder->expected_nodes
+                && decoder->root == ARCHON_IR_NODE_NONE))
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    status = archon_ir_verify(&decoder->scratch, decoder->root);
+    if (status != ARCHON_IR_OK)
+        return ARCHON_IR_MALFORMED_PROGRAM;
+    old = *decoder->destination;
+    *decoder->destination = decoder->scratch;
+    memset(&decoder->scratch, 0, sizeof(decoder->scratch));
+    archon_ir_graph_destroy(&old);
+    decoder->finished = 1;
+    decoder->active = 0;
+    return ARCHON_IR_OK;
+}
+
+void archon_ir_program_abort(ArchonIRProgramDecoder *decoder) {
+    if (!decoder)
+        return;
+    if (decoder->active)
+        archon_ir_graph_destroy(&decoder->scratch);
+    decoder->active = 0;
+    decoder->finished = 1;
+}
+
+ArchonIRStatus archon_ir_emit_program_i(
+        FILE *output,
+        const ArchonIRGraph *graph,
+        ArchonIRNodeId root) {
+    size_t i, j;
+    if (!output || archon_ir_verify(graph, root) != ARCHON_IR_OK)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (graph->node_count && root == ARCHON_IR_NODE_NONE)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (fprintf(
+            output, "ARCHON_IR_PROGRAM_BEGIN(%u, %zu, %zu)\n",
+            ARCHON_IR_PROGRAM_SCHEMA, graph->node_count,
+            graph->input_count) < 0)
+        return ARCHON_IR_IO_ERROR;
+    for (i = 0u; i < graph->node_count; ++i) {
+        const ArchonIRNode *node = &graph->nodes[i];
+        if (fprintf(
+                output,
+                "ARCHON_IR_NODE(%" PRIu32 ", %u, UINT32_C(0x%08" PRIx32 "), "
+                "UINT32_C(0x%08" PRIx32 "), ",
+                node->id, (unsigned)node->kind, node->opcode, node->flags) < 0)
+            return ARCHON_IR_IO_ERROR;
+        if (node->region == ARCHON_IR_NODE_NONE) {
+            if (fputs("UINT32_MAX, ", output) == EOF)
+                return ARCHON_IR_IO_ERROR;
+        } else if (fprintf(output, "%" PRIu32 ", ", node->region) < 0) {
+            return ARCHON_IR_IO_ERROR;
+        }
+        if (fprintf(
+                output, "UINT64_C(0x%016" PRIx64 "), %zu)\n",
+                node->payload, node->input_count) < 0)
+            return ARCHON_IR_IO_ERROR;
+        for (j = 0u; j < node->input_count; ++j) {
+            const ArchonIRInput *input =
+                &graph->inputs[node->first_input + j];
+            if (fprintf(
+                    output, "ARCHON_IR_INPUT(%" PRIu32 ", %zu, %u, %" PRIu32 ")\n",
+                    node->id, j, (unsigned)input->kind, input->source) < 0)
+                return ARCHON_IR_IO_ERROR;
+        }
+    }
+    if (root != ARCHON_IR_NODE_NONE
+            && fprintf(output, "ARCHON_IR_ROOT(%" PRIu32 ")\n", root) < 0)
+        return ARCHON_IR_IO_ERROR;
+    if (fputs("ARCHON_IR_PROGRAM_END()\n", output) == EOF
+            || ferror(output))
+        return ARCHON_IR_IO_ERROR;
+    return ARCHON_IR_OK;
+}
+
+ArchonIRStatus archon_ir_decode_program(
+        ArchonIRGraph *graph, ArchonIRNodeId *root) {
+#if defined(ARCHON_IR_PROGRAM_FILE) || defined(ARCHON_IR_INCLUDE_PROGRAM)
+    ArchonIRProgramDecoder decoder;
+    ArchonIRGraph parsed;
+    ArchonIRStatus status = ARCHON_IR_OK;
+    ArchonIRNodeId decoded_root = ARCHON_IR_NODE_NONE;
+    if (!graph || !root)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    memset(&decoder, 0, sizeof(decoder));
+    status = archon_ir_graph_init(&parsed, &graph->limits);
+    if (status != ARCHON_IR_OK)
+        return status;
+#define ARCHON_IR_PROGRAM_STEP(EXPR) do { \
+    if (status == ARCHON_IR_OK) \
+        status = (EXPR); \
+} while (0)
+#define ARCHON_IR_PROGRAM_BEGIN(SCHEMA, NODES, INPUTS) \
+    ARCHON_IR_PROGRAM_STEP( \
+        (decoder.active || decoder.finished) \
+            ? ARCHON_IR_MALFORMED_PROGRAM \
+            : archon_ir_program_begin( \
+                &decoder, &parsed, (SCHEMA), (NODES), (INPUTS)));
+#define ARCHON_IR_NODE(ID, KIND, OPCODE, FLAGS, REGION, PAYLOAD, ARITY) \
+    ARCHON_IR_PROGRAM_STEP(archon_ir_program_node( \
+        &decoder, (ID), (KIND), (OPCODE), (FLAGS), (REGION), \
+        (PAYLOAD), (ARITY)));
+#define ARCHON_IR_INPUT(NODE, SLOT, KIND, SOURCE) \
+    ARCHON_IR_PROGRAM_STEP(archon_ir_program_input( \
+        &decoder, (NODE), (SLOT), (KIND), (SOURCE)));
+#define ARCHON_IR_ROOT(ROOT) do { \
+    decoded_root = (ROOT); \
+    ARCHON_IR_PROGRAM_STEP(archon_ir_program_root(&decoder, decoded_root)); \
+} while (0);
+#define ARCHON_IR_PROGRAM_END() \
+    ARCHON_IR_PROGRAM_STEP(archon_ir_program_end(&decoder));
+#if defined(ARCHON_IR_PROGRAM_FILE)
+#include ARCHON_IR_PROGRAM_FILE
+#else
+#include "Program.i"
+#endif
+#undef ARCHON_IR_PROGRAM_END
+#undef ARCHON_IR_ROOT
+#undef ARCHON_IR_INPUT
+#undef ARCHON_IR_NODE
+#undef ARCHON_IR_PROGRAM_BEGIN
+#undef ARCHON_IR_PROGRAM_STEP
+    if (status == ARCHON_IR_OK && !decoder.finished)
+        status = ARCHON_IR_MALFORMED_PROGRAM;
+    if (status != ARCHON_IR_OK)
+        archon_ir_program_abort(&decoder);
+    else {
+        ArchonIRGraph old = *graph;
+        *graph = parsed;
+        memset(&parsed, 0, sizeof(parsed));
+        archon_ir_graph_destroy(&old);
+        *root = decoded_root;
+    }
+    archon_ir_graph_destroy(&parsed);
+    return status;
+#else
+    (void)graph;
+    (void)root;
+    return ARCHON_IR_PROGRAM_UNAVAILABLE;
+#endif
+}
+
+ArchonIRStatus archon_ir_load_program_i(
+        ArchonIRGraph *graph, ArchonIRNodeId *root) {
+    return archon_ir_decode_program(graph, root);
+}
+"""

@@ -68,6 +68,24 @@ Use `gen --emulator` to add native instruction execution to the generated
 C99. See the [C99 emulator guide](Emulator.md) for the API and a runner that
 executes the Toy8 example without Python.
 
+Generate a standalone compiler IR runtime plus the common graph and rewrite
+pipeline support:
+
+```sh
+python3 -m archon irgen gated rv32i.archdb -o generated/gated
+cc -std=c99 -Wall -Wextra -Werror -pedantic \
+    -c generated/gated/IR.c -o generated/gated/IR.o
+```
+
+Eight IR representations are available, and omitting ArchDB arguments compiles
+all bundled standard-specification entry points. See the
+[IR-generation guide](IRGeneration.md) for the CLI, Python plug-in contract,
+atomic output rules, Gated SSA builder/verifier API, and `Program.i` macros;
+the [pipeline guide](IRPipeline.md) and [artifact contracts](IRArtifacts.md)
+cover linked stages, the generated `ArchonEmbed.h` C11 API, and versioned
+interchange. The [Oracle guide](Oracle.md)
+documents the optional local transformation protocol and typed annotations.
+
 ## Scope
 
 This implementation covers fixed-width instruction encodings, architecture
@@ -85,12 +103,14 @@ Whole-file assembly supports local labels in raw instruction streams;
 object files, external relocations, and general program simulation are not
 supported.
 
-The root `AGENTS.md` (§32) documents the phased roadmap. Later phases extend
-the frontend and executable semantics, add ABI and linking support, generate
-IR and compiler backends, and build optimization, proof, lifting, and timing
-infrastructure. The syntax and examples in that design document are not all
-accepted by the current frontend. See the [implemented language subset](Language.md)
-for a complete example and its rules.
+The root `AGENTS.md` (§32) documents the phased roadmap. IR generation now
+provides standalone representation and pipeline libraries; later phases connect
+their artifact schemas into a complete compiler, extend the frontend and
+executable semantics, add ABI and linking support, and build proof, lifting, and
+timing infrastructure. The syntax and examples in that design document are not
+all accepted by the current frontend. See the
+[implemented language subset](Language.md) for a complete example and its
+rules.
 
 Run the tests with:
 

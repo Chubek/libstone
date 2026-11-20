@@ -49,6 +49,19 @@ def _features(text):
     return names
 
 
+def _generation_option(text):
+    name, sep, value = text.partition("=")
+    if not sep or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", name):
+        raise argparse.ArgumentTypeError("expected OPTION=JSON")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid JSON value for generation option {name!r}: {exc.msg}"
+        ) from None
+    return name, parsed
+
+
 def _compile(args):
     db = compile_file(args.source, parameters=dict(args.define), features=args.features)
     if args.command == "compile":
@@ -109,6 +122,54 @@ def _generate(args):
     _write_c99(args.output, code)
     if header is not None:
         _write_c99(args.header, header)
+
+
+def _ir_generate(args):
+    from .irgen import (
+        generate_ir,
+        standard_spec_entry_points,
+        write_generated_directory,
+    )
+
+    paths = [*args.databases, *args.database]
+    if paths:
+        seen = set()
+        for path in paths:
+            try:
+                canonical = Path(path).resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise ArchonError(f"cannot resolve ArchDB path {path!r}: {exc}") from exc
+            if canonical in seen:
+                raise ArchonError(f"duplicate ArchDB input {path!r}")
+            seen.add(canonical)
+        architectures = [database.load(path) for path in paths]
+        inputs = paths
+    else:
+        entries = standard_spec_entry_points()
+        architectures = [compile_file(path) for path in entries]
+        inputs = entries
+
+    options = {}
+    for name, value in args.option:
+        if name in options:
+            raise ArchonError(f"duplicate generation option {name!r}")
+        options[name] = value
+    if args.no_oracle:
+        if "oracle" in options:
+            raise ArchonError(
+                "oracle was specified by both --no-oracle and --option"
+            )
+        options["oracle"] = False
+    if args.target is not None:
+        if "target" in options:
+            raise ArchonError(
+                "target was specified by both --target and --option"
+            )
+        options["target"] = args.target
+    outputs = generate_ir(args.ir, architectures, options=options)
+    write_generated_directory(
+        outputs, args.output, input_paths=inputs, force=args.force,
+    )
 
 
 def _write_c99(path, text):
@@ -284,6 +345,67 @@ def _parser():
     gen.add_argument("--header", metavar="PATH",
                      help="also write the emulator's public C99 header (or '-' for stdout)")
     gen.set_defaults(handler=_generate)
+
+    irgen = commands.add_parser(
+        "irgen",
+        help="generate a standalone C99 IR implementation and pipeline support",
+    )
+    irgen.add_argument(
+        "ir",
+        help=(
+            "IR representation: gated, memory-ssa, sea-of-nodes, anf, cps, "
+            "typed-tac, untyped-tac, or supercombinators"
+        ),
+    )
+    irgen.add_argument(
+        "databases",
+        nargs="*",
+        metavar="ARCHDB",
+        help="compiled ArchDB(s); omit to compile every bundled stdspec entry point",
+    )
+    irgen.add_argument(
+        "-d",
+        "--database",
+        "--archdb",
+        action="append",
+        default=[],
+        metavar="ARCHDB",
+        help="add a compiled ArchDB (repeatable; may be combined with positional inputs)",
+    )
+    irgen.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        metavar="DIRECTORY",
+        help="atomic output directory",
+    )
+    irgen.add_argument(
+        "--option",
+        action="append",
+        type=_generation_option,
+        default=[],
+        metavar="NAME=JSON",
+        help="pass a JSON-compatible generation option (repeatable)",
+    )
+    irgen.add_argument(
+        "--target",
+        metavar="ARCHITECTURE",
+        help=(
+            "choose the final pipeline/emitter target when generating for "
+            "multiple ArchDBs (all selected targets remain in shared facts)"
+        ),
+    )
+    irgen.add_argument(
+        "--no-oracle",
+        action="store_true",
+        help="omit the generated Oracle IPC and annotation support",
+    )
+    irgen.add_argument(
+        "--force",
+        action="store_true",
+        help="replace a nonempty output directory (input paths remain protected)",
+    )
+    irgen.set_defaults(handler=_ir_generate)
 
     asm = commands.add_parser("asm", help="assemble one instruction")
     asm.add_argument("database", help="compiled .archdb file")

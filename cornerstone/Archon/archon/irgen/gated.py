@@ -1,0 +1,1266 @@
+"""Gated SSA backend: a compact, standalone C99 IR library."""
+
+from __future__ import annotations
+
+import re
+
+from ..diagnostics import ArchonError
+
+
+NAME = "gated"
+ALIASES = ("gated-ssa", "gssa")
+
+
+def _identifier(text: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").upper()
+    if not value:
+        value = "UNNAMED"
+    if value[0].isdigit():
+        value = "N_" + value
+    return value
+
+
+def _c_string(text: str) -> str:
+    result = ['"']
+    for byte in text.encode("utf-8"):
+        if byte == 0x22:
+            result.append(r"\"")
+        elif byte == 0x5C:
+            result.append(r"\\")
+        elif byte == 0x0A:
+            result.append(r"\n")
+        elif byte == 0x0D:
+            result.append(r"\r")
+        elif byte == 0x09:
+            result.append(r"\t")
+        elif 0x20 <= byte < 0x7F and byte != 0x3F:
+            result.append(chr(byte))
+        else:
+            result.append(f"\\{byte:03o}")
+    result.append('"')
+    return "".join(result)
+
+
+def _inventory(context: dict) -> tuple[list[str], list[tuple[str, str, int]]]:
+    architectures = context.get("architectures")
+    if not isinstance(architectures, list):
+        raise ArchonError("gated IR context is missing architectures")
+    names: list[str] = []
+    opcodes: list[tuple[str, str, int]] = []
+    used: set[str] = set()
+    for architecture_index, archdb in enumerate(architectures):
+        if not isinstance(archdb, dict) or not isinstance(archdb.get("architecture"), str):
+            raise ArchonError(f"gated IR architecture {architecture_index} is invalid")
+        architecture = archdb["architecture"]
+        if "\0" in architecture:
+            raise ArchonError("gated IR architecture names cannot contain NUL")
+        names.append(architecture)
+        instructions = archdb.get("instructions")
+        if not isinstance(instructions, list):
+            raise ArchonError(f"gated IR architecture {architecture!r} has no instruction list")
+        if any(
+            not isinstance(row, dict) or not isinstance(row.get("name"), str)
+            for row in instructions
+        ):
+            raise ArchonError(f"gated IR architecture {architecture!r} has invalid instructions")
+        ordered = sorted(
+            instructions, key=lambda row: (row["name"], str(row.get("id", "")))
+        )
+        for instruction_index, instruction in enumerate(ordered):
+            if not isinstance(instruction, dict) or not isinstance(instruction.get("name"), str):
+                raise ArchonError(
+                    f"gated IR instruction {instruction_index} in {architecture!r} is invalid"
+                )
+            if "\0" in instruction["name"]:
+                raise ArchonError("gated IR instruction names cannot contain NUL")
+            base = f"ARCHON_IR_OP_{_identifier(architecture)}_{_identifier(instruction['name'])}"
+            enum_name = base
+            suffix = 2
+            while enum_name in used:
+                enum_name = f"{base}_{suffix}"
+                suffix += 1
+            used.add(enum_name)
+            display = f"{architecture}.{instruction['name']}"
+            opcodes.append((enum_name, display, 256 + len(opcodes)))
+    return names, opcodes
+
+
+def emit_ir(context: dict) -> dict[str, str]:
+    """Emit ``IR.h`` and ``IR.c`` for the Gated SSA representation."""
+
+    if not isinstance(context, dict):
+        raise ArchonError("gated IR context must be an object")
+    architectures, opcodes = _inventory(context)
+    enum_rows = "\n".join(
+        f"    {enum_name} = {value}," for enum_name, _, value in opcodes
+    )
+    if enum_rows:
+        enum_rows += "\n"
+    opcode_cases = "\n".join(
+        f"    case {enum_name}: return {_c_string(display)};"
+        for enum_name, display, _ in opcodes
+    )
+    opcode_macro_cases = "\n".join(
+        f'    case {enum_name}: return "{enum_name}";'
+        for enum_name, _, _ in opcodes
+    )
+    valid_cases = "\n".join(
+        f"    case {enum_name}:" for enum_name, _, _ in opcodes
+    )
+    architecture_rows = "\n".join(f"    {_c_string(name)}," for name in architectures)
+    if not architecture_rows:
+        architecture_rows = "    NULL,"
+
+    replacements = {
+        "@ARCHITECTURE_COUNT@": str(len(architectures)),
+        "@ARCHITECTURE_ROWS@": architecture_rows,
+        "@OPCODE_COUNT@": str(len(opcodes)),
+        "@OPCODE_ENUMS@": enum_rows,
+        "@OPCODE_CASES@": opcode_cases,
+        "@OPCODE_MACRO_CASES@": opcode_macro_cases,
+        "@VALID_OPCODE_CASES@": valid_cases,
+        "@TARGET_LIMIT@": str(256 + len(opcodes)),
+    }
+
+    def render(template: str) -> str:
+        for token, value in replacements.items():
+            template = template.replace(token, value)
+        if re.search(r"@[A-Z_]+@", template):
+            raise AssertionError("unexpanded Gated SSA template token")
+        return template
+
+    return {"IR.c": render(_SOURCE), "IR.h": render(_HEADER)}
+
+
+_HEADER = r"""/* Generated by Archon: standalone Gated SSA IR, strict C99. */
+#ifndef ARCHON_GENERATED_GATED_IR_H
+#define ARCHON_GENERATED_GATED_IR_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ARCHON_IR_FORMAT_VERSION 1u
+#define ARCHON_IR_MAX_TYPE_WIDTH 4096u
+#define ARCHON_IR_ARCHITECTURE_COUNT @ARCHITECTURE_COUNT@u
+#define ARCHON_IR_TARGET_OPCODE_COUNT @OPCODE_COUNT@u
+
+enum archon_ir_status {
+    ARCHON_IR_OK = 0,
+    ARCHON_IR_INVALID_ARGUMENT,
+    ARCHON_IR_OUT_OF_MEMORY,
+    ARCHON_IR_INVALID_IR,
+    ARCHON_IR_IO_ERROR,
+    ARCHON_IR_PROGRAM_UNAVAILABLE
+};
+
+enum archon_ir_type_kind {
+    ARCHON_IR_TYPE_INVALID = 0,
+    ARCHON_IR_TYPE_BITS,
+    ARCHON_IR_TYPE_UINT,
+    ARCHON_IR_TYPE_SINT,
+    ARCHON_IR_TYPE_EFFECT
+};
+
+struct archon_ir_type {
+    enum archon_ir_type_kind kind;
+    unsigned width;
+};
+
+enum archon_ir_opcode {
+    ARCHON_IR_OP_INVALID = 0,
+    ARCHON_IR_OP_PARAMETER = 1,
+    ARCHON_IR_OP_CONSTANT = 2,
+    ARCHON_IR_OP_PHI = 3,
+    ARCHON_IR_OP_GATE = 4,
+    ARCHON_IR_OP_EFFECT_START = 5,
+    ARCHON_IR_OP_EFFECT = 6,
+    ARCHON_IR_OP_GENERIC = 7,
+    ARCHON_IR_OP_TARGET_BASE = 256,
+@OPCODE_ENUMS@    ARCHON_IR_OP_TARGET_LIMIT = @TARGET_LIMIT@
+};
+
+typedef uint32_t archon_ir_block_id;
+
+struct archon_ir_value {
+    uint32_t id;
+    struct archon_ir_type type;
+};
+
+struct archon_ir_effect {
+    uint32_t id;
+};
+
+struct archon_ir_input {
+    uint32_t value;
+    archon_ir_block_id incoming_block;
+};
+
+struct archon_ir_node {
+    uint32_t id;
+    archon_ir_block_id block;
+    enum archon_ir_opcode opcode;
+    struct archon_ir_type type;
+    uint64_t payload;
+    size_t first_input;
+    size_t input_count;
+};
+
+struct archon_ir_block {
+    archon_ir_block_id id;
+    char *name;
+    int sealed;
+};
+
+struct archon_ir_program {
+    struct archon_ir_block *blocks;
+    size_t block_count;
+    size_t block_capacity;
+    struct archon_ir_node *nodes;
+    size_t node_count;
+    size_t node_capacity;
+    struct archon_ir_input *inputs;
+    size_t input_count;
+    size_t input_capacity;
+    enum archon_ir_status status;
+    char error[192];
+};
+
+struct archon_ir_builder {
+    struct archon_ir_program *program;
+    archon_ir_block_id block;
+};
+
+void archon_ir_program_init(struct archon_ir_program *program);
+void archon_ir_program_reset(struct archon_ir_program *program);
+void archon_ir_program_dispose(struct archon_ir_program *program);
+enum archon_ir_status archon_ir_program_status(const struct archon_ir_program *program);
+const char *archon_ir_program_error(const struct archon_ir_program *program);
+
+struct archon_ir_type archon_ir_bits(unsigned width);
+struct archon_ir_type archon_ir_uint(unsigned width);
+struct archon_ir_type archon_ir_sint(unsigned width);
+struct archon_ir_type archon_ir_effect_type(void);
+int archon_ir_type_equal(struct archon_ir_type left, struct archon_ir_type right);
+
+void archon_ir_builder_init(
+    struct archon_ir_builder *builder, struct archon_ir_program *program
+);
+archon_ir_block_id archon_ir_create_block(
+    struct archon_ir_program *program, const char *name
+);
+enum archon_ir_status archon_ir_position_at_end(
+    struct archon_ir_builder *builder, archon_ir_block_id block
+);
+enum archon_ir_status archon_ir_seal_block(
+    struct archon_ir_program *program, archon_ir_block_id block
+);
+
+struct archon_ir_value archon_ir_build_parameter(
+    struct archon_ir_builder *builder, struct archon_ir_type type, uint32_t index
+);
+struct archon_ir_value archon_ir_build_constant(
+    struct archon_ir_builder *builder, struct archon_ir_type type, uint64_t bits
+);
+struct archon_ir_value archon_ir_build_node(
+    struct archon_ir_builder *builder,
+    enum archon_ir_opcode opcode,
+    struct archon_ir_type type,
+    const struct archon_ir_value *inputs,
+    size_t input_count
+);
+struct archon_ir_value archon_ir_build_phi(
+    struct archon_ir_builder *builder,
+    struct archon_ir_type type,
+    const archon_ir_block_id *incoming_blocks,
+    const struct archon_ir_value *incoming_values,
+    size_t incoming_count
+);
+struct archon_ir_value archon_ir_build_gate(
+    struct archon_ir_builder *builder,
+    struct archon_ir_value condition,
+    struct archon_ir_value when_true,
+    struct archon_ir_value when_false
+);
+struct archon_ir_effect archon_ir_build_effect_start(struct archon_ir_builder *builder);
+struct archon_ir_effect archon_ir_build_effect(
+    struct archon_ir_builder *builder,
+    enum archon_ir_opcode opcode,
+    struct archon_ir_effect dependency,
+    const struct archon_ir_value *inputs,
+    size_t input_count
+);
+struct archon_ir_value archon_ir_effect_value(
+    const struct archon_ir_program *program, struct archon_ir_effect effect
+);
+
+const struct archon_ir_node *archon_ir_node(
+    const struct archon_ir_program *program, uint32_t id
+);
+const struct archon_ir_block *archon_ir_block(
+    const struct archon_ir_program *program, archon_ir_block_id id
+);
+const char *archon_ir_opcode_name(enum archon_ir_opcode opcode);
+size_t archon_ir_architecture_count(void);
+const char *archon_ir_architecture_name(size_t index);
+
+enum archon_ir_status archon_ir_verify(
+    const struct archon_ir_program *program, char *message, size_t message_capacity
+);
+enum archon_ir_status archon_ir_print(
+    FILE *output, const struct archon_ir_program *program
+);
+enum archon_ir_status archon_ir_emit_program_i(
+    FILE *output, const struct archon_ir_program *program
+);
+enum archon_ir_status archon_ir_load_program_i(struct archon_ir_program *program);
+
+/*
+ * Program.i is an X-macro interchange format. archon_ir_emit_program_i emits:
+ *
+ *   ARCHON_IR_PROGRAM_BEGIN(version, "gated")
+ *   ARCHON_IR_BLOCK(id, sealed, "name")
+ *   ARCHON_IR_NODE(id, block, opcode, type_kind, width, payload)
+ *   ARCHON_IR_INPUT(node_id, value_id, incoming_block_or_zero)
+ *   ARCHON_IR_PROGRAM_END()
+ *
+ * Define those five macros and include Program.i to consume it in any C99
+ * program.  The generated loader can consume it directly by compiling IR.c
+ * with -DARCHON_IR_PROGRAM_FILE='"Program.i"'.  Without that definition the
+ * loader returns ARCHON_IR_PROGRAM_UNAVAILABLE.  Macro lines intentionally
+ * have no trailing semicolon.
+ */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+
+
+_SOURCE = r"""/* Generated by Archon: standalone Gated SSA IR, strict C99. */
+#include "IR.h"
+
+#include <inttypes.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *const archon_ir_architectures[] = {
+@ARCHITECTURE_ROWS@
+};
+
+static void archon_ir_copy_message(char *output, size_t capacity, const char *message) {
+    size_t length;
+    if (!output || capacity == 0u)
+        return;
+    length = strlen(message);
+    if (length >= capacity)
+        length = capacity - 1u;
+    memcpy(output, message, length);
+    output[length] = '\0';
+}
+
+static enum archon_ir_status archon_ir_fail(
+        struct archon_ir_program *program, enum archon_ir_status status, const char *message) {
+    if (program && program->status == ARCHON_IR_OK) {
+        program->status = status;
+        archon_ir_copy_message(program->error, sizeof program->error, message);
+    }
+    return status;
+}
+
+static int archon_ir_valid_type(struct archon_ir_type type) {
+    if (type.kind == ARCHON_IR_TYPE_EFFECT)
+        return type.width == 0u;
+    return (type.kind == ARCHON_IR_TYPE_BITS || type.kind == ARCHON_IR_TYPE_UINT ||
+            type.kind == ARCHON_IR_TYPE_SINT) &&
+        type.width >= 1u && type.width <= ARCHON_IR_MAX_TYPE_WIDTH;
+}
+
+static int archon_ir_valid_opcode(enum archon_ir_opcode opcode) {
+    switch (opcode) {
+    case ARCHON_IR_OP_PARAMETER:
+    case ARCHON_IR_OP_CONSTANT:
+    case ARCHON_IR_OP_PHI:
+    case ARCHON_IR_OP_GATE:
+    case ARCHON_IR_OP_EFFECT_START:
+    case ARCHON_IR_OP_EFFECT:
+    case ARCHON_IR_OP_GENERIC:
+@VALID_OPCODE_CASES@
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int archon_ir_reserve(
+        void **memory, size_t *capacity, size_t required, size_t element_size) {
+    size_t next;
+    void *replacement;
+    if (required <= *capacity)
+        return 1;
+    if (required > SIZE_MAX / element_size)
+        return 0;
+    next = *capacity ? *capacity : 8u;
+    while (next < required) {
+        if (next > SIZE_MAX / 2u) {
+            next = required;
+            break;
+        }
+        next *= 2u;
+    }
+    if (next > SIZE_MAX / element_size)
+        return 0;
+    replacement = realloc(*memory, next * element_size);
+    if (!replacement)
+        return 0;
+    *memory = replacement;
+    *capacity = next;
+    return 1;
+}
+
+static char *archon_ir_duplicate(const char *text) {
+    size_t length;
+    char *copy;
+    if (!text)
+        text = "";
+    length = strlen(text);
+    if (length == SIZE_MAX)
+        return NULL;
+    copy = (char *)malloc(length + 1u);
+    if (copy)
+        memcpy(copy, text, length + 1u);
+    return copy;
+}
+
+void archon_ir_program_init(struct archon_ir_program *program) {
+    if (program)
+        memset(program, 0, sizeof *program);
+}
+
+void archon_ir_program_dispose(struct archon_ir_program *program) {
+    size_t i;
+    if (!program)
+        return;
+    for (i = 0u; i < program->block_count; ++i)
+        free(program->blocks[i].name);
+    free(program->blocks);
+    free(program->nodes);
+    free(program->inputs);
+    memset(program, 0, sizeof *program);
+}
+
+void archon_ir_program_reset(struct archon_ir_program *program) {
+    archon_ir_program_dispose(program);
+}
+
+enum archon_ir_status archon_ir_program_status(const struct archon_ir_program *program) {
+    return program ? program->status : ARCHON_IR_INVALID_ARGUMENT;
+}
+
+const char *archon_ir_program_error(const struct archon_ir_program *program) {
+    if (!program)
+        return "null IR program";
+    return program->error[0] ? program->error : "";
+}
+
+struct archon_ir_type archon_ir_bits(unsigned width) {
+    struct archon_ir_type result = {ARCHON_IR_TYPE_BITS, width};
+    return result;
+}
+
+struct archon_ir_type archon_ir_uint(unsigned width) {
+    struct archon_ir_type result = {ARCHON_IR_TYPE_UINT, width};
+    return result;
+}
+
+struct archon_ir_type archon_ir_sint(unsigned width) {
+    struct archon_ir_type result = {ARCHON_IR_TYPE_SINT, width};
+    return result;
+}
+
+struct archon_ir_type archon_ir_effect_type(void) {
+    struct archon_ir_type result = {ARCHON_IR_TYPE_EFFECT, 0u};
+    return result;
+}
+
+int archon_ir_type_equal(struct archon_ir_type left, struct archon_ir_type right) {
+    return left.kind == right.kind && left.width == right.width;
+}
+
+const struct archon_ir_node *archon_ir_node(
+        const struct archon_ir_program *program, uint32_t id) {
+    if (!program || id == 0u || (size_t)id > program->node_count)
+        return NULL;
+    return &program->nodes[id - 1u];
+}
+
+const struct archon_ir_block *archon_ir_block(
+        const struct archon_ir_program *program, archon_ir_block_id id) {
+    if (!program || id == 0u || (size_t)id > program->block_count)
+        return NULL;
+    return &program->blocks[id - 1u];
+}
+
+void archon_ir_builder_init(
+        struct archon_ir_builder *builder, struct archon_ir_program *program) {
+    if (!builder)
+        return;
+    builder->program = program;
+    builder->block = 0u;
+}
+
+archon_ir_block_id archon_ir_create_block(
+        struct archon_ir_program *program, const char *name) {
+    struct archon_ir_block *block;
+    char *copy;
+    if (!program || program->status != ARCHON_IR_OK)
+        return 0u;
+    if (program->block_count >= UINT32_MAX) {
+        archon_ir_fail(program, ARCHON_IR_OUT_OF_MEMORY, "too many IR blocks");
+        return 0u;
+    }
+    copy = archon_ir_duplicate(name);
+    if (!copy) {
+        archon_ir_fail(program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate IR block name");
+        return 0u;
+    }
+    if (!archon_ir_reserve(
+            (void **)&program->blocks, &program->block_capacity,
+            program->block_count + 1u, sizeof *program->blocks)) {
+        free(copy);
+        archon_ir_fail(program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate IR blocks");
+        return 0u;
+    }
+    block = &program->blocks[program->block_count++];
+    block->id = (archon_ir_block_id)program->block_count;
+    block->name = copy;
+    block->sealed = 0;
+    return block->id;
+}
+
+enum archon_ir_status archon_ir_position_at_end(
+        struct archon_ir_builder *builder, archon_ir_block_id block) {
+    if (!builder || !builder->program)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (!archon_ir_block(builder->program, block))
+        return archon_ir_fail(
+            builder->program, ARCHON_IR_INVALID_ARGUMENT, "invalid insertion block");
+    builder->block = block;
+    return builder->program->status;
+}
+
+enum archon_ir_status archon_ir_seal_block(
+        struct archon_ir_program *program, archon_ir_block_id id) {
+    struct archon_ir_block *block;
+    if (!program)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (!archon_ir_block(program, id))
+        return archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "invalid block to seal");
+    block = &program->blocks[id - 1u];
+    block->sealed = 1;
+    return program->status;
+}
+
+static struct archon_ir_value archon_ir_invalid_value(void) {
+    struct archon_ir_value value;
+    value.id = 0u;
+    value.type.kind = ARCHON_IR_TYPE_INVALID;
+    value.type.width = 0u;
+    return value;
+}
+
+static int archon_ir_known_value(
+        const struct archon_ir_program *program, struct archon_ir_value value) {
+    const struct archon_ir_node *node = archon_ir_node(program, value.id);
+    return node && archon_ir_type_equal(node->type, value.type);
+}
+
+static struct archon_ir_value archon_ir_append_node(
+        struct archon_ir_builder *builder, enum archon_ir_opcode opcode,
+        struct archon_ir_type type, uint64_t payload,
+        const struct archon_ir_value *values, const archon_ir_block_id *incoming_blocks,
+        size_t input_count) {
+    struct archon_ir_program *program;
+    struct archon_ir_node *node;
+    struct archon_ir_value result;
+    size_t i;
+    result = archon_ir_invalid_value();
+    if (!builder || !builder->program)
+        return result;
+    program = builder->program;
+    if (program->status != ARCHON_IR_OK)
+        return result;
+    if (!archon_ir_block(program, builder->block)) {
+        archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "builder has no insertion block");
+        return result;
+    }
+    if (program->blocks[builder->block - 1u].sealed) {
+        archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "cannot append to a sealed block");
+        return result;
+    }
+    if (!archon_ir_valid_type(type)) {
+        archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "invalid IR result type");
+        return result;
+    }
+    if (!archon_ir_valid_opcode(opcode)) {
+        archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "invalid IR opcode");
+        return result;
+    }
+    if (input_count && !values) {
+        archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "missing IR input array");
+        return result;
+    }
+    for (i = 0u; i < input_count; ++i) {
+        if (!archon_ir_known_value(program, values[i])) {
+            archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "invalid typed IR input");
+            return result;
+        }
+        if (incoming_blocks && !archon_ir_block(program, incoming_blocks[i])) {
+            archon_ir_fail(program, ARCHON_IR_INVALID_ARGUMENT, "invalid incoming IR block");
+            return result;
+        }
+    }
+    if (program->node_count >= UINT32_MAX ||
+            input_count > SIZE_MAX - program->input_count) {
+        archon_ir_fail(program, ARCHON_IR_OUT_OF_MEMORY, "IR is too large");
+        return result;
+    }
+    if (!archon_ir_reserve(
+            (void **)&program->nodes, &program->node_capacity,
+            program->node_count + 1u, sizeof *program->nodes) ||
+            !archon_ir_reserve(
+                (void **)&program->inputs, &program->input_capacity,
+                program->input_count + input_count, sizeof *program->inputs)) {
+        archon_ir_fail(program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate IR nodes");
+        return result;
+    }
+    node = &program->nodes[program->node_count];
+    node->id = (uint32_t)(program->node_count + 1u);
+    node->block = builder->block;
+    node->opcode = opcode;
+    node->type = type;
+    node->payload = payload;
+    node->first_input = program->input_count;
+    node->input_count = input_count;
+    for (i = 0u; i < input_count; ++i) {
+        struct archon_ir_input *input = &program->inputs[program->input_count++];
+        input->value = values[i].id;
+        input->incoming_block = incoming_blocks ? incoming_blocks[i] : 0u;
+    }
+    ++program->node_count;
+    result.id = node->id;
+    result.type = type;
+    return result;
+}
+
+struct archon_ir_value archon_ir_build_parameter(
+        struct archon_ir_builder *builder, struct archon_ir_type type, uint32_t index) {
+    if (type.kind == ARCHON_IR_TYPE_EFFECT) {
+        if (builder && builder->program)
+            archon_ir_fail(
+                builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                "an effect token cannot be a parameter");
+        return archon_ir_invalid_value();
+    }
+    return archon_ir_append_node(
+        builder, ARCHON_IR_OP_PARAMETER, type, (uint64_t)index, NULL, NULL, 0u);
+}
+
+struct archon_ir_value archon_ir_build_constant(
+        struct archon_ir_builder *builder, struct archon_ir_type type, uint64_t bits) {
+    if (type.kind == ARCHON_IR_TYPE_EFFECT || type.width > 64u ||
+            (type.width < 64u && (bits >> type.width) != 0u)) {
+        if (builder && builder->program)
+            archon_ir_fail(
+                builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                "constant bits do not fit the requested type");
+        return archon_ir_invalid_value();
+    }
+    return archon_ir_append_node(
+        builder, ARCHON_IR_OP_CONSTANT, type, bits, NULL, NULL, 0u);
+}
+
+struct archon_ir_value archon_ir_build_node(
+        struct archon_ir_builder *builder, enum archon_ir_opcode opcode,
+        struct archon_ir_type type, const struct archon_ir_value *inputs,
+        size_t input_count) {
+    if (opcode == ARCHON_IR_OP_INVALID || opcode == ARCHON_IR_OP_PARAMETER ||
+            opcode == ARCHON_IR_OP_CONSTANT || opcode == ARCHON_IR_OP_PHI ||
+            opcode == ARCHON_IR_OP_GATE || opcode == ARCHON_IR_OP_EFFECT_START ||
+            opcode == ARCHON_IR_OP_EFFECT || type.kind == ARCHON_IR_TYPE_EFFECT) {
+        if (builder && builder->program)
+            archon_ir_fail(
+                builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                "use a specialized builder for this IR node");
+        return archon_ir_invalid_value();
+    }
+    return archon_ir_append_node(builder, opcode, type, 0u, inputs, NULL, input_count);
+}
+
+struct archon_ir_value archon_ir_build_phi(
+        struct archon_ir_builder *builder, struct archon_ir_type type,
+        const archon_ir_block_id *incoming_blocks,
+        const struct archon_ir_value *incoming_values, size_t incoming_count) {
+    size_t i;
+    if (incoming_count == 0u || !incoming_blocks || !incoming_values) {
+        if (builder && builder->program)
+            archon_ir_fail(
+                builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                "phi requires incoming blocks and values");
+        return archon_ir_invalid_value();
+    }
+    for (i = 0u; i < incoming_count; ++i) {
+        if (!archon_ir_type_equal(type, incoming_values[i].type)) {
+            if (builder && builder->program)
+                archon_ir_fail(
+                    builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                    "phi incoming value has the wrong type");
+            return archon_ir_invalid_value();
+        }
+    }
+    return archon_ir_append_node(
+        builder, ARCHON_IR_OP_PHI, type, 0u, incoming_values,
+        incoming_blocks, incoming_count);
+}
+
+struct archon_ir_value archon_ir_build_gate(
+        struct archon_ir_builder *builder, struct archon_ir_value condition,
+        struct archon_ir_value when_true, struct archon_ir_value when_false) {
+    struct archon_ir_value inputs[3];
+    if ((condition.type.kind != ARCHON_IR_TYPE_BITS &&
+            condition.type.kind != ARCHON_IR_TYPE_UINT) ||
+            condition.type.width != 1u ||
+            !archon_ir_type_equal(when_true.type, when_false.type)) {
+        if (builder && builder->program)
+            archon_ir_fail(
+                builder->program, ARCHON_IR_INVALID_ARGUMENT,
+                "gate requires an i1 condition and equal arm types");
+        return archon_ir_invalid_value();
+    }
+    inputs[0] = condition;
+    inputs[1] = when_true;
+    inputs[2] = when_false;
+    return archon_ir_append_node(
+        builder, ARCHON_IR_OP_GATE, when_true.type, 0u, inputs, NULL, 3u);
+}
+
+struct archon_ir_effect archon_ir_build_effect_start(struct archon_ir_builder *builder) {
+    struct archon_ir_value value = archon_ir_append_node(
+        builder, ARCHON_IR_OP_EFFECT_START, archon_ir_effect_type(),
+        0u, NULL, NULL, 0u);
+    struct archon_ir_effect effect = {value.id};
+    return effect;
+}
+
+struct archon_ir_value archon_ir_effect_value(
+        const struct archon_ir_program *program, struct archon_ir_effect effect) {
+    struct archon_ir_value value = archon_ir_invalid_value();
+    const struct archon_ir_node *node = archon_ir_node(program, effect.id);
+    if (node && node->type.kind == ARCHON_IR_TYPE_EFFECT) {
+        value.id = effect.id;
+        value.type = node->type;
+    }
+    return value;
+}
+
+struct archon_ir_effect archon_ir_build_effect(
+        struct archon_ir_builder *builder, enum archon_ir_opcode opcode,
+        struct archon_ir_effect dependency, const struct archon_ir_value *inputs,
+        size_t input_count) {
+    struct archon_ir_effect result = {0u};
+    struct archon_ir_value *all_inputs;
+    struct archon_ir_value value;
+    size_t i;
+    if (!builder || !builder->program)
+        return result;
+    if (opcode == ARCHON_IR_OP_INVALID || opcode == ARCHON_IR_OP_PARAMETER ||
+            opcode == ARCHON_IR_OP_CONSTANT || opcode == ARCHON_IR_OP_PHI ||
+            opcode == ARCHON_IR_OP_GATE || opcode == ARCHON_IR_OP_EFFECT_START) {
+        archon_ir_fail(
+            builder->program, ARCHON_IR_INVALID_ARGUMENT, "invalid effect opcode");
+        return result;
+    }
+    if (input_count && !inputs) {
+        archon_ir_fail(
+            builder->program, ARCHON_IR_INVALID_ARGUMENT, "missing effect inputs");
+        return result;
+    }
+    if (input_count == SIZE_MAX ||
+            (input_count + 1u) > SIZE_MAX / sizeof *all_inputs) {
+        archon_ir_fail(builder->program, ARCHON_IR_OUT_OF_MEMORY, "effect is too large");
+        return result;
+    }
+    all_inputs = (struct archon_ir_value *)malloc(
+        (input_count + 1u) * sizeof *all_inputs);
+    if (!all_inputs) {
+        archon_ir_fail(
+            builder->program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate effect inputs");
+        return result;
+    }
+    all_inputs[0] = archon_ir_effect_value(builder->program, dependency);
+    if (all_inputs[0].id == 0u) {
+        free(all_inputs);
+        archon_ir_fail(
+            builder->program, ARCHON_IR_INVALID_ARGUMENT, "invalid effect dependency");
+        return result;
+    }
+    for (i = 0u; i < input_count; ++i)
+        all_inputs[i + 1u] = inputs[i];
+    value = archon_ir_append_node(
+        builder, opcode, archon_ir_effect_type(), 0u,
+        all_inputs, NULL, input_count + 1u);
+    free(all_inputs);
+    result.id = value.id;
+    return result;
+}
+
+const char *archon_ir_opcode_name(enum archon_ir_opcode opcode) {
+    switch (opcode) {
+    case ARCHON_IR_OP_PARAMETER: return "parameter";
+    case ARCHON_IR_OP_CONSTANT: return "constant";
+    case ARCHON_IR_OP_PHI: return "phi";
+    case ARCHON_IR_OP_GATE: return "gate";
+    case ARCHON_IR_OP_EFFECT_START: return "effect.start";
+    case ARCHON_IR_OP_EFFECT: return "effect";
+    case ARCHON_IR_OP_GENERIC: return "generic";
+@OPCODE_CASES@
+    default: return "invalid";
+    }
+}
+
+size_t archon_ir_architecture_count(void) {
+    return (size_t)ARCHON_IR_ARCHITECTURE_COUNT;
+}
+
+const char *archon_ir_architecture_name(size_t index) {
+    size_t count = archon_ir_architecture_count();
+    if (index >= count)
+        return NULL;
+    return archon_ir_architectures[index];
+}
+
+static enum archon_ir_status archon_ir_bad(
+        char *message, size_t capacity, const char *text) {
+    archon_ir_copy_message(message, capacity, text);
+    return ARCHON_IR_INVALID_IR;
+}
+
+enum archon_ir_status archon_ir_verify(
+        const struct archon_ir_program *program, char *message, size_t capacity) {
+    size_t i, j, next_input = 0u;
+    if (!program)
+        return archon_ir_bad(message, capacity, "null IR program");
+    if (program->status != ARCHON_IR_OK)
+        return archon_ir_bad(
+            message, capacity, program->error[0] ? program->error : "IR builder failed");
+    if ((program->block_count && !program->blocks) ||
+            (program->node_count && !program->nodes) ||
+            (program->input_count && !program->inputs) ||
+            program->block_count > program->block_capacity ||
+            program->node_count > program->node_capacity ||
+            program->input_count > program->input_capacity ||
+            program->block_count > UINT32_MAX ||
+            program->node_count > UINT32_MAX)
+        return archon_ir_bad(message, capacity, "invalid IR table storage");
+    for (i = 0u; i < program->block_count; ++i) {
+        const struct archon_ir_block *block = &program->blocks[i];
+        if (block->id != i + 1u || !block->name)
+            return archon_ir_bad(message, capacity, "invalid block table");
+    }
+    for (i = 0u; i < program->node_count; ++i) {
+        const struct archon_ir_node *node = &program->nodes[i];
+        if (node->id != i + 1u || !archon_ir_block(program, node->block))
+            return archon_ir_bad(message, capacity, "invalid node identity or block");
+        if (!archon_ir_valid_opcode(node->opcode) || !archon_ir_valid_type(node->type))
+            return archon_ir_bad(message, capacity, "invalid node opcode or type");
+        if (node->first_input != next_input ||
+                node->first_input > program->input_count ||
+                node->input_count > program->input_count - node->first_input)
+            return archon_ir_bad(message, capacity, "invalid node input range");
+        next_input += node->input_count;
+        if ((node->opcode == ARCHON_IR_OP_PARAMETER ||
+                node->opcode == ARCHON_IR_OP_CONSTANT ||
+                node->opcode == ARCHON_IR_OP_EFFECT_START) && node->input_count != 0u)
+            return archon_ir_bad(message, capacity, "leaf node has inputs");
+        if (node->opcode == ARCHON_IR_OP_CONSTANT &&
+                (node->type.kind == ARCHON_IR_TYPE_EFFECT || node->type.width > 64u ||
+                (node->type.width < 64u && (node->payload >> node->type.width) != 0u)))
+            return archon_ir_bad(message, capacity, "invalid constant payload");
+        if (node->opcode == ARCHON_IR_OP_EFFECT_START &&
+                node->type.kind != ARCHON_IR_TYPE_EFFECT)
+            return archon_ir_bad(message, capacity, "effect start has a value type");
+        if (node->opcode == ARCHON_IR_OP_GATE && node->input_count != 3u)
+            return archon_ir_bad(message, capacity, "gate does not have three inputs");
+        if (node->opcode == ARCHON_IR_OP_PHI && node->input_count == 0u)
+            return archon_ir_bad(message, capacity, "phi has no incoming values");
+        for (j = 0u; j < node->input_count; ++j) {
+            const struct archon_ir_input *input =
+                &program->inputs[node->first_input + j];
+            const struct archon_ir_node *value = archon_ir_node(program, input->value);
+            if (!value)
+                return archon_ir_bad(message, capacity, "input refers to an invalid value");
+            if (node->opcode == ARCHON_IR_OP_PHI) {
+                size_t k;
+                if (!archon_ir_block(program, input->incoming_block) ||
+                        !archon_ir_type_equal(value->type, node->type))
+                    return archon_ir_bad(
+                        message, capacity, "invalid phi incoming edge or type");
+                for (k = 0u; k < j; ++k)
+                    if (program->inputs[node->first_input + k].incoming_block ==
+                            input->incoming_block)
+                        return archon_ir_bad(
+                            message, capacity, "duplicate phi incoming block");
+            } else {
+                if (input->incoming_block != 0u)
+                    return archon_ir_bad(
+                        message, capacity, "non-phi input has an incoming block");
+                if (input->value >= node->id)
+                    return archon_ir_bad(
+                        message, capacity, "ordinary input is not defined before use");
+            }
+        }
+        if (node->opcode == ARCHON_IR_OP_GATE) {
+            const struct archon_ir_node *condition =
+                archon_ir_node(program, program->inputs[node->first_input].value);
+            const struct archon_ir_node *when_true =
+                archon_ir_node(program, program->inputs[node->first_input + 1u].value);
+            const struct archon_ir_node *when_false =
+                archon_ir_node(program, program->inputs[node->first_input + 2u].value);
+            if ((condition->type.kind != ARCHON_IR_TYPE_BITS &&
+                    condition->type.kind != ARCHON_IR_TYPE_UINT) ||
+                    condition->type.width != 1u ||
+                    !archon_ir_type_equal(when_true->type, node->type) ||
+                    !archon_ir_type_equal(when_false->type, node->type))
+                return archon_ir_bad(message, capacity, "gate input types do not match");
+        }
+        if (node->type.kind == ARCHON_IR_TYPE_EFFECT &&
+                node->opcode != ARCHON_IR_OP_EFFECT_START &&
+                node->opcode != ARCHON_IR_OP_PHI &&
+                node->opcode != ARCHON_IR_OP_GATE) {
+            const struct archon_ir_node *dependency;
+            if (node->input_count == 0u)
+                return archon_ir_bad(message, capacity, "effect has no dependency token");
+            dependency = archon_ir_node(
+                program, program->inputs[node->first_input].value);
+            if (dependency->type.kind != ARCHON_IR_TYPE_EFFECT)
+                return archon_ir_bad(message, capacity, "effect dependency is not a token");
+        }
+        if (node->opcode == ARCHON_IR_OP_PHI) {
+            for (j = 0u; j < i; ++j)
+                if (program->nodes[j].block == node->block &&
+                        program->nodes[j].opcode != ARCHON_IR_OP_PHI)
+                    return archon_ir_bad(
+                        message, capacity, "phi appears after a non-phi in its block");
+        }
+    }
+    if (next_input != program->input_count)
+        return archon_ir_bad(message, capacity, "unowned entries in the input table");
+    if (message && capacity)
+        message[0] = '\0';
+    return ARCHON_IR_OK;
+}
+
+static const char *archon_ir_type_name(enum archon_ir_type_kind kind) {
+    switch (kind) {
+    case ARCHON_IR_TYPE_BITS: return "bits";
+    case ARCHON_IR_TYPE_UINT: return "uint";
+    case ARCHON_IR_TYPE_SINT: return "sint";
+    case ARCHON_IR_TYPE_EFFECT: return "effect";
+    default: return "invalid";
+    }
+}
+
+static int archon_ir_print_quoted(FILE *output, const char *text) {
+    const unsigned char *cursor = (const unsigned char *)text;
+    if (fputc('"', output) == EOF)
+        return 0;
+    while (*cursor) {
+        unsigned byte = *cursor++;
+        if (byte == '"' || byte == '\\') {
+            if (fputc('\\', output) == EOF || fputc((int)byte, output) == EOF)
+                return 0;
+        } else if (byte == '\n' || byte == '\r' || byte == '\t') {
+            int escaped = byte == '\n' ? 'n' : (byte == '\r' ? 'r' : 't');
+            if (fputc('\\', output) == EOF || fputc(escaped, output) == EOF)
+                return 0;
+        } else if (byte >= 0x20u && byte < 0x7fu && byte != (unsigned)'?') {
+            if (fputc((int)byte, output) == EOF)
+                return 0;
+        } else if (fprintf(output, "\\%03o", byte) < 0) {
+            return 0;
+        }
+    }
+    return fputc('"', output) != EOF;
+}
+
+enum archon_ir_status archon_ir_print(
+        FILE *output, const struct archon_ir_program *program) {
+    size_t block_index, node_index, input_index;
+    char message[192];
+    if (!output || !program)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (archon_ir_verify(program, message, sizeof message) != ARCHON_IR_OK)
+        return ARCHON_IR_INVALID_IR;
+    for (block_index = 0u; block_index < program->block_count; ++block_index) {
+        const struct archon_ir_block *block = &program->blocks[block_index];
+        if (fprintf(output, "block %%%" PRIu32 " ", block->id) < 0 ||
+                !archon_ir_print_quoted(output, block->name) ||
+                fprintf(output, "%s:\n", block->sealed ? " sealed" : "") < 0)
+            return ARCHON_IR_IO_ERROR;
+        for (node_index = 0u; node_index < program->node_count; ++node_index) {
+            const struct archon_ir_node *node = &program->nodes[node_index];
+            if (node->block != block->id)
+                continue;
+            if (node->type.kind == ARCHON_IR_TYPE_EFFECT) {
+                if (fprintf(output, "  !%" PRIu32 " = %s", node->id,
+                        archon_ir_opcode_name(node->opcode)) < 0)
+                    return ARCHON_IR_IO_ERROR;
+            } else if (fprintf(output, "  %%%" PRIu32 ":%s%u = %s",
+                    node->id, archon_ir_type_name(node->type.kind), node->type.width,
+                    archon_ir_opcode_name(node->opcode)) < 0) {
+                return ARCHON_IR_IO_ERROR;
+            }
+            if (node->opcode == ARCHON_IR_OP_CONSTANT ||
+                    node->opcode == ARCHON_IR_OP_PARAMETER)
+                if (fprintf(output, " %" PRIu64, node->payload) < 0)
+                    return ARCHON_IR_IO_ERROR;
+            for (input_index = 0u; input_index < node->input_count; ++input_index) {
+                const struct archon_ir_input *input =
+                    &program->inputs[node->first_input + input_index];
+                if (fprintf(output, "%s%%%u", input_index ? ", " : " ",
+                        (unsigned)input->value) < 0)
+                    return ARCHON_IR_IO_ERROR;
+                if (input->incoming_block &&
+                        fprintf(output, "@%%%u", (unsigned)input->incoming_block) < 0)
+                    return ARCHON_IR_IO_ERROR;
+            }
+            if (fputc('\n', output) == EOF)
+                return ARCHON_IR_IO_ERROR;
+        }
+    }
+    return ferror(output) ? ARCHON_IR_IO_ERROR : ARCHON_IR_OK;
+}
+
+static const char *archon_ir_opcode_macro(enum archon_ir_opcode opcode) {
+    switch (opcode) {
+    case ARCHON_IR_OP_PARAMETER: return "ARCHON_IR_OP_PARAMETER";
+    case ARCHON_IR_OP_CONSTANT: return "ARCHON_IR_OP_CONSTANT";
+    case ARCHON_IR_OP_PHI: return "ARCHON_IR_OP_PHI";
+    case ARCHON_IR_OP_GATE: return "ARCHON_IR_OP_GATE";
+    case ARCHON_IR_OP_EFFECT_START: return "ARCHON_IR_OP_EFFECT_START";
+    case ARCHON_IR_OP_EFFECT: return "ARCHON_IR_OP_EFFECT";
+    case ARCHON_IR_OP_GENERIC: return "ARCHON_IR_OP_GENERIC";
+@OPCODE_MACRO_CASES@
+    default: return NULL;
+    }
+}
+
+static const char *archon_ir_type_macro(enum archon_ir_type_kind kind) {
+    switch (kind) {
+    case ARCHON_IR_TYPE_BITS: return "ARCHON_IR_TYPE_BITS";
+    case ARCHON_IR_TYPE_UINT: return "ARCHON_IR_TYPE_UINT";
+    case ARCHON_IR_TYPE_SINT: return "ARCHON_IR_TYPE_SINT";
+    case ARCHON_IR_TYPE_EFFECT: return "ARCHON_IR_TYPE_EFFECT";
+    default: return NULL;
+    }
+}
+
+enum archon_ir_status archon_ir_emit_program_i(
+        FILE *output, const struct archon_ir_program *program) {
+    size_t i, j;
+    char message[192];
+    if (!output || !program)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    if (archon_ir_verify(program, message, sizeof message) != ARCHON_IR_OK)
+        return ARCHON_IR_INVALID_IR;
+    if (fputs("ARCHON_IR_PROGRAM_BEGIN(1, \"gated\")\n", output) == EOF)
+        return ARCHON_IR_IO_ERROR;
+    for (i = 0u; i < program->block_count; ++i) {
+        const struct archon_ir_block *block = &program->blocks[i];
+        if (fprintf(output, "ARCHON_IR_BLOCK(%" PRIu32 ", %d, ",
+                block->id, block->sealed ? 1 : 0) < 0 ||
+                !archon_ir_print_quoted(output, block->name) ||
+                fputs(")\n", output) == EOF)
+            return ARCHON_IR_IO_ERROR;
+    }
+    for (i = 0u; i < program->node_count; ++i) {
+        const struct archon_ir_node *node = &program->nodes[i];
+        const char *opcode = archon_ir_opcode_macro(node->opcode);
+        const char *type = archon_ir_type_macro(node->type.kind);
+        if (!opcode || !type ||
+                fprintf(output,
+                    "ARCHON_IR_NODE(%" PRIu32 ", %" PRIu32 ", %s, %s, %u, "
+                    "UINT64_C(0x%" PRIx64 "))\n",
+                    node->id, node->block, opcode, type, node->type.width,
+                    node->payload) < 0)
+            return ARCHON_IR_IO_ERROR;
+        for (j = 0u; j < node->input_count; ++j) {
+            const struct archon_ir_input *input =
+                &program->inputs[node->first_input + j];
+            if (fprintf(output,
+                    "ARCHON_IR_INPUT(%" PRIu32 ", %" PRIu32 ", %" PRIu32 ")\n",
+                    node->id, input->value, input->incoming_block) < 0)
+                return ARCHON_IR_IO_ERROR;
+        }
+    }
+    if (fputs("ARCHON_IR_PROGRAM_END()\n", output) == EOF || ferror(output))
+        return ARCHON_IR_IO_ERROR;
+    return ARCHON_IR_OK;
+}
+
+#ifdef ARCHON_IR_PROGRAM_FILE
+static enum archon_ir_status archon_ir_import_block(
+        struct archon_ir_program *program, uint32_t id, int sealed, const char *name) {
+    archon_ir_block_id actual = archon_ir_create_block(program, name);
+    if (!actual)
+        return program->status;
+    if (actual != id)
+        return archon_ir_fail(
+            program, ARCHON_IR_INVALID_IR, "Program.i block IDs are not sequential");
+    program->blocks[actual - 1u].sealed = sealed ? 1 : 0;
+    return ARCHON_IR_OK;
+}
+
+static enum archon_ir_status archon_ir_import_node(
+        struct archon_ir_program *program, uint32_t id, uint32_t block,
+        enum archon_ir_opcode opcode, enum archon_ir_type_kind kind,
+        unsigned width, uint64_t payload) {
+    struct archon_ir_node *node;
+    struct archon_ir_type type;
+    type.kind = kind;
+    type.width = width;
+    if (program->status != ARCHON_IR_OK)
+        return program->status;
+    if (id != program->node_count + 1u || !archon_ir_block(program, block) ||
+            !archon_ir_valid_opcode(opcode) || !archon_ir_valid_type(type))
+        return archon_ir_fail(
+            program, ARCHON_IR_INVALID_IR, "invalid Program.i node");
+    if (!archon_ir_reserve(
+            (void **)&program->nodes, &program->node_capacity,
+            program->node_count + 1u, sizeof *program->nodes))
+        return archon_ir_fail(
+            program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate Program.i nodes");
+    node = &program->nodes[program->node_count++];
+    node->id = id;
+    node->block = block;
+    node->opcode = opcode;
+    node->type = type;
+    node->payload = payload;
+    node->first_input = program->input_count;
+    node->input_count = 0u;
+    return ARCHON_IR_OK;
+}
+
+static enum archon_ir_status archon_ir_import_input(
+        struct archon_ir_program *program, uint32_t node_id,
+        uint32_t value, uint32_t incoming_block) {
+    struct archon_ir_node *node;
+    struct archon_ir_input *input;
+    if (program->status != ARCHON_IR_OK)
+        return program->status;
+    node = program->node_count ? &program->nodes[program->node_count - 1u] : NULL;
+    if (!node || node->id != node_id ||
+            node->first_input + node->input_count != program->input_count)
+        return archon_ir_fail(
+            program, ARCHON_IR_INVALID_IR,
+            "Program.i inputs must immediately follow their node");
+    if (!archon_ir_reserve(
+            (void **)&program->inputs, &program->input_capacity,
+            program->input_count + 1u, sizeof *program->inputs))
+        return archon_ir_fail(
+            program, ARCHON_IR_OUT_OF_MEMORY, "cannot allocate Program.i inputs");
+    input = &program->inputs[program->input_count++];
+    input->value = value;
+    input->incoming_block = incoming_block;
+    ++node->input_count;
+    return ARCHON_IR_OK;
+}
+#endif
+
+enum archon_ir_status archon_ir_load_program_i(struct archon_ir_program *program) {
+    enum archon_ir_status status = ARCHON_IR_OK;
+    char message[192];
+    int began = 0, ended = 0;
+    if (!program)
+        return ARCHON_IR_INVALID_ARGUMENT;
+    archon_ir_program_reset(program);
+#ifdef ARCHON_IR_PROGRAM_FILE
+#define ARCHON_IR_PROGRAM_BEGIN(VERSION, FORM) \
+    do { \
+        if (began || ended) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "duplicate Program.i begin"); \
+        else if ((VERSION) != (int)ARCHON_IR_FORMAT_VERSION || \
+                strcmp((FORM), "gated") != 0) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "unsupported Program.i format"); \
+        else \
+            began = 1; \
+    } while (0);
+#define ARCHON_IR_BLOCK(ID, SEALED, NAME) \
+    do { \
+        if (status == ARCHON_IR_OK && (!began || ended)) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "block outside Program.i body"); \
+        else if (status == ARCHON_IR_OK) \
+            status = archon_ir_import_block(program, (ID), (SEALED), (NAME)); \
+    } while (0);
+#define ARCHON_IR_NODE(ID, BLOCK, OPCODE, KIND, WIDTH, PAYLOAD) \
+    do { \
+        if (status == ARCHON_IR_OK && (!began || ended)) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "node outside Program.i body"); \
+        else if (status == ARCHON_IR_OK) \
+            status = archon_ir_import_node( \
+                program, (ID), (BLOCK), (OPCODE), (KIND), (WIDTH), (PAYLOAD)); \
+    } while (0);
+#define ARCHON_IR_INPUT(NODE, VALUE, INCOMING_BLOCK) \
+    do { \
+        if (status == ARCHON_IR_OK && (!began || ended)) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "input outside Program.i body"); \
+        else if (status == ARCHON_IR_OK) \
+            status = archon_ir_import_input( \
+                program, (NODE), (VALUE), (INCOMING_BLOCK)); \
+    } while (0);
+#define ARCHON_IR_PROGRAM_END() \
+    do { \
+        if (status == ARCHON_IR_OK && (!began || ended)) \
+            status = archon_ir_fail( \
+                program, ARCHON_IR_INVALID_IR, "invalid Program.i end"); \
+        else if (status == ARCHON_IR_OK) \
+            ended = 1; \
+    } while (0);
+#include ARCHON_IR_PROGRAM_FILE
+#undef ARCHON_IR_PROGRAM_END
+#undef ARCHON_IR_INPUT
+#undef ARCHON_IR_NODE
+#undef ARCHON_IR_BLOCK
+#undef ARCHON_IR_PROGRAM_BEGIN
+    if (status == ARCHON_IR_OK && (!began || !ended))
+        status = archon_ir_fail(
+            program, ARCHON_IR_INVALID_IR, "incomplete Program.i");
+    if (status != ARCHON_IR_OK)
+        return status;
+    status = archon_ir_verify(program, message, sizeof message);
+    if (status != ARCHON_IR_OK)
+        return archon_ir_fail(program, status, message);
+    return ARCHON_IR_OK;
+#else
+    (void)status;
+    (void)message;
+    (void)began;
+    (void)ended;
+    return archon_ir_fail(
+        program, ARCHON_IR_PROGRAM_UNAVAILABLE,
+        "compile IR.c with ARCHON_IR_PROGRAM_FILE to consume Program.i");
+#endif
+}
+"""
