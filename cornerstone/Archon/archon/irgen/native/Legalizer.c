@@ -1,5 +1,8 @@
 #include "NativeInternal.h"
+/* Embedders can reuse the structural verifier without a generated provider. */
+#ifndef AN_GENERIC_MIR_VERIFY
 #include "TargetNative.h"
+#endif
 
 enum { HAS_DST = 1u, HAS_A = 2u, HAS_B = 4u };
 
@@ -119,7 +122,7 @@ static int is_memory(ArchonMIROpcode op)
 
 static int legal_integer_operation(ANContext *ctx, ArchonMIROpcode op)
 {
-#if !defined(AN_SCALAR_GAS)
+#if !defined(AN_SCALAR_GAS) && !defined(AN_GENERIC_MIR_VERIFY)
     if (!AN_RV64_HAS_M) {
         switch (op) {
         case ARCHON_MIR_DIV_S:

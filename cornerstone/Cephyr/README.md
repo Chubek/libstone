@@ -48,6 +48,55 @@ from LibStone's root build with `-DLIBSTONE_BUILD_CEPHYR=ON`. Use
 `cmake --install build-cephyr --prefix PREFIX` for an installed compiler,
 target definitions, Archon resources, and libc sources.
 
+## Embedding and extensions
+
+The installed shared library, `libcephyr`, exposes a versioned C ABI through
+`<cephyr/Cephyr.h>` and a C++ convenience wrapper in `<cephyr/Cephyr.hpp>`.
+CMake applications can use `find_package(Cephyr CONFIG REQUIRED)` and link
+`Cephyr::Cephyr`. The Python `cephyr` package calls the same library in-process;
+it does not need the `cephyr` executable. Set `PYTHONPATH` to
+`<prefix>/<libdir>/cephyr/python` for a CMake installation.
+
+See the [embedding guide](EMBEDDING.md) for C and C++ examples and lifecycle
+requirements. The [extension SDK](SDK.md) provides opt-in, trusted callbacks
+through `<cephyr/CephyrSDK.h>` without exposing parser internals as public ABI.
+
+### Python bindings
+
+The `cephyr` package uses `ctypes` and requires the CPython main interpreter,
+built with the GIL, and the same CPython major/minor version used to build the
+native library. Calls through the package are serialized. The native compiler
+can still run its configured build tools when needed.
+
+In a CMake install the package finds the shared library relative to itself.
+From the source tree, use `PYTHONPATH=cornerstone/Cephyr/python` and set
+`CEPHYR_LIBRARY` to the path of the built shared library. You can also pass
+`library=...` to override discovery. Importing the module does not load the
+library.
+
+```python
+import cephyr
+
+compiler = cephyr.Compiler()
+result = compiler.compile(
+    ["-x", "c", "-", "-S", "-o", "-", "--diagnostics-format=sarif"],
+    "int add(int a, int b) { return a + b; }\n",
+)
+if result.ok:
+    print(result.output.decode("utf-8"))
+else:
+    print(result.diagnostics.decode("utf-8"))
+```
+
+Pass driver arguments without the program name. In-memory source is read
+from `-` and can be UTF-8 `str` or verbatim `bytes`; argv entries and optional
+`resource_root` and `archon_root` paths accept strings, filesystem bytes, or
+path-like objects. A `Result` contains a `Status` and two byte strings,
+`output` and `diagnostics`. `Result.sarif()` parses diagnostics requested
+with `--diagnostics-format=sarif`. Use `-o -` for in-memory text output where
+the driver supports it. The `cephyr.compile(...)` convenience function accepts
+the same compile arguments and an optional `library=...` path.
+
 ## Configuration and compilation
 
 Settings are applied in this order: built-in defaults, `./Cephyr.toml` (or

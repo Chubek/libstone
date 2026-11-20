@@ -1,3 +1,7 @@
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+#include "cephyr/Cephyr.h"
 #include "cephyr/backend.hpp"
 
 #include "cephyr/cache.hpp"
@@ -20,11 +24,16 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <span>
 #include <sstream>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+unsigned cephyr_python_version(void) {
+  return (PY_MAJOR_VERSION << 16) | PY_MINOR_VERSION;
+}
 
 namespace cephyr {
 namespace {
@@ -360,6 +369,166 @@ std::string content_digest(std::string_view contents) {
   return hash.finish();
 }
 
+using Artifacts = std::map<std::string, std::string>;
+
+class PythonError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+
+void ensure_python() {
+  // Hold the lock only for the initialization check. Never acquire the GIL
+  // with this lock held once a fully initialized interpreter exists.
+  static std::mutex mutex;
+  static bool attempted = false;
+  std::lock_guard lock(mutex);
+  if (Py_IsInitialized()) {
+    attempted = true;
+    return;
+  }
+  if (attempted)
+    throw PythonError("Cephyr cannot restart a previously initialized CPython runtime");
+  // A plain native host may have loaded libcephyr with RTLD_LOCAL. CPython's
+  // shared extension modules still need to resolve symbols from libpython.
+  // Pin and promote libpython when Cephyr starts the interpreter, so it also
+  // survives a later dlclose of libcephyr.
+  const auto anchor = reinterpret_cast<const void *>(&Py_IsInitialized);
+  Dl_info python_library{};
+  if (!dladdr(anchor, &python_library) || !python_library.dli_fname ||
+      (!dlopen(python_library.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD) &&
+       dlsym(RTLD_DEFAULT, "Py_IsInitialized") != anchor))
+    throw PythonError("cannot make the CPython runtime available to its extension modules");
+  PyConfig config;
+  PyConfig_InitIsolatedConfig(&config);
+  config.install_signal_handlers = 0;
+  config.site_import = 0;
+  config.write_bytecode = 0;
+  attempted = true;
+  const auto status = Py_InitializeFromConfig(&config);
+  PyConfig_Clear(&config);
+  if (PyStatus_Exception(status))
+    throw PythonError(status.err_msg ? status.err_msg : "cannot initialize CPython");
+  // The first native caller may leave or be a different thread from future
+  // callers. Do not finalize or reinitialize this process-wide interpreter.
+  PyEval_SaveThread();
+}
+
+class PythonScope {
+public:
+  PythonScope() : state_(PyGILState_Ensure()) {
+    PyErr_Fetch(&type_, &value_, &traceback_);
+  }
+  ~PythonScope() {
+    PyErr_Restore(type_, value_, traceback_);
+    PyGILState_Release(state_);
+  }
+  PythonScope(const PythonScope &) = delete;
+  PythonScope &operator=(const PythonScope &) = delete;
+
+private:
+  PyGILState_STATE state_;
+  PyObject *type_, *value_, *traceback_;
+};
+
+struct PyDecref {
+  void operator()(PyObject *object) const noexcept { Py_DECREF(object); }
+};
+using PyRef = std::unique_ptr<PyObject, PyDecref>;
+
+[[noreturn]] void python_error() {
+  PyObject *type, *value, *traceback;
+  PyErr_Fetch(&type, &value, &traceback);
+  PyErr_NormalizeException(&type, &value, &traceback);
+  const PyRef owned_type(type), owned_value(value), owned_traceback(traceback);
+  const PyRef text(value ? PyObject_Str(value) : nullptr);
+  const char *message = text ? PyUnicode_AsUTF8(text.get()) : nullptr;
+  PyErr_Clear();
+  throw PythonError(message ? message : "Archon CPython operation failed");
+}
+
+PyRef checked(PyObject *object) {
+  if (!object)
+    python_error();
+  return PyRef(object);
+}
+
+class ArchonPython {
+public:
+  struct Database {
+    archon::Value value;
+    std::string text, architecture;
+  };
+
+  ArchonPython(const std::filesystem::path &root, std::string_view package_digest)
+      : root_(root.string()) {
+    ensure_python();
+    Sha256 hash;
+    hash_field(hash, "root", root_);
+    hash_field(hash, "package", package_digest);
+    name_ = "_cephyr_archon_" + hash.finish();
+  }
+
+  Database compile_database(const std::filesystem::path &specification) const {
+    PythonScope scope;
+    ensure_namespace();
+    const archon::PackageScope package(name_);
+    Database db;
+    db.value = archon::compile_file(specification.string());
+    db.text = archon::dump_database(db.value);
+    db.architecture = db.value.at("architecture").as_string();
+    return db;
+  }
+
+  Artifacts generate(const Config &config, const Target &target,
+                     const archon::Value &database) const {
+    PythonScope scope;
+    ensure_namespace();
+    const archon::PackageScope package(name_);
+    const archon::Object options{
+        {"profile", "native"}, {"target", target.architecture},
+        {"abi", target.abi}, {"oracle", false},
+    };
+    return archon::irgen::generate_ir(
+        config.representation.empty() ? "gated" : config.representation,
+        {database}, options);
+  }
+
+  void publish(const Artifacts &files, const std::filesystem::path &directory,
+               const std::filesystem::path &specification) const {
+    PythonScope scope;
+    ensure_namespace();
+    const archon::PackageScope package(name_);
+    archon::irgen::write_generated_directory(files, directory.string(),
+                                             {specification.string()}, true);
+  }
+
+private:
+  void ensure_namespace() const {
+    // A private parent package lets the normal importer load and synchronize
+    // this Archon copy, including its relative imports. Never prepend to
+    // sys.path or replace the host's own `archon` package.
+    auto *modules = PyImport_GetModuleDict();
+    if (!PyDict_GetItemString(modules, name_.c_str())) {
+      const auto parent = checked(PyModule_New(name_.c_str()));
+      const auto location = checked(PyUnicode_DecodeFSDefault(root_.c_str()));
+      const auto paths = checked(Py_BuildValue("[O]", location.get()));
+      if (PyObject_SetAttrString(parent.get(), "__path__", paths.get()) < 0 ||
+          PyDict_SetItemString(modules, name_.c_str(), parent.get()) < 0)
+        python_error();
+    }
+  }
+
+  std::string root_, name_;
+};
+
+// LMDB process-level file locks do not support independently opening the same
+// environment in several threads. Keep cache lifetimes short and never hold
+// this lock while calling Python or external tools.
+std::mutex &backend_cache_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 std::string cache_contents(const std::map<std::string, std::string> &files) {
   std::string result;
   for (const auto &[name, contents] : files) {
@@ -394,9 +563,8 @@ bool cache_metadata(const std::map<std::string, std::string> &files,
          files.find("BackendManifest.json") != files.end();
 }
 
-archon::irgen::Artifacts
-generated_files(const std::map<std::string, std::string> &cache_files) {
-  archon::irgen::Artifacts result;
+Artifacts generated_files(const Artifacts &cache_files) {
+  Artifacts result;
   for (const auto &[name, contents] : cache_files) {
     if (name != kCacheFormatFile && name != kCacheFingerprintFile &&
         name != kCacheContentsFile)
@@ -422,8 +590,6 @@ struct Backend::Impl {
 
   bool attempted = false;
   bool ready = false;
-  std::unique_ptr<archon::Interpreter> interpreter;
-  archon::Value database;
   void *library = nullptr;
   CompileText compile_text = nullptr;
   DestroyArtifact destroy_artifact = nullptr;
@@ -449,7 +615,19 @@ struct Backend::Impl {
     diagnostics.error(code, std::move(message), location(file));
   }
 
-  bool make_fingerprint(std::string &result) {
+  bool read_package_digest(const std::filesystem::path &root, std::string &digest) {
+    Sha256 hash;
+    std::string failure;
+    if (!hash_tree(hash, root / "archon", "archon", failure)) {
+      error("cephyr.backend.resources", failure, target.specification.string());
+      return false;
+    }
+    digest = hash.finish();
+    return true;
+  }
+
+  bool make_fingerprint(std::string &result, const std::filesystem::path &root,
+                        std::string_view package_digest) {
     Sha256 hash;
     hash_field(hash, "format", kCacheFormat);
     hash_field(hash, "canonical-archdb", database_text);
@@ -470,11 +648,7 @@ struct Backend::Impl {
                  config.compile_flags[i]);
 
     std::string failure;
-    const auto root = std::filesystem::weakly_canonical(config.archon_root);
-    if (!hash_tree(hash, root / "archon", "archon", failure)) {
-      error("cephyr.backend.resources", failure, target.specification.string());
-      return false;
-    }
+    hash_field(hash, "archon-package", package_digest);
 
     // Full generate_ir embeds these resources from adjacent cornerstone
     // projects. Hashing them makes a cache entry invalid as soon as any
@@ -535,23 +709,9 @@ struct Backend::Impl {
     return true;
   }
 
-  bool compile_database() {
-    database = archon::compile_file(target.specification.string());
-    database_text = archon::dump_database(database);
-    database_architecture = database.at("architecture").as_string();
-    if (target.architecture != database_architecture) {
-      error("cephyr.backend.target",
-            "configured target architecture " + target.architecture +
-                " does not match compiled ArchDB " + database_architecture,
-            target.specification.string());
-      return false;
-    }
-    return true;
-  }
-
-  bool unchanged(std::string_view original) {
-    const auto current = archon::compile_file(target.specification.string());
-    if (archon::dump_database(current) != database_text) {
+  bool unchanged(const ArchonPython &python, const std::filesystem::path &root) {
+    const auto current = python.compile_database(target.specification);
+    if (current.text != database_text) {
       error("cephyr.backend.changed",
             "architecture sources changed during native backend preparation; "
             "retry the Cephyr invocation",
@@ -559,23 +719,17 @@ struct Backend::Impl {
       return false;
     }
     std::string current_fingerprint;
-    if (!make_fingerprint(current_fingerprint))
+    std::string package_digest;
+    if (!read_package_digest(root, package_digest) ||
+        !make_fingerprint(current_fingerprint, root, package_digest))
       return false;
-    if (current_fingerprint != original) {
+    if (current_fingerprint != fingerprint) {
       error("cephyr.backend.changed",
             "Archon generator or host compiler resources changed during "
             "native backend preparation; retry the Cephyr invocation",
             target.specification.string());
       return false;
     }
-    return true;
-  }
-
-  bool publish_generated(const archon::irgen::Artifacts &files,
-                         const std::filesystem::path &directory) {
-    archon::List inputs{target.specification.string()};
-    archon::irgen::write_generated_directory(files, directory.string(), inputs,
-                                             true);
     return true;
   }
 
@@ -679,19 +833,32 @@ struct Backend::Impl {
       return false;
     }
 
-    interpreter =
-        std::make_unique<archon::Interpreter>(config.archon_root.string());
-    if (!compile_database())
+    const auto root = std::filesystem::weakly_canonical(config.archon_root);
+    std::string package_digest;
+    if (!read_package_digest(root, package_digest))
       return false;
-    if (!make_fingerprint(fingerprint))
+    const ArchonPython python(root, package_digest);
+    auto db = python.compile_database(target.specification);
+    database_text = std::move(db.text);
+    database_architecture = std::move(db.architecture);
+    if (target.architecture != database_architecture) {
+      error("cephyr.backend.target",
+            "configured target architecture " + target.architecture +
+                " does not match compiled ArchDB " + database_architecture,
+            target.specification.string());
+      return false;
+    }
+    if (!make_fingerprint(fingerprint, root, package_digest))
       return false;
 
     const std::string cache_key = "archon-native:" + fingerprint;
-    std::unique_ptr<Cache> cache;
-    std::optional<std::map<std::string, std::string>> cached;
+    std::optional<Artifacts> cached;
     if (config.cache_enabled) {
-      cache = std::make_unique<Cache>(config.cache_path, diagnostics);
-      cached = cache->get(cache_key);
+      {
+        std::lock_guard lock(backend_cache_mutex());
+        Cache cache(config.cache_path, diagnostics);
+        cached = cache.get(cache_key);
+      }
       if (cached && !cache_metadata(*cached, fingerprint, native_sources(target.architecture))) {
         diagnostics.warning(
             "cephyr.backend.cache",
@@ -701,21 +868,13 @@ struct Backend::Impl {
       }
     }
 
-    archon::irgen::Artifacts generated;
+    Artifacts generated;
     if (cached) {
       generated = generated_files(*cached);
       if (config.verbose)
         diagnostics.note("cephyr.backend.irgen", "Archon IRGen cache hit");
     } else {
-      const archon::Object options{
-          {"profile", "native"},
-          {"target", database_architecture},
-          {"abi", target.abi},
-          {"oracle", false},
-      };
-      generated = archon::irgen::generate_ir(
-          config.representation.empty() ? "gated" : config.representation,
-          {database}, options);
+      generated = python.generate(config, target, db.value);
       if (config.verbose)
         diagnostics.note("cephyr.backend.irgen", "Archon IRGen generated");
       for (const auto source : native_sources(target.architecture)) {
@@ -729,11 +888,11 @@ struct Backend::Impl {
       }
     }
 
-    if (!unchanged(fingerprint))
+    if (!unchanged(python, root))
       return false;
 
     const auto generated_directory = workspace / "archon-generated";
-    publish_generated(generated, generated_directory);
+    python.publish(generated, generated_directory, target.specification);
     const auto library_path = workspace / "libcephyr-archon-backend.so";
     if (!build_library(generated_directory, library_path)) {
       return false;
@@ -742,13 +901,13 @@ struct Backend::Impl {
     if (!load_library(library_path))
       return false;
 
-    if (cache && !cached) {
-      std::map<std::string, std::string> files(generated.begin(),
-                                               generated.end());
-      files.emplace(std::string(kCacheFormatFile), std::string(kCacheFormat));
-      files.emplace(std::string(kCacheFingerprintFile), fingerprint);
-      files.emplace(std::string(kCacheContentsFile), cache_contents(files));
-      cache->put(cache_key, files);
+    if (config.cache_enabled && !cached) {
+      generated.emplace(std::string(kCacheFormatFile), std::string(kCacheFormat));
+      generated.emplace(std::string(kCacheFingerprintFile), fingerprint);
+      generated.emplace(std::string(kCacheContentsFile), cache_contents(generated));
+      std::lock_guard lock(backend_cache_mutex());
+      Cache cache(config.cache_path, diagnostics);
+      cache.put(cache_key, generated);
     }
     return true;
   }
@@ -760,6 +919,9 @@ struct Backend::Impl {
     try {
       ready = prepare_impl();
     } catch (const archon::Error &failure) {
+      error("cephyr.backend.archon", failure.what(),
+            target.specification.string());
+    } catch (const PythonError &failure) {
       error("cephyr.backend.archon", failure.what(),
             target.specification.string());
     } catch (const std::filesystem::filesystem_error &failure) {

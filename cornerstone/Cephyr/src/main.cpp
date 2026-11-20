@@ -1,3 +1,8 @@
+#include "driver.hpp"
+#include "mir_verify.h"
+#include "sdk_internal.hpp"
+
+#include <cephyr/Cephyr.h>
 #include <cephyr/backend.hpp>
 #include <cephyr/config.hpp>
 #include <cephyr/diagnostics.hpp>
@@ -11,15 +16,24 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <memory>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+struct cephyr_result {
+    std::string output;
+    std::string diagnostics;
+};
 
 namespace cephyr {
 namespace {
@@ -45,6 +59,13 @@ struct Options {
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
     bool no_headers = false, no_start = false, no_libraries = false, shared = false;
     bool verbose = false, sarif = false, werror = false, help = false, version = false;
+};
+
+struct Invocation {
+    const cephyr_request &request;
+    cephyr_result &result;
+    std::istream *cli_input = nullptr;
+    std::ostream *cli_output = nullptr;
 };
 
 constexpr std::string_view help_text = R"(Usage: cephyr [options] file...
@@ -146,7 +167,7 @@ std::optional<Command> comma_arguments(std::string_view text)
     return std::nullopt;
 }
 
-bool parse_options(int argc, char **argv, Options &opts, Diagnostics &diag)
+bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Diagnostics &diag)
 {
     bool positional = false, input_dash = false;
     Language current = Language::automatic;
@@ -155,7 +176,7 @@ bool parse_options(int argc, char **argv, Options &opts, Diagnostics &diag)
             diag.error("cephyr.option", "conflicting compilation stages");
         opts.stage = selected;
     };
-    for (int i = 1; i < argc; ++i) {
+    for (std::size_t i = 0; i < argc; ++i) {
         const std::string_view token(argv[i]);
         const auto argument = [&](std::string_view option) -> std::string {
             if (token.size() > option.size()) {
@@ -326,20 +347,43 @@ bool path_exists(const fs::path &path)
     return fs::exists(path, ec);
 }
 
+// Resolve the loaded object while a relative dlopen path still has its
+// original meaning. Do not depend on the embedding executable or on the
+// directory from which a later request is made.
+const fs::path module_directory = []() noexcept -> fs::path {
+    static const char anchor = 0;
+    Dl_info module{};
+    try {
+        if (dladdr(&anchor, &module) && module.dli_fname && *module.dli_fname) {
+            std::error_code ec;
+            const auto object = fs::canonical(module.dli_fname, ec);
+            if (!ec)
+                return object.parent_path();
+        }
+    } catch (...) {
+        // Fall back to compile-time paths if discovery fails.
+    }
+    return {};
+}();
+
 std::pair<fs::path, fs::path> resources()
 {
-    std::error_code ec;
-    const auto executable = fs::read_symlink("/proc/self/exe", ec);
-    if (!ec) {
-        auto cephyr = executable.parent_path() / CEPHYR_INSTALLED_RESOURCES;
-        auto archon = executable.parent_path() / CEPHYR_INSTALLED_ARCHON;
-        if (path_exists(cephyr / "triples") && path_exists(archon / "archon"))
-            return {cephyr.lexically_normal(), archon.lexically_normal()};
+    auto cephyr = fs::path(CEPHYR_SOURCE_RESOURCES);
+    auto archon = fs::path(CEPHYR_SOURCE_ARCHON);
+    if (!module_directory.empty()) {
+#ifdef CEPHYR_LIB_RELATIVE_RESOURCES
+        auto installed_cephyr = module_directory / CEPHYR_LIB_RELATIVE_RESOURCES;
+        auto installed_archon = module_directory / CEPHYR_LIB_RELATIVE_ARCHON;
+        if (path_exists(installed_cephyr / "triples"))
+            cephyr = installed_cephyr.lexically_normal();
+        if (path_exists(installed_archon / "archon"))
+            archon = installed_archon.lexically_normal();
+#endif
     }
-    return {CEPHYR_SOURCE_RESOURCES, CEPHYR_SOURCE_ARCHON};
+    return {std::move(cephyr), std::move(archon)};
 }
 
-std::optional<Config> configure(const Options &opts, Diagnostics &diag)
+std::optional<Config> configure(const Options &opts, const cephyr_request &request, Diagnostics &diag)
 {
     const auto [cephyr, archon] = resources();
     Config config = default_config(cephyr, archon);
@@ -352,6 +396,13 @@ std::optional<Config> configure(const Options &opts, Diagnostics &diag)
     }
     if (!config_file.empty() && !load_config(config, config_file, diag))
         return std::nullopt;
+    if (request.resource_root) {
+        const auto root = fs::absolute(request.resource_root);
+        config.triple_dir = (root / "triples").lexically_normal();
+        config.stdlib_root = (root / "stdlib").lexically_normal();
+    }
+    if (request.archon_root)
+        config.archon_root = fs::absolute(request.archon_root).lexically_normal();
     if (!opts.target.empty() && !(opts.target == "auto" && !config.triple_script.empty())) {
         if (opts.target != "auto" && opts.target != config.target.value_or(default_target_triple))
             config.triple_script.clear();
@@ -384,7 +435,8 @@ std::optional<Config> configure(const Options &opts, Diagnostics &diag)
 }
 
 PreprocessOptions preprocessor_options(const Options &opts, const Config &config,
-                                         const Target &target, bool assembler)
+                                          const Target &target, const NativeLoweringProvider *provider,
+                                          bool custom_model, bool assembler)
 {
     auto result = config.preprocess;
     result.assembler = assembler;
@@ -395,17 +447,19 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
         {true, "__STDC_NO_COMPLEX__=1"}, {true, "__STDC_NO_THREADS__=1"},
         {true, "__STDC_NO_VLA__=1"},
     };
-    if (target.architecture == "RISCV64IM")
+    if (provider && provider->architecture == "RISCV64IM")
         for (const auto *macro : {"__riscv=1", "__riscv_xlen=64", "__riscv_mul=1", "__riscv_div=1",
                                   "__riscv_float_abi_soft=1", "__CHAR_UNSIGNED__=1"})
             builtins.emplace_back(true, macro);
-    if (target.architecture == "AMD64")
+    if (provider && provider->architecture == "AMD64")
         for (const auto *macro : {"__x86_64__=1", "__x86_64=1", "__amd64__=1", "__amd64=1"})
             builtins.emplace_back(true, macro);
-    if (target.architecture == "AArch64")
+    if (provider && provider->architecture == "AArch64")
         for (const auto *macro : {"__aarch64__=1", "__AARCH64EL__=1", "__ARM_ARCH=8",
                                   "__ARM_ARCH_ISA_A64=1", "__ARM_PCS_AAPCS64=1", "__CHAR_UNSIGNED__=1"})
             builtins.emplace_back(true, macro);
+    if (custom_model)
+        builtins.emplace_back(true, "__CHAR_UNSIGNED__=1");
     if (target.is_linux) {
         builtins.emplace_back(true, "__linux__=1");
         builtins.emplace_back(true, "__unix__=1");
@@ -426,16 +480,30 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
     return result;
 }
 
-std::optional<std::string> read_input(const Input &input, Diagnostics &diag)
+std::optional<std::string> read_input(const Input &input, const Invocation &invocation,
+                                      Diagnostics &diag)
 {
     constexpr std::size_t max_input = 16u * 1024u * 1024u;
+    const std::string name = input.argument == "-" ? "<stdin>" : input.argument;
+    if (input.argument == "-" && !invocation.cli_input) {
+        const auto &request = invocation.request;
+        if (request.stdin_size > max_input) {
+            diag.error("cephyr.limit", "input exceeds the 16 MiB source limit", Location{name});
+            return std::nullopt;
+        }
+        const std::string_view source(request.stdin_data ? request.stdin_data : "", request.stdin_size);
+        if (source.find('\0') != std::string_view::npos) {
+            diag.error("cephyr.input", "input contains a NUL byte", Location{name});
+            return std::nullopt;
+        }
+        return std::string(source);
+    }
     std::ifstream file;
-    std::istream *stream = &std::cin;
+    std::istream *stream = invocation.cli_input;
     if (input.argument != "-") {
         file.open(input.argument, std::ios::binary);
         stream = &file;
     }
-    const std::string name = input.argument == "-" ? "<stdin>" : input.argument;
     if (!*stream) {
         diag.error("cephyr.input", "cannot open input", Location{name});
         return std::nullopt;
@@ -483,7 +551,8 @@ void save(const fs::path &path, std::string_view text)
     stream.write(text.data(), static_cast<std::streamsize>(text.size()));
     stream.close();
     if (!stream)
-        throw std::runtime_error("cannot write '" + path.string() + "'");
+        throw fs::filesystem_error("cannot write output", path,
+                                   std::error_code(errno ? errno : EIO, std::generic_category()));
 }
 
 bool same_file(const fs::path &a, const fs::path &b)
@@ -508,15 +577,25 @@ bool can_publish(const fs::path &path, const Options &opts, Diagnostics &diag)
     return true;
 }
 
-bool publish_text(const fs::path &output, std::string_view text, const Options &opts, Diagnostics &diag)
+bool publish_stdout(std::string_view text, Invocation &invocation, Diagnostics &diag)
 {
-    if (output == "-") {
-        std::cout.write(text.data(), static_cast<std::streamsize>(text.size()));
-        std::cout.flush();
-        if (!std::cout)
-            diag.error("cephyr.output", "cannot write standard output");
-        return bool(std::cout);
+    if (!invocation.cli_output) {
+        invocation.result.output.append(text);
+        return true;
     }
+    auto &output = *invocation.cli_output;
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    output.flush();
+    if (!output)
+        diag.error("cephyr.output", "cannot write standard output");
+    return bool(output);
+}
+
+bool publish_text(const fs::path &output, std::string_view text, const Options &opts,
+                  Invocation &invocation, Diagnostics &diag)
+{
+    if (output == "-")
+        return publish_stdout(text, invocation, diag);
     if (!can_publish(output, opts, diag))
         return false;
     TempDirectory staging(output.has_parent_path() ? output.parent_path() : fs::path("."), ".cephyr-out-XXXXXX");
@@ -719,7 +798,8 @@ bool link(const Config &config, const Target &target, const Options &opts,
     return execute(cmd, opts, diag) && publish_file(output, temporary, opts, diag);
 }
 
-bool check_auto_tools(const Options &opts, const Config &config, const Target &target, Diagnostics &diag)
+bool check_auto_tools(const Options &opts, const Config &config, const Target &target,
+                      bool sdk_backend, Diagnostics &diag)
 {
     if (opts.stage == Stage::preprocess || opts.stage == Stage::syntax || opts.stage == Stage::mir)
         return true;
@@ -730,7 +810,8 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
                                   [](const Input &input) { return c_input(input.language); });
     const bool has_source = std::any_of(opts.inputs.begin(), opts.inputs.end(),
                                   [](const Input &input) { return source_input(input.language); });
-    if (has_c && !check("a host C compiler to build the Archon backend", config.host_cc))
+    if (has_c && !sdk_backend &&
+        !check("a host C compiler to build the Archon backend", config.host_cc))
         return false;
     if (has_source && (opts.stage == Stage::object || opts.stage == Stage::link) &&
         !check("a target assembler", config.assembler.empty() ? target.assembler : config.assembler))
@@ -747,9 +828,9 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
             check("a target archiver", config.archiver.empty() ? target.archiver : config.archiver));
 }
 
-bool compile(const Options &opts, Diagnostics &diag)
+bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag)
 {
-    auto loaded = configure(opts, diag);
+    auto loaded = configure(opts, invocation.request, diag);
     if (!loaded)
         return false;
     auto &config = *loaded;
@@ -768,6 +849,15 @@ bool compile(const Options &opts, Diagnostics &diag)
     if (!target)
         return false;
     const auto *provider = native_lowering_provider(target->architecture, target->abi);
+    if (provider) {
+        std::error_code error;
+        if (!fs::equivalent(target->specification, config.archon_root / provider->stdspec, error))
+            provider = nullptr;
+    }
+    const bool sdk_backend = sdk.has_backend(*target);
+    // An exact SDK backend for an explicitly selected target may opt into
+    // Cephyr's generic little-endian LP64 frontend, not a built-in ISA/ABI.
+    const bool custom_model = !provider && !automatic && sdk_backend && target->abi == "LP64";
     if (opts.stage == Stage::link) {
         if (config.stdlib == "cephyr" && !(opts.no_start && opts.no_libraries) &&
             (!target->is_linux || !provider || !config.static_link)) {
@@ -780,7 +870,7 @@ bool compile(const Options &opts, Diagnostics &diag)
             return false;
         }
     }
-    if (automatic && !check_auto_tools(opts, config, *target, diag))
+    if (automatic && !check_auto_tools(opts, config, *target, sdk_backend, diag))
         return false;
     if (opts.verbose)
         diag.note("cephyr.target", target->triple + " (" + target->architecture + "/" + target->abi + ")" +
@@ -809,8 +899,8 @@ bool compile(const Options &opts, Diagnostics &diag)
         return workspace->path;
     };
     std::optional<Backend> backend;
-    const auto preprocessor = preprocessor_options(opts, config, *target, false);
-    const auto assembler_preprocessor = preprocessor_options(opts, config, *target, true);
+    const auto preprocessor = preprocessor_options(opts, config, *target, provider, custom_model, false);
+    const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider, custom_model, true);
     Command link_inputs;
     std::string preprocessed_output;
     std::size_t ordinal = 0;
@@ -855,10 +945,12 @@ bool compile(const Options &opts, Diagnostics &diag)
             }
             continue;
         }
-        auto source = read_input(input, diag);
+        auto source = read_input(input, invocation, diag);
         if (!source)
             return false;
         const auto name = input.argument == "-" ? "<stdin>" : input.argument;
+        if (input.language == Language::c && !sdk.desugar(*source, *target, name, diag))
+            return false;
         std::optional<Preprocessed> prep;
         if (input.language == Language::preprocessed) {
             prep = read_preprocessed(*source, name, diag);
@@ -883,28 +975,51 @@ bool compile(const Options &opts, Diagnostics &diag)
 
         std::string assembly;
         if (c_input(input.language)) {
-            if (!provider) {
-                diag.error("cephyr.target", "unsupported target for C lowering: " + target->architecture + "/" + target->abi);
+            if (!provider && !custom_model) {
+                diag.error("cephyr.target",
+                           "unsupported target for C lowering: " + target->architecture + "/" + target->abi +
+                           " (requires a standard target specification or an exact SDK backend for explicit LP64)",
+                           Location{name});
                 return false;
             }
-            prep->plain_char_signed = provider->plain_char_signed;
+            prep->plain_char_signed = provider && provider->plain_char_signed;
             auto parsed = parse(*prep, diag);
             if (!parsed || diag.error_count())
                 return false;
             auto lowered = lower(parsed->root(), *prep, diag, preprocessor.hosted);
             if (!lowered || diag.error_count())
                 return false;
+            if (!sdk.analyze(lowered->mir, *target, name, diag))
+                return false;
             if (opts.stage == Stage::syntax)
                 continue;
+            bool rewritten = false;
+            if (!sdk.rewrite(lowered->mir, *target, name, diag, &rewritten))
+                return false;
+            const bool custom_backend = opts.stage != Stage::mir && sdk_backend;
+            if (rewritten || custom_backend) {
+                ArchonBackendDiagnostic verification{};
+                if (cephyr_verify_mir(lowered->mir.data(), lowered->mir.size(), &verification) !=
+                    ARCHON_BACKEND_OK) {
+                    diag.error("cephyr.sdk.mir", verification.message[0] ? verification.message :
+                               "Archon rejected MachineIR", Location{name});
+                    return false;
+                }
+            }
             if (opts.stage == Stage::mir) {
-                if (!publish_text(output_name(input, opts), lowered->mir, opts, diag))
+                if (!publish_text(output_name(input, opts), lowered->mir, opts, invocation, diag))
                     return false;
                 continue;
             }
-            if (!backend)
-                backend.emplace(config, *target, temporary() / "backend", diag);
             const bool pic = opts.pic.value_or(opts.shared || (opts.stage == Stage::link && !config.static_link));
-            auto result = backend->compile(lowered->mir, name, pic);
+            std::optional<std::string> result;
+            if (custom_backend) {
+                result = sdk.emit_assembly(lowered->mir, *target, name, pic, diag);
+            } else {
+                if (!backend)
+                    backend.emplace(config, *target, temporary() / "backend", diag);
+                result = backend->compile(lowered->mir, name, pic);
+            }
             if (!result || diag.error_count())
                 return false;
             assembly = std::move(*result);
@@ -928,7 +1043,7 @@ bool compile(const Options &opts, Diagnostics &diag)
         }
 
         if (opts.stage == Stage::assembly) {
-            if (!publish_text(output_name(input, opts), assembly, opts, diag))
+            if (!publish_text(output_name(input, opts), assembly, opts, invocation, diag))
                 return false;
             continue;
         }
@@ -950,34 +1065,119 @@ bool compile(const Options &opts, Diagnostics &diag)
     if (diag.error_count())
         return false;
     if (opts.stage == Stage::preprocess)
-        return publish_text(opts.output.empty() ? fs::path("-") : opts.output, preprocessed_output, opts, diag);
+        return publish_text(opts.output.empty() ? fs::path("-") : opts.output,
+                            preprocessed_output, opts, invocation, diag);
     if (opts.stage == Stage::link)
         return link(config, *target, opts, std::move(link_inputs), temporary(), diag);
     return true;
 }
 
-} // namespace
-} // namespace cephyr
-
-int main(int argc, char **argv)
+int drive(Invocation &invocation)
 {
-    using namespace cephyr;
     Options opts;
     Diagnostics diag;
-    bool ok = false;
+    int status = CEPHYR_COMPILE_ERROR;
     try {
-        if (parse_options(argc, argv, opts, diag)) {
+        const auto &request = invocation.request;
+        const bool parsed = parse_options(request.argc, request.argv, opts, diag);
+        SdkPipeline sdk(request.sdk);
+        if (!sdk.validate(diag)) {
+            status = CEPHYR_INVALID_ARGUMENT;
+        } else if (parsed) {
             if (opts.help)
-                std::cout << help_text;
+                publish_stdout(help_text, invocation, diag);
             if (opts.version || (opts.verbose && opts.inputs.empty()))
-                std::cout << "Cephyr " CEPHYR_VERSION "\n";
-            ok = opts.help || opts.version || opts.inputs.empty() || compile(opts, diag);
+                publish_stdout("Cephyr " CEPHYR_VERSION "\n", invocation, diag);
+            if (opts.help || opts.version || opts.inputs.empty() || compile(opts, invocation, sdk, diag))
+                status = diag.error_count() ? CEPHYR_COMPILE_ERROR : CEPHYR_OK;
         }
+    } catch (const fs::filesystem_error &err) {
+        diag.error("cephyr.driver", err.what());
     } catch (const std::exception &err) {
         diag.error("cephyr.driver", err.what());
+        status = CEPHYR_INTERNAL_ERROR;
     }
-    if (!ok && !diag.error_count())
+    if (status != CEPHYR_OK && !diag.error_count())
         diag.error("cephyr.driver", "compilation failed");
-    diag.render(std::cerr, opts.sarif);
-    return ok && !diag.error_count() ? EXIT_SUCCESS : EXIT_FAILURE;
+    std::ostringstream diagnostics;
+    diag.render(diagnostics, opts.sarif);
+    invocation.result.diagnostics = std::move(diagnostics).str();
+    return status;
 }
+
+// Callbacks must not enter the driver recursively on the same thread.
+thread_local bool compiling = false;
+
+struct CompilationScope {
+    CompilationScope() { compiling = true; }
+    ~CompilationScope() { compiling = false; }
+};
+
+} // namespace
+
+int cephyr_cli_main(int argc, const char *const *argv, std::istream &input,
+                    std::ostream &output, std::ostream &diagnostics)
+{
+    const cephyr_request request{sizeof(cephyr_request), argc > 0 ? static_cast<std::size_t>(argc - 1) : 0,
+                                 argc > 0 ? argv + 1 : nullptr,
+                                 nullptr, 0, nullptr, nullptr, nullptr};
+    cephyr_result result;
+    Invocation invocation{request, result, &input, &output};
+    CompilationScope scope;
+    try {
+        const int status = drive(invocation);
+        diagnostics << result.diagnostics;
+        return status == CEPHYR_OK ? EXIT_SUCCESS : EXIT_FAILURE;
+    } catch (const std::exception &error) {
+        diagnostics << "error: " << error.what() << " [cephyr.driver]\n";
+        return EXIT_FAILURE;
+    }
+}
+
+} // namespace cephyr
+
+unsigned cephyr_abi_version(void) { return 1; }
+
+const char *cephyr_version(void) { return CEPHYR_VERSION; }
+
+int cephyr_compile(const cephyr_request *request, cephyr_result **result)
+{
+    if (!result)
+        return CEPHYR_INVALID_ARGUMENT;
+    *result = nullptr;
+    if (!request || request->struct_size < sizeof(cephyr_request) ||
+        (request->argc && !request->argv) || (request->stdin_size && !request->stdin_data) ||
+        (request->resource_root && !*request->resource_root) ||
+        (request->archon_root && !*request->archon_root) || cephyr::compiling)
+        return CEPHYR_INVALID_ARGUMENT;
+    for (std::size_t i = 0; i < request->argc; ++i)
+        if (!request->argv[i])
+            return CEPHYR_INVALID_ARGUMENT;
+
+    try {
+        cephyr::CompilationScope scope;
+        auto storage = std::make_unique<cephyr_result>();
+        cephyr::Invocation invocation{*request, *storage};
+        const int status = cephyr::drive(invocation);
+        *result = storage.release();
+        return status;
+    } catch (...) {
+        return CEPHYR_INTERNAL_ERROR;
+    }
+}
+
+const char *cephyr_result_output(const cephyr_result *result, size_t *size)
+{
+    if (size)
+        *size = result ? result->output.size() : 0;
+    return result ? result->output.c_str() : nullptr;
+}
+
+const char *cephyr_result_diagnostics(const cephyr_result *result, size_t *size)
+{
+    if (size)
+        *size = result ? result->diagnostics.size() : 0;
+    return result ? result->diagnostics.c_str() : nullptr;
+}
+
+void cephyr_result_destroy(cephyr_result *result) { delete result; }

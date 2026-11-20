@@ -13,6 +13,8 @@
 namespace archon {
 namespace {
 
+thread_local const std::string* package_prefix = nullptr;
+
 class GIL {
 public:
     GIL() {
@@ -152,6 +154,22 @@ void add_package_path(std::string_view package_root) {
         python_error();
 }
 
+PackageScope::PackageScope(std::string_view parent_package)
+    : prefix_(parent_package), previous_(package_prefix) {
+    const auto head = [](char c) {
+        return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    if (prefix_.empty() || !head(prefix_.front()))
+        throw Error("expected an application Python package identifier");
+    for (const char c : prefix_)
+        if (!head(c) && !(c >= '0' && c <= '9'))
+            throw Error("expected an application Python package identifier");
+    prefix_ += '.';
+    package_prefix = &prefix_;
+}
+
+PackageScope::~PackageScope() noexcept { package_prefix = previous_; }
+
 namespace detail {
 
 struct Access {
@@ -188,6 +206,9 @@ Value dictionary(const Object& entries) {
 Value invoke_api(const char* module_name, std::string_view operation,
                  const List& args, const Object& kwargs) {
     GIL gil;
+    const auto qualified = package_prefix ? *package_prefix + module_name : std::string{};
+    if (package_prefix)
+        module_name = qualified.c_str();
     auto module = Access::take(PyImport_ImportModule(module_name));
     return module.attribute(operation).call(args, kwargs);
 }

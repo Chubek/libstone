@@ -1,0 +1,15 @@
+CEPHYR_1 {
+    global:
+        cephyr_abi_version;
+        cephyr_python_version;
+        cephyr_version;
+        cephyr_compile;
+        cephyr_result_output;
+        cephyr_result_diagnostics;
+        cephyr_result_destroy;
+};
+
+CEPHYR_PRIVATE_1 {
+    global: cephyr_cli_main;
+    local: *;
+} CEPHYR_1;

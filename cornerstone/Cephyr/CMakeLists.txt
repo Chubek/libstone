@@ -2,7 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 project(Cephyr VERSION 0.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 option(CEPHYR_BUILD_TESTS "Build and register Cephyr tests" ON)
+option(CEPHYR_INSTALL_PYTHON "Install the in-process Python bindings" ON)
 if(CEPHYR_BUILD_TESTS)
   enable_testing()
 endif()
@@ -52,38 +54,82 @@ else()
     "${cephyr_repo}/moonstone" "${cephyr_repo}/moonstone/syren/include")
 endif()
 
-add_executable(cephyr
+set_target_properties(cephyr_cparser cephyr_ucpp cephyr_tomlc99 cephyr_diagnostics
+  PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+set(cephyr_native "${cephyr_archon}/archon/irgen/native")
+add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
   src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
-  src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp)
-target_compile_features(cephyr PRIVATE cxx_std_20)
-set_target_properties(cephyr PROPERTIES CXX_EXTENSIONS OFF)
+  src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
+  src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
+  "${cephyr_native}/Legalizer.c")
+add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
+target_compile_features(cephyr_compiler PRIVATE cxx_std_20)
+set_target_properties(cephyr_compiler PROPERTIES
+  C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF CXX_EXTENSIONS OFF
+  OUTPUT_NAME cephyr EXPORT_NAME Cephyr
+  VERSION "${PROJECT_VERSION}" SOVERSION 1)
+target_include_directories(cephyr_compiler PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(cephyr PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>)
+  target_compile_options(cephyr_compiler PRIVATE -Wall -Wextra)
 endif()
-target_include_directories(cephyr PRIVATE "${cephyr_archon}/archon/irgen/native")
-target_include_directories(cephyr SYSTEM PRIVATE
+# Keep vendor and implementation symbols out of the library's link interface.
+set(cephyr_exports "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Cephyr.map")
+target_link_options(cephyr_compiler PRIVATE "LINKER:--version-script=${cephyr_exports}" "LINKER:-z,defs")
+set_property(TARGET cephyr_compiler APPEND PROPERTY LINK_DEPENDS "${cephyr_exports}")
+target_include_directories(cephyr_compiler PRIVATE "${cephyr_native}")
+target_include_directories(cephyr_compiler SYSTEM PRIVATE
   "${cephyr_repo}" "${cephyr_vendor}/lmdbxx" "${CEPHYR_LMDB_INCLUDE_DIR}")
-target_link_libraries(cephyr PRIVATE cephyr_diagnostics cephyr_cparser cephyr_ucpp cephyr_tomlc99
+target_link_libraries(cephyr_compiler PRIVATE cephyr_diagnostics cephyr_cparser cephyr_ucpp cephyr_tomlc99
   libstone_kaguya Archon::Archon "${CEPHYR_LMDB_LIBRARY}" ${CMAKE_DL_LIBS})
 if(TARGET Wetstone::wetstone)
-  target_link_libraries(cephyr PRIVATE Wetstone::wetstone)
+  target_link_libraries(cephyr_compiler PRIVATE Wetstone::wetstone)
 endif()
 
+add_executable(cephyr src/cli.cpp)
+target_link_libraries(cephyr PRIVATE Cephyr::Cephyr)
+target_compile_features(cephyr PRIVATE cxx_std_20)
+set_target_properties(cephyr PROPERTIES CXX_EXTENSIONS OFF)
+
 set(cephyr_data_dir "${CMAKE_INSTALL_DATADIR}/cephyr")
-file(RELATIVE_PATH cephyr_installed_resources
-  "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_DATADIR}/cephyr")
-file(RELATIVE_PATH cephyr_installed_archon
-  "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_DATADIR}/archon/cornerstone/Archon")
-target_compile_definitions(cephyr PRIVATE
+file(RELATIVE_PATH cephyr_lib_relative_resources
+  "${CMAKE_INSTALL_FULL_LIBDIR}" "${CMAKE_INSTALL_FULL_DATADIR}/cephyr")
+file(RELATIVE_PATH cephyr_lib_relative_archon
+  "${CMAKE_INSTALL_FULL_LIBDIR}" "${CMAKE_INSTALL_FULL_DATADIR}/archon/cornerstone/Archon")
+file(RELATIVE_PATH cephyr_bin_relative_lib
+  "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
+set_target_properties(cephyr PROPERTIES INSTALL_RPATH "$ORIGIN/${cephyr_bin_relative_lib}")
+target_compile_definitions(cephyr_compiler PRIVATE
+  AN_GENERIC_MIR_VERIFY=1
   CEPHYR_VERSION="${PROJECT_VERSION}"
   CEPHYR_SOURCE_RESOURCES="${CMAKE_CURRENT_SOURCE_DIR}"
   CEPHYR_SOURCE_ARCHON="${cephyr_archon}"
-  CEPHYR_INSTALLED_RESOURCES="${cephyr_installed_resources}"
-  CEPHYR_INSTALLED_ARCHON="${cephyr_installed_archon}")
+  CEPHYR_LIB_RELATIVE_RESOURCES="${cephyr_lib_relative_resources}"
+  CEPHYR_LIB_RELATIVE_ARCHON="${cephyr_lib_relative_archon}")
+
+set(cephyr_package_dir "${CMAKE_INSTALL_LIBDIR}/cmake/Cephyr")
+configure_package_config_file(cmake/CephyrConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/CephyrConfig.cmake"
+  INSTALL_DESTINATION "${cephyr_package_dir}")
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/CephyrConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}" COMPATIBILITY SameMajorVersion)
 install(TARGETS cephyr RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(TARGETS cephyr_compiler EXPORT CephyrTargets LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+install(EXPORT CephyrTargets NAMESPACE Cephyr:: DESTINATION "${cephyr_package_dir}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CephyrConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/CephyrConfigVersion.cmake" DESTINATION "${cephyr_package_dir}")
+install(FILES include/cephyr/Cephyr.h include/cephyr/Cephyr.hpp include/cephyr/CephyrSDK.h
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cephyr")
+if(CEPHYR_INSTALL_PYTHON)
+  install(DIRECTORY python/cephyr DESTINATION "${CMAKE_INSTALL_LIBDIR}/cephyr/python"
+    FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
+endif()
 install(DIRECTORY stdlib triples DESTINATION "${cephyr_data_dir}" USE_SOURCE_PERMISSIONS)
-install(FILES Cephyr.toml README.md DESTINATION "${cephyr_data_dir}")
+install(FILES Cephyr.toml README.md EMBEDDING.md SDK.md DESTINATION "${cephyr_data_dir}")
+install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
 
 if(CEPHYR_BUILD_TESTS)
   add_executable(cephyr-diagnostics-test tests/diagnostics.cpp)
@@ -106,6 +152,20 @@ if(CEPHYR_BUILD_TESTS)
     cephyr_diagnostics libstone_kaguya cephyr_tomlc99)
   add_test(NAME cephyr.host-target COMMAND cephyr-host-target-test
     "${CMAKE_CURRENT_SOURCE_DIR}" "${cephyr_archon}")
+  find_package(Threads REQUIRED)
+  add_executable(cephyr-c-api-test tests/embedding.c)
+  set_target_properties(cephyr-c-api-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+  target_link_libraries(cephyr-c-api-test PRIVATE Cephyr::Cephyr)
+  add_test(NAME cephyr.c-api COMMAND cephyr-c-api-test)
+  add_executable(cephyr-cpp-api-test tests/embedding.cpp)
+  target_compile_features(cephyr-cpp-api-test PRIVATE cxx_std_20)
+  target_link_libraries(cephyr-cpp-api-test PRIVATE Cephyr::Cephyr Threads::Threads)
+  add_test(NAME cephyr.cpp-api COMMAND cephyr-cpp-api-test)
+  set_tests_properties(cephyr.c-api cephyr.cpp-api PROPERTIES TIMEOUT 60)
+  add_executable(cephyr-sdk-test tests/sdk.c)
+  set_target_properties(cephyr-sdk-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+  target_link_libraries(cephyr-sdk-test PRIVATE Cephyr::Cephyr)
+  add_test(NAME cephyr.sdk COMMAND cephyr-sdk-test "${CMAKE_CURRENT_SOURCE_DIR}" "${cephyr_archon}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     foreach(test IN ITEMS cephyr-diagnostics-test cephyr-preprocess-test cephyr-cache-test cephyr-host-target-test)
       target_compile_options(${test} PRIVATE -UNDEBUG)
@@ -124,4 +184,22 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_cli_regression.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.driver PROPERTIES TIMEOUT 300)
+  add_test(NAME cephyr.python-api COMMAND "${CMAKE_COMMAND}" -E env
+    "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+    "CEPHYR_LIBRARY=$<TARGET_FILE:cephyr_compiler>"
+    "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_python_api.py")
+  set_tests_properties(cephyr.python-api PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.installed-api COMMAND "${CMAKE_COMMAND}"
+    "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/installed-api-test"
+    "-DTEST_CONFIG=$<CONFIG>"
+    "-DTEST_CTEST=${CMAKE_CTEST_COMMAND}"
+    "-DINSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DINSTALL_DATADIR=${CMAKE_INSTALL_DATADIR}"
+    "-DINSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+    "-DTEST_PYTHON=${Python3_EXECUTABLE}"
+    "-DTEST_PYTHON_BINDINGS=${CEPHYR_INSTALL_PYTHON}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_api.cmake")
+  set_tests_properties(cephyr.installed-api PROPERTIES TIMEOUT 180)
 endif()

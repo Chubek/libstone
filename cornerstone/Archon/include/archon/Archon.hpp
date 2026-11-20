@@ -48,6 +48,22 @@ private:
 // keep the interpreter alive until all results are destroyed.
 void add_package_path(std::string_view package_root);
 
+// Route facade imports on the current thread through an application-owned
+// Python package, e.g. "host_private.archon.api" instead of "archon.api".
+// The application registers the parent package with CPython first. Scopes
+// can nest and must be destroyed in reverse order on the creating thread.
+class PackageScope {
+public:
+    explicit PackageScope(std::string_view parent_package);
+    ~PackageScope() noexcept;
+    PackageScope(const PackageScope&) = delete;
+    PackageScope& operator=(const PackageScope&) = delete;
+
+private:
+    std::string prefix_;
+    const std::string* previous_;
+};
+
 namespace detail { struct Access; }
 
 // An owning handle. Copies alias the same Python object, not a deep copy.

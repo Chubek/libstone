@@ -99,6 +99,11 @@ Archon objects and join their calling threads before finalizing Python.
 same Python object. The wrappers acquire the GIL for their operations. Python
 exceptions cross the API as `archon::Error`.
 
+If the host has already registered a private parent package containing
+`archon`, `archon::PackageScope` routes facade imports through that parent on
+the current thread without changing `sys.path`. Create and destroy nested
+scopes in reverse order on the same thread.
+
 Both APIs require the caller to list protected input paths when publishing
 a generated tree, especially when using forced replacement. Include any
 ArchDB, script, or bank path located in or aliased into the destination.

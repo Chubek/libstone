@@ -1,0 +1,9 @@
+target = "x86_64-cephyrsdk-linux-gnu"
+cache_enabled = false
+
+[paths]
+triple_script = "target.lua"
+
+[tools]
+# Custom assembly emission must not need the native Archon backend compiler.
+host_cc = ["/bin/false"]
