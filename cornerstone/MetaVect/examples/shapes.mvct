@@ -1,0 +1,8 @@
+// Shapes are painted in this order, in a top-left coordinate system.
+canvas(120, 80) {
+    let margin = 8;
+    let ink = "#173B52";
+    rect(margin, margin, 104, 64, "#EFF6F8");
+    circle(34, 40, 20, "#DB5946");
+    line(56, 40, sub(120, margin), 40, ink, 4);
+}
