@@ -131,7 +131,8 @@ IRGen, and for the separate C runtime APIs provided by generated code.
 
 ## Native backend
 
-The opt-in RV64IM/LP64 profile generates a C99 library and runtime driver for
-typed MachineIR. See [Embedding](Embedding.md), [MachineIR](MachineIR.md),
-[Binary emission](BinaryEmission.md), and the
+The opt-in native profiles generate a C99 library and runtime driver for typed
+MachineIR. RV64I/RV64IM LP64 support GAS and [RV64 raw emission](BinaryEmission.md);
+[SysV AMD64 and AAPCS64](NativeScalarGAS.md) support scalar GAS. See
+[Embedding](Embedding.md), [MachineIR](MachineIR.md), and the
 [capability matrix](CAPABILITY_MATRIX.json).

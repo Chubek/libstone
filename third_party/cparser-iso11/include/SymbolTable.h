@@ -10,6 +10,7 @@
 
 #include "common.h"
 #include <map>
+#include <string>
 #include <vector>
 
 namespace cparser
@@ -53,6 +54,7 @@ enum STTypeKind
 struct STType;
 struct STObject;
 struct STScope;
+class ASTNode;
 
 struct STType
 {
@@ -65,6 +67,7 @@ struct STType
     struct STObject *fields;    // Struct fields
     unsigned size;
     bool isSigned;
+    std::string tagName;
 
     STType(STTypeKind Kind)
         : kind(Kind), elemType(nullptr), baseType(nullptr),
@@ -77,8 +80,9 @@ struct STType
 struct STObject
 {
     STObjectKind kind;
-    char name[IDLEN];
+    std::string name;
     STType *type;
+    ASTNode *astType;
 
     int ival;  // Integer constant value.
     int level; // Scope level
@@ -93,10 +97,9 @@ struct STObject
     struct STObject *next;
 
     STObject(const char *Name, STObjectKind Kind, STType *Type)
-        : ival(0), level(0), prmc(0), locals(nullptr),
+        : name(Name), astType(nullptr), ival(0), level(0), prmc(0), locals(nullptr),
           isConstant(false), next(nullptr)
     {
-        strcpy(name, Name);
         kind = Kind;
         type = Type;
     }
@@ -132,6 +135,7 @@ public:
     STType *floatType;
     STType *doubleType;
     STType *voidType;
+    STType *boolType;
     STType *nullType;
     STType *noType;
 
@@ -146,6 +150,7 @@ public:
     STObject *insert(const char *, STObjectKind, STType *);
     STObject *insertGlobalVariable(const char *, STType *, const char *);
     STObject *find(const char *);
+    STObject *findLocal(const char *);
 
     int getLevel() { return level; }
 

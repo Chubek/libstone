@@ -11,7 +11,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <string>
+#include <utility>
 
 #include "common.h"
 #include <map>
@@ -26,9 +28,11 @@ struct Token
     union
     {
         int ival;
-        float fval;
+        std::uint64_t uval;
+        long double fval;
     } info;
     std::string sval;
+    std::string spelling;
     int line, col;
 };
 
@@ -37,28 +41,32 @@ typedef std::map<const char *, unsigned, CharCompare> TokenMap;
 class Lexer
 {
 protected:
-    FILE *_fp;
-    int _ch;   // Current character
-    int _line; // Current line
-    int _col;  // Current column
+    FILE *_fp = nullptr;
+    std::string _source;
+    std::size_t _offset = 0;
+    int _ch = 0;   // Current character
+    int _line = 1; // Current line
+    int _col = 0;  // Current column
+    DiagnosticHandler _diagnostic;
 
-    void error(int lineNum, const char *format, ...);
-    bool isHexDigit(char c);
-    int powr(int x, int n);
-
-    virtual void readName(Token *t) {}
-    virtual void readNumberLit(Token *t) {}
-    virtual void readStringLit(Token *t) {}
-    virtual void readCharLit(Token *t) {}
-    virtual void comment() {}
+    [[noreturn]] void error(int line, int column, const char *format, ...);
 
 public:
     void nextCh();
-    virtual unsigned next(Token *t) { return 0; }
+    virtual unsigned next(Token *) = 0;
 
     Lexer(const char *filename);
+    explicit Lexer(std::string source) : _source(std::move(source)) {}
+    Lexer(const Lexer &) = delete;
+    Lexer &operator=(const Lexer &) = delete;
 
-    ~Lexer() {}
+    virtual ~Lexer();
+
+    const DiagnosticHandler &getDiagnosticHandler() const { return _diagnostic; }
+    void setDiagnosticHandler(DiagnosticHandler handler)
+    {
+        _diagnostic = std::move(handler);
+    }
 };
 
 } // namespace cparser

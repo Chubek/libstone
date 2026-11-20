@@ -100,12 +100,18 @@ ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
         goto done;
     }
     if (flags & ~(unsigned)(ARCHON_BACKEND_SCHEDULE_PURE |
-            ARCHON_BACKEND_PHYSICAL_RECORDS | ARCHON_BACKEND_MACHINE_CODE)) {
+            ARCHON_BACKEND_PHYSICAL_RECORDS | ARCHON_BACKEND_MACHINE_CODE |
+            ARCHON_BACKEND_PIC)) {
         an_error(&ctx, ARCHON_BACKEND_UNSUPPORTED, "unknown backend compile flags");
         goto done;
     }
     if ((flags & ARCHON_BACKEND_PHYSICAL_RECORDS) && (flags & ARCHON_BACKEND_MACHINE_CODE)) {
         an_error(&ctx, ARCHON_BACKEND_INVALID, "choose one backend output mode");
+        goto done;
+    }
+    if ((flags & ARCHON_BACKEND_PIC) &&
+            (flags & (ARCHON_BACKEND_PHYSICAL_RECORDS | ARCHON_BACKEND_MACHINE_CODE))) {
+        an_error(&ctx, ARCHON_BACKEND_INVALID, "PIC requires assembly output");
         goto done;
     }
     if (!an_continue(&ctx))
@@ -122,6 +128,7 @@ ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
     out.limit = output_limit(options);
     out.physical = (flags & ARCHON_BACKEND_PHYSICAL_RECORDS) != 0;
     out.machine_code = (flags & ARCHON_BACKEND_MACHINE_CODE) != 0;
+    out.pic = (flags & ARCHON_BACKEND_PIC) != 0;
     compiled = an_compile_module(&ctx, module, &out);
     if (out.status != ARCHON_BACKEND_OK)
         output_error(&ctx, out.status);

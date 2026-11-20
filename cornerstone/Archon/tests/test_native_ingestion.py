@@ -50,6 +50,9 @@ int an_compile_module(ANContext *ctx, const ArchonMIRModule *module, ANOut *out)
     assert(module->version == ARCHON_MIR_SCHEMA_VERSION);
     assert(ctx->function == SIZE_MAX && ctx->block == SIZE_MAX &&
            ctx->instruction == SIZE_MAX);
+    assert(out->physical == !!(ctx->flags & ARCHON_BACKEND_PHYSICAL_RECORDS));
+    assert(out->machine_code == !!(ctx->flags & ARCHON_BACKEND_MACHINE_CODE));
+    assert(out->pic == !!(ctx->flags & ARCHON_BACKEND_PIC));
     assert(out->limit == 1 || out->limit == 16u * 1024 * 1024 ||
            out->limit == 64u * 1024 * 1024);
     out->data = malloc(4);
@@ -112,6 +115,23 @@ int main(void)
     assert(!artifact.data && !artifact.size);
     module.import_count = 0;
     module.global_count = 0;
+    assert(archon_backend_compile_ex(&module, NULL,
+        ARCHON_BACKEND_PIC | ARCHON_BACKEND_PHYSICAL_RECORDS,
+        &artifact, &diag) == ARCHON_BACKEND_INVALID);
+    assert(diag.stage == ARCHON_BACKEND_INPUT && strstr(diag.message, "assembly output"));
+    assert(!artifact.data && !artifact.size);
+    assert(archon_backend_compile_ex(&module, NULL,
+        ARCHON_BACKEND_PIC | ARCHON_BACKEND_MACHINE_CODE,
+        &artifact, NULL) == ARCHON_BACKEND_INVALID);
+    assert(!artifact.data && !artifact.size);
+    assert(archon_backend_compile_ex(&module, NULL, 16u,
+        &artifact, NULL) == ARCHON_BACKEND_UNSUPPORTED);
+    assert(!artifact.data && !artifact.size);
+    assert(archon_backend_compile_ex(&module, NULL, ARCHON_BACKEND_PIC,
+        &artifact, &diag) == ARCHON_BACKEND_OK);
+    assert(artifact.size == 3 && strcmp(artifact.data, "asm") == 0);
+    archon_backend_artifact_destroy(&artifact);
+
     options.max_output_bytes = 1;
     assert(archon_backend_compile(&module, &options, &artifact, &diag) == ARCHON_BACKEND_LIMIT);
     assert(diag.status == ARCHON_BACKEND_LIMIT && diag.stage == ARCHON_BACKEND_EMIT);

@@ -21,6 +21,21 @@ namespace cparser
 class CParser : public Parser
 {
     bool _inTypedef;
+    bool _lastParameterListVariadic;
+    unsigned _depth = 0;
+
+    class ParseDepth
+    {
+        CParser &parser;
+    public:
+        explicit ParseDepth(CParser &p) : parser(p)
+        {
+            if (parser._depth == 512)
+                parser.parsingError("C syntax nesting limit exceeded");
+            ++parser._depth;
+        }
+        ~ParseDepth() { --parser._depth; }
+    };
 
     void initNames();
 
@@ -58,9 +73,13 @@ class CParser : public Parser
 
     // Declarations
     ASTNode *Declaration(ASTNode *declSpec);
-    ASTNode *DeclarationSpecifiers();
+    ASTNode *TypedefDeclaration(ASTNode *declSpec);
+    ASTNode *StaticAssertDeclaration();
+    ASTNode *DeclarationSpecifiers(bool typeOnly = false);
     SequenceASTNode *InitDeclaratorList(ASTNode *typeSpec);
     ASTNode *InitDeclarator(ASTNode *typeSpec);
+    ASTNode *InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
+                                    ASTNode *name);
     void StorageClassSpecifier(unsigned &flags);
     ASTNode *TypeSpecifier();
     ASTNode *StructOrUnionSpecifier();
@@ -104,12 +123,15 @@ class CParser : public Parser
     ASTNode *TranslationUnit();
     ASTNode *ExternalDeclaration();
     ASTNode *FunctionDefinition(ASTNode *funcType);
+    ASTNode *FunctionDefinition(ASTNode *funcType, ASTNode *name,
+                                unsigned flags);
 public:
     void parse(const char *output);
 
     CParser(CLexer *LEX) : Parser(LEX)
     {
         _inTypedef = false;
+        _lastParameterListVariadic = false;
         initNames();
     }
 };

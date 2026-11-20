@@ -48,10 +48,10 @@ const char *Parser::getLATokInfoSval(unsigned k)
 
 void Parser::parsingError(const char *msg)
 {
-    std::cout << "line: " << _tok->line << "; col: " << _tok->col
-              << "; error: " << msg << std::endl;
-    _parsingErrors++;
-    exit(1);
+    const auto &token = getLookahead();
+    ++_parsingErrors;
+    failDiagnostic(_lex->getDiagnosticHandler(), DiagnosticKind::ParseError,
+                   token.line, token.col, msg);
 }
 
 void Parser::check(unsigned expected)
@@ -64,7 +64,9 @@ void Parser::check(unsigned expected)
     {
         char msg[MAXSTR];
 
-        sprintf(msg, "expected '%s'", _name[expected]);
+        auto name = _name.find(expected);
+        std::snprintf(msg, sizeof(msg), "expected '%s'",
+                      name != _name.end() ? name->second : "token");
         parsingError(msg);
     }
 }
@@ -74,7 +76,10 @@ void Parser::initTokenBuffer()
     _sym = _lex->next(&_tokbuf[0]);
     _lex->next(&_tokbuf[1]);
     _lex->next(&_tokbuf[2]);
+    _tokIdx = TOK_BUF_LEN - 1;
     _laIdx = 0;
+    _newLaIdx = 2;
+    _tok = &_tokbuf[_tokIdx];
 }
 
 } // namespace cparser

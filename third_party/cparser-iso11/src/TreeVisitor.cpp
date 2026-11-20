@@ -16,6 +16,11 @@ void TreeVisitor::visit(IntegerConstASTNode *n) {}
 void TreeVisitor::visit(RealConstASTNode *n) {}
 void TreeVisitor::visit(StringConstASTNode *n) {}
 void TreeVisitor::visit(CharConstASTNode *n) {}
+void TreeVisitor::visit(StaticAssertASTNode *n)
+{
+    n->getExpr()->accept(this);
+    n->getMessage()->accept(this);
+}
 
 void TreeVisitor::visit(SizeOfExprASTNode *n) { n->getExpr()->accept(this); }
 void TreeVisitor::visit(AlignOfExprASTNode *n) { n->getExpr()->accept(this); }
@@ -264,6 +269,10 @@ void TreeVisitor::visit(AssignExprASTNode *n)
 }
 
 void TreeVisitor::visit(CondExprASTNode *n) {}
+void TreeVisitor::visit(CompoundExprASTNode *n)
+{
+    n->getElements()->accept(this);
+}
 
 void TreeVisitor::visit(CallExprASTNode *n)
 {
@@ -274,6 +283,7 @@ void TreeVisitor::visit(CallExprASTNode *n)
 void TreeVisitor::visit(VoidTypeASTNode *n) {}
 void TreeVisitor::visit(IntegralTypeASTNode *n) {}
 void TreeVisitor::visit(RealTypeASTNode *n) {}
+void TreeVisitor::visit(BooleanTypeASTNode *n) {}
 
 void TreeVisitor::visit(EnumeralTypeASTNode *n)
 {

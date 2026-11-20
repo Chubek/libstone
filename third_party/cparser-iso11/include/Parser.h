@@ -48,14 +48,15 @@ protected:
     void getTok();
     unsigned getLATok(unsigned k);
     const char *getLATokInfoSval(unsigned k);
-    void parsingError(const char *msg);
+    const Token &getLookahead() const { return _tokbuf[_laIdx]; }
+    [[noreturn]] void parsingError(const char *msg);
     void check(unsigned expected);
 
     void initTokenBuffer();
     virtual void initNames() {}
 
 public:
-    virtual void parse(const char *output) {}
+    virtual void parse(const char *) = 0;
 
     SymbolTable *getSymbolTable()
     {
@@ -65,6 +66,14 @@ public:
     AbstractSyntaxTree *getAST()
     {
         return _ast;
+    }
+
+    int getParsingErrors() const { return _parsingErrors; }
+
+    void setDiagnosticHandler(DiagnosticHandler handler)
+    {
+        _lex->setDiagnosticHandler(handler);
+        _ast->setDiagnosticHandler(std::move(handler));
     }
 
     unsigned getCurrentLine() const

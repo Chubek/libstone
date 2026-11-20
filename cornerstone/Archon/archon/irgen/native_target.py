@@ -1,6 +1,6 @@
-"""Fail-closed target binding for the native RV64IM GNU assembler provider.
+"""Fail-closed target binding for reviewed native lowering providers.
 
-The provider is not a retargetable ISA or ABI inference engine. Its reviewed
+The providers are not retargetable ISA or ABI inference engines. The RV64
 contract comes from RV64I 2.1 and M 2.0 of the RISC-V unprivileged ISA manual
 and the integer LP64 convention of the RISC-V ELF psABI. The scalar calling
 convention is supplied by the compiled ABI facts and qualified independently
@@ -9,8 +9,13 @@ against this provider's supported subset.
 Arithmetic supported by ArchSem is matched against exact typed programs
 (including register effects), and representable operand/encoding layouts are
 checked. For the remaining operations the manifest binds the native behavior
-to one canonical, validated stdspec ArchDB. No generic execution semantics are
+to canonical, validated stdspec ArchDBs. No generic execution semantics are
 added to the DB for these instructions.
+
+The AMD64 and AArch64 GAS-only providers bind to exact, validated stdspec
+ArchDBs including their independently qualified scalar ABI v2 facts. The
+bundled DBs are not complete ISA descriptions; the additional GAS sequences
+come from the baseline instruction sets, not inferred ArchSem or encodings.
 """
 
 from copy import deepcopy
@@ -23,13 +28,40 @@ from ..diagnostics import ArchonError, Location
 from ..semantics import compile_semantics
 
 
-_NAME = "RISCV64IM"
+_RV64_PROVIDER = "riscv64-elf-lp64"
 _PARAMETERS = {"XLEN": 64, "SHAMT": 6}
-# SHA-256 of the canonical ArchDB with just the independently reviewed
-# abi_facts member removed. Keep every other member, including unknown ones.
-# Updating the pin requires re-reviewing all native instructions and the DB
-# configuration; matching names or assembly spellings are not evidence.
-_REVIEWED_ISA_DB = "3e5dc650a0a5df6d05bb780535e8fe4e3f01aff85aff30e834a466734e530e1e"
+_M_STEMS = frozenset({"MUL", "DIV", "REM", "DIVU", "REMU"})
+
+
+@dataclass(frozen=True)
+class _RV64Profile:
+    isa: str
+    features: tuple[str, ...]
+    stdspec: str
+    # SHA-256 of the canonical ArchDB with only the independently reviewed
+    # ABI facts removed. Updating a pin requires re-reviewing the ISA and DB.
+    isa_sha256: str
+    manifest_only: frozenset[str] = frozenset()
+
+
+_RV64_PROFILES = {
+    "RISCV64IM": _RV64Profile(
+        "RV64IM", ("I", "M"), "stdspec/riscv/rv64im.arch",
+        "4c1b040339ebeb2252a47c27347c61847a2cfba83da5ca5d0c19edb61ed70342",
+    ),
+    "RISCV64": _RV64Profile(
+        "RV64I", ("I",), "stdspec/riscv/rv64i.arch",
+        "5d0cbb001e67ff1394288ae5b33dbbd1f6fdfcbac1b6d355e42f399bddbd1c96",
+        # This DB describes the common integer ALU subset, not all of RV64I.
+        # These encodings are taken from the RV64I 2.1 ISA, not fabricated DB
+        # rows or inferred from a lookalike name. Do not claim ArchSem checks
+        # for syntax/semantics that this exact DB does not contain.
+        frozenset({
+            "SLT", "SLTU", "SLLI", "LB", "LBU", "LH", "LHU", "LW", "LWU",
+            "LD", "JALR", "EBREAK", "AUIPC",
+        }),
+    ),
+}
 
 # Exact provider qualification, not generation data or a fallback. The
 # RISC-V ELF psABI integer register convention preserves sp and s0-s11;
@@ -142,8 +174,9 @@ def _binary(operator):
 # * DIV[U]/REM[U] are 64-bit ISA operations, not checked division. Zero divisor
 #   gives an all-ones quotient and the dividend as remainder; signed MIN/-1
 #   gives MIN and 0 respectively. The native legalizer owns extra MIR checks.
-# * LD/SD transfer 64 bits using rs1 + sign_extend(imm), in process memory
-#   subject to the execution environment's access/alignment behavior.
+# * Loads/stores use rs1 + sign_extend(imm) in process memory, subject to the
+#   execution environment's access/alignment behavior. LB/LH/LW sign-extend;
+#   LBU/LHU/LWU zero-extend; stores retain the low 8/16/32/64 source bits.
 # * BEQ/BNE compare registers; JAL links with PC+4. Their displacement is
 #   PC-relative; its low bit is implicitly zero. Native emitted labels are
 #   four-byte aligned. JALR links with PC+4 and jumps to
@@ -183,7 +216,16 @@ _INSTRUCTIONS = {
     """),
     "ADDI": ("I", 0x00000013, "write(rd, read(rs1) +% sext<64>(imm));"),
     "SLLI": ("SHIFT", 0x00001013, "write(rd, read(rs1) << shamt);"),
+    "LB": ("ADDR", 0x00000003, None),
+    "LBU": ("ADDR", 0x00004003, None),
+    "LH": ("ADDR", 0x00001003, None),
+    "LHU": ("ADDR", 0x00005003, None),
+    "LW": ("ADDR", 0x00002003, None),
+    "LWU": ("ADDR", 0x00006003, None),
     "LD": ("ADDR", 0x00003003, None),
+    "SB": ("S", 0x00000023, None),
+    "SH": ("S", 0x00001023, None),
+    "SW": ("S", 0x00002023, None),
     "SD": ("S", 0x00003023, None),
     "JALR": ("ADDR", 0x00000067, None),
     "EBREAK": ("SYS", 0x00100073, None),
@@ -194,23 +236,19 @@ _INSTRUCTIONS = {
 }
 
 
-def _reject(reason: str) -> NoReturn:
-    raise ArchonError(f"native target requires the reviewed RV64IM LP64 ArchDB: {reason}")
+def _resolve_rv64(db: dict, fingerprint: str) -> dict:
+    name = db["architecture"]
+    profile = _RV64_PROFILES[name]
 
+    def _reject(reason: str) -> NoReturn:
+        raise ArchonError(
+            f"native target requires the reviewed {profile.isa} LP64 ArchDB: {reason}"
+        )
 
-def resolve_native_target(db: dict) -> dict:
-    """Return fresh provider facts for the one qualified ArchDB, or raise ArchonError."""
-    try:
-        serialized = database.dumps(db)
-    except ArchonError as exc:
-        _reject(exc.message)
-
-    if db["architecture"] != _NAME:
-        _reject(f"architecture is {db['architecture']!r}, expected {_NAME}")
     if db["endian"] != "little" or db["address_width"] != 64:
         _reject("expected little-endian 64-bit addresses")
-    if db["features"] != ["I", "M"] or db["parameters"] != _PARAMETERS:
-        _reject("expected I and M with XLEN=64 and SHAMT=6")
+    if tuple(db["features"]) != profile.features or db["parameters"] != _PARAMETERS:
+        _reject(f"expected {' and '.join(profile.features)} with XLEN=64 and SHAMT=6")
 
     regs = db["registers"]
     if (regs is None or regs["count"] != 32 or regs["width"] != 64
@@ -240,21 +278,25 @@ def resolve_native_target(db: dict) -> dict:
     mnemonics = {}
     facts = {}
     for stem, (fmt, fixed, witness) in _INSTRUCTIONS.items():
+        if stem in _M_STEMS and "M" not in profile.features:
+            continue
         form = _FORMS[fmt]
         mnemonic = stem.lower()
         assembly = mnemonic + form.syntax
         mask = form.mask()
         operands = form.db_operands()
-        if form.in_db:
+        in_db = form.in_db and stem not in profile.manifest_only
+        if in_db:
             row = rows.get(stem)
             if row is None:
                 _reject(f"missing native instruction {stem}")
-            if (row["id"] != f"{_NAME}.{stem}" or row["width"] != 32 or row["mask"] != mask
+            if (row["id"] != f"{name}.{stem}" or row["width"] != 32 or row["mask"] != mask
                     or row["value"] != fixed or row["operands"] != operands
                     or row["fields"] != form.db_fields() or row["assembly"] != assembly):
                 _reject(f"{stem} does not match the reviewed operand/encoding/assembly layout")
             expected = None if witness is None else compile_semantics(
-                witness, Location("<native RV64IM ArchSem witness>", 1, 1), operands, 64, {},
+                witness, Location(f"<native {profile.isa} ArchSem witness>", 1, 1),
+                operands, 64, {},
             )
             if row["semantics"] != expected:
                 _reject(f"{stem} does not match the reviewed ArchSem program")
@@ -269,25 +311,106 @@ def resolve_native_target(db: dict) -> dict:
                 dict(operand=name, lsb=lsb, width=width, operand_lsb=operand_lsb)
                 for name, lsb, width, operand_lsb in form.fields
             ],
-            "in_db": form.in_db,
-            "evidence": "exact-archsem" if witness is not None else "reviewed-isa-manifest",
+            "in_db": in_db,
+            "evidence": "exact-archsem" if in_db and witness is not None else "reviewed-isa-manifest",
         }
 
     isa_db = {key: value for key, value in db.items() if key != "abi_facts"}
     isa_fingerprint = hashlib.sha256(database.dumps(isa_db).encode("ascii")).hexdigest()
-    if isa_fingerprint != _REVIEWED_ISA_DB:
-        _reject("database fingerprint (excluding ABI facts) differs from the reviewed "
-                "stdspec/riscv/rv64im.arch")
+    if isa_fingerprint != profile.isa_sha256:
+        _reject(f"database fingerprint (excluding ABI facts) differs from the reviewed "
+                f"{profile.stdspec}")
 
     return {
-        "name": _NAME, "abi": abi["name"], "instructions": mnemonics,
+        "name": name, "abi": abi["name"], "instructions": mnemonics,
         "abi_facts": deepcopy(abi), "instruction_facts": facts,
-        "fingerprint": hashlib.sha256(serialized.encode("ascii")).hexdigest(),
+        "fingerprint": fingerprint,
+        "provider": _RV64_PROVIDER, "isa": profile.isa, "isa_features": profile.features,
         # These are GNU assembler expansions, not native opcodes or a DB
         # relocation evaluator. PCREL_LO12_I refers to the anchor on AUIPC.
+        # Under `.option pic`, `la` uses a GOT_HI20/PCREL_LO12_I pair whose
+        # second instruction is LD; the static default remains `lla`.
         "gas_symbol_sequences": {
             "jump": ("AUIPC", "JALR"),
             "call": ("AUIPC", "JALR"),
             "lla": ("AUIPC", "ADDI"),
+            "la-pic": ("AUIPC", "LD"),
         },
     }
+
+
+# An architecture key selects only a qualification routine, never a backend
+# by itself. The routine still has to qualify the full database and ABI.
+_LP64_GAS_PROFILES = {
+    "AMD64": (
+        "amd64-sysv-elf-lp64", "amd64",
+        "530c92fee80327e1c9a4923144e4ee3996fb6b7226319294f74c9d6ce86f2ede",
+        {
+            "name": "SysVAMD64", "args": [7, 6, 2, 1, 8, 9],
+            "stack_pointer": {"kind": "register", "index": 4},
+            "return_address": {"kind": "stack_slot", "offset": 0, "size_bytes": 8},
+            "stack_entry_remainder": 8, "stack_arg_offset": 8,
+            "caller_saved": [0, 1, 2, 6, 7, 8, 9, 10, 11],
+            "callee_saved": [3, 4, 5, 12, 13, 14, 15], "unallocatable": [4],
+        },
+    ),
+    "AArch64": (
+        "aarch64-aapcs64-elf-lp64", "aarch64",
+        "c6006b2abb10948243e27ea5b5cc00d0cd4e8ab9308c76a16e112610dbcd54ac",
+        {
+            "name": "AAPCS64", "args": list(range(8)),
+            "stack_pointer": {"kind": "state", "name": "SP"},
+            "return_address": {"kind": "register", "index": 30},
+            "stack_entry_remainder": 0, "stack_arg_offset": 0,
+            "caller_saved": [*range(18), 30],
+            "callee_saved": list(range(19, 30)), "unallocatable": [18, 31],
+        },
+    ),
+}
+
+
+def _resolve_lp64_gas(db: dict, fingerprint: str) -> dict:
+    name = db["architecture"]
+    provider, directory, pin, reviewed = _LP64_GAS_PROFILES[name]
+
+    def reject(reason: str) -> NoReturn:
+        raise ArchonError(
+            f"native target requires the reviewed {name}/{reviewed['name']} LP64 ArchDB: {reason}"
+        )
+
+    abi = db.get("abi_facts_v2")
+    if abi is None:
+        reject("missing declarative abi_facts_v2")
+    expected = {
+        "schema_version": 2, "register_file": "IntegerRegisters", "result": 0,
+        "stack_align": 16, "stack_slot_bytes": 8, "stack_growth": "downward",
+        **reviewed,
+    }
+    for key, value in expected.items():
+        if abi[key] != value:
+            reject(f"abi_facts_v2.{key} does not match the reviewed scalar ABI")
+    if fingerprint != pin:
+        reject(f"database fingerprint differs from the reviewed stdspec/{directory}/root.arch")
+
+    return {
+        "name": name, "abi": abi["name"], "abi_facts_v2": deepcopy(abi),
+        "fingerprint": fingerprint, "provider": provider,
+        "isa": "AMD64" if directory == "amd64" else "Armv8-A A64",
+        "isa_features": tuple(db["features"]),
+    }
+
+
+_NATIVE_QUALIFIERS = {
+    **dict.fromkeys(_RV64_PROFILES, _resolve_rv64),
+    **dict.fromkeys(_LP64_GAS_PROFILES, _resolve_lp64_gas),
+}
+
+
+def resolve_native_target(db: dict) -> dict:
+    """Return fresh facts from a reviewed qualifier, or raise ArchonError."""
+    serialized = database.dumps(db)
+    qualifier = _NATIVE_QUALIFIERS.get(db["architecture"])
+    if qualifier is None:
+        raise ArchonError(f"no reviewed native lowering provider: architecture is {db['architecture']!r}")
+    fingerprint = hashlib.sha256(serialized.encode("ascii")).hexdigest()
+    return qualifier(db, fingerprint)

@@ -11,6 +11,7 @@
 #include "../include/Lexer.h"
 #include <cassert>
 #include <iostream>
+#include <limits>
 #include <stack>
 
 namespace cparser
@@ -22,8 +23,9 @@ bool CParser::isTypeSpecifier(unsigned kind, int n)
 {
     if (kind == TK_CHAR || kind == TK_DOUBLE || kind == TK_ENUM ||
         kind == TK_FLOAT || kind == TK_INT || kind == TK_LONG ||
-        kind == TK_SHORT || kind == TK_SIGNED || kind == TK_STRUCT ||
-        kind == TK_UNION || kind == TK_UNSIGNED || kind == TK_VOID)
+         kind == TK_SHORT || kind == TK_SIGNED || kind == TK_STRUCT ||
+         kind == TK_UNION || kind == TK_UNSIGNED || kind == TK_VOID ||
+         kind == TK__BOOL || kind == TK__COMPLEX || kind == TK__IMAGINARY)
     {
         return true;
     }
@@ -40,13 +42,13 @@ bool CParser::isTypeSpecifier(unsigned kind, int n)
 bool CParser::isTypeQualifier(unsigned kind)
 {
     return kind == TK_CONST || kind == TK_VOLATILE || kind == TK_RESTRICT ||
-           kind == TK__ATOMIC || _sym == TK__NULLABLE;
+           kind == TK__ATOMIC || kind == TK__NULLABLE;
 }
 
 bool CParser::isStorageClassSpecifier(unsigned kind)
 {
     return kind == TK_TYPEDEF || kind == TK_EXTERN || kind == TK_STATIC ||
-           kind == TK_AUTO || kind == TK_REGISTER;
+           kind == TK_AUTO || kind == TK_REGISTER || kind == TK__THREAD_LOCAL;
 }
 
 //
@@ -142,10 +144,11 @@ void CParser::initNames()
     _name.insert(std::make_pair(TK_RETURN, "return"));
     _name.insert(std::make_pair(TK_SWITCH, "switch"));
     _name.insert(std::make_pair(TK_WHILE, "while"));
+    _name.insert(std::make_pair(TK__STATIC_ASSERT, "_Static_assert"));
     _name.insert(std::make_pair(TK_EOF, "end of file"));
 }
 
-void CParser::parse(const char *output)
+void CParser::parse(const char *)
 {
     ASTNode *tree;
     // int errors;
@@ -153,7 +156,20 @@ void CParser::parse(const char *output)
     _lex->nextCh();
     initTokenBuffer();
 
-    tree = TranslationUnit();
+    // Construct the process-wide null sentinel before enabling per-parse
+    // ownership, then retain every subsequently allocated node in the AST.
+    (void)NULL_AST_NODE;
+    auto *previousTree = ASTNode::setAllocationTree(_ast);
+    try
+    {
+        tree = TranslationUnit();
+    }
+    catch (...)
+    {
+        ASTNode::setAllocationTree(previousTree);
+        throw;
+    }
+    ASTNode::setAllocationTree(previousTree);
     _ast->setRoot(tree);
 
     // if (!parsingErrors)
@@ -202,47 +218,49 @@ ASTNode *CParser::PrimaryExpression()
     if (_sym == TK_IDENT)
     {
         getTok();
-        res = new IdentASTNode(_tok->sval, _tok->line);
+        STObject *object = _stb.find(_tok->sval.c_str());
+        if (object != _stb.noObj && object->kind == STOK_CON)
+        {
+            res = new IntegerConstASTNode(
+                static_cast<std::uint64_t>(object->ival), _tok->sval);
+            res->setLineNum(_tok->line);
+        }
+        else
+            res = new IdentASTNode(_tok->sval, _tok->line);
     }
     else if (_sym == TK_INT_LIT)
     {
         getTok();
-        res = new IntegerConstASTNode(_tok->info.ival);
+        res = new IntegerConstASTNode(_tok->info.uval, _tok->spelling);
+        res->setLineNum(_tok->line);
     }
     else if (_sym == TK_CHAR_LIT)
     {
         getTok();
-        res = new CharConstASTNode(_tok->info.ival);
+        res = new CharConstASTNode(_tok->info.ival, _tok->spelling);
+        res->setLineNum(_tok->line);
     }
     else if (_sym == TK_STRING_LIT)
     {
         getTok();
-        res = new StringConstASTNode(_tok->sval);
+        res = new StringConstASTNode(_tok->sval, _tok->spelling);
+        res->setLineNum(_tok->line);
     }
     else if (_sym == TK_FLOAT_LIT)
     {
         getTok();
-        res = new RealConstASTNode(_tok->info.fval);
+        res = new RealConstASTNode(_tok->info.fval, _tok->spelling);
+        res->setLineNum(_tok->line);
     }
     else if (_sym == TK_LPAR)
     {
         getTok();
-        // Is this a function call? (* func)(x, y)
-        if (_sym == TK_TIMES)
-        {
-            getTok();
-            check(TK_IDENT);
-            res = new IdentASTNode(_tok->sval, _tok->line);
-        }
-        else
-        {
-            res = Expression();
-        }
+        res = Expression();
         check(TK_RPAR);
     }
     else if (_sym == TK__GENERIC)
     {
-        res = GenericSelection();
+        parsingError("_Generic selection is unsupported");
     }
     return res;
 }
@@ -364,7 +382,7 @@ ASTNode *CParser::PostfixExpression(ASTNode *typeName)
             getTok();
             check(TK_IDENT);
             tmp = new IdentASTNode(_tok->sval, _tok->line);
-            expr = new StructRefASTNode(expr, parsePostfixExpression(tmp));
+            expr = new StructRefASTNode(expr, tmp);
         }
         else if (_sym == TK_PTR_OP)
         { // '->'
@@ -373,8 +391,7 @@ ASTNode *CParser::PostfixExpression(ASTNode *typeName)
             getTok();
             check(TK_IDENT);
             tmp = new IdentASTNode(_tok->sval, _tok->line);
-            expr = new IndirectRefASTNode(NULL_AST_NODE, expr,
-                                          parsePostfixExpression(tmp));
+            expr = new IndirectRefASTNode(NULL_AST_NODE, expr, tmp);
         }
         else if (_sym == TK_INC_OP)
         { // '++'
@@ -414,6 +431,7 @@ bool isFirstOfPostfixExpression(unsigned n)
 
 ASTNode *CParser::UnaryExpression(ASTNode *typeName)
 {
+    ParseDepth depth(*this);
     ASTNode *res = NULL_AST_NODE;
     ASTNode *expr = NULL_AST_NODE;
 
@@ -437,42 +455,42 @@ ASTNode *CParser::UnaryExpression(ASTNode *typeName)
              _sym == TK_MINUS || _sym == TK_TILDA || _sym == TK_NOT)
     {
         ASTNode *type = _ast->integerTypeASTNode;
-        ASTNodeKind kind = UnaryOperator();
+        const unsigned operation = _sym;
+        getTok();
+        ASTNode *operand = CastExpression();
 
-        if (kind == NK_INDIRECT_REF || kind == NK_ADDR_EXPR)
+        if (operation == TK_TIMES || operation == TK_AND)
         {
             type = new PointerTypeASTNode(_ast->integerTypeASTNode);
 
-            if (kind == NK_ADDR_EXPR)
-                res = new AddrExprASTNode(type, CastExpression());
+            if (operation == TK_AND)
+                res = new AddrExprASTNode(type, operand);
             else
-                res = new IndirectRefASTNode(type, CastExpression(),
+                res = new IndirectRefASTNode(type, operand,
                                              NULL_AST_NODE);
         }
-        else if (kind == NK_BIT_NOT_EXPR)
-        {
-            res = new BitNotExprASTNode(type, CastExpression());
-        }
-        else if (kind == NK_LOG_NOT_EXPR)
-        {
-            res = new LogNotExprASTNode(type, CastExpression());
-        }
+        else if (operation == TK_TILDA)
+            res = new BitNotExprASTNode(type, operand);
+        else if (operation == TK_NOT)
+            res = new LogNotExprASTNode(type, operand);
+        else if (operation == TK_MINUS)
+            res = AST_MINUS(type, new IntegerConstASTNode(0, "0"), operand);
+        else
+            res = new UnaryPlusASTNode(operand);
     }
     else if (_sym == TK_SIZEOF)
     {
         getTok();
         if (_sym == TK_LPAR)
         {
-            getTok();
-            expr = TypeName();
-            // FIXME: Put this into TypeName().
-            //expr = TypeSpecifier();
-            if (_sym == TK_TIMES)
+            if (isTypeSpecifier(getLATok(2), 2) || isTypeQualifier(getLATok(2)))
             {
                 getTok();
-                expr = new PointerTypeASTNode(expr);
+                expr = TypeName();
+                check(TK_RPAR);
             }
-            check(TK_RPAR);
+            else
+                expr = UnaryExpression(NULL_AST_NODE);
         }
         else
         {
@@ -487,6 +505,10 @@ ASTNode *CParser::UnaryExpression(ASTNode *typeName)
         expr = TypeName();
         check(TK_RPAR);
         res = new AlignOfExprASTNode(expr);
+    }
+    else
+    {
+        parsingError("expected expression");
     }
 
     return res;
@@ -521,30 +543,22 @@ ASTNodeKind CParser::UnaryOperator()
 
 ASTNode *CParser::CastExpression()
 {
+    ParseDepth depth(*this);
     ASTNode *typeName = NULL_AST_NODE;
     ASTNode *expr = NULL_AST_NODE;
     bool cast = false;
-    bool isPtrType = false;
 
-    if (_sym == TK_LPAR && isTypeSpecifier(getLATok(2), 2))
+    if (_sym == TK_LPAR &&
+        (isTypeSpecifier(getLATok(2), 2) || isTypeQualifier(getLATok(2))))
     {
         getTok();
         cast = true;
-        typeName = TypeSpecifier();
-
-        if (_sym == TK_TIMES)
-        {
-            getTok();
-            isPtrType = true;
-        }
+        typeName = TypeName();
         check(TK_RPAR);
     }
-    expr = UnaryExpression(typeName);
+    expr = cast ? CastExpression() : UnaryExpression(typeName);
     if (cast)
     {
-        if (isPtrType)
-            typeName = new PointerTypeASTNode(typeName);
-
         return new CastExprASTNode(typeName, expr);
     }
     else
@@ -787,6 +801,7 @@ ASTNode *CParser::LogicalOrExpression()
 
 ASTNode *CParser::ConditionalExpression()
 {
+    ParseDepth depth(*this);
     ASTNode *expr = NULL_AST_NODE;
     ASTNode *res = LogicalOrExpression();
 
@@ -804,6 +819,7 @@ ASTNode *CParser::ConditionalExpression()
 
 ASTNode *CParser::AssignmentExpression()
 {
+    ParseDepth depth(*this);
     ASTNode *res = ConditionalExpression();
 
     if (_sym >= TK_ASSIGN && _sym <= TK_OR_ASSIGN)
@@ -873,14 +889,18 @@ ASTNode *CParser::AssignmentExpression()
 ASTNode *CParser::Expression()
 {
     ASTNode *expr = AssignmentExpression();
+    SequenceASTNode *expressions = nullptr;
 
     while (_sym == TK_COMMA)
     {
+        if (!expressions)
+            expressions = new SequenceASTNode(expr);
         getTok();
-        AssignmentExpression();
+        expressions->add(AssignmentExpression());
     }
 
-    return expr;
+    return expressions ? static_cast<ASTNode *>(new CompoundExprASTNode(expressions))
+                       : expr;
 }
 
 ASTNode *CParser::ConstantExpression() { return ConditionalExpression(); }
@@ -900,7 +920,6 @@ ASTNode *CParser::Declaration(ASTNode *declSpec)
 
     if (initlist != NULL_AST_NODE)
     {
-        // initlist->transform(NK_VAR_DECL, declspec);
         return initlist;
     }
     else
@@ -910,16 +929,61 @@ ASTNode *CParser::Declaration(ASTNode *declSpec)
     }
 }
 
-ASTNode *CParser::DeclarationSpecifiers()
+ASTNode *CParser::TypedefDeclaration(ASTNode *declSpec)
 {
+    auto *types = new SequenceASTNode();
+    for (;;)
+    {
+        ASTNode *type = declSpec;
+        ASTNode *name = Declarator(type);
+        auto *declaration = new TypeDeclASTNode(name, type);
+        declaration->setFlags(declSpec->getFlags());
+        declaration->declare(_ast);
+        types->add(declaration);
+        if (_sym != TK_COMMA)
+            break;
+        getTok();
+    }
+    check(TK_SEMICOLON);
+    _inTypedef = false;
+    return types;
+}
+
+ASTNode *CParser::StaticAssertDeclaration()
+{
+    const int line = getLookahead().line;
+    check(TK__STATIC_ASSERT);
+    check(TK_LPAR);
+    ASTNode *expr = ConstantExpression();
+    check(TK_COMMA);
+    check(TK_STRING_LIT);
+    auto *message = new StringConstASTNode(_tok->sval, _tok->spelling);
+    message->setLineNum(_tok->line);
+    check(TK_RPAR);
+    check(TK_SEMICOLON);
+    auto *node = new StaticAssertASTNode(expr, message);
+    node->setLineNum(line);
+    return node;
+}
+
+ASTNode *CParser::DeclarationSpecifiers(bool typeOnly)
+{
+    ParseDepth depth(*this);
     ASTNode *declSpec = NULL_AST_NODE;
-    // ASTNodeKind storageClassSpec = NK_UNKNOWN;
     unsigned flags = 0x0;
+    unsigned baseQualifiers = 0;
+    unsigned longCount = 0;
+    bool sawUnsigned = false, sawSigned = false;
+    bool sawShort = false, sawChar = false, sawInt = false;
+    bool sawVoid = false, sawFloat = false, sawDouble = false, sawBool = false;
+    bool sawScalar = false;
 
     for (;;)
     {
         if (isStorageClassSpecifier(_sym))
         {
+            if (typeOnly)
+                parsingError("storage class is not allowed in a type name");
             StorageClassSpecifier(flags);
         }
         else if (isTypeQualifier(_sym))
@@ -928,29 +992,64 @@ ASTNode *CParser::DeclarationSpecifiers()
         }
         else if (isTypeSpecifier(_sym, 1))
         {
-            declSpec = TypeSpecifier();
-            declSpec->setFlags(flags);
+            // A typedef name following another complete type specifier is the
+            // declarator being introduced and shadows that typedef.
+            if (_sym == TK_IDENT && (sawScalar || declSpec != NULL_AST_NODE))
+                break;
+            switch (_sym)
+            {
+                case TK_UNSIGNED:
+                    if (sawUnsigned) parsingError("duplicate unsigned specifier");
+                    sawUnsigned = sawScalar = true; getTok(); break;
+                case TK_SIGNED:
+                    if (sawSigned) parsingError("duplicate signed specifier");
+                    sawSigned = sawScalar = true; getTok(); break;
+                case TK_SHORT:
+                    if (sawShort) parsingError("duplicate short specifier");
+                    sawShort = sawScalar = true; getTok(); break;
+                case TK_LONG: ++longCount; sawScalar = true; getTok(); break;
+                case TK_CHAR:
+                    if (sawChar) parsingError("duplicate char specifier");
+                    sawChar = sawScalar = true; getTok(); break;
+                case TK_INT:
+                    if (sawInt) parsingError("duplicate int specifier");
+                    sawInt = sawScalar = true; getTok(); break;
+                case TK_VOID:
+                    if (sawVoid) parsingError("duplicate void specifier");
+                    sawVoid = sawScalar = true; getTok(); break;
+                case TK_FLOAT:
+                    if (sawFloat) parsingError("duplicate float specifier");
+                    sawFloat = sawScalar = true; getTok(); break;
+                case TK_DOUBLE:
+                    if (sawDouble) parsingError("duplicate double specifier");
+                    sawDouble = sawScalar = true; getTok(); break;
+                case TK__BOOL:
+                    if (sawBool) parsingError("duplicate _Bool specifier");
+                    sawBool = sawScalar = true; getTok(); break;
+                case TK__COMPLEX:
+                case TK__IMAGINARY:
+                    parsingError("complex and imaginary types are unsupported");
+                default:
+                    if (sawScalar || declSpec != NULL_AST_NODE)
+                        parsingError("conflicting type specifiers");
+                    declSpec = TypeSpecifier();
+                    baseQualifiers = declSpec->getFlags() & DS_QUALIFIER_MASK;
+                    break;
+            }
         }
         // else if (isTypeSpecifier(_sym, 1))
         // {
         //     TypeSpecifier();
         // }
-        else if (_sym == TK_TIMES) // ??? TODO: Check grammar ???
-        {
-            getTok();
-            declSpec = new PointerTypeASTNode(declSpec);
-            if (isTypeQualifier(_sym))
-            {
-                TypeQualifier(flags);
-            }
-        }
         else if (_sym == TK___ASM || _sym == TK___ATTRIBUTE__)
         {
-            GccDeclaratorExtension();
+            parsingError("GCC declaration extensions are unsupported");
         }
         else if (_sym == TK_INLINE || _sym == TK__NORETURN)
         {
-            // TODO: FunctionSpecifier()
+            if (typeOnly)
+                parsingError("function specifier is not allowed in a type name");
+            flags |= _sym == TK_INLINE ? FS_INLINE : FS_NORETURN;
             getTok();
         }
         else
@@ -959,6 +1058,44 @@ ASTNode *CParser::DeclarationSpecifiers()
         }
     }
 
+    if (sawScalar)
+    {
+        const unsigned categoryCount = unsigned(sawChar) + unsigned(sawVoid) +
+            unsigned(sawFloat) + unsigned(sawDouble) + unsigned(sawBool);
+        if (sawSigned && sawUnsigned)
+            parsingError("both signed and unsigned were specified");
+        if (categoryCount > 1 || longCount > 2 ||
+            ((sawVoid || sawFloat || sawBool) &&
+             (sawSigned || sawUnsigned || sawShort || longCount || sawInt)) ||
+            (sawDouble && (sawSigned || sawUnsigned || sawShort || sawInt ||
+                           longCount > 1)) ||
+            (sawChar && (sawShort || longCount || sawInt)) ||
+            (sawShort && longCount))
+            parsingError("invalid type specifier combination");
+
+        if (sawVoid)
+            declSpec = new VoidTypeASTNode();
+        else if (sawFloat)
+            declSpec = new RealTypeASTNode(4, false);
+        else if (sawDouble)
+            declSpec = new RealTypeASTNode(longCount ? 16 : 8, true);
+        else if (sawBool)
+            declSpec = new BooleanTypeASTNode();
+        else
+        {
+            const unsigned bytes = sawChar ? 1 : sawShort ? 2 : longCount ? 8 : 4;
+            const unsigned rank = sawChar ? 1 : sawShort ? 2 :
+                                  longCount == 2 ? 5 : longCount ? 4 : 3;
+            // Cephyr's only current native ABI is RV64 LP64, where plain char
+            // is unsigned. All other unqualified integer types are signed.
+            const bool isSigned = sawChar ? sawSigned : !sawUnsigned;
+            declSpec = new IntegralTypeASTNode(bytes, isSigned, rank,
+                                              sawChar && !sawSigned && !sawUnsigned);
+        }
+    }
+    if (declSpec == NULL_AST_NODE)
+        parsingError("expected declaration type");
+    declSpec->setFlags(flags | baseQualifiers);
     return declSpec;
 }
 
@@ -975,10 +1112,98 @@ SequenceASTNode *CParser::InitDeclaratorList(ASTNode *typeSpec)
     return initlist;
 }
 
+static ASTNode *cloneType(ASTNode *type)
+{
+    ASTNode *copy = type;
+    switch (type->getKind())
+    {
+        case NK_VOID_TYPE:
+            copy = new VoidTypeASTNode();
+            break;
+        case NK_BOOLEAN_TYPE:
+            copy = new BooleanTypeASTNode();
+            break;
+        case NK_INTEGRAL_TYPE:
+        {
+            auto *integer = static_cast<IntegralTypeASTNode *>(type);
+            copy = new IntegralTypeASTNode(integer->getAlignment(),
+                                           integer->getIsSigned(),
+                                           integer->getRank(),
+                                           integer->isPlainChar());
+            break;
+        }
+        case NK_REAL_TYPE:
+        {
+            auto *real = static_cast<RealTypeASTNode *>(type);
+            copy = new RealTypeASTNode(real->getAlignment(), real->getIsDouble());
+            break;
+        }
+        case NK_POINTER_TYPE:
+            copy = new PointerTypeASTNode(
+                cloneType(static_cast<PointerTypeASTNode *>(type)->getBaseType()));
+            break;
+        case NK_ARRAY_TYPE:
+        {
+            auto *array = static_cast<ArrayTypeASTNode *>(type);
+            copy = new ArrayTypeASTNode(cloneType(array->getElementType()),
+                                        array->getExpr());
+            break;
+        }
+        case NK_FUNCTION_TYPE:
+        {
+            auto *function = static_cast<FunctionTypeASTNode *>(type);
+            auto *signature = new FunctionTypeASTNode(function->getType(),
+                                                       function->getPrms());
+            signature->setPrototype(function->hasPrototype());
+            signature->setVariadic(function->isVariadic());
+            copy = signature;
+            break;
+        }
+        case NK_STRUCT_TYPE:
+        {
+            auto *record = static_cast<StructTypeASTNode *>(type);
+            copy = new StructTypeASTNode(record->getName(), record->getBody(),
+                                         record->getIdentity());
+            break;
+        }
+        case NK_UNION_TYPE:
+        {
+            auto *record = static_cast<UnionTypeASTNode *>(type);
+            copy = new UnionTypeASTNode(record->getName(), record->getBody(),
+                                        record->getIdentity());
+            break;
+        }
+        case NK_ENUMERAL_TYPE:
+        {
+            auto *enumeration = static_cast<EnumeralTypeASTNode *>(type);
+            copy = new EnumeralTypeASTNode(enumeration->getName(),
+                                           enumeration->getBody());
+            break;
+        }
+        default:
+            break;
+    }
+    copy->setFlags(type->getFlags());
+    copy->setLineNum(type->getLineNum());
+    return copy;
+}
+
 ASTNode *CParser::InitDeclarator(ASTNode *typeSpec)
 {
+    ASTNode *declaratorType = cloneType(typeSpec);
+    ASTNode *name = Declarator(declaratorType);
+    return InitDeclaratorAfterName(typeSpec, declaratorType, name);
+}
+
+ASTNode *CParser::InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
+                                         ASTNode *name)
+{
     ASTNode *init = NULL_AST_NODE;
-    VarDeclASTNode *declr = new VarDeclASTNode(typeSpec, Declarator(typeSpec));
+    if (typeSpec->getFlags() & (FS_INLINE | FS_NORETURN))
+        parsingError("function specifier used on a non-function declaration");
+    VarDeclASTNode *declr = new VarDeclASTNode(type, name);
+    declr->setFlags(typeSpec->getFlags());
+    declr->declare(_ast);
 
     if (_sym == TK_ASSIGN)
     {
@@ -997,10 +1222,12 @@ ASTNode *CParser::InitDeclarator(ASTNode *typeSpec)
 
 void CParser::StorageClassSpecifier(unsigned &flags)
 {
+    if (flags & DS_STORAGE_MASK)
+        parsingError("multiple storage-class specifiers are unsupported");
     if (_sym == TK_TYPEDEF)
     {
         getTok();
-        //flags |= SCS_TYPEDEF;
+        flags |= SCS_TYPEDEF;
         _inTypedef = true;
     }
     else if (_sym == TK_EXTERN)
@@ -1015,7 +1242,7 @@ void CParser::StorageClassSpecifier(unsigned &flags)
     }
     else if (_sym == TK__THREAD_LOCAL)
     {
-        getTok();
+        parsingError("_Thread_local storage is unsupported");
     }
     else if (_sym == TK_AUTO)
     {
@@ -1037,21 +1264,20 @@ stbTypeToASTNodeType(AbstractSyntaxTree *ast, STType *type, const char *objName)
         case STTK_NONE:
             return NULL_AST_NODE;
         case STTK_CHAR:
-            return ast->charTypeASTNode;
+            return new IntegralTypeASTNode(type->size, type->isSigned, 1);
         case STTK_SHORT:
-            return ast->shortTypeASTNode;
+            return new IntegralTypeASTNode(type->size, type->isSigned, 2);
         case STTK_INT:
-            return ast->integerTypeASTNode;
+            return new IntegralTypeASTNode(type->size, type->isSigned, 3);
         case STTK_UNSIGNED:
-            return ast->unsignedTypeASTNode;
+            return new IntegralTypeASTNode(type->size, false,
+                                           type->size > 4 ? 4 : 3);
         case STTK_LONG:
-            return ast->longTypeASTNode;
-            //return NULL_AST_NODE;
+            return new IntegralTypeASTNode(type->size, type->isSigned, 4);
         case STTK_FLOAT:
             return ast->floatTypeASTNode;
         case STTK_DOUBLE:
-            // return IR_f64;
-            return NULL_AST_NODE;
+            return new RealTypeASTNode(type->size, true);
         case STTK_VOID:
             return ast->voidTypeASTNode;
         case STTK_ARRAY:
@@ -1060,12 +1286,19 @@ stbTypeToASTNodeType(AbstractSyntaxTree *ast, STType *type, const char *objName)
         case STTK_STRUCT:
             // return _ast->createStructTypeASTNode(new IdentASTNode(objName),
             //                                    NULL_AST_NODE);
-            return new StructTypeASTNode(new IdentASTNode(objName),
-                                         NULL_AST_NODE);
+            return new StructTypeASTNode(new IdentASTNode(
+                                             type->tagName.empty()
+                                                 ? objName
+                                                 : type->tagName),
+                                          NULL_AST_NODE);
         case STTK_UNION:
-            return NULL_AST_NODE;
+            return new UnionTypeASTNode(new IdentASTNode(
+                                            type->tagName.empty()
+                                                ? objName
+                                                : type->tagName),
+                                        NULL_AST_NODE);
         case STTK_BOOL:
-            return NULL_AST_NODE;
+            return new BooleanTypeASTNode();
         case STTK_REAL:
             return NULL_AST_NODE;
         case STTK_POINTER:
@@ -1073,7 +1306,11 @@ stbTypeToASTNodeType(AbstractSyntaxTree *ast, STType *type, const char *objName)
                                                                type->baseType,
                                                                objName));
         case STTK_ENUM:
-            return NULL_AST_NODE;
+            return new EnumeralTypeASTNode(new IdentASTNode(
+                                               type->tagName.empty()
+                                                   ? objName
+                                                   : type->tagName),
+                                           NULL_AST_NODE);
         case STTK_FUNCTION:
             return NULL_AST_NODE;
     }
@@ -1119,11 +1356,21 @@ ASTNode *CParser::TypeSpecifier()
     else if (_sym == TK_SIGNED)
     {
         getTok();
+        return new IntegralTypeASTNode(4, true, 3);
     }
     else if (_sym == TK_UNSIGNED)
     {
         getTok();
         return _ast->unsignedTypeASTNode;
+    }
+    else if (_sym == TK__BOOL)
+    {
+        getTok();
+        return new BooleanTypeASTNode();
+    }
+    else if (_sym == TK__COMPLEX || _sym == TK__IMAGINARY)
+    {
+        parsingError("complex and imaginary types are unsupported");
     }
     else if (_sym == TK_STRUCT || _sym == TK_UNION)
     {
@@ -1142,9 +1389,13 @@ ASTNode *CParser::TypeSpecifier()
 
         obj = _stb.find(_tok->sval.c_str());
         if (obj != _stb.noObj)
-            return stbTypeToASTNodeType(_ast, obj->type, obj->name);
+        {
+            if (obj->astType)
+                return cloneType(obj->astType);
+            return stbTypeToASTNodeType(_ast, obj->type, obj->name.c_str());
+        }
 
-        sprintf(msg, "unknown type '%s'", obj->name);
+        std::snprintf(msg, sizeof(msg), "unknown type '%s'", _tok->sval.c_str());
         parsingError(msg);
     }
 
@@ -1157,7 +1408,7 @@ ASTNode *CParser::StructOrUnionSpecifier()
 {
     ASTNode *typeName = NULL_AST_NODE;
     ASTNode *typeBody = NULL_AST_NODE;
-    STObject *obj = nullptr;
+    STType *recordType = nullptr;
     ASTNodeKind typeKind;
 
     if (_sym == TK_STRUCT)
@@ -1171,59 +1422,61 @@ ASTNode *CParser::StructOrUnionSpecifier()
         typeKind = NK_UNION_TYPE;
     }
 
+    const auto recordKind = typeKind == NK_STRUCT_TYPE ? STTK_STRUCT : STTK_UNION;
     if (_sym == TK_IDENT)
     {
-        STType *recordType;
-
         getTok();
         typeName = new IdentASTNode(_tok->sval, _tok->line);
-        if (typeKind == NK_STRUCT_TYPE)
-            recordType = _stb.allocType(STTK_STRUCT);
+        const std::string key =
+            std::string(typeKind == NK_STRUCT_TYPE ? "struct:" : "union:") + _tok->sval;
+        const std::string otherKey =
+            std::string(typeKind == NK_STRUCT_TYPE ? "union:" : "struct:") + _tok->sval;
+        const std::string enumKey = "enum:" + _tok->sval;
+        const bool introduces = _sym == TK_LBRACE || _sym == TK_SEMICOLON;
+        const auto lookup = [&](const std::string &name) {
+            return introduces ? _stb.findLocal(name.c_str()) : _stb.find(name.c_str());
+        };
+        auto *found = lookup(key);
+        for (const auto *other : {lookup(otherKey), lookup(enumKey)})
+            if (other != _stb.noObj && (found == _stb.noObj || other->level >= found->level))
+                parsingError("tag refers to a different kind of type");
+        if (found == _stb.noObj)
+        {
+            recordType = _stb.allocType(recordKind);
+            recordType->tagName = _tok->sval;
+            _stb.insert(key.c_str(), STOK_TYPE, recordType);
+        }
         else
-            recordType = _stb.allocType(STTK_UNION);
-        obj = _stb.find(_tok->sval.c_str());
-        // if (obj != _stb.noObj && obj->type->fields != NULL)
-        // {
-        //     _ast->error("struct type '%s' has already been declared",
-        //                _tok->sval,
-        //                _tok->line);
-        // }
-        // else
-        if (obj == _stb.noObj)
-            obj = _stb.insert(_tok->sval.c_str(), STOK_TYPE, recordType);
+            recordType = found->type;
     }
+    else if (_sym == TK_LBRACE)
+        recordType = _stb.allocType(recordKind);
+    else
+        parsingError("expected a tag or record definition");
+
     if (_sym == TK_LBRACE)
     {
+        if (recordType->fields)
+            parsingError("record tag is already defined");
         getTok();
         _stb.openScope();
         typeBody = StructDeclarationList();
-        // FIXME: What if we have anonymous struct type?
-        if (obj != nullptr)
+        if (typeKind == NK_UNION_TYPE)
         {
-            if (typeKind == NK_UNION_TYPE)
-            {
-                STObject *tmp = _stb.getTopScope()->locals;
-                unsigned maxFieldTypeSize = 0;
-
-                while (tmp != nullptr)
-                {
-                    if (maxFieldTypeSize < tmp->type->size)
-                        maxFieldTypeSize = tmp->type->size;
-                    tmp = tmp->next;
-                }
-                _stb.getTopScope()->size = maxFieldTypeSize;
-            }
-            obj->type->fields = _stb.getTopScope()->locals;
-            obj->type->size = _stb.getTopScope()->size;
+            unsigned maxFieldTypeSize = 0;
+            for (auto *field = _stb.getTopScope()->locals; field; field = field->next)
+                if (maxFieldTypeSize < field->type->size)
+                    maxFieldTypeSize = field->type->size;
+            _stb.getTopScope()->size = maxFieldTypeSize;
         }
+        recordType->fields = _stb.getTopScope()->locals;
+        recordType->size = _stb.getTopScope()->size;
         _stb.closeScope();
         check(TK_RBRACE);
     }
     if (typeKind == NK_STRUCT_TYPE)
-        // return _ast->createStructTypeASTNode(typeName, typeBody);
-        return new StructTypeASTNode(typeName, typeBody);
-    else
-        return new UnionTypeASTNode(typeName, typeBody);
+        return new StructTypeASTNode(typeName, typeBody, recordType);
+    return new UnionTypeASTNode(typeName, typeBody, recordType);
 }
 
 SequenceASTNode *CParser::StructDeclarationList()
@@ -1242,7 +1495,7 @@ ASTNode *CParser::StructDeclaration()
     ASTNode *typeSpec = SpecifierQualifierList();
     SequenceASTNode *declaratorList = StructDeclaratorList(typeSpec);
 
-    // declaratorList->declare(_ast);
+    declaratorList->declare(_ast);
     check(TK_SEMICOLON);
 
     return declaratorList;
@@ -1250,12 +1503,7 @@ ASTNode *CParser::StructDeclaration()
 
 ASTNode *CParser::SpecifierQualifierList()
 {
-    SequenceASTNode *lst = new SequenceASTNode(TypeSpecifier());
-
-    while (isTypeSpecifier(_sym, 1))
-        lst->add(TypeSpecifier());
-
-    return lst;
+    return DeclarationSpecifiers(true);
 }
 
 SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec)
@@ -1273,7 +1521,8 @@ SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec)
 
 ASTNode *CParser::StructDeclarator(ASTNode *typeSpec)
 {
-    return new FieldDeclASTNode(typeSpec, Declarator(typeSpec));
+    ASTNode *name = Declarator(typeSpec);
+    return new FieldDeclASTNode(typeSpec, name);
 }
 
 ASTNode *CParser::EnumSpecifier()
@@ -1290,7 +1539,9 @@ ASTNode *CParser::EnumSpecifier()
         getTok();
         name = new IdentASTNode(_tok->sval);
         enumType = _stb.allocType(STTK_ENUM);
-        _stb.insert(_tok->sval.c_str(), STOK_TYPE, enumType);
+        enumType->tagName = _tok->sval;
+        const std::string key = std::string("enum:") + _tok->sval;
+        _stb.insert(key.c_str(), STOK_TYPE, enumType);
     }
 
     if (_sym == TK_LBRACE)
@@ -1305,37 +1556,58 @@ ASTNode *CParser::EnumSpecifier()
 
 SequenceASTNode *CParser::EnumeratorList()
 {
-    SequenceASTNode *enums;
-    STObject *obj;
-    unsigned i = 0;
-
-    check(TK_IDENT);
-    enums = new SequenceASTNode(new IdentASTNode(_tok->sval));
-
-    obj = _stb.insert(_tok->sval.c_str(), STOK_CON, _stb.intType);
-    obj->ival = i;
-
-    if (_sym == TK_ASSIGN)
+    auto *enums = new SequenceASTNode();
+    std::int64_t nextValue = 0;
+    for (;;)
     {
-        getTok();
-        ConstantExpression();
-    }
-
-    while (_sym == TK_COMMA)
-    {
-        getTok();
         check(TK_IDENT);
-        enums->add(new IdentASTNode(_tok->sval));
-
-        i++;
-        obj = _stb.insert(_tok->sval.c_str(), STOK_CON, _stb.intType);
-        obj->ival = i;
-
+        const int line = _tok->line, column = _tok->col;
+        const std::string name = _tok->sval;
+        enums->add(new IdentASTNode(name, line));
+        std::int64_t value = nextValue;
         if (_sym == TK_ASSIGN)
         {
             getTok();
-            ConstantExpression();
+            const bool negative = _sym == TK_MINUS;
+            if (negative)
+                getTok();
+            const bool isEnumerator = _sym == TK_IDENT;
+            ASTNode *expr = ConstantExpression();
+            if (AST_MATCH_INTEGER_CONST(expr))
+            {
+                const auto magnitude = AST_INTEGER_CONST_VALUE(expr);
+                if (isEnumerator)
+                    value = static_cast<std::int32_t>(magnitude);
+                else if (magnitude > std::uint64_t(INT32_MAX) + unsigned(negative))
+                    _ast->errorAt(line, column, "enumerator '%s' exceeds int range",
+                                  name.c_str());
+                else
+                    value = static_cast<std::int64_t>(magnitude);
+            }
+            else if (expr->getKind() == NK_CHAR_CONST)
+                value = static_cast<CharConstASTNode *>(expr)->getValue();
+            else
+                _ast->errorAt(line, column,
+                              "enumerator '%s' requires a literal or previous enumerator",
+                              name.c_str());
+            if (negative)
+                value = -value;
         }
+        if (value < INT32_MIN || value > INT32_MAX)
+            _ast->errorAt(line, column, "enumerator '%s' exceeds int range",
+                          name.c_str());
+        auto *obj = _stb.insert(name.c_str(), STOK_CON, _stb.intType);
+        if (obj == _stb.noObj)
+            _ast->errorAt(line, column, "enumerator '%s' is already declared",
+                          name.c_str());
+        obj->ival = static_cast<int>(value);
+        nextValue = value + 1;
+
+        if (_sym != TK_COMMA)
+            break;
+        getTok();
+        if (_sym == TK_RBRACE)
+            break;
     }
 
     return enums;
@@ -1351,6 +1623,7 @@ void CParser::TypeQualifier(unsigned &flags)
     else if (_sym == TK_RESTRICT)
     {
         getTok();
+        flags |= TQ_RESTRICT;
     }
     else if (_sym == TK_VOLATILE)
     {
@@ -1359,11 +1632,11 @@ void CParser::TypeQualifier(unsigned &flags)
     }
     else if (_sym == TK__ATOMIC)
     {
-        getTok();
+        parsingError("_Atomic types are unsupported");
     }
     else if (_sym == TK__NULLABLE)
     {
-        getTok();
+        parsingError("_Nullable types are unsupported");
     }
     else
     {
@@ -1411,22 +1684,25 @@ ASTNode *CParser::AlignmentSpecifier()
 
 ASTNode *CParser::Declarator(ASTNode * &typeSpec)
 {
+    ParseDepth depth(*this);
+    unsigned pointers = 0;
     while (_sym == TK_TIMES)
     {
-        unsigned flags;
-
+        if (++pointers > 128)
+            parsingError("pointer declarator nesting limit exceeded");
+        const unsigned storage = typeSpec->getFlags() & DS_STORAGE_MASK;
         getTok();
-
-        // Flags needs to be preserved
-        flags = typeSpec->getFlags();
         typeSpec = new PointerTypeASTNode(typeSpec);
-        typeSpec->setFlags(flags);
+        unsigned qualifiers = 0;
+        while (isTypeQualifier(_sym))
+            TypeQualifier(qualifiers);
+        typeSpec->setFlags(storage | qualifiers);
     }
 
     ASTNode *decl = DirectDeclarator(typeSpec);
 
-    while (_sym == TK___ASM || _sym == TK___ATTRIBUTE__)
-        GccDeclaratorExtension();
+    if (_sym == TK___ASM || _sym == TK___ATTRIBUTE__)
+        parsingError("GCC declarator extensions are unsupported");
 
     return decl;
 }
@@ -1434,8 +1710,7 @@ ASTNode *CParser::Declarator(ASTNode * &typeSpec)
 ASTNode *CParser::DirectDeclarator(ASTNode * &typeSpec)
 {
     ASTNode *declr = NULL_AST_NODE;
-    ASTNode *expr = NULL_AST_NODE;
-    FunctionTypeASTNode *funcType;
+    FunctionTypeASTNode *funcType = nullptr;
     bool isFuncPtr = false;
 
     if (_sym == TK_IDENT)
@@ -1449,6 +1724,8 @@ ASTNode *CParser::DirectDeclarator(ASTNode * &typeSpec)
         if (_sym == TK_TIMES)
         {
             getTok();
+            if (_sym == TK_TIMES)
+                parsingError("nested parenthesized pointer declarators are unsupported");
 
             unsigned flags = 0;
             // TODO: Check the grammar
@@ -1463,52 +1740,46 @@ ASTNode *CParser::DirectDeclarator(ASTNode * &typeSpec)
             funcType = new FunctionTypeASTNode(typeSpec, NULL_AST_NODE);
             typeSpec = new PointerTypeASTNode(funcType);
         }
-        ASTNode *dummy = NULL_AST_NODE;
-        declr = Declarator(dummy);
+        // Only a bare parenthesized name or (*name)(parameters) is modeled.
+        // An array or another pointer inside the parentheses changes binding.
+        check(TK_IDENT);
+        declr = new IdentASTNode(_tok->sval, _tok->line);
         check(TK_RPAR);
     }
-    for (;;)
-    {
-        if (_sym == TK_LBRACK)
-        {
-            getTok();
 
-            if (_sym != TK_RBRACK)
-            {
-                expr = Expression();
-                typeSpec = new ArrayTypeASTNode(typeSpec, expr);
-            }
-            else
-            {
-                // Declarations like int a[] are treated as a pointers.
-                typeSpec = new PointerTypeASTNode(typeSpec);
-            }
-            check(TK_RBRACK);
-        }
-        // else if (_sym == TK_LPAR)
-        // {
-        //     getTok();
-        //     if (_sym != TK_RPAR)
-        //     {
-        //         //
-        //     }
-        //     check(TK_RPAR);
-        // }
-        else
-        {
-            break;
-        }
-    }
-    if (_sym == TK_LPAR && isFuncPtr)
+    if (isFuncPtr)
     {
+        if (_sym != TK_LPAR)
+            parsingError("parenthesized non-function pointer declarator is unsupported");
         getTok();
         if (_sym != TK_RPAR)
         {
+            _stb.openScope();
             ASTNode *funcPrms = ParameterTypeList();
+            _stb.closeScope();
             funcType->setPrms(funcPrms);
+            funcType->setPrototype(true);
+            funcType->setVariadic(_lastParameterListVariadic);
         }
         check(TK_RPAR);
+        if (_sym == TK_LBRACK || _sym == TK_LPAR)
+            parsingError("nested function-pointer declarator is unsupported");
+        return declr;
     }
+
+    std::vector<ASTNode *> dimensions;
+    while (_sym == TK_LBRACK)
+    {
+        if (dimensions.size() == 128)
+            parsingError("array declarator nesting limit exceeded");
+        getTok();
+        ASTNode *dimension =
+            _sym == TK_RBRACK ? NULL_AST_NODE : AssignmentExpression();
+        dimensions.push_back(dimension);
+        check(TK_RBRACK);
+    }
+    for (auto i = dimensions.rbegin(); i != dimensions.rend(); ++i)
+        typeSpec = new ArrayTypeASTNode(typeSpec, *i);
 
     return declr;
 }
@@ -1607,10 +1878,12 @@ ASTNode *CParser::GccAttribute()
 ASTNode *CParser::ParameterTypeList()
 {
     ASTNode *paramList = ParameterList();
+    _lastParameterListVariadic = false;
     if (_sym == TK_COMMA)
     {
         getTok();
         check(TK_ELLIPSIS);
+        _lastParameterListVariadic = true;
     }
     return paramList;
 }
@@ -1643,19 +1916,39 @@ static bool isFirstOfAbstractDeclarator(unsigned n)
 ASTNode *CParser::ParameterDeclaration()
 {
     ASTNode *typeSpec = DeclarationSpecifiers();
-    ASTNode *declr = NULL_AST_NODE;
-
+    unsigned pointers = 0;
+    while (_sym == TK_TIMES)
+    {
+        if (++pointers > 128)
+            parsingError("pointer parameter nesting limit exceeded");
+        getTok();
+        typeSpec = new PointerTypeASTNode(typeSpec);
+        unsigned qualifiers = 0;
+        while (isTypeQualifier(_sym))
+            TypeQualifier(qualifiers);
+        typeSpec->setFlags(qualifiers);
+    }
     if (_sym == TK_IDENT)
     {
         ASTNode *d = Declarator(typeSpec);
-        declr = new ParmDeclASTNode(typeSpec, d);
+        return new ParmDeclASTNode(typeSpec, d);
     }
-    else if (isFirstOfAbstractDeclarator(_sym))
-    {
-        declr = new ParmDeclASTNode(typeSpec,  AbstractDeclarator());
-    }
+    if (_sym == TK_LPAR)
+        parsingError("parenthesized declarator parameters are unsupported");
 
-    return declr;
+    std::vector<ASTNode *> dimensions;
+    while (_sym == TK_LBRACK)
+    {
+        if (dimensions.size() == 128)
+            parsingError("array parameter nesting limit exceeded");
+        getTok();
+        dimensions.push_back(_sym == TK_RBRACK ? NULL_AST_NODE :
+                                                AssignmentExpression());
+        check(TK_RBRACK);
+    }
+    for (auto i = dimensions.rbegin(); i != dimensions.rend(); ++i)
+        typeSpec = new ArrayTypeASTNode(typeSpec, *i);
+    return new ParmDeclASTNode(typeSpec, NULL_AST_NODE);
 }
 
 ASTNode *CParser::IdentifierList()
@@ -1686,11 +1979,20 @@ ASTNode *CParser::IdentifierList()
 //     ;
 ASTNode *CParser::TypeName()
 {
-    // check(TK_IDENT);
-    // return new IdentASTNode(_tok->sval, _tok->line);
-    ASTNode *specQualList = SpecifierQualifierList();
-    //AbstractDeclarator();
-    return specQualList;
+    ASTNode *type = SpecifierQualifierList();
+    unsigned pointers = 0;
+    while (_sym == TK_TIMES)
+    {
+        if (++pointers > 128)
+            parsingError("pointer type nesting limit exceeded");
+        getTok();
+        type = new PointerTypeASTNode(type);
+        unsigned qualifiers = 0;
+        while (isTypeQualifier(_sym))
+            TypeQualifier(qualifiers);
+        type->setFlags(type->getFlags() | qualifiers);
+    }
+    return type;
 }
 
 ASTNode *CParser::AbstractDeclarator()
@@ -1733,6 +2035,7 @@ ASTNode *CParser::DirectAbstractDeclarator()
 
 ASTNode *CParser::Initializer()
 {
+    ParseDepth depth(*this);
     ASTNode *res = NULL_AST_NODE;
 
     if (_sym == TK_LBRACE)
@@ -1756,15 +2059,23 @@ ASTNode *CParser::InitializerList()
     SequenceASTNode *res;
     ASTNode *init;
 
-    init = Initializer();
-    res = new SequenceASTNode(init);
+    const auto parseInitializer = [&]() -> ASTNode * {
+        if (_sym == TK_PERIOD || _sym == TK_LBRACK)
+            parsingError("designated initializers are unsupported");
+        return Initializer();
+    };
+    init = parseInitializer();
+    res = new SequenceASTNode();
+    res->addElement(init);
 
     while (_sym == TK_COMMA)
     {
         getTok();
+        if (_sym == TK_RBRACE)
+            break;
 
-        init = Initializer();
-        res->add(init);
+        init = parseInitializer();
+        res->addElement(init);
     }
 
     return res;
@@ -1776,6 +2087,7 @@ ASTNode *CParser::InitializerList()
 
 ASTNode *CParser::Statement()
 {
+    ParseDepth depth(*this);
     ASTNode *stmt = NULL_AST_NODE;
     // ASTNode *expr = NULL_AST_NODE;
 
@@ -1786,7 +2098,11 @@ ASTNode *CParser::Statement()
         else
             stmt = ExpressionStatement();
     }
-    else if (_sym == TK_TIMES || (_sym == TK_LPAR && getLATok(2) == TK_TIMES))
+    else if (isFirstOfPostfixExpression(_sym) || _sym == TK_TIMES ||
+             _sym == TK_AND || _sym == TK_PLUS || _sym == TK_MINUS ||
+             _sym == TK_TILDA || _sym == TK_NOT || _sym == TK_INC_OP ||
+             _sym == TK_DEC_OP || _sym == TK_SIZEOF || _sym == TK__ALIGNOF ||
+             _sym == TK_SEMICOLON)
     {
         // This is a function call of type: (*func)(x, y)
         stmt = ExpressionStatement();
@@ -1814,66 +2130,11 @@ ASTNode *CParser::Statement()
     }
     else if (_sym == TK_ASM)
     {
-        getTok();
-        check(TK_LPAR);
-        check(TK_STRING_LIT);
-        stmt = new AsmStmtASTNode(_tok->sval);
-        if (_sym == TK_COLON)
-        {
-            // Output operands
-            getTok();
-            if (_sym != TK_COLON)
-            {
-                check(TK_STRING_LIT);
-                check(TK_LPAR);
-                Expression();
-                check(TK_RPAR);
-                while (_sym == TK_COMMA)
-                {
-                    getTok();
-                    check(TK_STRING_LIT);
-                    check(TK_LPAR);
-                    Expression();
-                    check(TK_RPAR);
-                }
-            }
-        }
-        if (_sym == TK_COLON)
-        {
-            // Input operands
-            getTok();
-            if (_sym != TK_COLON)
-            {
-                check(TK_STRING_LIT);
-                check(TK_LPAR);
-                Expression();
-                check(TK_RPAR);
-                while (_sym == TK_COMMA)
-                {
-                    getTok();
-                    check(TK_STRING_LIT);
-                    check(TK_LPAR);
-                    Expression();
-                    check(TK_RPAR);
-                }
-            }
-        }
-        if (_sym == TK_COLON)
-        {
-            // Clobbered inputs
-            getTok();
-            if (_sym != TK_RPAR)
-            {
-                check(TK_STRING_LIT);
-                while (_sym == TK_COMMA)
-                {
-                    getTok();
-                    check(TK_STRING_LIT);
-                }
-            }
-        }
-        check(TK_RPAR);
-        check(TK_SEMICOLON);
+        parsingError("inline assembly is unsupported in C source");
+    }
+    else
+    {
+        parsingError("expected statement");
     }
 
     return stmt;
@@ -1903,7 +2164,7 @@ ASTNode *CParser::LabeledStatement()
     {
         getTok();
         check(TK_COLON);
-        Statement();
+        labstmt = new CaseLabelASTNode(NULL_AST_NODE, Statement());
     }
 
     return labstmt;
@@ -1911,11 +2172,11 @@ ASTNode *CParser::LabeledStatement()
 
 ASTNode *CParser::CompoundStatement()
 {
-    ASTNode *compstmt = NULL_AST_NODE;
-
     check(TK_LBRACE);
-    if (_sym != TK_RBRACE)
-        compstmt = StmtOrDeclList();
+    _stb.openScope();
+    ASTNode *compstmt = StmtOrDeclList();
+    static_cast<CompoundStmtASTNode *>(compstmt)->setScope(_stb.getTopScope());
+    _stb.closeScope();
     check(TK_RBRACE);
 
     return compstmt;
@@ -1928,77 +2189,9 @@ ASTNode *CParser::FunctionBody()
         return NULL_AST_NODE;
     }
 
-    ASTNode *decl = NULL_AST_NODE;
-    ASTNode *stmt = NULL_AST_NODE;
-    ASTNode *declList = NULL_AST_NODE;
-    ASTNode *stmtList = NULL_AST_NODE;
-    ASTNode *compound = NULL_AST_NODE;
-
     getTok(); // eat '{'
-    compound = new CompoundStmtASTNode(NULL_AST_NODE, NULL_AST_NODE);
-    if (_sym != TK_RBRACE)
-    {
-        // The scope has been opened in FunctionDeclASTNode.
-
-        // Declarations
-        while (isStorageClassSpecifier(_sym) || isTypeQualifier(_sym) ||
-               isTypeSpecifier(_sym, 1))
-        {
-            ASTNode *declSpec = DeclarationSpecifiers();
-
-            if (_inTypedef)
-            {
-                _inTypedef = false;
-                decl = new TypeDeclASTNode(Declarator(declSpec), declSpec);
-                decl->declare(_ast);
-                check(TK_SEMICOLON);
-            }
-            else
-            {
-                decl = Declaration(declSpec);
-            }
-            //_ast->declare(decl);
-            if (declList == NULL_AST_NODE)
-                declList = new SequenceASTNode(decl);
-            else
-                static_cast<SequenceASTNode *>(declList)->add(decl);
-
-            //_inTypedef = false;
-        }
-
-        // Statements
-        for (;;)
-        {
-            if (_sym == TK_IDENT || _sym == TK_TIMES ||
-                (_sym == TK_LPAR && getLATok(2) == TK_TIMES))
-            {
-                stmt = Statement();
-                if (stmtList == NULL_AST_NODE)
-                    stmtList = new SequenceASTNode(stmt);
-                else
-                    static_cast<SequenceASTNode *>(stmtList)->add(stmt);
-            }
-            else if (_sym >= TK_ASM && _sym <= TK_WHILE)
-            {
-                stmt = Statement();
-                if (stmtList == NULL_AST_NODE)
-                    stmtList = new SequenceASTNode(stmt);
-                else
-                    static_cast<SequenceASTNode *>(stmtList)->add(stmt);
-            }
-            else
-            {
-                break;
-            }
-        }
-        static_cast<CompoundStmtASTNode *>(compound)->setDecls(declList);
-        static_cast<CompoundStmtASTNode *>(compound)->setStmts(stmtList);
-    }
-    else
-    {
-        static_cast<CompoundStmtASTNode *>(compound)->setStmts(
-            new SequenceASTNode(new NopExprASTNode()));
-    }
+    ASTNode *compound = StmtOrDeclList();
+    static_cast<CompoundStmtASTNode *>(compound)->setScope(_stb.getTopScope());
     check(TK_RBRACE);
 
     return compound;
@@ -2012,64 +2205,57 @@ ASTNode *CParser::DeclarationList()
 
 ASTNode *CParser::StmtOrDeclList()
 {
-    ASTNode *decl = NULL_AST_NODE;
-    ASTNode *stmt = NULL_AST_NODE;
     ASTNode *stmts = NULL_AST_NODE;
     ASTNode *decls = NULL_AST_NODE;
+    ASTNode *items = NULL_AST_NODE;
+    const auto append = [](ASTNode *&list, ASTNode *item) {
+        if (list == NULL_AST_NODE)
+            list = new SequenceASTNode();
+        auto *sequence = static_cast<SequenceASTNode *>(list);
+        if (item->getKind() == NK_LIST)
+            for (ASTNode *element :
+                 static_cast<SequenceASTNode *>(item)->getElements())
+                sequence->addElement(element);
+        else
+            sequence->addElement(item);
+    };
 
-    // Declarations
-    while (isStorageClassSpecifier(_sym) || isTypeQualifier(_sym) ||
-           isTypeSpecifier(_sym, 1))
+    while (_sym != TK_RBRACE && _sym != TK_EOF)
     {
-        // _inTypedef is set in DeclartionSpecifiers/StorageClassSpecifier
-        ASTNode *declSpec = DeclarationSpecifiers();
-
-        if (_inTypedef)
+        const bool assertion = _sym == TK__STATIC_ASSERT;
+        const bool declaration = assertion ||
+                                 isStorageClassSpecifier(_sym) ||
+                                 isTypeQualifier(_sym) ||
+                                 isTypeSpecifier(_sym, 1) ||
+                                 _sym == TK_INLINE || _sym == TK__NORETURN;
+        ASTNode *item = NULL_AST_NODE;
+        if (declaration)
         {
-            _inTypedef = false;
-            decl = new TypeDeclASTNode(Declarator(declSpec), declSpec);
-            decl->declare(_ast);
-            check(TK_SEMICOLON);
+            if (assertion)
+                item = StaticAssertDeclaration();
+            else
+            {
+                ASTNode *declSpec = DeclarationSpecifiers();
+                if (_inTypedef)
+                    item = TypedefDeclaration(declSpec);
+                else
+                    item = Declaration(declSpec);
+            }
+
+            append(decls, item);
         }
         else
         {
-            decl = Declaration(declSpec);
+            item = Statement();
+            append(stmts, item);
         }
-        //_ast->declare(decl);
-        if (decls == NULL_AST_NODE)
-            decls = new SequenceASTNode(decl);
-        else
-            static_cast<SequenceASTNode *>(decls)->add(decl);
 
-        //_inTypedef = false;
+        append(items, item);
     }
 
-    // Statements
-    for (;;)
-    {
-        if (_sym == TK_IDENT)
-        {
-            stmt = Statement();
-            if (stmts == NULL_AST_NODE)
-                stmts = new SequenceASTNode(stmt);
-            else
-                static_cast<SequenceASTNode *>(stmts)->add(stmt);
-        }
-        else if (_sym >= TK_ASM && _sym <= TK_WHILE)
-        {
-            stmt = Statement();
-            if (stmts == NULL_AST_NODE)
-                stmts = new SequenceASTNode(stmt);
-            else
-                static_cast<SequenceASTNode *>(stmts)->add(stmt);
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    return new CompoundStmtASTNode(decls, stmts);
+    if (items == NULL_AST_NODE)
+        items = new SequenceASTNode();
+    return new CompoundStmtASTNode(decls, stmts, items);
 }
 
 ASTNode *CParser::SelectionStatement()
@@ -2158,11 +2344,22 @@ ASTNode *CParser::IterationStatement()
 
         getTok();
         check(TK_LPAR);
+        _stb.openScope();
 
-        if (_sym != TK_SEMICOLON)
+        const bool declaration = isStorageClassSpecifier(_sym) ||
+                                 isTypeQualifier(_sym) ||
+                                 isTypeSpecifier(_sym, 1);
+        if (declaration)
+        {
+            ASTNode *declSpec = DeclarationSpecifiers();
+            init = _inTypedef ? TypedefDeclaration(declSpec) :
+                                Declaration(declSpec);
+        }
+        else if (_sym != TK_SEMICOLON)
             init = Expression();
 
-        check(TK_SEMICOLON);
+        if (!declaration)
+            check(TK_SEMICOLON);
 
         if (_sym != TK_SEMICOLON)
             expr = Expression();
@@ -2175,6 +2372,7 @@ ASTNode *CParser::IterationStatement()
         check(TK_RPAR);
 
         stmt = Statement();
+        _stb.closeScope();
 
         // Create for statement
         iterstmt = new ForStmtASTNode(init, expr, step, stmt);
@@ -2227,6 +2425,8 @@ ASTNode *CParser::ExpressionStatement()
 
     if (_sym != TK_SEMICOLON)
         expr = Expression();
+    else
+        expr = new NopExprASTNode();
     check(TK_SEMICOLON);
 
     return expr;
@@ -2248,7 +2448,8 @@ ASTNode *CParser::TranslationUnit()
         if (isStorageClassSpecifier(_sym) || isTypeQualifier(_sym) ||
             isTypeSpecifier(_sym, 1) ||
             _sym == TK___ASM || _sym == TK___ATTRIBUTE__ ||
-            _sym == TK_INLINE || _sym == TK__NORETURN)
+            _sym == TK_INLINE || _sym == TK__NORETURN ||
+            _sym == TK__STATIC_ASSERT)
         {
             // _inTypedef is set in ExternalDeclaration/DeclartionSpecifiers/
             // StorageClassSpecifier
@@ -2272,6 +2473,8 @@ ASTNode *CParser::TranslationUnit()
         }
     }
 
+    if (tunit == NULL_AST_NODE)
+        tunit = new SequenceASTNode();
     static_cast<SequenceASTNode *>(tunit)->setScope(_stb.getTopScope());
     _stb.closeScope();
 
@@ -2280,82 +2483,103 @@ ASTNode *CParser::TranslationUnit()
 
 ASTNode *CParser::ExternalDeclaration()
 {
+    if (_sym == TK__STATIC_ASSERT)
+        return StaticAssertDeclaration();
     // _inTypedef is set in DeclartionSpecifiers/StorageClassSpecifier
     ASTNode *declSpec = DeclarationSpecifiers();
 
-    if (getLATok(2) == TK_LPAR || getLATok(3) == TK_LPAR)
+    if (_inTypedef)
+    {
+        _inTypedef = false;
+        ASTNode *decl = TypedefDeclaration(declSpec);
+        return decl;
+    }
+    if (_sym == TK_IDENT && getLATok(2) == TK_LPAR)
     {
         return FunctionDefinition(declSpec);
     }
-    else
+    if (_sym == TK_TIMES)
     {
-        ASTNode *decl;
-
-        if (_inTypedef)
+        // Distinguish a function returning a pointer during declarator
+        // parsing rather than guessing from a fixed number of tokens.
+        ASTNode *type = cloneType(declSpec);
+        ASTNode *name = Declarator(type);
+        if (_sym == TK_LPAR)
         {
-            _inTypedef = false;
-            decl = new TypeDeclASTNode(Declarator(declSpec), declSpec);
-            decl->declare(_ast);
-            check(TK_SEMICOLON);
+            return FunctionDefinition(type, name, declSpec->getFlags());
         }
-        else
+        auto *list = new SequenceASTNode(
+            InitDeclaratorAfterName(declSpec, type, name));
+        while (_sym == TK_COMMA)
         {
-            decl = Declaration(declSpec);
+            getTok();
+            list->add(InitDeclarator(declSpec));
         }
-
-        // Traverse declarations i.e. insert into symbol table.
-        //_ast->declare(decl);
-
-        return decl;
+        check(TK_SEMICOLON);
+        return list;
     }
+    return Declaration(declSpec);
 }
 
 ASTNode *CParser::FunctionDefinition(ASTNode *funcType)
 {
-    ASTNode *funcName = NULL_AST_NODE;
-    ASTNode *funcPrms = NULL_AST_NODE;
-    // bool isPtrType = false;
-
-    if (_sym == TK_TIMES)
-    {
-        getTok();
-        funcType = new PointerTypeASTNode(funcType);
-    }
-
-    // Function name
     ASTNode *dummy = NULL_AST_NODE;
-    funcName = Declarator(dummy);
+    ASTNode *funcName = Declarator(dummy);
+    return FunctionDefinition(funcType, funcName, funcType->getFlags());
+}
+
+ASTNode *CParser::FunctionDefinition(ASTNode *funcType, ASTNode *funcName,
+                                    unsigned flags)
+{
+    ASTNode *funcPrms = NULL_AST_NODE;
 
     check(TK_LPAR);
 
     FunctionDeclASTNode *funcDecl = new FunctionDeclASTNode(funcType,
                                                             funcName,
                                                             NULL_AST_NODE,
-                                                            NULL_AST_NODE);
+                                                             NULL_AST_NODE);
+    funcDecl->setFlags(flags);
 
+    // A tag introduced by a prototype is private to its parameter list.
+    // For a definition the same scope continues into the function body.
+    _stb.openScope();
     // TODO: Move ParameterTypeList to DirectDeclarator
     if (_sym != TK_RPAR)
     {
         funcPrms = ParameterTypeList();
         funcDecl->setPrms(funcPrms);
+        funcDecl->setPrototype(true);
+        funcDecl->setVariadic(_lastParameterListVariadic);
     }
     check(TK_RPAR);
 
-    while (_sym == TK___ASM || _sym == TK___ATTRIBUTE__)
-        GccDeclaratorExtension();
+    auto *fullType = new FunctionTypeASTNode(funcType, funcPrms);
+    fullType->setFlags(flags & (DS_STORAGE_MASK | FS_INLINE | FS_NORETURN));
+    fullType->setPrototype(funcDecl->hasPrototype());
+    fullType->setVariadic(funcDecl->isVariadic());
+    funcDecl->setType(fullType);
+
+    if (_sym == TK___ASM || _sym == TK___ATTRIBUTE__)
+        parsingError("GCC declarator extensions are unsupported");
 
     //_ast->declare(funcDecl);
 
-    _stb.openScope();
+    if (funcPrms != NULL_AST_NODE)
+        funcPrms->declare(_ast);
 
     // Parameters are going inside of the function body.
     // if (funcPrms != NULL_AST_NODE)
     //    _ast->declare(funcPrms);
 
-    if (_sym != TK_SEMICOLON)
+    if (_sym == TK_LBRACE)
+    {
+        if ((flags & FS_INLINE) && !(flags & SCS_STATIC))
+            parsingError("inline functions with external linkage are unsupported");
         funcDecl->setBody(FunctionBody());
+    }
     else
-        getTok();
+        check(TK_SEMICOLON);
 
     funcDecl->setScope(_stb.getTopScope());
     _stb.closeScope();

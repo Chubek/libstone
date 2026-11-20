@@ -24,7 +24,7 @@ immediate shifts, comparisons, `auipc`, RV64 `*W` operations, loads and stores,
 control flow (including PC updates), fences, system instructions, and assembly
 pseudo-instructions.
 
-## Legacy integer ABI facts
+## Integer ABI facts
 
 `rv32i.arch` publishes ILP32 facts with 4-byte stack argument slots, and
 `rv64i.arch` publishes LP64 facts with 8-byte slots. Both follow the
@@ -41,8 +41,8 @@ for fixed-arity calls with one-word integer or pointer arguments and results:
 These are scalar facts in the ArchDB `abi_facts` record, not a full psABI
 classifier. They do not describe narrower-scalar extensions, multi-register
 arguments or returns, aggregates, variadic calls, or floating-point calling
-conventions. They do not change the legacy instruction subsets or qualify
-either target for the native backend.
+conventions. The facts do not change the declared instruction subsets. Native
+qualification additionally requires a reviewed ISA/ABI provider.
 
 [RISC-V psABI integer register convention]: https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_integer_register_convention
 [integer calling convention]: https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#integer-cc
@@ -76,12 +76,25 @@ done
 The LLVM comparison checks encoding only; neither suite establishes full
 ISA conformance.
 
-## RV64IM native profile
+## RV64 native profiles
 
-`rv64im.arch` is a separate entry point for the first native compiler backend.
-It adds the selected M operations, comparisons, immediate left shift and
-encodable control and memory forms; it does not claim full ISA or emulator
-coverage. ArchDB v1 has no scattered instruction fields, so the native
-provider supplies reviewed forms for stores and branches and delegates final
-encoding and relocations to an assembler. See [Embedding](../../Embedding.md)
-and [implementation boundaries](../../IMPLEMENTATION.md).
+| Standard spec | Native profile | Coverage and remaining gaps |
+| --- | --- | --- |
+| `riscv/rv64i.arch` | `RISCV64/LP64` (RV64I) | GAS (default/PIC), physical inspection, local raw code. Modular `mul` uses a bounded shift-and-add loop. Division, remainder, `div_checked_s` and `mul_checked_s` are rejected on the input instruction. |
+| `riscv/rv64im.arch` | `RISCV64IM/LP64` (RV64IM) | Same outputs, with M instructions and checked multiply/divide expansions. |
+| `riscv/rv32i.arch` | None | ILP32 needs 32-bit pointers, frame slots and call layout; the native MIR's `i64` needs multiword or restricted lowering. |
+| `aarch64/root.arch` | [`AArch64/AAPCS64`](../../NativeScalarGAS.md) | Default or PIC scalar GAS; no raw encoding or physical inspection. |
+| `amd64/root.arch` | [`AMD64/SysVAMD64`](../../NativeScalarGAS.md) | Scalar GAS (default or PIC); no raw encoding or physical inspection. |
+| `mips32/root.arch` | None | O32 non-PIC needs 32-bit legalization, the caller argument home area, MIPS delay-slot handling and target emission. |
+| `pdp11/root.arch` | None | Unix V7 word ABI needs 16-bit or multiword legalization, stack calls/returns and PDP-11 instruction/layout emission. |
+
+The RV64 profiles share the same [scalar LP64 ABI](../../ABI.md) and narrow
+memory subset (`lb`, `lbu`, `lh`, `lhu`, `lw`, `lwu`, `ld`, `sb`, `sh`, `sw`,
+`sd`). Each qualifies an independently pinned ArchDB. The RV64I ArchDB still
+describes just the base ALU subset above; its native provider gets additional
+RV64I forms from the reviewed ISA manifest, not from fabricated ArchDB
+semantics. `rv64im.arch` declares selected M, comparison, immediate left
+shift, control and memory forms directly. Both profiles use manifest forms
+for stores and branches with scattered fields, which ArchDB v1 cannot
+describe. Symbol relocations still require an external assembler/linker.
+See [Embedding](../../Embedding.md) and [implementation boundaries](../../IMPLEMENTATION.md).

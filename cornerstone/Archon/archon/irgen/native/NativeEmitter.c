@@ -105,7 +105,7 @@ static int valid_symbol(ANOut *out, const char *name)
  * transfers expand. Each LF-terminated record has space-separated fields.
  * xN is a hardware register and instruction immediates are signed decimal.
  * FN:LABEL identifies a label by function layout index and local label index.
- * LD, SD and JALR place the base register before the displacement. The
+ * Loads, stores and JALR place the base register before the displacement. The
  * instruction counter tracks GAS expansion, not the number of records. */
 void an_emit(ANOut *out, ANOpcode op, unsigned rd, unsigned rs1,
     unsigned rs2, int imm)
@@ -136,8 +136,9 @@ void an_emit(ANOut *out, ANOpcode op, unsigned rd, unsigned rs1,
         append(out, 1, out->physical ? "inst %s x%u x%u %d\n" : "\t%s x%u, x%u, %d\n",
             name, rd, rs1, imm);
         return;
-    case AN_LD:
-    case AN_SD:
+    case AN_LD: case AN_LB: case AN_LBU: case AN_LH: case AN_LHU:
+    case AN_LW: case AN_LWU:
+    case AN_SD: case AN_SB: case AN_SH: case AN_SW:
     case AN_JALR:
         if (out->physical)
             append(out, 1, "inst %s x%u x%u %d\n", name, rd, rs1, imm);
@@ -244,15 +245,33 @@ void an_address_symbol(ANOut *out, unsigned dst, const char *name)
         emit_local_symbol(out, name, dst, AN_ADDI);
         return;
     }
-    append(out, 2, out->physical ? "address-symbol x%u %s\n" : "\tlla x%u, %s\n", dst, name);
+    if (out->physical)
+        append(out, 2, "address-symbol x%u %s\n", dst, name);
+    else if (out->pic)
+        append(out, 2, "\tla x%u, %s\n", dst, name);
+    else
+        append(out, 2, "\tlla x%u, %s\n", dst, name);
 }
 
 void an_asm_header(ANOut *out)
 {
-    if (!out->machine_code)
-        append(out, 0, out->physical ? "archon-physical 1\ntarget " AN_TARGET_NAME
-            "\narchdb-sha256 " AN_TARGET_SHA256 "\n" :
-            "\t.option push\n\t.option norvc\n\t.option norelax\n\t.text\n");
+    if (out->machine_code)
+        return;
+    if (out->physical)
+        append(out, 0, "archon-physical 1\ntarget " AN_TARGET_NAME
+            "\narchdb-sha256 " AN_TARGET_SHA256 "\n");
+    else {
+        /* Keep the RV64I ELF requirement and assembly dialect explicit,
+         * even if the external assembler defaults to a larger ISA. */
+        if (!AN_RV64_HAS_M)
+            append(out, 0, "\t.attribute arch, \"rv64i2p1\"\n");
+        append(out, 0, "\t.option push\n");
+        if (!AN_RV64_HAS_M)
+            append(out, 0, "\t.option arch, rv64i\n");
+        if (out->pic)
+            append(out, 0, "\t.option pic\n");
+        append(out, 0, "\t.option norvc\n\t.option norelax\n\t.text\n");
+    }
 }
 
 void an_asm_function(ANOut *out, const char *name)

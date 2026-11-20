@@ -5,8 +5,8 @@ the ISAs.
 
 | ISA | Entry point | Declarative scalar ABI coverage |
 | --- | --- | --- |
-| RISC-V RV32I | [`riscv/rv32i.arch`](riscv/rv32i.arch) | v1: [ILP32 scalar integer profile](riscv/README.md#legacy-integer-abi-facts) |
-| RISC-V RV64I | [`riscv/rv64i.arch`](riscv/rv64i.arch) | v1: [LP64 scalar integer profile](riscv/README.md#legacy-integer-abi-facts) |
+| RISC-V RV32I | [`riscv/rv32i.arch`](riscv/rv32i.arch) | v1: [ILP32 scalar integer profile](riscv/README.md#integer-abi-facts) |
+| RISC-V RV64I | [`riscv/rv64i.arch`](riscv/rv64i.arch) | v1: [LP64 scalar integer profile](riscv/README.md#integer-abi-facts) |
 | RISC-V RV64IM | [`riscv/rv64im.arch`](riscv/rv64im.arch) | v1: LP64 scalar integer profile |
 | Arm AArch64 | [`aarch64/root.arch`](aarch64/root.arch) | v2: [AAPCS64 integer profile](aarch64/README.md#calling-convention), with SP distinct from XZR. |
 | MIPS32 | [`mips32/root.arch`](mips32/root.arch) | v1: [O32 non-PIC scalar integer profile (`O32NonPIC`)](mips32/README.md#scalar-non-pic-o32-abi-facts) |
@@ -20,8 +20,9 @@ the ISAs.
 complete ABI or a guarantee of native code generation. Version 2 still describes
 single-register integer results, but allows a separate scalar stack pointer or a
 stack-resident return address. Neither version models managed calls or typed
-frames. The native provider independently qualifies the reviewed
-[RV64IM LP64 profile](../ABI.md).
+frames. The native providers independently qualify the reviewed
+[RV64I and RV64IM LP64 profiles](riscv/README.md#rv64-native-profiles) and the
+[SysV AMD64 and AAPCS64 scalar GAS profiles](../NativeScalarGAS.md).
 
 Instruction encodings and architectural effects are described in the `.arch`
 sources, not hard-coded in the Archon runtime. See each directory for its

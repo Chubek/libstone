@@ -1,4 +1,5 @@
 #include "Backend.h"
+#include "TargetNative.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,13 +20,28 @@ int main(int argc, char **argv)
     unsigned flags = 0;
     int verify = 0, read_error, rc = 1, i;
     if (argc == 2 && !strcmp(argv[1], "--list-capabilities")) {
-        printf("%s: canonical-mir-v1 -> GAS assembly, physical-v1 records, or raw machine code "
+#if defined(AN_SCALAR_GAS_PIC)
+        printf("%s: canonical-mir-v1 -> ELF GAS assembly only (default or PIC)\n",
+            archon_backend_target());
+#elif defined(AN_SCALAR_GAS)
+        printf("%s: canonical-mir-v1 -> non-PIC ELF GAS assembly only\n",
+            archon_backend_target());
+#else
+        printf("%s: canonical-mir-v1 -> GAS assembly (default or PIC), "
+               "physical-v1 records, or raw machine code "
                "(one function, no imports or globals)\n",
             archon_backend_target());
+#endif
         return ferror(stdout) ? 1 : 0;
     }
     if (argc < 3 || (strcmp(argv[1], "--input") && strcmp(argv[1], "--verify-input"))) {
-        fputs("usage: archon-backend --input PATH|- [--emit-physical|--emit-code] [--schedule-pure] > OUT\n"
+        fputs("usage: archon-backend --input PATH|-"
+#if defined(AN_SCALAR_GAS_PIC)
+              " [--pic]"
+#elif !defined(AN_SCALAR_GAS)
+              " [--emit-physical|--emit-code] [--pic] [--schedule-pure]"
+#endif
+              " > OUT\n"
               "       archon-backend --verify-input PATH|-\n"
               "       archon-backend --list-capabilities\n", stderr);
         return 2;
@@ -38,6 +54,8 @@ int main(int argc, char **argv)
             flags |= ARCHON_BACKEND_MACHINE_CODE;
         else if (!strcmp(argv[i], "--schedule-pure") && !verify)
             flags |= ARCHON_BACKEND_SCHEDULE_PURE;
+        else if (!strcmp(argv[i], "--pic") && !verify)
+            flags |= ARCHON_BACKEND_PIC;
         else {
             fprintf(stderr, "archon-backend: unsupported option %s\n", argv[i]);
             return 2;
@@ -45,6 +63,11 @@ int main(int argc, char **argv)
     }
     if ((flags & ARCHON_BACKEND_PHYSICAL_RECORDS) && (flags & ARCHON_BACKEND_MACHINE_CODE)) {
         fputs("archon-backend: choose one output mode\n", stderr);
+        return 2;
+    }
+    if ((flags & ARCHON_BACKEND_PIC) &&
+            (flags & (ARCHON_BACKEND_PHYSICAL_RECORDS | ARCHON_BACKEND_MACHINE_CODE))) {
+        fputs("archon-backend: PIC requires assembly output\n", stderr);
         return 2;
     }
 #ifdef _WIN32

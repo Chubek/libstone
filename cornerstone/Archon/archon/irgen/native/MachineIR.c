@@ -2,6 +2,39 @@
 
 #include <stdlib.h>
 
+static ANOpcode load_opcode(ArchonMIROpcode op)
+{
+    switch (op) {
+    case ARCHON_MIR_LOAD_S8: return AN_LB;
+    case ARCHON_MIR_LOAD_U8: return AN_LBU;
+    case ARCHON_MIR_LOAD_S16: return AN_LH;
+    case ARCHON_MIR_LOAD_U16: return AN_LHU;
+    case ARCHON_MIR_LOAD_S32: return AN_LW;
+    case ARCHON_MIR_LOAD_U32: return AN_LWU;
+    case ARCHON_MIR_LOAD:
+    case ARCHON_MIR_LOAD_PTR:
+    case ARCHON_MIR_LOAD_FUNC_PTR:
+        return AN_LD;
+    default:
+        return AN_OPCODE_COUNT;
+    }
+}
+
+static ANOpcode store_opcode(ArchonMIROpcode op)
+{
+    switch (op) {
+    case ARCHON_MIR_STORE8: return AN_SB;
+    case ARCHON_MIR_STORE16: return AN_SH;
+    case ARCHON_MIR_STORE32: return AN_SW;
+    case ARCHON_MIR_STORE:
+    case ARCHON_MIR_STORE_PTR:
+    case ARCHON_MIR_STORE_FUNC_PTR:
+        return AN_SD;
+    default:
+        return AN_OPCODE_COUNT;
+    }
+}
+
 /* The verifier establishes the generic SSA contract. Lowering visits blocks
  * in layout order, using the same instruction order that allocation checked.
  * Reserved scratch registers are never assigned as value homes. */
@@ -9,12 +42,17 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ANFrame *frame,
     const ANHome *homes, const ArchonMIRInst *ins, unsigned *next_label)
 {
     unsigned shape = an_shape(ins->op);
+    ANOpcode memory;
     int disp;
     switch (ins->op) {
     case ARCHON_MIR_CONST:
         an_li(out, AN_T2, ins->imm);
         break;
     case ARCHON_MIR_COPY:
+    case ARCHON_MIR_PTR_TO_INT:
+    case ARCHON_MIR_INT_TO_PTR:
+    case ARCHON_MIR_FUNC_PTR_TO_INT:
+    case ARCHON_MIR_INT_TO_FUNC_PTR:
         an_read(out, frame, homes, ins->a, AN_T2);
         break;
     case ARCHON_MIR_PTR_ADD:
@@ -23,16 +61,31 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ANFrame *frame,
         an_emit(out, AN_ADD, AN_T2, AN_T0, AN_T1, 0);
         break;
     case ARCHON_MIR_LOAD:
+    case ARCHON_MIR_LOAD_S8:
+    case ARCHON_MIR_LOAD_U8:
+    case ARCHON_MIR_LOAD_S16:
+    case ARCHON_MIR_LOAD_U16:
+    case ARCHON_MIR_LOAD_S32:
+    case ARCHON_MIR_LOAD_U32:
+    case ARCHON_MIR_LOAD_PTR:
+    case ARCHON_MIR_LOAD_FUNC_PTR:
     case ARCHON_MIR_STORE:
+    case ARCHON_MIR_STORE8:
+    case ARCHON_MIR_STORE16:
+    case ARCHON_MIR_STORE32:
+    case ARCHON_MIR_STORE_PTR:
+    case ARCHON_MIR_STORE_FUNC_PTR:
         /* an_legal admits only signed 12-bit, naturally aligned displacements. */
         disp = ins->imm <= INT32_MAX ? (int)ins->imm :
             -1 - (int)(UINT64_MAX - ins->imm);
         an_read(out, frame, homes, ins->a, AN_T0);
-        if (ins->op == ARCHON_MIR_LOAD)
-            an_load(out, AN_T2, AN_T0, disp);
-        else {
+        memory = load_opcode(ins->op);
+        if (memory == AN_OPCODE_COUNT) {
+            memory = store_opcode(ins->op);
             an_read(out, frame, homes, ins->b, AN_T1);
-            an_store(out, AN_T1, AN_T0, disp);
+            an_emit(out, memory, AN_T1, AN_T0, 0, disp);
+        } else {
+            an_emit(out, memory, AN_T2, AN_T0, 0, disp);
         }
         break;
     case ARCHON_MIR_FRAME_ADDR:

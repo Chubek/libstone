@@ -109,18 +109,27 @@ module RV64IMBackend {
     // A bounded emulator memory does not model the native process address
     // space. V1 has no implicit PC update, breakpoint transition, or
     // relocation semantics. These instructions declare only their encodings.
-    instruction LD {
-        requires feature(I);
-        operands { out rd: GPR; in rs1: GPR; in imm: imm<sint<12>>; }
-        encoding IType {
-            opcode = 0x03;
-            rd = encode_register(rd);
-            funct3 = 3;
-            rs1 = encode_register(rs1);
-            imm = imm;
+    template Rv64Load<Mnemonic: string, Funct3: bits<3>> {
+        instruction self {
+            requires feature(I);
+            operands { out rd: GPR; in rs1: GPR; in imm: imm<sint<12>>; }
+            encoding IType {
+                opcode = 0x03;
+                rd = encode_register(rd);
+                funct3 = Funct3;
+                rs1 = encode_register(rs1);
+                imm = imm;
+            }
+            assembly "{Mnemonic} {rd}, {imm}({rs1})";
         }
-        assembly "ld {rd}, {imm}({rs1})";
     }
+    def LB  = Rv64Load<"lb",  0>;
+    def LH  = Rv64Load<"lh",  1>;
+    def LW  = Rv64Load<"lw",  2>;
+    def LD  = Rv64Load<"ld",  3>;
+    def LBU = Rv64Load<"lbu", 4>;
+    def LHU = Rv64Load<"lhu", 5>;
+    def LWU = Rv64Load<"lwu", 6>;
 
     instruction JALR {
         requires feature(I);
@@ -152,6 +161,6 @@ module RV64IMBackend {
         assembly "ebreak";
     }
 
-    // SD, BEQ, BNE and JAL have scattered immediates. Their GAS forms belong
-    // to the native provider manifest, not the contiguous-field v1 database.
+    // Stores, BEQ, BNE and JAL have scattered immediates. Their GAS forms
+    // belong to the native provider manifest, not the contiguous-field v1 DB.
 }

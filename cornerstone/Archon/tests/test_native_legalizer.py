@@ -18,9 +18,11 @@ CLIENT = r"""
 
 #define CHECK(inst, status) check((inst), ARCHON_BACKEND_##status)
 
-enum { I64, PTR, VOID };
+enum { I64, PTR, FUNC_PTR, VOID };
 
-static const ArchonMIRType types[] = {ARCHON_MIR_I64, ARCHON_MIR_PTR, ARCHON_MIR_VOID};
+static const ArchonMIRType types[] = {
+    ARCHON_MIR_I64, ARCHON_MIR_PTR, ARCHON_MIR_FUNC_PTR, ARCHON_MIR_VOID
+};
 static const ArchonMIRFunction fn = {
     .types = types, .value_count = sizeof types / sizeof *types, .local_count = 2
 };
@@ -70,10 +72,18 @@ int main(void)
     ArchonMIRInst x;
     size_t i;
 
+    assert(ARCHON_MIR_CONST == 1 && ARCHON_MIR_MUL_CHECKED_S == 33);
+    assert(ARCHON_MIR_LOAD_S8 == 34); /* New operations append to v1. */
+    assert(ARCHON_MIR_INT_TO_PTR == 48 && ARCHON_MIR_FUNC_PTR_TO_INT == 49);
     assert(an_shape(ARCHON_MIR_CONST) == 1);
     assert(an_shape(ARCHON_MIR_COPY) == 3);
     assert(an_shape(ARCHON_MIR_PTR_ADD) == 7);
     assert(an_shape(ARCHON_MIR_LOAD) == 3 && an_shape(ARCHON_MIR_STORE) == 6);
+    assert(an_shape(ARCHON_MIR_LOAD_S8) == 3 && an_shape(ARCHON_MIR_STORE8) == 6);
+    assert(an_shape(ARCHON_MIR_LOAD_PTR) == 3 && an_shape(ARCHON_MIR_STORE_PTR) == 6);
+    assert(an_shape(ARCHON_MIR_PTR_TO_INT) == 3 && an_shape(ARCHON_MIR_INT_TO_PTR) == 3);
+    assert(an_shape(ARCHON_MIR_FUNC_PTR_TO_INT) == 3 &&
+           an_shape(ARCHON_MIR_INT_TO_FUNC_PTR) == 3);
     assert(an_shape(ARCHON_MIR_FRAME_ADDR) == 1 && an_shape(ARCHON_MIR_GLOBAL_ADDR) == 1);
     assert(an_shape(ARCHON_MIR_CALL) == 1);
     assert(an_shape((ArchonMIROpcode)0) == 0 && an_shape((ArchonMIROpcode)999) == 0);
@@ -85,6 +95,7 @@ int main(void)
         CHECK(inst(op, PTR, I64, I64), INVALID);
         CHECK(inst(op, I64, PTR, I64), INVALID);
         CHECK(inst(op, I64, I64, PTR), INVALID);
+        CHECK(inst(op, I64, FUNC_PTR, I64), INVALID);
     }
 
     x = inst(ARCHON_MIR_CONST, I64, none, none);
@@ -116,6 +127,90 @@ int main(void)
     CHECK(inst(ARCHON_MIR_STORE, none, I64, I64), INVALID);
     CHECK(inst(ARCHON_MIR_STORE, none, PTR, PTR), INVALID);
     CHECK(inst(ARCHON_MIR_STORE, I64, PTR, I64), INVALID);
+
+    /* Narrow transfer result/source types and width-specific alignment. */
+    for (i = ARCHON_MIR_LOAD_S8; i <= ARCHON_MIR_LOAD_U32; ++i) {
+        ArchonMIROpcode op = (ArchonMIROpcode)i;
+        CHECK(inst(op, I64, PTR, none), OK);
+        CHECK(inst(op, PTR, PTR, none), INVALID);
+        CHECK(inst(op, I64, I64, none), INVALID);
+    }
+    x = inst(ARCHON_MIR_LOAD_S8, I64, PTR, none);
+    x.imm = 2047;
+    CHECK(x, OK);
+    x.imm = UINT64_C(0) - 2048;
+    CHECK(x, OK);
+    x.imm = 2048;
+    CHECK(x, UNSUPPORTED);
+    x = inst(ARCHON_MIR_LOAD_U16, I64, PTR, none);
+    x.imm = 2046;
+    CHECK(x, OK);
+    x.imm = 2047;
+    CHECK(x, INVALID);
+    x.imm = UINT64_C(0) - 2047;
+    CHECK(x, INVALID);
+    x = inst(ARCHON_MIR_LOAD_S32, I64, PTR, none);
+    x.imm = 2044;
+    CHECK(x, OK);
+    x.imm = UINT64_C(0) - 2048;
+    CHECK(x, OK);
+    x.imm = 2046;
+    CHECK(x, INVALID);
+
+    for (i = ARCHON_MIR_STORE8; i <= ARCHON_MIR_STORE32; ++i) {
+        ArchonMIROpcode op = (ArchonMIROpcode)i;
+        CHECK(inst(op, none, PTR, I64), OK);
+        CHECK(inst(op, none, PTR, PTR), INVALID);
+        CHECK(inst(op, none, I64, I64), INVALID);
+    }
+    x = inst(ARCHON_MIR_STORE16, none, PTR, I64);
+    x.imm = UINT64_C(0) - 2;
+    CHECK(x, OK);
+    x.imm = UINT64_MAX;
+    CHECK(x, INVALID);
+    x = inst(ARCHON_MIR_STORE32, none, PTR, I64);
+    x.imm = 2044;
+    CHECK(x, OK);
+    x.imm = 2047;
+    CHECK(x, INVALID);
+
+    CHECK(inst(ARCHON_MIR_LOAD_PTR, PTR, PTR, none), OK);
+    CHECK(inst(ARCHON_MIR_LOAD_PTR, I64, PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_LOAD_FUNC_PTR, FUNC_PTR, PTR, none), OK);
+    CHECK(inst(ARCHON_MIR_LOAD_FUNC_PTR, PTR, PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_STORE_PTR, none, PTR, PTR), OK);
+    CHECK(inst(ARCHON_MIR_STORE_PTR, none, PTR, I64), INVALID);
+    CHECK(inst(ARCHON_MIR_STORE_FUNC_PTR, none, PTR, FUNC_PTR), OK);
+    CHECK(inst(ARCHON_MIR_STORE_FUNC_PTR, none, PTR, PTR), INVALID);
+    x = inst(ARCHON_MIR_LOAD_PTR, PTR, PTR, none);
+    x.imm = 8;
+    CHECK(x, OK);
+    x.imm = 4;
+    CHECK(x, INVALID);
+    x = inst(ARCHON_MIR_STORE_FUNC_PTR, none, PTR, FUNC_PTR);
+    x.imm = UINT64_C(0) - 2048;
+    CHECK(x, OK);
+    x.imm = 2048;
+    CHECK(x, UNSUPPORTED);
+
+    CHECK(inst(ARCHON_MIR_PTR_TO_INT, I64, PTR, none), OK);
+    CHECK(inst(ARCHON_MIR_PTR_TO_INT, PTR, PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_PTR_TO_INT, I64, FUNC_PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_INT_TO_PTR, PTR, I64, none), OK);
+    CHECK(inst(ARCHON_MIR_INT_TO_PTR, I64, I64, none), INVALID);
+    CHECK(inst(ARCHON_MIR_INT_TO_PTR, FUNC_PTR, I64, none), INVALID);
+    CHECK(inst(ARCHON_MIR_FUNC_PTR_TO_INT, I64, FUNC_PTR, none), OK);
+    CHECK(inst(ARCHON_MIR_FUNC_PTR_TO_INT, I64, PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_FUNC_PTR_TO_INT, PTR, FUNC_PTR, none), INVALID);
+    CHECK(inst(ARCHON_MIR_INT_TO_FUNC_PTR, FUNC_PTR, I64, none), OK);
+    CHECK(inst(ARCHON_MIR_INT_TO_FUNC_PTR, PTR, I64, none), INVALID);
+    CHECK(inst(ARCHON_MIR_INT_TO_FUNC_PTR, FUNC_PTR, PTR, none), INVALID);
+    x = inst(ARCHON_MIR_PTR_TO_INT, I64, PTR, none);
+    x.imm = 1;
+    CHECK(x, INVALID);
+    x = inst(ARCHON_MIR_FUNC_PTR_TO_INT, I64, FUNC_PTR, none);
+    x.imm = 1;
+    CHECK(x, INVALID);
 
     x = inst(ARCHON_MIR_FRAME_ADDR, PTR, none, none);
     CHECK(x, OK);
@@ -174,14 +269,18 @@ class NativeLegalizerTests(unittest.TestCase):
         cc = shlex.split(os.environ.get("CC", "cc"))
         if not cc or not shutil.which(cc[0]):
             self.skipTest("C compiler is unavailable")
-        with tempfile.TemporaryDirectory(prefix="archon-native-legalizer-") as tmp:
-            client = Path(tmp) / "client.c"
-            binary = Path(tmp) / "client"
+        build_root = Path("/tmp/opencode")
+        with tempfile.TemporaryDirectory(prefix="archon-native-legalizer-",
+                                         dir=build_root if build_root.is_dir() else None) as tmp:
+            root = Path(tmp)
+            client = root / "client.c"
+            binary = root / "client"
+            (root / "TargetNative.h").write_text("#define AN_RV64_HAS_M 1\n", encoding="ascii")
             client.write_text(CLIENT, encoding="utf-8")
             subprocess.run(
                 [
                     *cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
-                    "-I", str(NATIVE), str(NATIVE / "Legalizer.c"),
+                    "-I", str(NATIVE), "-I", str(root), str(NATIVE / "Legalizer.c"),
                     str(client), "-o", str(binary),
                 ],
                 check=True,

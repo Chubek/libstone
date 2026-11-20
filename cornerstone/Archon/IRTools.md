@@ -33,6 +33,33 @@ make an unsupported legacy emitter target executable.
 | `sandstone` | `bin` (default) or Sandstone `obj` JSON. Supply `--sandstone-bank PATH`, `--sandstone-archml PATH`, or both. `--sandstone-syntax NAME` selects a syntax in the bank. |
 | `archon` | Flat binary from the selected ArchDB's fixed-width instruction subset. It recognizes that database's canonical syntax and file-local labels, not GAS sections, assembler macros, or external references. |
 
+With `--assembler archon`, the portable `Driver.c` defaults to `--dialect
+archon` and emits `Program.archs`. Feed that file to the matching generated
+launcher:
+
+```sh
+generated/Assembler.sh -o fragment.bin -- Program.archs
+```
+
+The portable driver compiles straight-line fragments; register inputs and
+outputs are allocation results, not a function ABI. When multiple databases
+are included, generation's `--target` chooses the linked pipeline and
+assembler target. An explicit instruction from another database is not
+implicitly retargeted, even if its opcode name matches.
+
+The linked allocator enforces register operand ranges such as AMD64’s
+legacy GPR window. This does not add lowering for tied operands, spills,
+calls, branches, or a function return convention.
+
+For Wasm32, JVM and CIL (the CLR stdspec), use explicit target instructions
+with ArchSem models, for example a Gated SSA effect-token chain. Feed the
+assembled bytes to `Target.execute_program_state`, supplying an initial stack
+where needed (e.g. Wasm `drop`). This models individual bytecodes in linear
+order; it does not stackify arbitrary SSA or produce WebAssembly modules,
+JVM class files, or CLR assemblies. Encoding-only instructions may be
+assembled by the standalone codec but are rejected by the stack compilation
+pipeline. These fragments do not use the separate native ABI backend.
+
 The Sandstone choice also emits and registers `AsmOPT.lua`. It runs after
 Sandstone expands source macros, includes, and Lua directives, before
 instruction layout. With an RV64 target and `--sandstone-syntax default`,

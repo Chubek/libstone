@@ -1,0 +1,6 @@
+#ifndef CEPHYR_CLI_FORCED_H
+#define CEPHYR_CLI_FORCED_H
+
+#define CEPHYR_CLI_FORCED_VALUE 17
+
+#endif

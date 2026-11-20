@@ -370,18 +370,10 @@ def _explicit_pattern(instruction, db):
     }
 
 
-def _legacy_registers_supported(instruction):
-    # Legacy MachineIR and its allocator do not carry per-operand register
-    # membership, so neither derived nor explicit patterns can use these forms.
-    return not any("register_range" in operand for operand in instruction["operands"])
-
-
 def _patterns(db):
     rows = []
     pattern_id = 0
     for instruction in sorted(db["instructions"], key=lambda row: row["name"]):
-        if not _legacy_registers_supported(instruction):
-            continue
         patterns = []
         semantic = _semantic_pattern(instruction)
         if semantic is not None:

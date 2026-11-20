@@ -219,7 +219,17 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"mul_checked_s", ARCHON_MIR_MUL_CHECKED_S},
         {"trunc", ARCHON_MIR_TRUNC}, {"zext", ARCHON_MIR_ZEXT}, {"sext", ARCHON_MIR_SEXT},
         {"ptr_add", ARCHON_MIR_PTR_ADD}, {"load", ARCHON_MIR_LOAD},
+        {"load_s8", ARCHON_MIR_LOAD_S8}, {"load_u8", ARCHON_MIR_LOAD_U8},
+        {"load_s16", ARCHON_MIR_LOAD_S16}, {"load_u16", ARCHON_MIR_LOAD_U16},
+        {"load_s32", ARCHON_MIR_LOAD_S32}, {"load_u32", ARCHON_MIR_LOAD_U32},
+        {"load_ptr", ARCHON_MIR_LOAD_PTR}, {"load_func_ptr", ARCHON_MIR_LOAD_FUNC_PTR},
         {"store", ARCHON_MIR_STORE}, {"frame_addr", ARCHON_MIR_FRAME_ADDR},
+        {"store8", ARCHON_MIR_STORE8}, {"store16", ARCHON_MIR_STORE16},
+        {"store32", ARCHON_MIR_STORE32}, {"store_ptr", ARCHON_MIR_STORE_PTR},
+        {"store_func_ptr", ARCHON_MIR_STORE_FUNC_PTR},
+        {"ptr_to_int", ARCHON_MIR_PTR_TO_INT}, {"int_to_ptr", ARCHON_MIR_INT_TO_PTR},
+        {"func_ptr_to_int", ARCHON_MIR_FUNC_PTR_TO_INT},
+        {"int_to_func_ptr", ARCHON_MIR_INT_TO_FUNC_PTR},
         {"global_addr", ARCHON_MIR_GLOBAL_ADDR}, {"call", ARCHON_MIR_CALL},
         {"func_addr", ARCHON_MIR_FUNC_ADDR}, {"call_indirect", ARCHON_MIR_CALL_INDIRECT}
     };
@@ -242,7 +252,20 @@ static int inst(Parser *p, ArchonMIRInst *ins)
     switch (ins->op) {
     case ARCHON_MIR_CONST:
     case ARCHON_MIR_LOAD:
+    case ARCHON_MIR_LOAD_S8:
+    case ARCHON_MIR_LOAD_U8:
+    case ARCHON_MIR_LOAD_S16:
+    case ARCHON_MIR_LOAD_U16:
+    case ARCHON_MIR_LOAD_S32:
+    case ARCHON_MIR_LOAD_U32:
+    case ARCHON_MIR_LOAD_PTR:
+    case ARCHON_MIR_LOAD_FUNC_PTR:
     case ARCHON_MIR_STORE:
+    case ARCHON_MIR_STORE8:
+    case ARCHON_MIR_STORE16:
+    case ARCHON_MIR_STORE32:
+    case ARCHON_MIR_STORE_PTR:
+    case ARCHON_MIR_STORE_FUNC_PTR:
     case ARCHON_MIR_FRAME_ADDR:
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:

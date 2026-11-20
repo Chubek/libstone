@@ -74,16 +74,16 @@ class ABIFactsV2Tests(unittest.TestCase):
             "unallocatable": [5, 6, 7],
         })
 
-    def test_no_new_native_qualification_and_unchanged_rv64im(self):
-        for db in (self.arm, self.amd, self.pdp):
-            with self.subTest(arch=db["architecture"]), self.assertRaisesRegex(
-                ArchonError, "architecture is",
-            ):
-                resolve_native_target(db)
+    def test_native_qualification_and_canonical_rv64im(self):
+        for db in (self.arm, self.amd):
+            with self.subTest(arch=db["architecture"]):
+                self.assertEqual(resolve_native_target(db)[ABI], db[ABI])
+        with self.assertRaisesRegex(ArchonError, "architecture is"):
+            resolve_native_target(self.pdp)
         legacy = compile_file(STDSPEC / "riscv/rv64im.arch")
         text = database.dumps(legacy)
         self.assertEqual(sha256(text.encode("ascii")).hexdigest(),
-                         "bb6494cdce96de6df80c3a2bbd5cb134617e14e4827ca318d1f999f958cb91cb")
+                         "b5dbe17dee2c0fa522d17fc1546aa73e09a8f68726f7d725f5f42569b5f5abc5")
         self.assertNotIn(ABI, legacy)
         self.assertEqual(resolve_native_target(legacy)["abi_facts"], legacy["abi_facts"])
         del legacy["abi_facts"]

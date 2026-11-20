@@ -448,7 +448,7 @@ def _parser():
     )
     irgen.add_argument(
         "--abi", metavar="ABI",
-        help="native backend ABI (currently LP64 only)",
+        help="native backend ABI name (LP64, SysVAMD64, or AAPCS64, depending on target)",
     )
     irgen.add_argument(
         "--assembler", choices=_IRGEN_ASSEMBLERS,

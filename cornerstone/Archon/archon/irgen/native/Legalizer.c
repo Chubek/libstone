@@ -1,4 +1,5 @@
 #include "NativeInternal.h"
+#include "TargetNative.h"
 
 enum { HAS_DST = 1u, HAS_A = 2u, HAS_B = 4u };
 
@@ -13,12 +14,29 @@ unsigned an_shape(ArchonMIROpcode op)
         return HAS_DST;
     case ARCHON_MIR_COPY:
     case ARCHON_MIR_LOAD:
+    case ARCHON_MIR_LOAD_S8:
+    case ARCHON_MIR_LOAD_U8:
+    case ARCHON_MIR_LOAD_S16:
+    case ARCHON_MIR_LOAD_U16:
+    case ARCHON_MIR_LOAD_S32:
+    case ARCHON_MIR_LOAD_U32:
+    case ARCHON_MIR_LOAD_PTR:
+    case ARCHON_MIR_LOAD_FUNC_PTR:
+    case ARCHON_MIR_PTR_TO_INT:
+    case ARCHON_MIR_INT_TO_PTR:
+    case ARCHON_MIR_FUNC_PTR_TO_INT:
+    case ARCHON_MIR_INT_TO_FUNC_PTR:
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:
     case ARCHON_MIR_CALL_INDIRECT: /* Optional destination, func_ptr callee in a. */
         return HAS_DST | HAS_A;
     case ARCHON_MIR_STORE:
+    case ARCHON_MIR_STORE8:
+    case ARCHON_MIR_STORE16:
+    case ARCHON_MIR_STORE32:
+    case ARCHON_MIR_STORE_PTR:
+    case ARCHON_MIR_STORE_FUNC_PTR:
         return HAS_A | HAS_B;
     case ARCHON_MIR_ADD:
     case ARCHON_MIR_SUB:
@@ -58,11 +76,11 @@ static int is_value_type(ArchonMIRType type)
     return type == ARCHON_MIR_I64 || type == ARCHON_MIR_PTR || type == ARCHON_MIR_FUNC_PTR;
 }
 
-static int legal_displacement(ANContext *ctx, uint64_t imm)
+static int legal_displacement(ANContext *ctx, uint64_t imm, unsigned alignment)
 {
-    if ((imm & UINT64_C(7)) != 0)
+    if ((imm & (alignment - 1u)) != 0)
         return an_error(ctx, ARCHON_BACKEND_INVALID,
-                        "memory displacement must be a multiple of 8 bytes");
+                        "memory displacement does not satisfy access alignment");
     /* Compare two's-complement bit patterns without an out-of-range cast. */
     if (imm > UINT64_C(2047) && imm < UINT64_MAX - UINT64_C(2047))
         return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED,
@@ -73,6 +91,58 @@ static int legal_displacement(ANContext *ctx, uint64_t imm)
 static int is_conversion(ArchonMIROpcode op)
 {
     return op == ARCHON_MIR_TRUNC || op == ARCHON_MIR_ZEXT || op == ARCHON_MIR_SEXT;
+}
+
+static int is_memory(ArchonMIROpcode op)
+{
+    switch (op) {
+    case ARCHON_MIR_LOAD:
+    case ARCHON_MIR_LOAD_S8:
+    case ARCHON_MIR_LOAD_U8:
+    case ARCHON_MIR_LOAD_S16:
+    case ARCHON_MIR_LOAD_U16:
+    case ARCHON_MIR_LOAD_S32:
+    case ARCHON_MIR_LOAD_U32:
+    case ARCHON_MIR_LOAD_PTR:
+    case ARCHON_MIR_LOAD_FUNC_PTR:
+    case ARCHON_MIR_STORE:
+    case ARCHON_MIR_STORE8:
+    case ARCHON_MIR_STORE16:
+    case ARCHON_MIR_STORE32:
+    case ARCHON_MIR_STORE_PTR:
+    case ARCHON_MIR_STORE_FUNC_PTR:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int legal_integer_operation(ANContext *ctx, ArchonMIROpcode op)
+{
+#if !defined(AN_SCALAR_GAS)
+    if (!AN_RV64_HAS_M) {
+        switch (op) {
+        case ARCHON_MIR_DIV_S:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "div_s is unsupported without M (RV64I)");
+        case ARCHON_MIR_REM_S:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "rem_s is unsupported without M (RV64I)");
+        case ARCHON_MIR_DIV_U:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "div_u is unsupported without M (RV64I)");
+        case ARCHON_MIR_REM_U:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "rem_u is unsupported without M (RV64I)");
+        case ARCHON_MIR_DIV_CHECKED_S:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "div_checked_s is unsupported without M (RV64I)");
+        case ARCHON_MIR_MUL_CHECKED_S:
+            return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "mul_checked_s is unsupported without M (RV64I)");
+        default:
+            break;
+        }
+    }
+#else
+    (void)ctx;
+    (void)op;
+#endif
+    return 1;
 }
 
 /* The verifier checks value table bounds and SSA, and resolves symbols and
@@ -107,7 +177,7 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     }
 
     if (op != ARCHON_MIR_CONST && op != ARCHON_MIR_FRAME_ADDR &&
-            op != ARCHON_MIR_LOAD && op != ARCHON_MIR_STORE &&
+            !is_memory(op) &&
             !is_conversion(op) && inst->imm != 0)
         return an_error(ctx, ARCHON_BACKEND_INVALID, "unexpected immediate operand");
 
@@ -140,11 +210,84 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     case ARCHON_MIR_LOAD:
         if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_PTR)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "LOAD requires (ptr) -> i64");
-        return legal_displacement(ctx, inst->imm);
+        return legal_displacement(ctx, inst->imm, 8);
+    case ARCHON_MIR_LOAD_S8:
+    case ARCHON_MIR_LOAD_U8:
+        if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "narrow load requires (ptr) -> i64");
+        return legal_displacement(ctx, inst->imm, 1);
+    case ARCHON_MIR_LOAD_S16:
+    case ARCHON_MIR_LOAD_U16:
+        if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "narrow load requires (ptr) -> i64");
+        return legal_displacement(ctx, inst->imm, 2);
+    case ARCHON_MIR_LOAD_S32:
+    case ARCHON_MIR_LOAD_U32:
+        if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "narrow load requires (ptr) -> i64");
+        return legal_displacement(ctx, inst->imm, 4);
+    case ARCHON_MIR_LOAD_PTR:
+        if (dst != ARCHON_MIR_PTR || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "LOAD_PTR requires (ptr) -> ptr");
+        return legal_displacement(ctx, inst->imm, 8);
+    case ARCHON_MIR_LOAD_FUNC_PTR:
+        if (dst != ARCHON_MIR_FUNC_PTR || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "LOAD_FUNC_PTR requires (ptr) -> func_ptr");
+        return legal_displacement(ctx, inst->imm, 8);
     case ARCHON_MIR_STORE:
         if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_I64)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "STORE requires (ptr, i64)");
-        return legal_displacement(ctx, inst->imm);
+        return legal_displacement(ctx, inst->imm, 8);
+    case ARCHON_MIR_STORE8:
+        if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "STORE8 requires (ptr, i64)");
+        return legal_displacement(ctx, inst->imm, 1);
+    case ARCHON_MIR_STORE16:
+        if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "STORE16 requires (ptr, i64)");
+        return legal_displacement(ctx, inst->imm, 2);
+    case ARCHON_MIR_STORE32:
+        if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "STORE32 requires (ptr, i64)");
+        return legal_displacement(ctx, inst->imm, 4);
+    case ARCHON_MIR_STORE_PTR:
+        if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "STORE_PTR requires (ptr, ptr)");
+        return legal_displacement(ctx, inst->imm, 8);
+    case ARCHON_MIR_STORE_FUNC_PTR:
+        if (a != ARCHON_MIR_PTR || b != ARCHON_MIR_FUNC_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "STORE_FUNC_PTR requires (ptr, func_ptr)");
+        return legal_displacement(ctx, inst->imm, 8);
+    case ARCHON_MIR_PTR_TO_INT:
+        if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "PTR_TO_INT requires (ptr) -> i64");
+        return 1;
+    case ARCHON_MIR_INT_TO_PTR:
+        if (dst != ARCHON_MIR_PTR || a != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "INT_TO_PTR requires (i64) -> ptr");
+        return 1;
+    case ARCHON_MIR_FUNC_PTR_TO_INT:
+        if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_FUNC_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "FUNC_PTR_TO_INT requires (func_ptr) -> i64");
+        return 1;
+    case ARCHON_MIR_INT_TO_FUNC_PTR:
+        if (dst != ARCHON_MIR_FUNC_PTR || a != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "INT_TO_FUNC_PTR requires (i64) -> func_ptr");
+        return 1;
     case ARCHON_MIR_FRAME_ADDR:
         if (dst != ARCHON_MIR_PTR)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "FRAME_ADDR requires a ptr destination");
@@ -189,7 +332,7 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     case ARCHON_MIR_MUL_CHECKED_S:
         if (dst != ARCHON_MIR_I64 || a != ARCHON_MIR_I64 || b != ARCHON_MIR_I64)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "integer operation requires (i64, i64) -> i64");
-        return 1;
+        return legal_integer_operation(ctx, op);
     default:
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "missing legality rule for MIR opcode");
     }

@@ -23,13 +23,14 @@ class NativeRegalloc(unittest.TestCase):
             root = Path(directory)
             source = root / "test.c"
             source.write_text(SOURCE, encoding="ascii")
+            (root / "TargetNative.h").write_text("#define AN_RV64_HAS_M 1\n", encoding="ascii")
             abi = write_native_abi(root)
             names = ("ABI", "FrameLowering", "Legalizer", "NativeHomes", "NativeRegalloc",
                      "NativeVerify")
             executable = root / "test"
             subprocess.run(
                 [*cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-pedantic",
-                 "-I", str(NATIVE), *(str(NATIVE / f"{name}.c") for name in names),
+                 "-I", str(NATIVE), "-I", str(root), *(str(NATIVE / f"{name}.c") for name in names),
                  str(abi), str(source), "-o", str(executable)],
                 check=True,
             )

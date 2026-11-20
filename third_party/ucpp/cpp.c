@@ -69,7 +69,9 @@ static char *system_macros_def[] = { STD_MACROS, 0 };
 static char *system_assertions_def[] = { STD_ASSERT, 0 };
 #endif
 
+/* The logical display name and physical path can differ after #line. */
 char *current_filename = 0, *current_long_filename = 0;
+static char *initial_physical_filename;
 static int current_incdir = -1;
 
 #ifndef NO_UCPP_ERROR_FUNCTIONS
@@ -297,7 +299,8 @@ void set_init_filename(char *x, int real_file)
 {
 	if (current_filename) freemem(current_filename);
 	current_filename = sdup(x);
-	current_long_filename = 0;
+	if (initial_physical_filename) freemem(initial_physical_filename);
+	current_long_filename = initial_physical_filename = sdup(x);
 	current_incdir = -1;
 	if (real_file) {
 		protect_detect.macro = 0;
@@ -402,6 +405,10 @@ static void restore_lexer_state(struct lexer_state *ls,
 	ls->ebuf = lsbak->ebuf;
 	ls->pbuf = lsbak->pbuf;
 	ls->nlka = lsbak->nlka;
+	ls->lka[0] = lsbak->lka[0];
+	ls->lka[1] = lsbak->lka[1];
+	ls->macfile = lsbak->macfile;
+	ls->last = lsbak->last;
 	ls->discard = lsbak->discard;
 	ls->line = lsbak->line;
 	ls->oline = lsbak->oline;
@@ -538,22 +545,48 @@ void free_lexer_state(struct lexer_state *ls)
 }
 
 /*
+ * Quote a logical filename for a linemarker or the __FILE__ string literal.
+ */
+char *quote_filename(const char *filename)
+{
+	const unsigned char *s = (const unsigned char *)filename;
+	char *quoted = getmem(4 * strlen(filename) + 3), *d = quoted;
+
+	*d ++ = '"';
+	for (; *s; s ++) {
+		unsigned c = *s;
+		if (c == '"' || c == '\\' || c == '?') {
+			*d ++ = '\\';
+			*d ++ = c;
+		} else if (c < 32 || c == 127) {
+			*d ++ = '\\';
+			*d ++ = '0' + ((c >> 6) & 7);
+			*d ++ = '0' + ((c >> 3) & 7);
+			*d ++ = '0' + (c & 7);
+		} else *d ++ = c;
+	}
+	*d ++ = '"';
+	*d = 0;
+	return quoted;
+}
+
+/*
  * Print line information.
  */
 static void print_line_info(struct lexer_state *ls, unsigned long flags)
 {
-	char *fn = current_long_filename ?
-		current_long_filename : current_filename;
+	char *fn = quote_filename(current_filename);
 	char *b, *d;
 
 	b = getmem(50 + strlen(fn));
 	if (flags & GCC_LINE_NUM) {
-		sprintf(b, "# %ld \"%s\"\n", ls->line, fn);
+		sprintf(b, "# %ld %s\n", ls->line, fn);
 	} else {
-		sprintf(b, "#line %ld \"%s\"\n", ls->line, fn);
+		sprintf(b, "#line %ld %s\n", ls->line, fn);
 	}
 	for (d = b; *d; d ++) put_char(ls, (unsigned char)(*d));
 	freemem(b);
+	freemem(fn);
 }
 
 /*
@@ -568,8 +601,7 @@ static void print_line_info(struct lexer_state *ls, unsigned long flags)
  */
 int enter_file(struct lexer_state *ls, unsigned long flags)
 {
-	char *fn = current_long_filename ?
-		current_long_filename : current_filename;
+	char *fn = current_filename;
 
 	if (!(flags & LINE_NUM)) return 0;
 	if ((flags & LEXER) && !(flags & TEXT_OUTPUT)) {
@@ -708,6 +740,19 @@ static FILE *find_file(char *name, int localdir)
 			ff = HTT_get(&found_files, s);
 		} else ff = HTT_get(&found_files, name);
 	}
+	/* A cached angle include must not hide a file beside the includer. */
+	if (localdir && !ff &&
+#ifdef UCPP_MMAP
+		(f = fopen_mmap_file(s ? s : name))
+#else
+		(f = fopen(s ? s : name, "r"))
+#endif
+		) {
+		protect_detect.ff = new_found_file();
+		nffa = 1;
+		lf = 1;
+		goto found_file;
+	}
 	if (!ff) {
 		struct found_file_sys *ffs = HTT_get(&found_files_sys, name);
 
@@ -728,16 +773,6 @@ static FILE *find_file(char *name, int localdir)
 	 */
 	protect_detect.ff = new_found_file();
 	nffa = 1;
-	if (localdir &&
-#ifdef UCPP_MMAP
-		(f = fopen_mmap_file(s ? s : name))
-#else
-		(f = fopen(s ? s : name, "r"))
-#endif
-		) {
-		lf = 1;
-		goto found_file;
-	}
 	/*
 	 * If s contains a name, that name is now irrelevant: it was a
 	 * filename for a search in the current directory, and the file
@@ -1340,13 +1375,14 @@ include_macro2:
 	if ((size_t)x >= tf2.nt) goto include_macro_err;
 	if (tf2.t[x].type == STRING) {
 		if (y != x) goto include_macro_err;
-		if (tf2.t[x].name[0] == 'L') {
+		if (tf2.t[x].name[0] != '"') {
+			size_t prefix = strchr(tf2.t[x].name, '"') - tf2.t[x].name;
 			if (ls->flags & WARN_STANDARD)
-				warning(l, "wide string for #include");
+				warning(l, "prefixed string for #include");
 			fname = sdup(tf2.t[x].name);
 			nl = strlen(fname);
 			*(fname + nl - 1) = 0;
-			mmvwo(fname, fname + 2, nl - 2);
+			mmvwo(fname, fname + prefix + 1, nl - prefix - 1);
 		} else {
 			fname = sdup(tf2.t[x].name);
 			nl = strlen(fname);
@@ -1426,7 +1462,8 @@ do_include_next:
 #else
 	ls->input = f;
 #endif
-	current_filename = fname;
+	freemem(fname);
+	current_filename = sdup(current_long_filename);
 	enter_file(ls, flags);
 	return 0;
 
@@ -1434,9 +1471,57 @@ do_include_next:
 #undef right_angle
 }
 
-/*
- * for #line directives
- */
+/* Decode the string literal from #line just once, not on every use. */
+static void decode_line_filename(char *filename)
+{
+	char *read = filename, *write = filename;
+	while (*read) {
+		unsigned c = (unsigned char)*read ++;
+		if (c == '\\' && *read) {
+			c = (unsigned char)*read ++;
+			switch (c) {
+			case 'a': c = '\a'; break;
+			case 'b': c = '\b'; break;
+			case 'f': c = '\f'; break;
+			case 'n': c = '\n'; break;
+			case 'r': c = '\r'; break;
+			case 't': c = '\t'; break;
+			case 'v': c = '\v'; break;
+			case 'x': {
+				unsigned value = 0;
+				int count = 0;
+				for (;;) {
+					unsigned h = (unsigned char)*read;
+					if (h >= '0' && h <= '9') h -= '0';
+					else if (h >= 'a' && h <= 'f') h -= 'a' - 10;
+					else if (h >= 'A' && h <= 'F') h -= 'A' - 10;
+					else break;
+					value = (value * 16 + h) & 255;
+					read ++;
+					count = 1;
+				}
+				if (count) c = value;
+				break;
+			}
+			default:
+				if (c >= '0' && c <= '7') {
+					int count;
+					c -= '0';
+					for (count = 1; count < 3 && *read >= '0'
+						&& *read <= '7'; count ++)
+						c = (c * 8 + (*read ++ - '0')) & 255;
+				}
+				break;
+			}
+		}
+		/* Filenames cannot contain an embedded NUL. */
+		if (c == 0) break;
+		*write ++ = c;
+	}
+	*write = 0;
+}
+
+/* for #line directives */
 static int handle_line(struct lexer_state *ls, unsigned long flags)
 {
 	char *fname;
@@ -1514,20 +1599,22 @@ static int handle_line(struct lexer_state *ls, unsigned long flags)
 				error(l, "not a valid filename for #line");
 				goto line_macro_err;
 			}
-			if (tf2.t[i].name[0] == 'L') {
+			if (tf2.t[i].name[0] != '"') {
+				size_t prefix = strchr(tf2.t[i].name, '"') - tf2.t[i].name;
 				if (ls->flags & WARN_STANDARD) {
-					warning(l, "wide string for #line");
+					warning(l, "prefixed string for #line");
 				}
 				fname = sdup(tf2.t[i].name);
 				nl = strlen(fname);
 				*(fname + nl - 1) = 0;
-				mmvwo(fname, fname + 2, nl - 2);
+				mmvwo(fname, fname + prefix + 1, nl - prefix - 1);
 			} else {
 				fname = sdup(tf2.t[i].name);
 				nl = strlen(fname);
 				*(fname + nl - 1) = 0;
 				mmvwo(fname, fname + 1, nl - 1);
 			}
+			decode_line_filename(fname);
 			if (current_filename) freemem(current_filename);
 			current_filename = fname;
 		}
@@ -1678,6 +1765,18 @@ static void handle_pragma(struct lexer_state *ls)
 }
 
 /*
+ * Assembler comments have no CPP tokens after their leading '#'.
+ */
+static void copy_assembly_comment(struct lexer_state *ls)
+{
+	int c;
+	while ((c = grap_char(ls)) >= 0 && c != '\n') {
+		if (ls->condcomp) put_char(ls, c);
+		discard_char(ls);
+	}
+}
+
+/*
  * We saw a # at the beginning of a line (or preceeded only by whitespace).
  * We check the directive name and act accordingly.
  */
@@ -1697,6 +1796,20 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 
 	save_flags = ls->flags;
 	ls->flags |= LEXER;
+	if (save_flags & ASSEMBLY_INPUT) {
+		int c;
+		while (space_char(c = grap_char(ls))) discard_char(ls);
+		if (c != '\n' && c != '/' && c != '_' &&
+			!(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z')) {
+			if (ls->condcomp && !(save_flags & LEXER)) {
+				char *prefix = operators_name[sharp_type];
+				while (*prefix) put_char(ls, *prefix ++);
+				if (c >= 0) put_char(ls, ' ');
+			}
+			copy_assembly_comment(ls);
+			goto handle_exit3;
+		}
+	}
 	while (!next_token(ls)) {
 		int t = ls->ctok->type;
 
@@ -1722,15 +1835,9 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 		case NAME:
 			break;
 		default:
+			if (save_flags & ASSEMBLY_INPUT)
+				goto assembly_comment;
 			if (ls->flags & FAIL_SHARP) {
-                                /* LPS 20050602 - ignores '#!' if on the first line */
-                                if( ( l == 1 ) &&
-                                    ( ls->condcomp ) )
-                                {
-					ret = 1;
-                                }
-                                else
-                                /* LPS 20050602 */
 				if (ls->condcomp) {
 					error(l, "rogue '#'");
 					ret = 1;
@@ -1893,6 +2000,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				ret = handle_unassert(ls);
 				goto handle_exit;
 			}
+			if (save_flags & ASSEMBLY_INPUT)
+				goto assembly_comment;
 		} else {
 			if (!strcmp(ls->ctok->name, "else")) {
 				if (condfval(ls->ifnest - 1)
@@ -1962,6 +2071,20 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 	}
 	return 1;
 
+assembly_comment:
+	if (ls->condcomp && !(save_flags & LEXER)) {
+		char *prefix = operators_name[sharp_type];
+		char *token = token_name(ls->ctok);
+
+		ls->flags = save_flags;
+		while (*prefix) put_char(ls, *prefix ++);
+		put_char(ls, ' ');
+		while (*token) put_char(ls, *token ++);
+		copy_assembly_comment(ls);
+		goto handle_exit3;
+	}
+	goto handle_warp_ign;
+
 handle_warp_ign:
 	while (!next_token(ls)) if (ls->ctok->type == NEWLINE) break;
 	goto handle_exit;
@@ -2023,7 +2146,7 @@ int cpp(struct lexer_state *ls)
 		}
 		if (ls->ifnest) {
 			error(ls->line, "unterminated #if construction "
-				"(depth %ld)", ls->ifnest);
+				"(depth %d)", ls->ifnest);
 			r = CPPERR_NEST;
 		}
 		if (ls_depth == 0) return CPPERR_EOF;
@@ -2083,6 +2206,9 @@ int cpp(struct lexer_state *ls)
 			return r ? r : x;
 		}
 	}
+	if ((ls->flags & ASSEMBLY_INPUT) && !(ls->flags & LEXER)
+		&& (ls->ctok->type == SHARP || ls->ctok->type == DSHARP))
+		copy_assembly_comment(ls);
 	if (ls->ctok->type == NEWLINE) ls->ltwnl = 1;
 	else if (!ttWHI(ls->ctok->type)) ls->ltwnl = 0;
 	return r ? r : -1;
@@ -2283,6 +2409,8 @@ void wipeout()
 	init_lexer_state(&ls);
 	while (ls_depth > 0) pop_file_context(&ls);
 	free_lexer_state(&ls);
+	if (initial_physical_filename) freemem(initial_physical_filename);
+	initial_physical_filename = 0;
 	free_lexer_state(&dsharp_lexer);
 #ifdef PRAGMA_TOKENIZE
 	free_lexer_state(&tokenize_lexer);

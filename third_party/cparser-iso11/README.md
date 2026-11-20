@@ -27,6 +27,26 @@ like for example `test/cpp_out_example.c`, and to finish the `GenCVisitor` imple
 
 Thank you for your interest in my project. Any feedback would be highly appreciated!
 
+## Cephyr embedding changes
+
+Cephyr feeds the lexer in-memory preprocessed C. An installed per-instance
+diagnostic callback receives lexing, parsing, and semantic diagnostics without
+redirecting process streams. A fatal diagnostic stops the translation unit;
+the parser owns incomplete as well as successful ASTs. A nesting limit bounds
+recursive grammar calls.
+
+The integration preserves RV64 LP64 integer widths/ranks, literal spellings,
+declaration storage flags, typedef scopes, parameter names and function
+prototype/variadic information. `CompoundStmtASTNode::getItems()` is the
+source-ordered view used for lowering. Named array declarators retain bounds
+outermost-first; the AST represents `_Static_assert` without evaluating it.
+
+This is not a complete C11 front end or ABI checker. Unsupported productions
+include complex parenthesized declarators (such as pointers to arrays),
+general enum initializer expressions, designators, `_Generic`, atomic and
+thread-local declarations, GNU attributes, and inline assembly. The native
+lowerer has additional restrictions independent of the syntax accepted here.
+See `cornerstone/Cephyr/tests/parser.cpp` for AST and diagnostic regressions.
 
 ## References
 

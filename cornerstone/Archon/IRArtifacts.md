@@ -274,16 +274,22 @@ The runtime never preprocesses its inputs. Native generation publishes
 ABI, and separately versioned public API and MachineIR schema. It does not
 publish `MIR.i` or any of the legacy artifacts described above.
 
-The `--emit-physical` driver option writes `archon-physical 1`, the target name
+The RV64 `--emit-physical` driver option writes `archon-physical 1`, the target name
 and ArchDB SHA-256, then functions, labels, physical instructions, symbolic
 branch/call/address records and data definitions. Symbolic transfers are
 retained until the assembler/linker resolves them; the stream ends with `end`.
 This format is for inspection, not a compiler restart point.
 
 `--emit-code` is an alternative output mode for a single function with no
-imports or globals. It returns plain RV64IM instruction bytes starting at the
-entry point, not a serialized MachineIR artifact or an ELF container. See
+imports or globals. It returns raw bytes for the generated RV64I or RV64IM
+profile, starting at the entry point, not a MachineIR artifact or ELF container. See
 [BinaryEmission.md](BinaryEmission.md#raw-instruction-bytes).
+
+`--pic` applies only to GAS assembly. On RV64 it emits `.option pic` and uses
+`la` for data and function addresses. It cannot be combined with
+`--emit-physical` or `--emit-code`, whose formats do not carry external GOT
+relocations. [AMD64 and AArch64](NativeScalarGAS.md) reject both alternate
+formats; AMD64 supports GAS PIC using GOTPCREL and PLT.
 
 The generated target facts carry declared ABI v1 or v2 as JSON. The optional
 `ARCHON_TARGET_OPERAND_REGISTER_RANGE` callback reports explicitly bounded

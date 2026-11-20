@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -148,7 +149,10 @@ enum ASTNodeKind
     NK_ARRAY_TYPE,
     NK_STRUCT_TYPE,
     NK_UNKNOWN_TYPE,
-    NK_UNION_TYPE
+    NK_UNION_TYPE,
+
+    NK_STATIC_ASSERT,
+    NK_UNARY_PLUS_EXPR
 };
 
 class AbstractSyntaxTree;
@@ -156,6 +160,12 @@ class TreeVisitor;
 
 class ASTNode
 {
+    friend class AbstractSyntaxTree;
+    static thread_local AbstractSyntaxTree *allocationTree;
+    AbstractSyntaxTree *owner = nullptr;
+    std::size_t ownerIndex = 0;
+    void trackAllocation();
+
 protected:
     ASTNodeKind kind;
     int lineNum;
@@ -164,6 +174,7 @@ protected:
 
 public:
     ASTNodeKind getKind() { return kind; }
+    static AbstractSyntaxTree *setAllocationTree(AbstractSyntaxTree *);
 
     ASTNode()
     {
@@ -171,6 +182,7 @@ public:
         refCount = 0;
         lineNum = 0;
         kind = NK_UNKNOWN;
+        trackAllocation();
     }
 
     ASTNode(ASTNodeKind Kind)
@@ -179,10 +191,14 @@ public:
         kind = Kind;
         refCount = 0;
         lineNum = 0;
+        trackAllocation();
     }
 
+    ASTNode(const ASTNode &) = delete;
+    ASTNode &operator=(const ASTNode &) = delete;
+
     // Virtual destructor
-    virtual ~ASTNode() {}
+    virtual ~ASTNode();
 
     int getLineNum() { return lineNum; }
     void setLineNum(int LineNum) { lineNum = LineNum; }
@@ -190,9 +206,9 @@ public:
     void setFlags(unsigned Flags) { flags = Flags; }
 
     // Virtual functions
-    virtual void declare(AbstractSyntaxTree *ast) {}
-    virtual STType *checkType(AbstractSyntaxTree *ast) { return nullptr; }
-    virtual void accept(TreeVisitor *v) {}
+    virtual void declare(AbstractSyntaxTree *) {}
+    virtual STType *checkType(AbstractSyntaxTree *) { return nullptr; }
+    virtual void accept(TreeVisitor *) {}
 
     bool isType()
     {
@@ -213,8 +229,6 @@ public:
 // Singleton class
 class NullASTNode : public ASTNode
 {
-    static NullASTNode *s_instance;
-
 public:
     NullASTNode() { kind = NK_UNKNOWN; }
 
@@ -222,12 +236,7 @@ public:
 
     void accept(TreeVisitor *v);
 
-    static NullASTNode *getInstance()
-    {
-        if (!s_instance)
-            s_instance = new NullASTNode();
-        return s_instance;
-    }
+    static NullASTNode *getInstance();
 };
 
 #define NULL_AST_NODE NullASTNode::getInstance()
@@ -258,16 +267,19 @@ public:
 
 class IntegerConstASTNode : public ASTNode
 {
-    int _value;
+    std::uint64_t _value;
+    std::string _spelling;
 
 public:
-    IntegerConstASTNode(int VALUE)
+    IntegerConstASTNode(std::uint64_t VALUE, std::string Spelling = {})
     {
         _value = VALUE;
+        _spelling = std::move(Spelling);
         kind = NK_INTEGER_CONST;
     }
 
-    int getValue() { return _value; }
+    std::uint64_t getValue() const { return _value; }
+    const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -275,16 +287,19 @@ public:
 
 class RealConstASTNode : public ASTNode
 {
-    int _value;
+    long double _value;
+    std::string _spelling;
 
 public:
-    RealConstASTNode(int VALUE)
+    RealConstASTNode(long double VALUE, std::string Spelling = {})
     {
         _value = VALUE;
+        _spelling = std::move(Spelling);
         kind = NK_REAL_CONST;
     }
 
-    float getValue() { return _value; }
+    long double getValue() const { return _value; }
+    const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -293,14 +308,18 @@ public:
 class StringConstASTNode : public ASTNode
 {
     std::string _value;
+    std::string _spelling;
 public:
-    StringConstASTNode(const std::string &val)
+    StringConstASTNode(std::string val, std::string spelling = {})
     {
-        _value = val;
+        _value = std::move(val);
+        _spelling = std::move(spelling);
         kind = NK_STRING_CONST;
     }
 
     const char *getValue() { return _value.c_str(); }
+    const std::string &getBytes() const { return _value; }
+    const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -309,17 +328,45 @@ public:
 class CharConstASTNode : public ASTNode
 {
     int _value;
+    std::string _spelling;
 
 public:
-    CharConstASTNode(int VALUE)
+    CharConstASTNode(int VALUE, std::string Spelling = {})
     {
         _value = VALUE;
+        _spelling = std::move(Spelling);
         kind = NK_CHAR_CONST;
     }
 
     int getValue() { return _value; }
+    const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);
+    void accept(TreeVisitor *v);
+};
+
+class StaticAssertASTNode : public ASTNode
+{
+    ASTNode *_expr;
+    ASTNode *_message;
+
+public:
+    StaticAssertASTNode(ASTNode *expr, StringConstASTNode *message)
+    {
+        kind = NK_STATIC_ASSERT;
+        ASSIGN_AST_NODE_REF(_expr, expr);
+        ASSIGN_AST_NODE_REF(_message, message);
+    }
+    ~StaticAssertASTNode()
+    {
+        DELETE_AST_NODE_REF(_expr);
+        DELETE_AST_NODE_REF(_message);
+    }
+    ASTNode *getExpr() const { return _expr; }
+    StringConstASTNode *getMessage() const
+    {
+        return static_cast<StringConstASTNode *>(_message);
+    }
     void accept(TreeVisitor *v);
 };
 
@@ -353,7 +400,7 @@ class AlignOfExprASTNode : public ASTNode
 public:
     AlignOfExprASTNode(ASTNode *Expr)
     {
-        kind = NK_SIZEOF_EXPR;
+        kind = NK_ALIGNOF_EXPR;
         ASSIGN_AST_NODE_REF(_expr, Expr);
     }
 
@@ -404,6 +451,8 @@ class FunctionDeclASTNode : public ASTNode
     ASTNode *_prms;
     ASTNode *_body;
     STScope *_scope;
+    bool _prototype;
+    bool _variadic;
 
 public:
     FunctionDeclASTNode(ASTNode *tp, ASTNode *n, ASTNode *p, ASTNode *b)
@@ -414,6 +463,8 @@ public:
         ASSIGN_AST_NODE_REF(_prms, p);
         ASSIGN_AST_NODE_REF(_body, b);
         _scope = nullptr;
+        _prototype = false;
+        _variadic = false;
     }
 
     ~FunctionDeclASTNode()
@@ -429,7 +480,11 @@ public:
     ASTNode *getPrms() { return _prms; }
     ASTNode *getBody() { return _body; }
 
-    void setType(ASTNode *Type) { ASSIGN_AST_NODE_REF(_type, Type); }
+    void setType(ASTNode *Type)
+    {
+        DELETE_AST_NODE_REF(_type);
+        ASSIGN_AST_NODE_REF(_type, Type);
+    }
     void setName(ASTNode *Name) { ASSIGN_AST_NODE_REF(_name, Name); }
     void setPrms(ASTNode *Prms) { ASSIGN_AST_NODE_REF(_prms, Prms); }
     void setBody(ASTNode *Body) { ASSIGN_AST_NODE_REF(_body, Body); }
@@ -437,6 +492,10 @@ public:
     void setScope(STScope *s) { _scope = s; }
     STScope *getScope() { return _scope; }
     bool isForwardDeclaration() { return _body == NULL_AST_NODE; }
+    bool hasPrototype() const { return _prototype; }
+    bool isVariadic() const { return _variadic; }
+    void setPrototype(bool value) { _prototype = value; }
+    void setVariadic(bool value) { _variadic = value; }
 
     void accept(TreeVisitor *v);
 };
@@ -479,6 +538,7 @@ public:
     ASTNode *getType() { return _type; }
     ASTNode *getInit() { return _init; }
 
+    void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
 };
 
@@ -504,7 +564,7 @@ public:
     ASTNode *getName() { return _name; }
     ASTNode *getType() { return _type; }
 
-    //void declare(AbstractSyntaxTree *ast);
+    void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
 };
 
@@ -533,7 +593,7 @@ public:
     ASTNode *getName() { return _name; }
     ASTNode *getType() { return _type; }
 
-    //void declare(AbstractSyntaxTree *ast);
+    void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
 };
 
@@ -544,6 +604,7 @@ class AsmStmtASTNode : public ASTNode
 public:
     AsmStmtASTNode(const std::string &data)
     {
+        kind = NK_ASM_STMT;
         _data = data;
     }
 
@@ -610,14 +671,21 @@ class CompoundStmtASTNode : public ASTNode
 {
     ASTNode *_decls;
     ASTNode *_stmts;
+    ASTNode *_items;
     STScope *_scope;
 
 public:
     CompoundStmtASTNode(ASTNode *Decls, ASTNode *Stmts)
+        : CompoundStmtASTNode(Decls, Stmts, NULL_AST_NODE)
+    {
+    }
+
+    CompoundStmtASTNode(ASTNode *Decls, ASTNode *Stmts, ASTNode *Items)
     {
         kind = NK_COMPOUND_STMT;
         ASSIGN_AST_NODE_REF(_decls, Decls);
         ASSIGN_AST_NODE_REF(_stmts, Stmts);
+        ASSIGN_AST_NODE_REF(_items, Items);
         _scope = nullptr;
     }
 
@@ -625,12 +693,19 @@ public:
     {
         DELETE_AST_NODE_REF(_decls);
         DELETE_AST_NODE_REF(_stmts);
+        DELETE_AST_NODE_REF(_items);
     }
 
     ASTNode *getDecls() { return _decls; }
     ASTNode *getStmts() { return _stmts; }
+    ASTNode *getItems()
+    {
+        return _items != NULL_AST_NODE ? _items :
+               (_stmts != NULL_AST_NODE ? _stmts : _decls);
+    }
     void setDecls(ASTNode *Decls) { ASSIGN_AST_NODE_REF(_decls, Decls); }
     void setStmts(ASTNode *Stmts) { ASSIGN_AST_NODE_REF(_stmts, Stmts); }
+    void setItems(ASTNode *Items) { ASSIGN_AST_NODE_REF(_items, Items); }
     void setScope(STScope *s) { _scope = s; }
     STScope *getScope() { return _scope; }
 
@@ -894,6 +969,21 @@ public:
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
+};
+
+class UnaryPlusASTNode : public ASTNode
+{
+    ASTNode *_expr;
+
+public:
+    explicit UnaryPlusASTNode(ASTNode *expr)
+    {
+        kind = NK_UNARY_PLUS_EXPR;
+        ASSIGN_AST_NODE_REF(_expr, expr);
+    }
+    ~UnaryPlusASTNode() { DELETE_AST_NODE_REF(_expr); }
+    ASTNode *getExpr() const { return _expr; }
+    void accept(TreeVisitor *visitor) { _expr->accept(visitor); }
 };
 
 class BitNotExprASTNode : public ASTNode
@@ -1741,6 +1831,20 @@ public:
     void accept(TreeVisitor *v);
 };
 
+class CompoundExprASTNode : public ASTNode
+{
+    ASTNode *_elements;
+public:
+    explicit CompoundExprASTNode(ASTNode *Elements)
+    {
+        kind = NK_COMPOUND_EXPR;
+        ASSIGN_AST_NODE_REF(_elements, Elements);
+    }
+    ~CompoundExprASTNode() { DELETE_AST_NODE_REF(_elements); }
+    ASTNode *getElements() { return _elements; }
+    void accept(TreeVisitor *v);
+};
+
 class CallExprASTNode : public ASTNode
 {
     ASTNode *_expr;
@@ -1781,10 +1885,14 @@ class IntegralTypeASTNode : public ASTNode
 {
     unsigned _alignment;
     bool _isSigned;
+    unsigned _rank;
+    bool _isPlainChar;
 
 public:
-    IntegralTypeASTNode(unsigned Alignment, bool IsSigned)
-        : _alignment(Alignment), _isSigned(IsSigned)
+    IntegralTypeASTNode(unsigned Alignment, bool IsSigned, unsigned Rank = 0,
+                        bool IsPlainChar = false)
+        : _alignment(Alignment), _isSigned(IsSigned),
+          _rank(Rank ? Rank : Alignment), _isPlainChar(IsPlainChar)
     {
         kind = NK_INTEGRAL_TYPE;
     }
@@ -1793,6 +1901,8 @@ public:
 
     unsigned getAlignment() { return _alignment; }
     bool getIsSigned() { return _isSigned; }
+    unsigned getRank() const { return _rank; }
+    bool isPlainChar() const { return _isPlainChar; }
 
     void accept(TreeVisitor *v);
 };
@@ -1814,6 +1924,13 @@ public:
     unsigned getAlignment() { return _alignment; }
     bool getIsDouble() { return _isDouble; }
 
+    void accept(TreeVisitor *v);
+};
+
+class BooleanTypeASTNode : public ASTNode
+{
+public:
+    BooleanTypeASTNode() { kind = NK_BOOLEAN_TYPE; }
     void accept(TreeVisitor *v);
 };
 
@@ -1865,6 +1982,8 @@ class FunctionTypeASTNode : public ASTNode
 {
     ASTNode *_type;
     ASTNode *_prms;
+    bool _prototype;
+    bool _variadic;
 
 public:
     FunctionTypeASTNode(ASTNode *tp, ASTNode *p)
@@ -1872,6 +1991,8 @@ public:
         kind = NK_FUNCTION_TYPE;
         ASSIGN_AST_NODE_REF(_type, tp);
         ASSIGN_AST_NODE_REF(_prms, p);
+        _prototype = false;
+        _variadic = false;
     }
 
     ~FunctionTypeASTNode()
@@ -1882,6 +2003,10 @@ public:
 
     ASTNode *getType() { return _type; }
     ASTNode *getPrms() { return _prms; }
+    bool hasPrototype() const { return _prototype; }
+    bool isVariadic() const { return _variadic; }
+    void setPrototype(bool value) { _prototype = value; }
+    void setVariadic(bool value) { _variadic = value; }
 
     void setType(ASTNode *Type) { ASSIGN_AST_NODE_REF(_type, Type); }
     void setPrms(ASTNode *Prms) { ASSIGN_AST_NODE_REF(_prms, Prms); }
@@ -1919,9 +2044,11 @@ class StructTypeASTNode : public ASTNode
 {
     ASTNode *_name;
     ASTNode *_body;
+    const STType *_identity;
 
 public:
-    StructTypeASTNode(ASTNode *Name, ASTNode *Body)
+    StructTypeASTNode(ASTNode *Name, ASTNode *Body, const STType *identity = nullptr)
+        : _identity(identity)
     {
         kind = NK_STRUCT_TYPE;
         ASSIGN_AST_NODE_REF(_name, Name);
@@ -1936,6 +2063,7 @@ public:
 
     ASTNode *getName() { return _name; }
     ASTNode *getBody() { return _body; }
+    const STType *getIdentity() const { return _identity; }
 
     void accept(TreeVisitor *v);
 };
@@ -1944,9 +2072,11 @@ class UnionTypeASTNode : public ASTNode
 {
     ASTNode *_name;
     ASTNode *_body;
+    const STType *_identity;
 
 public:
-    UnionTypeASTNode(ASTNode *Name, ASTNode *Body)
+    UnionTypeASTNode(ASTNode *Name, ASTNode *Body, const STType *identity = nullptr)
+        : _identity(identity)
     {
         kind = NK_UNION_TYPE;
         ASSIGN_AST_NODE_REF(_name, Name);
@@ -1961,6 +2091,7 @@ public:
 
     ASTNode *getName() { return _name; }
     ASTNode *getBody() { return _body; }
+    const STType *getIdentity() const { return _identity; }
 
     void accept(TreeVisitor *v);
 };
@@ -2005,8 +2136,9 @@ public:
             for (unsigned i = 0; i < tmpVec.size(); i++)
                 PUSH_BACK_AST_NODE_REF(_elements, tmpVec[i]);
 
-            // We don't need n anymore.
-            delete n;
+            // A parsed list is retained by its AST even after flattening.
+            if (n->getRefCount() == 0)
+                delete n;
         }
         else
         {

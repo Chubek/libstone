@@ -11,8 +11,9 @@ both consume the resulting order.
 Scheduling is local to each block and can move only explicit pure, total
 operations: constants, copies, wrapping arithmetic, total division and
 remainder, bitwise operations, masked shifts, and integer comparisons. Every
-other opcode, including calls, loads, stores, checked arithmetic, conversions,
-and address formation, is pinned at its original index. No instruction crosses
+other opcode, including all width and pointer forms of loads and stores,
+checked arithmetic, pointer/integer casts, conversions, calls, and address
+formation, is pinned at its original index. No instruction crosses
 a pinned operation or a block terminator, and block parameters and edges are
 unchanged.
 

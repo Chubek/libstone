@@ -5,6 +5,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <utility>
 
 namespace irgen = archon::irgen;
@@ -28,6 +29,28 @@ static void error(const char* type, const char* message, Fn fn) {
         return;
     }
     throw std::runtime_error("expected archon::Error");
+}
+
+static void check_standard_irgen(const std::vector<std::string>& entries) {
+    const auto databases = irgen::compile_standard_architectures();
+    check(entries.size() == databases.size(), "standard spec compile lost entry points");
+    std::set<std::string> targets;
+    for (const auto& database : databases) {
+        const auto name = database.at("architecture").as_string();
+        check(targets.insert(name).second, "duplicate standard spec architecture");
+        const Object options{{"target", name}, {"oracle", false}};
+        const auto out = irgen::generate_ir("gated", databases, options);
+        check(out.count("IR.c") && out.count("Pipeline.c") && out.count("Emitter.c"),
+              "missing classic IR pipeline stage for selected stdspec");
+        check(out.at("Emitter.c").find("Emitter_target[] = \"" + name + '"') != std::string::npos,
+              "classic IRGen selected the wrong stdspec in a mixed database bank");
+    }
+    const std::set<std::string> bundled{
+        "AArch64", "AMD64", "CIL", "JVM", "MIPS32", "PDP11",
+        "RISCV32", "RISCV64", "RISCV64IM", "Wasm32",
+    };
+    check(std::includes(targets.begin(), targets.end(), bundled.begin(), bundled.end()),
+          "missing an installed physical or virtual stdspec");
 }
 
 int main(int argc, char** argv) try {
@@ -118,6 +141,7 @@ int main(int argc, char** argv) try {
     check(irgen::available_representations().size() >= 8, "incomplete IR registry");
     const auto entries = irgen::standard_spec_entry_points();
     check(std::find(entries.begin(), entries.end(), spec) != entries.end(), "missing installed stdspec");
+    check_standard_irgen(entries);
     const auto stages = irgen::pipeline_stages();
     check(std::find(stages.begin(), stages.end(), "proof-tool") != stages.end(), "missing proof stage");
     const Object gen_options{{"oracle", false}};

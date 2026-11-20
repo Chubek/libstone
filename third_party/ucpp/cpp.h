@@ -228,6 +228,7 @@ struct lexer_state {
 #define LEXER		     0x010000UL	/* behave as a lexer */
 #define KEEP_OUTPUT	     0x020000UL	/* emit the result of preprocessing */
 #define COPY_LINE	     0x040000UL /* make a copy of the parsed line */
+#define ASSEMBLY_INPUT	     0x200000UL /* permit assembler '#' comment lines */
 
 /* internal flags */
 #define READ_AGAIN	     0x080000UL	/* emit again the last token */

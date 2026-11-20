@@ -1,6 +1,6 @@
 # RV64 LP64 calling convention
 
-The native backend targets little-endian RV64IM with the LP64 integer calling
+The native RV64I and RV64IM profiles share the little-endian LP64 integer calling
 convention. Machine IR supports `I64`, `PTR`, and `FUNC_PTR` values. All have
 64-bit representations and occupy naturally aligned 8-byte words in stack homes,
 argument slots, and global word arrays. Global words are laid out consecutively

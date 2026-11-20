@@ -6,12 +6,36 @@
 // See the LICENSE file for more details.
 
 #include "../include/ASTNode.h"
+#include "../include/AbstractSyntaxTree.h"
 #include "../include/TreeVisitor.h"
 
 namespace cparser
 {
 
-NullASTNode *NullASTNode::s_instance = 0;
+thread_local AbstractSyntaxTree *ASTNode::allocationTree = nullptr;
+
+void ASTNode::trackAllocation()
+{
+    if (allocationTree)
+        allocationTree->trackNode(this);
+}
+
+ASTNode::~ASTNode()
+{
+    if (owner)
+        owner->forgetNode(ownerIndex);
+}
+
+AbstractSyntaxTree *ASTNode::setAllocationTree(AbstractSyntaxTree *tree)
+{
+    return std::exchange(allocationTree, tree);
+}
+
+NullASTNode *NullASTNode::getInstance()
+{
+    static NullASTNode instance;
+    return &instance;
+}
 
 void IdentASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
@@ -22,6 +46,7 @@ void RealConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void StringConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void CharConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void StaticAssertASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void SizeOfExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
@@ -126,6 +151,7 @@ void NeExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void AssignExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void CondExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void CompoundExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void CallExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
@@ -134,6 +160,7 @@ void VoidTypeASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void IntegralTypeASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void RealTypeASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void BooleanTypeASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void EnumeralTypeASTNode::accept(TreeVisitor *v) { v->visit(this); }
 

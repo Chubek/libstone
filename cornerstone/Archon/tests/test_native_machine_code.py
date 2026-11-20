@@ -20,8 +20,8 @@ FACTORIAL = (ROOT / "examples/native-backend/factorial.mir").read_text(encoding=
 INVENTORY = """
 archon-mir 1
 module 1 0 0
-function all_forms void 3 24 3 0
-types i64 i64 ptr i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 func_ptr i64 i64
+function all_forms void 3 38 3 0
+types i64 i64 ptr i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 func_ptr i64 i64 i64 i64 i64 i64 i64 i64 ptr func_ptr i64 ptr i64 i64 i64 func_ptr
 block 0 0
 params
 cbr 0 1 0 2 0
@@ -48,13 +48,56 @@ sext 20 19 1
 func_addr 21 all_forms
 const 22 0xfedcba9876543210
 add_checked_s 23 20 22
+load_s8 24 2 1
+load_u8 25 2 2047
+load_s16 26 2 2
+load_u16 27 2 2046
+load_s32 28 2 4
+load_u32 29 2 2044
+load_ptr 30 2 8
+load_func_ptr 31 2 16
+ptr_to_int 32 2
+int_to_ptr 33 0
+func_ptr_to_int 34 31
+const 35 0
+eq 36 34 35
+int_to_func_ptr 37 35
+store8 2 24 1
+store16 2 26 2
+store32 2 28 4
+store_ptr 2 30 8
+store_func_ptr 2 31 16
+store_func_ptr 2 37 24
 {stores}call_indirect - 21 all_forms 3 0 1 2
 ret -
 block 0 0
 params
 trap
 end
-""".format(count=22 + 520, stores="store 2 23 2040\n" * 520)
+""".format(count=42 + 520, stores="store 2 23 2040\n" * 520)
+
+OBJECT_MEMORY = """\
+archon-mir 1
+module 1 0 1
+function object_memory i64 0 7 1 2
+types ptr i64 ptr i64 i64 ptr i64
+local 1 1
+local 4 4
+block 0 9
+params
+frame_addr 0 0
+const 1 0x80
+store8 0 1 0
+global_addr 2 packed
+load_u8 3 2 7
+load_s8 4 0 0
+frame_addr 5 1
+store32 5 1 0
+load_u32 6 5 0
+ret 4
+global packed 1 init 0x8070605040302010
+end
+"""
 
 FAULT_INJECTION = r"""
 #include "NativeInternal.h"
@@ -84,6 +127,17 @@ int main(void)
     assert(!an_encode(AN_LD, 1, 2, 3, 0, words));
     assert(!an_encode(AN_SLLI, 1, 2, 0, 64, words));
     assert(!an_encode(AN_SD, 1, 2, 0, -2049, words));
+    assert(an_encode(AN_LB, 1, 2, 0, -1, words) && words[0] == UINT32_C(0xfff10083));
+    assert(an_encode(AN_LBU, 1, 2, 0, 2047, words) && words[0] == UINT32_C(0x7ff14083));
+    assert(an_encode(AN_LH, 1, 2, 0, -2, words) && words[0] == UINT32_C(0xffe11083));
+    assert(an_encode(AN_LHU, 1, 2, 0, 2046, words) && words[0] == UINT32_C(0x7fe15083));
+    assert(an_encode(AN_LW, 1, 2, 0, -4, words) && words[0] == UINT32_C(0xffc12083));
+    assert(an_encode(AN_LWU, 1, 2, 0, 2044, words) && words[0] == UINT32_C(0x7fc16083));
+    assert(an_encode(AN_SB, 1, 2, 0, -1, words) && words[0] == UINT32_C(0xfe110fa3));
+    assert(an_encode(AN_SH, 1, 2, 0, -2, words) && words[0] == UINT32_C(0xfe111f23));
+    assert(an_encode(AN_SW, 1, 2, 0, 2044, words) && words[0] == UINT32_C(0x7e112e23));
+    assert(!an_encode(AN_LH, 1, 2, 3, 0, words));
+    assert(!an_encode(AN_SW, 1, 2, 0, 2048, words));
     assert(!an_encode(AN_BEQ, 1, 2, 0, 3, words));
     assert(!an_encode(AN_BNE, 1, 2, 0, 4096, words));
     assert(an_encode(AN_BNE, 1, 2, 0, -4096, words));
@@ -220,6 +274,42 @@ class NativeMachineCodeTests(unittest.TestCase):
                 self.assertEqual(machine.reg_read(reg.UC_RISCV_REG_PC), sentinel)
                 self.assertEqual(machine.reg_read(reg.UC_RISCV_REG_A0), expected)
                 self.assertEqual(machine.reg_read(reg.UC_RISCV_REG_SP), stack_top)
+
+    def test_narrow_and_pointer_memory_reach_physical_forms(self):
+        data = INVENTORY.encode("ascii")
+        assembly = self.run_ok(self.driver, "--input", "-", text=data).decode("ascii")
+        physical = self.run_ok(
+            self.driver, "--input", "-", "--emit-physical", text=data
+        ).decode("ascii")
+        for mnemonic, displacement in (
+            ("lb", 1), ("lbu", 2047), ("lh", 2), ("lhu", 2046),
+            ("lw", 4), ("lwu", 2044),
+        ):
+            with self.subTest(mnemonic=mnemonic):
+                self.assertIn(f"\t{mnemonic} x7, {displacement}(x5)\n", assembly)
+                self.assertIn(f"inst {mnemonic} x7 x5 {displacement}\n", physical)
+        for mnemonic, displacement in (("sb", 1), ("sh", 2), ("sw", 4)):
+            with self.subTest(mnemonic=mnemonic):
+                self.assertIn(f"\t{mnemonic} x6, {displacement}(x5)\n", assembly)
+                self.assertIn(f"inst {mnemonic} x6 x5 {displacement}\n", physical)
+        # Data and function pointers remain distinct MIR types, but both are
+        # represented by one RV64 word once their exact legality is verified.
+        self.assertGreaterEqual(assembly.count("\tld x7, 8(x5)\n"), 1)
+        self.assertGreaterEqual(assembly.count("\tld x7, 16(x5)\n"), 1)
+        self.assertGreaterEqual(physical.count("inst sd x6 x5 8\n"), 1)
+        self.assertGreaterEqual(physical.count("inst sd x6 x5 16\n"), 1)
+
+    def test_byte_local_and_packed_global_word_are_addressable(self):
+        assembly = self.run_ok(
+            self.driver, "--input", "-", text=OBJECT_MEMORY.encode("ascii")
+        ).decode("ascii")
+        self.assertIn("\tsb x6, 0(x5)\n", assembly)
+        self.assertIn("\tlbu x7, 7(x5)\n", assembly)
+        self.assertIn("\tlb x7, 0(x5)\n", assembly)
+        self.assertIn("\tsw x6, 0(x5)\n", assembly)
+        self.assertIn("\tlwu x7, 0(x5)\n", assembly)
+        self.assertIn("\t.p2align 3\n\t.globl packed\n", assembly)
+        self.assertIn("\t.quad 0x8070605040302010\n", assembly)
 
     def test_local_layout_and_encoding_reject_invalid_records(self):
         client, exe = self.root / "inject.c", self.root / "inject"

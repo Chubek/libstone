@@ -1,4 +1,5 @@
 #include "NativeInternal.h"
+#include "TargetNative.h"
 
 static void emit_trap(ANOut *out, size_t fn, unsigned *next_label)
 {
@@ -76,6 +77,29 @@ static void select_checked_mul(ANOut *out, unsigned dst, unsigned a,
     an_label(out, fn, ok);
 }
 
+static void select_base_mul(ANOut *out, unsigned dst, unsigned a,
+    unsigned b, size_t fn, unsigned *next_label)
+{
+    unsigned loop = (*next_label)++;
+    unsigned next_bit = (*next_label)++;
+
+    /* Unsigned shift-and-add also gives the signed product modulo 2^64.
+     * dst + a*b is invariant modulo 2^64; b becomes zero in <=64 steps.
+     * a and b are scratch copies. Taken transfers clobber T3, so
+     * rematerialize the shift count at next_bit. */
+    an_emit(out, AN_ADDI, dst, AN_ZERO, AN_ZERO, 0);
+    an_label(out, fn, loop);
+    an_emit(out, AN_ADDI, AN_T3, AN_ZERO, AN_ZERO, 1);
+    an_emit(out, AN_AND, AN_T3, b, AN_T3, 0);
+    an_branch(out, 0, AN_T3, AN_ZERO, fn, next_bit);
+    an_emit(out, AN_ADD, dst, dst, a, 0);
+    an_label(out, fn, next_bit);
+    an_emit(out, AN_SLLI, a, a, AN_ZERO, 1);
+    an_emit(out, AN_ADDI, AN_T3, AN_ZERO, AN_ZERO, 1);
+    an_emit(out, AN_SRL, b, b, AN_T3, 0);
+    an_branch(out, 1, b, AN_ZERO, fn, loop);
+}
+
 /* The caller stages operands and the result in three distinct scratch
  * registers (T0, T1, T2); checked operations may overwrite operand copies. */
 int an_select(ANOut *out, ArchonMIROpcode op, unsigned dst, unsigned a,
@@ -85,7 +109,13 @@ int an_select(ANOut *out, ArchonMIROpcode op, unsigned dst, unsigned a,
     switch (op) {
     case ARCHON_MIR_ADD: selected = AN_ADD; break;
     case ARCHON_MIR_SUB: selected = AN_SUB; break;
-    case ARCHON_MIR_MUL: selected = AN_MUL; break;
+    case ARCHON_MIR_MUL:
+        if (!AN_RV64_HAS_M) {
+            select_base_mul(out, dst, a, b, fn, next_label);
+            return 1;
+        }
+        selected = AN_MUL;
+        break;
     /* Total division/remainder use the RV64M edge-case results. */
     case ARCHON_MIR_DIV_S: selected = AN_DIV; break;
     case ARCHON_MIR_REM_S: selected = AN_REM; break;

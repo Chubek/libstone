@@ -66,8 +66,10 @@
   },
   "native_profile": {
     "architecture": "RV64IM",
+    "architectures": ["RV64I", "RV64IM"],
     "abi": "LP64 integer and pointer scalars",
-    "target_selection": "validated ArchDB v1 and reviewed provider fingerprint",
+    "target_selection": "validated ArchDB v1 and independently reviewed ISA and ABI qualification",
+    "unsupported_architectures": ["RV32I", "MIPS32", "PDP-11"],
     "dependencies": {
       "generated_core": "C99 standard library",
       "generation": "Python and Archon",
@@ -79,7 +81,7 @@
       "backend_generation": {
         "status": "EXECUTABLE",
         "implementation": "IRGen native profile and generated C99 static library",
-        "evidence": ["test_native_target", "test_irgen_native"]
+        "evidence": ["test_native_target", "test_irgen_native", "test_native_rv64i"]
       },
       "runtime_ingestion": {
         "status": "EXECUTABLE",
@@ -99,22 +101,22 @@
       "legalization": {
         "status": "PARTIAL",
         "phase": "generic SSA",
-        "implementation": "Typed i64 and pointer legality, narrow-width conversions in i64, signed checked add/subtract/multiply/divide",
-        "evidence": ["test_native_legalizer", "test_irgen_native"],
-        "unsupported": ["Other widths", "Floating point", "Vectors", "General rewrite rules", "Libcalls"]
+        "implementation": "Typed i64/data/function-pointer legality, exact data- or function-pointer/i64 casts without cross-kind casts, narrow-width conversions in i64, signed checked add/subtract on both profiles; signed checked multiply/divide on RV64IM",
+        "evidence": ["test_native_legalizer", "test_irgen_native", "test_native_rv64i"],
+        "unsupported": ["RV64I division, remainder and signed checked multiply", "Other widths", "Floating point", "Vectors", "General rewrite rules", "Libcalls"]
       },
       "instruction_selection": {
         "status": "PARTIAL",
         "phase": "verified generic operations to selected physical instructions",
-        "implementation": "Explicit reviewed scalar RV64IM mappings and checked-arithmetic expansions",
-        "evidence": ["test_native_target", "test_irgen_native"],
+        "implementation": "Explicit reviewed scalar RV64I/RV64IM mappings, checked-arithmetic expansions and base-ISA modular multiplication",
+        "evidence": ["test_native_target", "test_irgen_native", "test_native_rv64i"],
         "unsupported": ["Declarative multi-target patterns", "Native equality saturation", "Native superoptimization"]
       },
       "memory": {
         "status": "PARTIAL",
         "phase": "generic memory operations to physical operands",
-        "implementation": "Aligned eight-byte loads and stores, static locals, and global data",
-        "evidence": ["test_native_legalizer", "test_irgen_native"],
+        "implementation": "Naturally aligned signed/unsigned 8/16/32-bit loads, low-bit stores, typed 64-bit integer/data/function-pointer transfers, static locals, and global words",
+        "evidence": ["test_native_legalizer", "test_native_machine_code", "test_irgen_native"],
         "unsupported": ["Atomics", "Explicit volatility", "Unaligned accesses", "Thread-local storage"]
       },
       "calling_convention": {
@@ -141,14 +143,14 @@
       "assembly": {
         "status": "EXECUTABLE",
         "phase": "physical emission",
-        "implementation": "Validated static GAS assembly with function and data symbols",
-        "evidence": ["test_irgen_native", "test_native_text"]
+        "implementation": "Validated default or PIC GAS assembly with function and data symbols",
+        "evidence": ["test_irgen_native", "test_native_text", "test_native_rv64i"]
       },
       "instruction_encoding": {
         "status": "PARTIAL",
         "phase": "physical operands to raw bytes",
-        "implementation": "Table-derived little-endian RV64IM encoding and checked local fixups for a single function",
-        "evidence": ["test_native_machine_code"],
+        "implementation": "Table-derived little-endian RV64I/RV64IM encoding and checked local fixups for a single function",
+        "evidence": ["test_native_machine_code", "test_native_rv64i"],
         "unsupported": ["Multi-function raw modules", "External relocations", "Object containers", "Executable memory"]
       },
       "object_and_linker": {
@@ -169,5 +171,17 @@
         "status": "UNSUPPORTED"
       }
     }
+  },
+  "native_scalar_gas_profiles": {
+    "status": "EXECUTABLE",
+    "profiles": {
+      "AMD64/SysVAMD64": ["Non-PIC ELF GAS", "GOTPCREL/PLT PIC ELF GAS"],
+      "AArch64/AAPCS64": ["Non-PIC ELF GAS", "Page-relative GOT/PLT PIC ELF GAS"]
+    },
+    "target_selection": "Exact canonical ArchDB pins and independently checked ABI v2 LP64 scalar facts",
+    "implementation": "Verified runtime MachineIR v1, bounded stack homes and input order; integer ALU and traps, typed scalar memory, direct/indirect register and stack calls",
+    "unsupported": ["Alternate ABIs", "Floating point", "Physical records", "Raw machine code", "Native scheduling", "ELF object/link bridge"],
+    "evidence": ["test_native_scalar_gas", "test_abi_facts_v2"],
+    "coverage": "NativeScalarGAS.md"
   }
 }

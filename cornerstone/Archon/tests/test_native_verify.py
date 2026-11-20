@@ -274,7 +274,8 @@ class NativeVerifyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="archon-native-verify-") as directory:
             root = Path(directory)
             (root / "TargetNative.h").write_text(
-                '#define AN_TARGET_NAME "RISCV64IM/LP64"\n', encoding="ascii"
+                '#define AN_TARGET_NAME "RISCV64IM/LP64"\n#define AN_RV64_HAS_M 1\n',
+                encoding="ascii",
             )
             (root / "client.c").write_text(CLIENT, encoding="ascii")
             subprocess.run(

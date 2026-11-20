@@ -6,6 +6,10 @@ working directory, or a downstream language runtime. `Backend.h` is the C API.
 The eight existing IR libraries and the `Program.i` pipeline remain available
 separately; their artifacts are not runtime MachineIR v1.
 
+See [AMD64 and AArch64 scalar GAS](NativeScalarGAS.md) for those targets'
+calling conventions, supported options, and limits. The physical-record,
+scheduling, and RV64 assembly details below apply to the RV64 provider.
+
 ## Generic representation
 
 In a function, value IDs index `types`; value types are `i64`, `ptr` (a data
@@ -36,11 +40,26 @@ the backend cannot inspect separately compiled function implementations.
   bits of `SRC` and clear the rest of the `i64` result; `sext` fills the rest
   from the highest retained bit. Width must be in 1–64. These operations do not
   change the carrier type or implicitly convert pointers.
-- `ptr_add` adds a byte offset modulo the machine address width. `load` and
-  `store` transfer eight little-endian bytes; displacements are aligned
-  signed 12-bit byte offsets. Clients must supply valid, naturally aligned
-  addresses and sufficient stack storage. No volatile, atomic, aliased
-  source-language object, or bounds-checking policy is inferred.
+- `ptr_add` adds a byte offset modulo the machine address width. `load_s8`,
+  `load_s16`, and `load_s32` read one, two, or four little-endian bytes and
+  sign-extend to `i64`; the corresponding `load_u*` operations zero-extend.
+  `store8`, `store16`, and `store32` write the low bits of an `i64`. Existing
+  `load`/`store` transfer an `i64` word. `load_ptr`/`store_ptr` transfer a data
+  pointer, while `load_func_ptr`/`store_func_ptr` transfer a function pointer;
+  the types are not interchangeable even though all full-width transfers use
+  an eight-byte representation in the supported LP64 profiles.
+- `ptr_to_int`/`int_to_ptr` and
+  `func_ptr_to_int`/`int_to_func_ptr` explicitly preserve a 64-bit pattern
+  while changing between one pointer kind and `i64`. Each pair accepts only
+  its exact pointer kind; there is no data-pointer/function-pointer cast.
+  For the supported ELF profiles, converting integer zero to `func_ptr` produces
+  the null function pointer. A nullable function pointer can therefore be
+  converted to `i64` and compared with an `i64` zero using `eq`.
+- Memory displacements are signed 12-bit byte offsets aligned to the access
+  width. Clients must supply valid, naturally aligned effective addresses and
+  sufficient stack or global storage. No volatile, atomic, aliased
+  source-language object, pointer provenance, or bounds-checking policy is
+  inferred.
 - `frame_addr` takes an index in the current function's local table.
   `global_addr` names a defined or external data object. Global data consists
   of eight-byte words, initialized or zero-filled.
@@ -98,7 +117,9 @@ Imports use `import SYMBOL RESULT COUNT PARAM_TYPES...`. Globals use
 with `zero` declares an external data symbol. Defined symbols are exported.
 The stream ends with `end`; extra tokens are rejected. The supported opcode
 names are the lower-case `ARCHON_MIR_*` names in `Backend.h` (without the
-prefix), excluding the separately spelled terminators.
+prefix), excluding the separately spelled terminators. New v1 operations are
+appended to the public enum so existing opcode values and text remain
+unchanged.
 
 ## Lowering contract
 
@@ -112,3 +133,10 @@ records instead of assembly. Native scheduling preserves exact incoming order
 by default; `ARCHON_BACKEND_SCHEDULE_PURE` enables checked reordering inside
 pure regions only. Neither infers hardware latency. An unsupported operation
 or failed compatibility check prevents publishing an artifact.
+
+Assembly output defaults to the existing non-PIC contract (`lla` for data or
+function addresses). `ARCHON_BACKEND_PIC` instead emits `.option pic` and GAS
+`la`, allowing the assembler to use GOT-based address materialization for
+preemptible external symbols. It does not change MIR pointer types or call
+signatures. PIC is rejected with physical records or raw machine code because
+those modes neither represent nor apply external GOT relocations.

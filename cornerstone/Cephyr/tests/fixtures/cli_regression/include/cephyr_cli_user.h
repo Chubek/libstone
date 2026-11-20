@@ -1,0 +1,6 @@
+#ifndef CEPHYR_CLI_USER_H
+#define CEPHYR_CLI_USER_H
+
+#define CEPHYR_CLI_USER_VALUE 13
+
+#endif

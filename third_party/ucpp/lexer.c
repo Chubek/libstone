@@ -73,7 +73,7 @@ enum {
 	S_PLUS, S_MINUS, S_DOT, S_DOT2, S_SLASH, S_NUMBER, S_NUMBER2, S_LT,
 	S_LT2, S_EQ, S_GT, S_GT2, S_CIRC, S_PIPE, S_BACKSLASH,
 	S_COMMENT, S_COMMENT2, S_COMMENT3, S_COMMENT4, S_COMMENT5,
-	S_NAME, S_NAME_BS, S_LCHAR,
+	S_NAME, S_NAME_BS, S_LCHAR, S_UCHAR, S_U8CHAR,
 	MSTATE,
 	S_ILL, S_DDOT, S_DDSHARP, S_BS, S_ROGUE_BS, S_BEHEAD, S_DECAY,
 	S_TRUNC, S_TRUNCC, S_OUCH
@@ -131,6 +131,8 @@ static struct machine_state {
 	{ S_START,	{ '?' },	STO(QUEST)		},
 	{ S_START,	{ ALP },	PUT(S_NAME)		},
 	{ S_START,	{ 'L' },	PUT(S_LCHAR)		},
+	{ S_START,	{ 'U' },	PUT(S_LCHAR)		},
+	{ S_START,	{ 'u' },	PUT(S_UCHAR)		},
 	{ S_START,	{ '[' },	STO(LBRK)		},
 	{ S_START,	{ ']' },	STO(RBRK)		},
 	{ S_START,	{ '^' },	S_CIRC			},
@@ -288,10 +290,16 @@ static struct machine_state {
 	{ S_NAME_BS,	{ ANY },	FRZ(S_ROGUE_BS)		},
 	{ S_NAME_BS,	{ 'u', 'U' },	PUT(S_NAME)		},
 
-	/* after a L */
+	/* C11 literal prefixes L, U, u, and u8. */
 	{ S_LCHAR,	{ ANY },	FRZ(S_NAME)		},
 	{ S_LCHAR,	{ '"' },	PUT(S_STRING)		},
 	{ S_LCHAR,	{ '\'' },	PUT(S_CHAR)		},
+	{ S_UCHAR,	{ ANY },	FRZ(S_NAME)		},
+	{ S_UCHAR,	{ '"' },	PUT(S_STRING)		},
+	{ S_UCHAR,	{ '\'' },	PUT(S_CHAR)		},
+	{ S_UCHAR,	{ '8' },	PUT(S_U8CHAR)		},
+	{ S_U8CHAR,	{ ANY },	FRZ(S_NAME)		},
+	{ S_U8CHAR,	{ '"' },	PUT(S_STRING)		},
 
 	/* after a ^ */
 	{ S_CIRC,	{ ANY },	FRZ(STO(CIRC))		},
@@ -484,32 +492,33 @@ static inline int read_char(struct lexer_state *ls)
 {
 	unsigned char c;
 
-	if (!ls->input) {
-		return ((ls->pbuf ++) < ls->ebuf) ?
-			ls->input_string[ls->pbuf - 1] : -1;
-	}
 	while (1) {
+		if (!ls->input) {
+			if (ls->pbuf >= ls->ebuf) return -1;
+			c = ls->input_string[ls->pbuf ++];
+		} else {
 #ifndef NO_UCPP_BUF
-		if (ls->pbuf == ls->ebuf) {
+			if (ls->pbuf == ls->ebuf) {
 #ifdef UCPP_MMAP
-			if (ls->from_mmap) {
-				munmap((void *)ls->input_buf, ls->ebuf);
-				ls->from_mmap = 0;
-				ls->input_buf = ls->input_buf_sav;
+				if (ls->from_mmap) {
+					munmap((void *)ls->input_buf, ls->ebuf);
+					ls->from_mmap = 0;
+					ls->input_buf = ls->input_buf_sav;
+				}
+#endif
+				ls->ebuf = fread(ls->input_buf, 1,
+					INPUT_BUF_MEMG, ls->input);
+				ls->pbuf = 0;
 			}
-#endif
-			ls->ebuf = fread(ls->input_buf, 1,
-				INPUT_BUF_MEMG, ls->input);
-			ls->pbuf = 0;
-		}
-		if (ls->ebuf == 0) return -1;
-		c = ls->input_buf[ls->pbuf ++];
+			if (ls->ebuf == 0) return -1;
+			c = ls->input_buf[ls->pbuf ++];
 #else
-		int x = getc(ls->input);
+			int x = getc(ls->input);
 
-		if (x == EOF) return -1;
-		c = x;
+			if (x == EOF) return -1;
+			c = x;
 #endif
+		}
 		if (ls->flags & COPY_LINE) {
 			if (c == '\n') {
 				ls->copy_line[ls->cli] = 0;
@@ -626,11 +635,6 @@ static inline int next_char(struct lexer_state *ls)
 		if (c == '\\' && char_lka1(ls) == '\n') {
 			ls->line ++;
 			next_fifo_char(ls);
-		} else if (c == '\r' && char_lka1(ls) == '\n') {
-			ls->line ++;
-			next_fifo_char(ls);
-			c = '\n';
-			return c;
 		} else {
 			ls->last = c;
 			return c;
@@ -927,11 +931,13 @@ static inline int read_token(struct lexer_state *ls)
 					|| ((CMT(cstat) || CMT(z))
 					&& (ls->flags & DISCARD_COMMENTS))) {
 					outc = 0;
-				} else if (z == S_LCHAR || z == S_SLASH
+				} else if (z == S_LCHAR || z == S_UCHAR || z == S_SLASH
 					|| (z == S_SHARP && ls->ltwnl)
 					|| (z == S_PCT && ls->ltwnl)
 					|| (z == S_BACKSLASH)) {
 					outc = c;
+				} else if (z == S_U8CHAR) {
+					outc = -3;
 				} else if (z == S_PCT2 && ls->ltwnl) {
 					outc = -1;
 				} else if (z == S_PCT3 && ls->ltwnl) {
@@ -939,7 +945,11 @@ static inline int read_token(struct lexer_state *ls)
 					   not be a %:%: */
 					outc = -2;
 				} else {
-					if (outc < 0) {
+					if (outc == -3) {
+						put_char(ls, 'u');
+						put_char(ls, '8');
+						outc = 0;
+					} else if (outc < 0) {
 						put_char(ls, '%');
 						put_char(ls, ':');
 						if (outc == -2)

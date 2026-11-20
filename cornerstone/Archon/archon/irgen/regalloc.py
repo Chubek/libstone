@@ -105,6 +105,7 @@ def _target_rows(db: Mapping) -> tuple[str, str, str]:
         registers.get("reserved", ()),
         db.get("reserved_registers", ()),
         db.get("abi", {}).get("reserved", ()) if isinstance(db.get("abi"), Mapping) else (),
+        (db.get("abi_facts_v2") or {}).get("unallocatable", ()),
     ):
         if not isinstance(source, (list, tuple, set, frozenset)):
             continue
@@ -247,10 +248,13 @@ struct RA_interval {
     uint32_t assigned_register;
     uint32_t spill_slot;
     uint32_t spill_cost;
+    uint32_t register_min;
+    uint32_t register_max;
     unsigned has_explicit_ranges;
     unsigned has_canonical_events;
     unsigned fixed;
     unsigned spilled;
+    unsigned constrained_registers;
 };
 
 struct RA_register {
@@ -329,6 +333,10 @@ enum RA_status RA_add_definition(
         struct RA_allocator *allocator, uint64_t position, uint32_t value);
 enum RA_status RA_fix_interval(
         struct RA_allocator *allocator, uint32_t value, uint32_t physical);
+/* Intersect this value's encodable physical register bounds. */
+enum RA_status RA_constrain_registers(
+        struct RA_allocator *allocator, uint32_t value,
+        uint32_t first, uint32_t last);
 
 enum RA_status RA_load_stream(
         struct RA_allocator *allocator, FILE *stream, const char *source,
@@ -1127,6 +1135,30 @@ enum RA_status RA_fix_interval(
         return RA_INVALID_ARGUMENT;
     interval->fixed = 1u;
     interval->fixed_register = row->canonical;
+    allocator->allocated = 0u;
+    return RA_OK;
+}
+
+enum RA_status RA_constrain_registers(
+        struct RA_allocator *allocator, uint32_t value,
+        uint32_t first, uint32_t last) {
+    struct RA_interval *interval;
+    if (!allocator || first > last)
+        return RA_INVALID_ARGUMENT;
+    interval = RA_mutable_interval(allocator, value, 1);
+    if (!interval)
+        return RA_OUT_OF_MEMORY;
+    if (interval->constrained_registers) {
+        if (first < interval->register_min)
+            first = interval->register_min;
+        if (last > interval->register_max)
+            last = interval->register_max;
+        if (first > last)
+            return RA_INVALID_ARGUMENT;
+    }
+    interval->register_min = first;
+    interval->register_max = last;
+    interval->constrained_registers = 1u;
     allocator->allocated = 0u;
     return RA_OK;
 }
@@ -2153,10 +2185,18 @@ static int RA_has_definition(
     return 0;
 }
 
+static int RA_interval_allows_register(
+        const struct RA_interval *interval, uint32_t physical) {
+    return !interval->constrained_registers ||
+        (physical >= interval->register_min && physical <= interval->register_max);
+}
+
 static int RA_register_available(
         const struct RA_allocator *allocator, size_t current,
         uint32_t physical, size_t excluded) {
     size_t i;
+    if (!RA_interval_allows_register(&allocator->intervals[current], physical))
+        return 0;
     for (i = 0; i < allocator->interval_count; ++i) {
         const struct RA_interval *other = &allocator->intervals[i];
         if (i == current || i == excluded || other->spilled ||
@@ -2197,10 +2237,12 @@ enum RA_status RA_allocate(
         allocator->intervals[i].spill_slot = RA_NO_SPILL_SLOT;
         allocator->intervals[i].spilled = 0u;
     }
-    qsort(allocator->intervals, allocator->interval_count,
-        sizeof *allocator->intervals, RA_interval_compare);
-    qsort(allocator->registers, allocator->register_count,
-        sizeof *allocator->registers, RA_register_compare);
+    if (allocator->interval_count > 1u)
+        qsort(allocator->intervals, allocator->interval_count,
+            sizeof *allocator->intervals, RA_interval_compare);
+    if (allocator->register_count > 1u)
+        qsort(allocator->registers, allocator->register_count,
+            sizeof *allocator->registers, RA_register_compare);
 
     /* Precolor fixed intervals before ordinary scan decisions see them. */
     for (i = 0; i < allocator->interval_count; ++i) {
@@ -2212,6 +2254,9 @@ enum RA_status RA_allocate(
         if (!physical)
             return RA_diagnose(diagnostic, RA_UNKNOWN_REGISTER, "", 0,
                 "fixed interval names an unknown physical register");
+        if (!RA_interval_allows_register(interval, physical->canonical))
+            return RA_diagnose(diagnostic, RA_INVALID_ARGUMENT, "", 0,
+                "fixed register is outside the interval's encodable range");
         interval->fixed_register = physical->canonical;
         interval->assigned_register = physical->canonical;
         if (physical->hardwired_zero && RA_has_definition(allocator, interval->value))
@@ -2456,8 +2501,9 @@ static uint64_t RA_external_register_id(
     for (i = 0; i < allocator->register_count; ++i)
         if (allocator->registers[i].id == canonical)
             return allocator->registers[i].external_canonical ?
-                allocator->registers[i].external_canonical : canonical;
-    return canonical;
+                allocator->registers[i].external_canonical
+                : (uint64_t)canonical + UINT64_C(1);
+    return (uint64_t)canonical + UINT64_C(1);
 }
 
 enum RA_status RA_write(

@@ -306,9 +306,9 @@ static ppval pp_strtoconst(char *refc)
 	s_big rs;
 	int sp, dec;
 
-	if (*c == '\'' || *c == 'L') {
-		q.sign = (*c == 'L') ? WCHAR_SIGNEDNESS : 1;
-		if (*c == 'L' && *(++ c) != '\'') {
+	if (*c == '\'' || *c == 'L' || *c == 'u' || *c == 'U') {
+		q.sign = *c == '\'' || (*c == 'L' && WCHAR_SIGNEDNESS);
+		if (*c != '\'' && *(++ c) != '\'') {
 			error(eval_line,
 				"invalid wide character constant: %s", refc);
 			throw(eval_exception);

@@ -62,6 +62,7 @@ def _artifact_rows(oracle_enabled: bool) -> str:
 
 def emit(context: object) -> dict[str, str]:
     oracle_enabled = _oracle_enabled(context)
+    options = (context.get("options") or {}) if isinstance(context, Mapping) else {}
     oracle_option_field = (
         "    const ArchonOracleOptions *oracle;\n"
         if oracle_enabled
@@ -81,6 +82,11 @@ def emit(context: object) -> dict[str, str]:
             "@INTERMEDIATE_ARTIFACTS@", _artifact_rows(oracle_enabled)
         )
         .replace("@ORACLE_ASSIGNMENTS@", oracle_assignments)
+        .replace(
+            "@DEFAULT_DIALECT@",
+            "ARCHON_EMBED_DIALECT_ARCHON" if options.get("assembler") == "archon"
+            else "ARCHON_EMBED_DIALECT_GAS",
+        )
     )
     return {
         "ArchonEmbed.h": header,
@@ -125,6 +131,7 @@ typedef ArchonPipelineRewrite ArchonEmbedRewrite;
 typedef Emitter_Dialect ArchonEmbedDialect;
 #define ARCHON_EMBED_DIALECT_GAS EMITTER_DIALECT_GAS
 #define ARCHON_EMBED_DIALECT_SANDSTONE EMITTER_DIALECT_SANDSTONE
+#define ARCHON_EMBED_DIALECT_ARCHON EMITTER_DIALECT_ARCHON
 
 typedef enum ArchonEmbedArtifactPolicy {
     /*
@@ -241,7 +248,7 @@ void archon_embed_options_init(ArchonEmbedOptions *options) {
         memset(options, 0, sizeof *options);
         options->stop_after = ARCHON_EMBED_STAGE_EMIT;
         options->rewrite = ARCHON_EMBED_REWRITE_CONVENTIONAL;
-        options->dialect = ARCHON_EMBED_DIALECT_GAS;
+        options->dialect = @DEFAULT_DIALECT@;
         options->artifact_policy = ARCHON_EMBED_ARTIFACTS_DISCARD;
     }
 }
@@ -302,7 +309,8 @@ static int AE_options_valid(
         return 0;
     }
     if (options->dialect != ARCHON_EMBED_DIALECT_GAS &&
-            options->dialect != ARCHON_EMBED_DIALECT_SANDSTONE) {
+            options->dialect != ARCHON_EMBED_DIALECT_SANDSTONE &&
+            options->dialect != ARCHON_EMBED_DIALECT_ARCHON) {
         AE_diagnostic(result, "invalid assembly dialect");
         return 0;
     }

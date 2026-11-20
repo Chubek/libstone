@@ -177,6 +177,7 @@ extern JMP_BUF eval_exception;
 #define throw_away		ucpp_throw_away
 #define garbage_collect		ucpp_garbage_collect
 #define init_buf_lexer_state	ucpp_init_buf_lexer_state
+#define quote_filename		ucpp_quote_filename
 #ifdef PRAGMA_TOKENIZE
 #define compress_token_list	ucpp_compress_token_list
 #endif
@@ -185,6 +186,7 @@ char *token_name(struct token *);
 void throw_away(struct garbage_fifo *, char *);
 void garbage_collect(struct garbage_fifo *);
 void init_buf_lexer_state(struct lexer_state *, int);
+char *quote_filename(const char *);
 #ifdef PRAGMA_TOKENIZE
 struct comp_token_fifo compress_token_list(struct token_fifo *);
 #endif

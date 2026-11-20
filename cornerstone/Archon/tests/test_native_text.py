@@ -54,6 +54,21 @@ import incompatible i64 1 ptr
 end
 """
 
+PIC_ADDRESSES = b"""archon-mir 1
+module 1 1 1
+function addresses i64 0 3 1 0
+types ptr func_ptr i64
+block 0 3
+params
+global_addr 0 ext_data
+func_addr 1 ext_function
+ptr_to_int 2 0
+ret 2
+import ext_function void 0
+global ext_data 0 zero
+end
+"""
+
 
 class RuntimeTextTests(unittest.TestCase):
     @classmethod
@@ -125,6 +140,54 @@ class RuntimeTextTests(unittest.TestCase):
         bad = self.cli("--input", "-", data=INDIRECT.replace(
             b"func_addr 1 target", b"func_addr 1 incompatible"))
         self.assertIn(b"known indirect target has a different signature", bad.stderr)
+
+    def test_pic_flag_materializes_external_addresses_and_links_shared_object(self):
+        default = self.cli("--input", "-", data=PIC_ADDRESSES)
+        pic = self.cli("--input", "-", "--pic", data=PIC_ADDRESSES)
+        self.assertEqual((default.returncode, pic.returncode), (0, 0))
+        self.assertNotIn(b"\t.option pic\n", default.stdout)
+        self.assertIn(b"\tlla x7, ext_data\n", default.stdout)
+        self.assertIn(b"\tlla x7, ext_function\n", default.stdout)
+        self.assertIn(b"\t.option pic\n", pic.stdout)
+        self.assertIn(b"\tla x7, ext_data\n", pic.stdout)
+        self.assertIn(b"\tla x7, ext_function\n", pic.stdout)
+        self.assertNotIn(b"\tlla ", pic.stdout)
+        for output in ("--emit-physical", "--emit-code"):
+            with self.subTest(output=output):
+                rejected = self.cli("--input", "-", "--pic", output, data=PIC_ADDRESSES)
+                self.assertEqual((rejected.returncode, rejected.stdout), (2, b""))
+                self.assertIn(b"PIC requires assembly output", rejected.stderr)
+
+        clang, lld = shutil.which("clang"), shutil.which("ld.lld")
+        if not clang or not lld:
+            self.skipTest("Clang and LLD are required for the PIC shared-link check")
+        targets = subprocess.run(
+            [clang, "--print-targets"], check=True, capture_output=True, timeout=10,
+        )
+        if b"riscv64" not in targets.stdout:
+            self.skipTest("Clang lacks RV64 support")
+        source, definitions = self.work / "pic.s", self.work / "pic-defs.s"
+        obj, defs, shared = self.work / "pic.o", self.work / "pic-defs.o", self.work / "pic.so"
+        source.write_bytes(pic.stdout)
+        definitions.write_text(
+            ".option norvc\n.text\n.globl ext_function\n"
+            ".type ext_function,@function\next_function:\n\tret\n"
+            ".data\n.p2align 3\n.globl ext_data\next_data:\n\t.quad 0\n",
+            encoding="ascii",
+        )
+        target = ("--target=riscv64-linux-gnu", "-march=rv64im", "-mabi=lp64")
+        for asm, output in ((source, obj), (definitions, defs)):
+            subprocess.run(
+                [clang, *target, "-c", asm, "-o", output],
+                check=True, capture_output=True, timeout=30,
+            )
+        subprocess.run(
+            [lld, "-m", "elf64lriscv", "-shared", "--no-relax", obj, defs, "-o", shared],
+            check=True, capture_output=True, timeout=30,
+        )
+        image = shared.read_bytes()
+        self.assertEqual(image[:7], b"\x7fELF\x02\x01\x01")
+        self.assertEqual(int.from_bytes(image[16:20], "little"), (243 << 16) | 3)
 
     def test_elf_bridge_atomic_publication(self):
         clang = shutil.which("clang")

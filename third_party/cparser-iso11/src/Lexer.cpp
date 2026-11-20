@@ -7,58 +7,32 @@
 
 #include "../include/Lexer.h"
 
+#include <cstdarg>
 #include <cstdio>
-#include <ctype.h>
-#include <iostream>
-#include <map>
 
 namespace cparser
 {
 
-void Lexer::error(int lineNum, const char *format, ...)
+void Lexer::error(int line, int column, const char *format, ...)
 {
     char dest[4096];
 
     va_list argptr;
     va_start(argptr, format);
-    vsprintf(dest, format, argptr);
+    vsnprintf(dest, sizeof(dest), format, argptr);
     va_end(argptr);
-    printf("error: %s; line %d\n", dest, lineNum);
-
-    exit(1);
-}
-
-bool Lexer::isHexDigit(char c)
-{
-    if (c >= 'A' && c <= 'F')
-        return true;
-    return false;
-}
-
-int Lexer::powr(int x, int n)
-{
-    if (n == 0)
-    {
-        return 1;
-    }
-    else if (n == 1)
-    {
-        return x;
-    }
-    else
-    {
-        int res = 1;
-
-        for (int i = 0; i < n; i++)
-            res = res * x;
-
-        return res;
-    }
+    failDiagnostic(_diagnostic, DiagnosticKind::LexError, line, column, dest);
 }
 
 void Lexer::nextCh()
 {
-    _ch = getc(_fp);
+    if (_ch == EOF)
+        return;
+    if (_fp)
+        _ch = getc(_fp);
+    else
+        _ch = _offset < _source.size()
+              ? static_cast<unsigned char>(_source[_offset++]) : EOF;
     _col++;
     if (_ch == '\n')
     {
@@ -69,21 +43,15 @@ void Lexer::nextCh()
 
 Lexer::Lexer(const char *filename)
 {
-    _line = 1;
-    _col = 0;
-    _ch = 0;
+    _fp = filename ? fopen(filename, "r") : stdin;
+    if (!_fp)
+        error(1, 1, "cannot open '%s'", filename);
+}
 
-    // Load source file
-    if (filename == NULL)
-        _fp = stdin;
-    else
-        _fp = fopen(filename, "r");
-
-    if (_fp == NULL)
-    {
-        printf("Fatal error: file '%s' does not exists!\n", filename);
-        exit(1);
-    }
+Lexer::~Lexer()
+{
+    if (_fp && _fp != stdin)
+        fclose(_fp);
 }
 
 } // namespace cparser

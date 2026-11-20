@@ -22,6 +22,15 @@ python3 -m archon irgen gated rv32.archdb wasm.archdb -o generated/gated
 positional ArchDBs. With no ArchDB arguments, Archon discovers and compiles every
 `architecture` entry point below `stdspec/`.
 
+**Target coverage is profile-specific.** Every
+[bundled standard specification](stdspec/README.md) can be selected for classic
+IR generation, including from a mixed set of databases. This describes
+generation of the IR and target artifacts, not support for every operation,
+assembly dialect, or ABI. A selected target can reject a program at instruction
+selection, register allocation, or final emission. In particular, the stack VMs
+do not have a physical register ABI, and admission to the classic profile does
+not admit a target to the separate native MachineIR profile.
+
 Generation includes `Oracle.c` and `Oracle.h` by default. They provide the
 bounded shared-memory/IPC bridge used to ask an external process to transform
 or annotate `.i` artifacts. Disable this optional integration with
@@ -216,8 +225,10 @@ modifying the source `Program.i`.
 
 ## Native runtime profile
 
-`--profile native --abi LP64` adds a standalone C99 backend library and
-runtime driver for the reviewed `RISCV64IM` ArchDB. It does not replace the
-eight generated representations or change the default legacy pipeline. See
-[Embedding.md](Embedding.md) for the build and [MachineIR.md](MachineIR.md)
-for the runtime input contract.
+`--profile native` adds a standalone C99 backend library and runtime driver
+for a reviewed ArchDB. Optional `--abi` must match its profile (`LP64` for
+RV64I/RV64IM, `SysVAMD64` for AMD64, `AAPCS64` for AArch64). It does not
+replace the eight generated representations or change the default legacy
+pipeline. See [Embedding.md](Embedding.md) for the build, [MachineIR.md](MachineIR.md)
+for the runtime input contract, and [NativeScalarGAS.md](NativeScalarGAS.md)
+for AMD64/AArch64 capabilities.

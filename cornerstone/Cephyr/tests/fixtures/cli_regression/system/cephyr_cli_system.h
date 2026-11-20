@@ -1,0 +1,6 @@
+#ifndef CEPHYR_CLI_SYSTEM_H
+#define CEPHYR_CLI_SYSTEM_H
+
+#define CEPHYR_CLI_SYSTEM_VALUE 19
+
+#endif

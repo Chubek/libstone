@@ -160,16 +160,21 @@ class CLexer : public Lexer
 
     unsigned keyword(const char *s);
     void readName(Token *t);
-    void readNumberLit(Token *t);
+    void readNumberLit(Token *t, bool leadingDot = false);
     void readStringLit(Token *t);
     void readCharLit(Token *t);
-    void comment();
+    void comment(int line, int column);
     void initialize();
 
 public:
     unsigned next(Token *t);
 
     CLexer(const char *filename) : Lexer(filename)
+    {
+        initialize();
+    }
+
+    explicit CLexer(std::string source) : Lexer(std::move(source))
     {
         initialize();
     }

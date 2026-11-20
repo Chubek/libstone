@@ -105,7 +105,7 @@ ArchDB, script, or bank path located in or aliased into the destination.
 
 ## Generated native backend
 
-Generate and build once per target:
+Generate and build once per target. This example uses RV64IM:
 
 ```sh
 ./tools/archonc stdspec/riscv/rv64im.arch -o rv64im.archdb
@@ -114,9 +114,16 @@ Generate and build once per target:
 cmake -S generated -B build
 cmake --build build
 build/archon-backend --input program.mir >program.s
+build/archon-backend --input program.mir --pic >program-pic.s
 build/archon-backend --input program.mir --schedule-pure --emit-physical >program.physical
 build/archon-backend --input function.mir --emit-code >function.bin
 ```
+
+For the base RV64I profile, compile `stdspec/riscv/rv64i.arch` and select
+`--target RISCV64` instead. The ABI stays LP64; `BackendManifest.json` records
+the qualified ISA, and lists the runtime MIR operations unavailable on RV64I.
+See [native profile coverage](stdspec/riscv/README.md#rv64-native-profiles).
+For AMD64 and AArch64, see the [scalar GAS profiles](NativeScalarGAS.md).
 
 The generated `archon_backend` static library exposes `Backend.h`. Link it
 into an application compiled as C99 or C11. `archon_backend_compile` compiles a
@@ -126,11 +133,16 @@ return. Callers must provide valid array storage for the duration of the call,
 including when invoking from another language through an FFI. Input views and
 referenced memory must not be concurrently mutated.
 
-The `_ex` compile variants additionally accept `ARCHON_BACKEND_SCHEDULE_PURE`
+On RV64, the `_ex` compile variants additionally accept `ARCHON_BACKEND_SCHEDULE_PURE`
 with either `ARCHON_BACKEND_PHYSICAL_RECORDS` or `ARCHON_BACKEND_MACHINE_CODE`.
-The output modes are mutually exclusive.
+`ARCHON_BACKEND_PIC` is assembly-only and selects `.option pic` plus GAS `la`
+address materialization; combining it with either non-assembly output mode is
+invalid. The output modes are mutually exclusive.
 `archon_backend_compile_physical` is the typed convenience API for physical
 inspection with default ordering.
+The AMD64 and AArch64 profiles reject those three RV64-specific options.
+AMD64 and AArch64 both support assembly-only PIC lowering with ELF GOT and PLT
+relocations.
 
 Initialize an `ArchonBackendArtifact` to zero and reuse it only after calling
 `archon_backend_artifact_destroy`. Successful textual output is NUL-terminated

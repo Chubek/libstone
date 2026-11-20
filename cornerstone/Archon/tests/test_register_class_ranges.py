@@ -187,16 +187,12 @@ class RegisterClassRangesTests(unittest.TestCase):
             files[f"{prefix}.h"] = generate_emulator_header(db, prefix=prefix)
         self._run_c(files, "checks.c", "window.c", "amd.c", "arm.c")
 
-    def test_legacy_selection_and_emission_cannot_use_bounded_forms(self):
-        # All of AMD64's instruction forms are bounded. Mark a dialect
-        # available to test rejection of a fabricated allocation even when
-        # there is no missing-dialect check to stop it.
+    def test_legacy_selection_exposes_bounded_forms_but_emitter_checks_ranges(self):
         amd = compile_file(STDSPEC / "amd64/root.arch")
-        amd["assembly_dialects"] = {"gas": {"supported": True}}
         options = {"oracle": False}
         files = emitter.emit({"database": amd, "options": options})
         files.update(isel.emit({"architectures": [amd, self.db], "options": options}))
-        self.assertNotIn('"SCOPED"', files["ISelPattern_Windowed.i"])
+        self.assertIn('"SCOPED"', files["ISelPattern_Windowed.i"])
         self.assertIn('"WIDE"', files["ISelPattern_Windowed.i"])
         files["checks.c"] = C_LEGACY
         files["Regallocated.i"] = """\
@@ -290,23 +286,26 @@ int main(void)
 {
     Emitter_Options options = {0};
     Emitter_Diagnostic diagnostic;
+    Emitter_Operand_Info info;
     ArchonISelOperand operand = {ARCHON_ISEL_OPERAND_VALUE, 64, 0, 1};
     ArchonISelOperation operation = {"copy", NULL, 64, 0, 0, &operand, 1};
     ArchonISelChoice choice;
     size_t index;
 
-    assert(archon_isel_pattern_count("AMD64") == 0);
+    assert(archon_isel_pattern_count("AMD64") > 0);
     assert(archon_isel_select_operation("AMD64", &operation, &choice, NULL, 0)
-        == ARCHON_ISEL_NO_MATCH);
+        == ARCHON_ISEL_OK);
     operation.operation = NULL;
     operation.explicit_target = "MOV";
     assert(archon_isel_select_operation("AMD64", &operation, &choice, NULL, 0)
-        == ARCHON_ISEL_NO_MATCH);
+        == ARCHON_ISEL_OK);
 
-    assert(!Emitter_lookup_instruction("MOV", &index));
+    assert(Emitter_lookup_instruction("MOV", &index));
+    assert(Emitter_operand_info(index, 0, &info));
+    assert(info.register_min == 0u && info.register_max == 7u);
     options.dialect = EMITTER_DIALECT_GAS;
     options.output_path = "unexpected.s";
-    assert(Emitter_emit(&options, &diagnostic) == EMITTER_STATUS_UNKNOWN_INSTRUCTION);
+    assert(Emitter_emit(&options, &diagnostic) == EMITTER_STATUS_OPERAND_RANGE);
 }
 """
 

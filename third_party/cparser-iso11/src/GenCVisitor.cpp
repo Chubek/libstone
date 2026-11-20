@@ -76,7 +76,10 @@ void GenCVisitor::visit(TypeDeclASTNode *n)
 
 void GenCVisitor::visit(FunctionDeclASTNode *n)
 {
-    n->getType()->accept(this);
+    ASTNode *result = n->getType();
+    if (result->getKind() == NK_FUNCTION_TYPE)
+        result = static_cast<FunctionTypeASTNode *>(result)->getType();
+    result->accept(this);
 
     std::cout << " ";
 

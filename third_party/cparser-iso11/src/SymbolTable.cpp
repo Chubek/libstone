@@ -66,9 +66,9 @@ SymbolTable::SymbolTable()
     unsignedType->size = 4;
     unsignedType->isSigned = false;
 
-    // int: 4 bytes
+    // LP64 long: 8 bytes
     longType = allocType(STTK_LONG);
-    longType->size = 4;
+    longType->size = 8;
     longType->isSigned = true;
 
     // float: 4 bytes
@@ -82,6 +82,10 @@ SymbolTable::SymbolTable()
     // int: 4 bytes
     voidType = allocType(STTK_VOID);
     voidType->size = 4;
+
+    boolType = allocType(STTK_BOOL);
+    boolType->size = 1;
+    boolType->isSigned = false;
 
     noType = allocType(STTK_NONE);
     insert("NOTYPE", STOK_TYPE, noType);
@@ -125,7 +129,7 @@ STObject *SymbolTable::insert(const char *name, STObjectKind kind, STType *type)
     last = nullptr;
     while (p != nullptr)
     {
-        if (strcmp(p->name, name) == 0)
+        if (p->name == name)
             return noObj;
         last = p;
         p = p->next;
@@ -143,9 +147,17 @@ STObject *SymbolTable::find(const char *name)
 {
     for (STScope *s = topScope; s != nullptr; s = s->outer)
         for (STObject *p = s->locals; p != nullptr; p = p->next)
-            if (strcmp(p->name, name) == 0)
+            if (p->name == name)
                 return p;
 
+    return noObj;
+}
+
+STObject *SymbolTable::findLocal(const char *name)
+{
+    for (STObject *p = topScope->locals; p != nullptr; p = p->next)
+        if (p->name == name)
+            return p;
     return noObj;
 }
 

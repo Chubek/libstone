@@ -29,7 +29,16 @@ typedef enum {
     ARCHON_MIR_FRAME_ADDR, ARCHON_MIR_GLOBAL_ADDR, ARCHON_MIR_CALL,
     ARCHON_MIR_FUNC_ADDR, ARCHON_MIR_CALL_INDIRECT,
     ARCHON_MIR_TRUNC, ARCHON_MIR_ZEXT, ARCHON_MIR_SEXT,
-    ARCHON_MIR_MUL_CHECKED_S
+    ARCHON_MIR_MUL_CHECKED_S,
+    /* Appended to preserve every MachineIR v1 opcode value above. */
+    ARCHON_MIR_LOAD_S8, ARCHON_MIR_LOAD_U8,
+    ARCHON_MIR_LOAD_S16, ARCHON_MIR_LOAD_U16,
+    ARCHON_MIR_LOAD_S32, ARCHON_MIR_LOAD_U32,
+    ARCHON_MIR_LOAD_PTR, ARCHON_MIR_LOAD_FUNC_PTR,
+    ARCHON_MIR_STORE8, ARCHON_MIR_STORE16, ARCHON_MIR_STORE32,
+    ARCHON_MIR_STORE_PTR, ARCHON_MIR_STORE_FUNC_PTR,
+    ARCHON_MIR_PTR_TO_INT, ARCHON_MIR_INT_TO_PTR,
+    ARCHON_MIR_FUNC_PTR_TO_INT, ARCHON_MIR_INT_TO_FUNC_PTR
 } ArchonMIROpcode;
 typedef struct {
     ArchonMIROpcode op;
@@ -105,7 +114,9 @@ typedef enum {
 enum {
     ARCHON_BACKEND_SCHEDULE_PURE = 1u,
     ARCHON_BACKEND_PHYSICAL_RECORDS = 2u,
-    ARCHON_BACKEND_MACHINE_CODE = 4u
+    ARCHON_BACKEND_MACHINE_CODE = 4u,
+    /* Assembly-only: use GAS PIC address materialization. */
+    ARCHON_BACKEND_PIC = 8u
 };
 typedef struct {
     ArchonBackendStatus status;
@@ -128,10 +139,11 @@ typedef struct {
 ArchonBackendStatus archon_backend_compile(const ArchonMIRModule *module,
     const ArchonBackendOptions *options, ArchonBackendArtifact *artifact,
     ArchonBackendDiagnostic *diagnostic);
-/* Flags zero selects assembly. Output modes are mutually exclusive.
- * MACHINE_CODE returns raw position-independent RV64IM instruction bytes
- * for one function (entry at byte zero, no imports or globals). Use size,
- * not strlen, for this output. The library does not map or execute it. */
+/* Flags zero selects the existing non-PIC assembly. Output modes are mutually
+ * exclusive. PIC is valid only for assembly output.
+ * MACHINE_CODE returns raw position-independent instruction bytes for the
+ * generated RV64I or RV64IM target, for one function (entry at byte zero, no
+ * imports or globals). Use size, not strlen; the library does not execute it. */
 ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
     const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
     ArchonBackendDiagnostic *diagnostic);

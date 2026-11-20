@@ -112,6 +112,10 @@ static inline int check_special_macro(char *name)
 int c99_compliant = 1;
 int c99_hosted = 1;
 
+#ifndef UCPP_STDC_VERSION
+#define UCPP_STDC_VERSION "199901L"
+#endif
+
 /*
  * add the special macros to the macro table
  */
@@ -128,25 +132,28 @@ static void add_special_macros(void)
 	m->arg = getmem(sizeof(char *)); m->arg[0] = sdup("foo");
 	HTT_put(&macros, m, "_Pragma");
 	if (c99_compliant) {
+		char *stdc_version = UCPP_STDC_VERSION;
+		size_t stdc_version_size = strlen(stdc_version) + 1;
 #ifndef LOW_MEM
 		struct token t;
 #endif
 
 		m = new_macro();
 #ifdef LOW_MEM
-		m->cval.t = getmem(9);
+		m->cval.t = getmem(1 + stdc_version_size);
 		m->cval.t[0] = NUMBER;
-		mmv(m->cval.t + 1, "199901L", 8);
-		m->cval.length = 9;
+		mmv(m->cval.t + 1, stdc_version, stdc_version_size);
+		m->cval.length = 1 + stdc_version_size;
 #else
 		t.type = NUMBER;
 		t.line = 0;
-		t.name = sdup("199901L");
+		t.name = sdup(stdc_version);
 		aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
 #endif
 		HTT_put(&macros, m, "__STDC_VERSION__");
 	}
-	if (c99_hosted) {
+	if (c99_hosted >= 0) {
+		char *hosted = c99_hosted > 0 ? "1" : "0";
 #ifndef LOW_MEM
 		struct token t;
 #endif
@@ -155,12 +162,12 @@ static void add_special_macros(void)
 #ifdef LOW_MEM
 		m->cval.t = getmem(3);
 		m->cval.t[0] = NUMBER;
-		mmv(m->cval.t + 1, "1", 2);
+		mmv(m->cval.t + 1, hosted, 2);
 		m->cval.length = 3;
 #else
 		t.type = NUMBER;
 		t.line = 0;
-		t.name = sdup("1");
+		t.name = sdup(hosted);
 		aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
 #endif
 		HTT_put(&macros, m, "__STDC_HOSTED__");
@@ -1057,7 +1064,7 @@ int substitute_macro(struct lexer_state *ls, struct macro *m,
 	if ((i = check_special_macro(mname)) >= MAC_SPECIAL) {
 		/* we have a special macro */
 		switch (i) {
-			char buf[30], *bbuf, *cfn;
+			char buf[30], *bbuf;
 
 		case MAC_LINE:
 			t.type = NUMBER;
@@ -1070,25 +1077,7 @@ int substitute_macro(struct lexer_state *ls, struct macro *m,
 		case MAC_FILE:
 			t.type = STRING;
 			t.line = l;
-			cfn = current_long_filename ?
-				current_long_filename : current_filename;
-			bbuf = getmem(2 * strlen(cfn) + 3);
-			{
-				char *c, *d;
-				int lcwb = 0;
-
-				bbuf[0] = '"';
-				for (c = cfn, d = bbuf + 1; *c; c ++) {
-					if (*c == '\\') {
-						if (lcwb) continue;
-						*(d ++) = '\\';
-						lcwb = 1;
-					} else lcwb = 0;
-					*(d ++) = *c;
-				}
-				*(d ++) = '"';
-				*(d ++) = 0;
-			}
+			bbuf = quote_filename(current_filename);
 			t.name = bbuf;
 			print_space(ls);
 			print_token(ls, &t, 0);
@@ -1195,9 +1184,9 @@ collect_args:
 			freemem(atl);
 			goto exit_error;
 		}
-		pn = atl[0].t[0].name;
-		if ((pn[0] == '"' && pn[1] == '"') || (pn[0] == 'L'
-			&& pn[1] == '"' && pn[2] == '"')) {
+		/* Destringizing deletes any C11 encoding prefix. */
+		pn = strchr(atl[0].t[0].name, '"') + 1;
+		if (*pn == '"') {
 			/* void pragma -- just ignore it */
 			freemem(atl[0].t);
 			freemem(atl);
@@ -1211,11 +1200,10 @@ collect_args:
 	 * output, and exactly as many times as it appears. Therefore,
 	 * _Pragma() will get evaluated just like they should.
 	 */
-			char *c = atl[0].t[0].name, *d;
+			char *d;
 
 			for (d = "\n#pragma "; *d; d ++) put_char(ls, *d);
-			d = (*c == 'L') ? c + 2 : c + 1;
-			for (; *d != '"'; d ++) {
+			for (d = pn; *d != '"'; d ++) {
 				if (*d == '\\' && (*(d + 1) == '\\'
 					|| *(d + 1) == '"')) {
 					d ++;
@@ -1231,12 +1219,9 @@ collect_args:
 					"_Pragma() ignored and not dumped");
 #endif
 		} else if (ls->flags & HANDLE_PRAGMA) {
-			char *c = atl[0].t[0].name, *d, *buf;
+			char *c = pn, *d, *buf;
 			struct token t;
 
-			/* a wide string is a string */
-			if (*c == 'L') c ++;
-			c ++;
 			for (buf = d = getmem(strlen(c)); *c != '"'; c ++) {
 				if (*c == '\\' && (*(c + 1) == '\\'
 					|| *(c + 1) == '"')) {

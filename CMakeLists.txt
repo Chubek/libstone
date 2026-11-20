@@ -21,3 +21,7 @@ option(LIBSTONE_BUILD_GATESTONE "Build the GateML frontend-definition compiler" 
 if(LIBSTONE_BUILD_GATESTONE)
   add_subdirectory(gatestone)
 endif()
+option(LIBSTONE_BUILD_CEPHYR "Build the Cephyr C11 compiler driver" OFF)
+if(LIBSTONE_BUILD_CEPHYR)
+  add_subdirectory(cornerstone/Cephyr)
+endif()

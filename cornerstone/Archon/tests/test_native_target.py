@@ -49,12 +49,13 @@ class NativeTargetTests(unittest.TestCase):
         ).hexdigest())
         stems = (
             "ADD SUB MUL DIV REM DIVU REMU AND OR XOR SLL SRL SRA SLT SLTU "
-            "ADDI SLLI LD SD JALR EBREAK BEQ BNE JAL AUIPC"
+            "ADDI SLLI LB LBU LH LHU LW LWU LD SB SH SW SD "
+            "JALR EBREAK BEQ BNE JAL AUIPC"
         ).split()
         self.assertEqual(facts["instructions"], {stem: stem.lower() for stem in stems})
         checks = facts["instruction_facts"]
         self.assertEqual({stem for stem, f in checks.items() if not f["in_db"]},
-                         {"SD", "BEQ", "BNE", "JAL"})
+                         {"SB", "SH", "SW", "SD", "BEQ", "BNE", "JAL"})
         for stem in ("ADD", "SRA", "MUL", "SLT", "SLTU", "SLLI"):
             self.assertEqual(checks[stem]["evidence"], "exact-archsem")
         for stem in ("DIV", "LD", "EBREAK", "AUIPC"):
@@ -72,16 +73,36 @@ class NativeTargetTests(unittest.TestCase):
         del old["abi_facts"]
         text = database.dumps(old)
         self.assertEqual(hashlib.sha256(text.encode("ascii")).hexdigest(),
-                         "3e5dc650a0a5df6d05bb780535e8fe4e3f01aff85aff30e834a466734e530e1e")
+                         "4c1b040339ebeb2252a47c27347c61847a2cfba83da5ca5d0c19edb61ed70342")
         self.assertEqual(database.dumps(database.loads(text)), text)
         self.assertEqual(Target(database.loads(text)).encode("ADD", {"rd": 1, "rs1": 2, "rs2": 3}),
                          bytes.fromhex("b3003100"))
-        rv64i = compile_file(RISCV / "rv64i.arch")
-        self.assertEqual(rv64i["abi_facts"]["name"], "LP64")
-        with self.assertRaisesRegex(ArchonError, "expected RISCV64IM"):
-            resolve_native_target(rv64i)
         with self.assertRaisesRegex(ArchonError, "missing declarative abi_facts"):
             resolve_native_target(database.loads(text))
+
+    def test_base_profile_qualifies_independently_without_m(self):
+        db = compile_file(RISCV / "rv64i.arch")
+        facts = resolve_native_target(database.loads(database.dumps(db)))
+        im = resolve_native_target(self.db)
+        self.assertEqual((facts["name"], facts["isa"], facts["isa_features"]),
+                         ("RISCV64", "RV64I", ("I",)))
+        self.assertEqual(facts["provider"], im["provider"])
+        self.assertEqual(facts["abi_facts"], im["abi_facts"])
+        self.assertNotEqual(facts["fingerprint"], im["fingerprint"])
+        checks = facts["instruction_facts"]
+        self.assertEqual(set(im["instruction_facts"]) - checks.keys(),
+                         {"MUL", "DIV", "DIVU", "REM", "REMU"})
+        self.assertEqual({stem for stem, row in checks.items() if row["in_db"]},
+                         {"ADD", "ADDI", "AND", "OR", "SUB", "XOR", "SLL", "SRL", "SRA"})
+        for stem in set(checks) - {"ADD", "ADDI", "AND", "OR", "SUB", "XOR", "SLL", "SRL", "SRA"}:
+            self.assertEqual(checks[stem]["evidence"], "reviewed-isa-manifest")
+        db["unreviewed"] = True
+        with self.assertRaisesRegex(ArchonError, r"fingerprint.*rv64i\.arch"):
+            resolve_native_target(db)
+        db = compile_file(RISCV / "rv64i.arch")
+        instruction(db, "ADD")["semantics"] = instruction(db, "SUB")["semantics"]
+        with self.assertRaisesRegex(ArchonError, "ADD does not match the reviewed ArchSem"):
+            resolve_native_target(db)
 
     def test_abi_facts_validation_at_db_boundaries(self):
         original = self.db["abi_facts"]
@@ -189,8 +210,10 @@ class NativeTargetTests(unittest.TestCase):
                 resolve_native_target(ordered)
 
     def test_rejects_wrong_targets_and_configurations(self):
-        for spec in ("riscv/rv32i.arch", "riscv/rv64i.arch", "wasm/root.arch"):
-            with self.subTest(spec=spec), self.assertRaisesRegex(ArchonError, "architecture is"):
+        for spec in ("riscv/rv32i.arch", "mips32/root.arch", "pdp11/root.arch", "wasm/root.arch"):
+            with self.subTest(spec=spec), self.assertRaisesRegex(
+                ArchonError, "no reviewed native lowering provider: architecture is",
+            ):
                 resolve_native_target(compile_file(STDSPEC / spec))
         with self.assertRaisesRegex(ArchonError, "expected I and M"):
             resolve_native_target(compile_file(RISCV / "rv64im.arch", features=["I"]))
@@ -240,6 +263,15 @@ class NativeTargetTests(unittest.TestCase):
             ("SLTU", {"rd": 1, "rs1": 2, "rs2": 3}, 0x003130B3),
             ("SLLI", {"rd": 1, "rs1": 2, "shamt": 63}, 0x03F11093),
             ("LD", {"rd": 1, "rs1": 2, "imm": -16}, 0xFF013083),
+            ("LB", {"rd": 1, "rs1": 2, "imm": -1}, 0xFFF10083),
+            ("LBU", {"rd": 1, "rs1": 2, "imm": 2047}, 0x7FF14083),
+            ("LH", {"rd": 1, "rs1": 2, "imm": -2}, 0xFFE11083),
+            ("LHU", {"rd": 1, "rs1": 2, "imm": 2046}, 0x7FE15083),
+            ("LW", {"rd": 1, "rs1": 2, "imm": -4}, 0xFFC12083),
+            ("LWU", {"rd": 1, "rs1": 2, "imm": 2044}, 0x7FC16083),
+            ("SB", {"rs2": 1, "rs1": 2, "imm": -1}, 0xFE110FA3),
+            ("SH", {"rs2": 1, "rs1": 2, "imm": -2}, 0xFE111F23),
+            ("SW", {"rs2": 1, "rs1": 2, "imm": 2044}, 0x7E112E23),
             ("SD", {"rs2": 1, "rs1": 2, "imm": -16}, 0xFE113823),
             ("SD", {"rs2": 3, "rs1": 2, "imm": 2047}, 0x7E313FA3),
             ("JALR", {"rd": 1, "rs1": 2, "imm": -16}, 0xFF0100E7),

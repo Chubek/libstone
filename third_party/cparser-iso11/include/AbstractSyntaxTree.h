@@ -11,6 +11,7 @@
 #include <cstring>
 #include <queue>
 #include <stack>
+#include <utility>
 
 #include "ASTNode.h"
 
@@ -23,6 +24,12 @@
 
 #define TQ_CONST 0x20
 #define TQ_VOLATILE 0x40
+#define TQ_RESTRICT 0x80
+#define FS_INLINE 0x100
+#define FS_NORETURN 0x200
+
+#define DS_STORAGE_MASK (SCS_TYPEDEF | SCS_EXTERN | SCS_STATIC | SCS_AUTO | SCS_REGISTER)
+#define DS_QUALIFIER_MASK (TQ_CONST | TQ_VOLATILE | TQ_RESTRICT)
 
 #define UNLESS(x) if (!(x))
 #define TYPE(x) x->type
@@ -78,6 +85,8 @@ class ASTNode;
 
 class AbstractSyntaxTree
 {
+    friend class ASTNode;
+
     ASTNode *_root;
 
     SymbolTable *_stb;
@@ -86,6 +95,18 @@ class AbstractSyntaxTree
 
     int _errors;
     int _warnings;
+    DiagnosticHandler _diagnostic;
+    std::vector<ASTNode *> _nodes;
+
+    void trackNode(ASTNode *node)
+    {
+        _nodes.push_back(node);
+        node->owner = this;
+        node->ownerIndex = _nodes.size() - 1;
+        node->incRefCount();
+    }
+
+    void forgetNode(std::size_t index) noexcept { _nodes[index] = nullptr; }
 
 public:
     STObject *currentRecordObj;
@@ -96,6 +117,7 @@ public:
     ASTNode *unsignedTypeASTNode;
     ASTNode *shortTypeASTNode;
     ASTNode *charTypeASTNode;
+    ASTNode *boolTypeASTNode;
     ASTNode *floatTypeASTNode;
 
     std::vector<StructTypeASTNode *> structTypes;
@@ -108,16 +130,27 @@ public:
         _currentFuncDecl = currentFuncDecl;
     }
 
-    void error(int lineNum, const char *format, ...);
+    [[noreturn]] void error(int lineNum, const char *format, ...);
+    [[noreturn]] void errorAt(int line, int column, const char *format, ...);
     void warning(int lineNum, const char *format, ...);
 
-    void setRoot(ASTNode *Root) { _root = Root; }
+    void setDiagnosticHandler(DiagnosticHandler handler)
+    {
+        _diagnostic = std::move(handler);
+    }
+
+    void setRoot(ASTNode *Root)
+    {
+        if (_root)
+            DELETE_AST_NODE_REF(_root);
+        ASSIGN_AST_NODE_REF(_root, Root);
+    }
     ASTNode *getRoot() { return _root; }
 
     void declare();
 
-    int getErrors() { return _errors; }
-    int getWarnings() { return _warnings; }
+    int getErrors() const { return _errors; }
+    int getWarnings() const { return _warnings; }
 
     STType *getStbType(ASTNode *typeASTNode);
 
@@ -136,14 +169,17 @@ public:
     AbstractSyntaxTree(SymbolTable *STB) : _stb(STB)
     {
         ASSIGN_AST_NODE_REF(voidTypeASTNode, new VoidTypeASTNode());
-        ASSIGN_AST_NODE_REF(charTypeASTNode, new IntegralTypeASTNode(1, true));
-        ASSIGN_AST_NODE_REF(shortTypeASTNode, new IntegralTypeASTNode(2, true));
+        // Cephyr's only native target is RV64 LP64, whose plain char is
+        // unsigned. Rank is distinct from storage width.
+        ASSIGN_AST_NODE_REF(charTypeASTNode, new IntegralTypeASTNode(1, false, 1, true));
+        ASSIGN_AST_NODE_REF(boolTypeASTNode, new BooleanTypeASTNode());
+        ASSIGN_AST_NODE_REF(shortTypeASTNode, new IntegralTypeASTNode(2, true, 2));
         ASSIGN_AST_NODE_REF(integerTypeASTNode,
-                            new IntegralTypeASTNode(4, true));
+                            new IntegralTypeASTNode(4, true, 3));
         ASSIGN_AST_NODE_REF(longTypeASTNode,
-                            new IntegralTypeASTNode(8, true));
+                            new IntegralTypeASTNode(8, true, 4));
         ASSIGN_AST_NODE_REF(unsignedTypeASTNode,
-                            new IntegralTypeASTNode(4, false));
+                            new IntegralTypeASTNode(4, false, 3));
         ASSIGN_AST_NODE_REF(floatTypeASTNode, new RealTypeASTNode(4, false));
 
         _currentFuncDecl = nullptr;
@@ -157,10 +193,22 @@ public:
     ~AbstractSyntaxTree()
     {
         if (_root)
-            delete _root;
+            DELETE_AST_NODE_REF(_root);
+
+        for (auto i = _nodes.rbegin(); i != _nodes.rend(); ++i)
+        {
+            ASTNode *node = *i;
+            if (!node)
+                continue;
+            node->owner = nullptr;
+            node->decRefCount();
+            if (node->getRefCount() == 0)
+                delete node;
+        }
 
         DELETE_AST_NODE_REF(voidTypeASTNode);
         DELETE_AST_NODE_REF(charTypeASTNode);
+        DELETE_AST_NODE_REF(boolTypeASTNode);
         DELETE_AST_NODE_REF(shortTypeASTNode);
         DELETE_AST_NODE_REF(integerTypeASTNode);
         DELETE_AST_NODE_REF(longTypeASTNode);

@@ -9,16 +9,23 @@ from ..diagnostics import ArchonError
 STAGE_ORDER = 1600
 
 _SOURCE_DIR = Path(__file__).with_name("native")
-_SOURCES = (
+_RV64_SOURCES = (
     "ABI.c", "Backend.c", "CFGLowering.c", "FrameLowering.c", "IntegerConversion.c", "Legalizer.c",
     "MachineIR.c", "MIRText.c", "NativeEmitter.c", "NativeEncoding.c", "NativeFrameVerify.c",
     "NativeHomes.c", "NativeISel.c", "NativeLayout.c", "NativeRegalloc.c", "NativeSchedule.c",
     "NativeVerify.c",
 )
-_REQUIRED_MNEMONICS = (
-    "ADD", "SUB", "MUL", "DIV", "REM", "DIVU", "REMU", "AND", "OR", "XOR",
-    "SLL", "SRL", "SRA", "SLT", "SLTU", "ADDI", "SLLI", "LD", "SD",
+_RV64_BASE_MNEMONICS = (
+    "ADD", "SUB", "AND", "OR", "XOR",
+    "SLL", "SRL", "SRA", "SLT", "SLTU", "ADDI", "SLLI",
+    "LB", "LBU", "LH", "LHU", "LW", "LWU", "LD", "SB", "SH", "SW", "SD",
     "JALR", "EBREAK", "BEQ", "BNE", "AUIPC",
+)
+_RV64_M_MNEMONICS = ("MUL", "DIV", "REM", "DIVU", "REMU")
+_GAS_SOURCES = ("Backend.c", "Legalizer.c", "MIRText.c", "NativeVerify.c", "ScalarGAS.c")
+_AMD64_REGISTERS = (
+    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
 )
 
 
@@ -27,14 +34,14 @@ def check_options(options):
     if profile not in ("legacy", "native"):
         raise ArchonError("IR-generation profile must be 'legacy' or 'native'")
     abi = options.get("abi")
-    if abi is not None and (profile != "native" or abi != "LP64"):
-        raise ArchonError("IR-generation option 'abi' requires native profile and LP64")
+    if abi is not None and (profile != "native" or not isinstance(abi, str) or not abi):
+        raise ArchonError("IR-generation option 'abi' requires a native ABI name and profile")
 
 
 def _render_abi(abi):
     return (
         '#include "NativeInternal.h"\n\n'
-        '/* Values validated by the reviewed RV64IM scalar provider. */\n'
+        '/* Values validated by the reviewed RV64 scalar provider. */\n'
         'const ANABI an_abi = {\n'
         f'    .name = "{abi["name"]}",\n'
         f'    .argc = {len(abi["args"])}u,\n'
@@ -46,10 +53,10 @@ def _render_abi(abi):
     )
 
 
-def _render_encodings(facts):
+def _render_rv64_encodings(facts, opcodes):
     """Bind validated encoding fields to the native emitter's operand slots."""
     rows = []
-    for key in _REQUIRED_MNEMONICS:
+    for key in opcodes:
         form = facts["instruction_facts"][key]
         by_name = {}
         reg_count, imm_width, imm_signed = 0, 0, 0
@@ -120,71 +127,12 @@ def _render_adapter_cmake(stem, title):
     )
 
 
-def emit(context):
-    options = context["options"]
-    check_options(options)
-    if options.get("profile") != "native":
-        return {}
-
-    from .native_target import resolve_native_target
-
-    db = context["database"]
-    if db is None:
-        raise ArchonError("native backend generation requires a compiled RV64IM ArchDB")
-    facts = resolve_native_target(db)
-    if facts["abi"] != options.get("abi", "LP64"):
-        raise ArchonError("compiled target does not support the requested native ABI")
-    target = facts["name"]
-    abi = facts["abi"]
-    if target != "RISCV64IM" or abi != "LP64":
-        raise ArchonError("no native lowering provider for this architecture and ABI")
-    mnemonics = facts["instructions"]
-    definitions = []
-    for key in _REQUIRED_MNEMONICS:
-        name = mnemonics.get(key)
-        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*", name):
-            raise ArchonError(f"native target has no validated GAS mnemonic for {key}")
-        definitions.append(f'#define AN_MN_{key} "{name}"')
-    fingerprint = facts["fingerprint"]
-    manifest = {
-        "schema_version": 1,
-        "backend_abi_version": 1,
-        "machineir_schema_version": 1,
-        "target": target,
-        "abi": abi,
-        "archdb_version": db["version"],
-        "archdb_sha256": fingerprint,
-        "abi_facts": facts["abi_facts"],
-        "instruction_evidence": {
-            stem: {"archdb_encoding": row["in_db"], "basis": row["evidence"]}
-            for stem, row in facts["instruction_facts"].items()
-        },
-        "input": ["in-memory generic MachineIR v1", "canonical MachineIR text v1"],
-        "artifact": [
-            "static ELF-oriented GAS assembly", "physical instruction inspection text v1",
-            "raw RV64IM machine code (one function, no imports or globals)",
-        ],
-        "address_width": 64,
-        "endian": "little",
-        "schedule": ["input order (default)", "verified pure-region ordering; no latency model"],
-        "optimizer": "none",
-        "oracle": False,
-    }
-    files = {name: (_SOURCE_DIR / name).read_text(encoding="utf-8")
-             for name in (*_SOURCES, "NativeDriver.c", "NativeInternal.h", "Backend.h")}
-    files["NativeABIData.c"] = _render_abi(facts["abi_facts"])
-    files["NativeEncodingData.c"] = _render_encodings(facts)
-    files["TargetNative.h"] = (
-        "#ifndef ARCHON_TARGET_NATIVE_H\n#define ARCHON_TARGET_NATIVE_H\n"
-        f'#define AN_TARGET_NAME "{target}/{abi}"\n'
-        f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
-        + "\n".join(definitions) + "\n#endif\n"
-    )
-    files["CMakeLists.txt"] = (
+def _render_backend_cmake(sources):
+    return (
         "cmake_minimum_required(VERSION 3.16)\n"
         "project(ArchonNativeBackend LANGUAGES C)\n"
         "add_library(archon_backend STATIC\n"
-        + "".join(f"    {name}\n" for name in (*_SOURCES, "NativeABIData.c", "NativeEncodingData.c")) + ")\n"
+        + "".join(f"    {name}\n" for name in sources) + ")\n"
         "set_target_properties(archon_backend PROPERTIES C_STANDARD 99 "
         "C_STANDARD_REQUIRED YES C_EXTENSIONS NO EXPORT_NAME Backend)\n"
         "add_library(Archon::Backend ALIAS archon_backend)\n"
@@ -204,6 +152,173 @@ def emit(context):
         "install(FILES Backend.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/archon/backend)\n"
         "install(FILES BackendManifest.json DESTINATION ${CMAKE_INSTALL_DATADIR}/archon/backend)\n"
     )
+
+
+def _emit_rv64(facts, archdb_version):
+    target = facts["name"]
+    abi = facts["abi"]
+    isa = facts["isa"]
+    has_m = "M" in facts["isa_features"]
+    opcodes = _RV64_BASE_MNEMONICS + (_RV64_M_MNEMONICS if has_m else ())
+    mnemonics = facts["instructions"]
+    definitions = []
+    for key in opcodes:
+        name = mnemonics.get(key)
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*", name):
+            raise ArchonError(f"native target has no validated GAS mnemonic for {key}")
+        definitions.append(f'#define AN_MN_{key} "{name}"')
+    fingerprint = facts["fingerprint"]
+    manifest = {
+        "schema_version": 1,
+        "backend_abi_version": 1,
+        "machineir_schema_version": 1,
+        "target": target,
+        "abi": abi,
+        "archdb_version": archdb_version,
+        "archdb_sha256": fingerprint,
+        "provider": facts["provider"],
+        "isa": isa,
+        "isa_features": facts["isa_features"],
+        "abi_facts": facts["abi_facts"],
+        "instruction_evidence": {
+            stem: {"archdb_encoding": row["in_db"], "basis": row["evidence"]}
+            for stem, row in facts["instruction_facts"].items()
+        },
+        "input": ["in-memory generic MachineIR v1", "canonical MachineIR text v1"],
+        "artifact": [
+            "ELF-oriented GAS assembly (default or PIC)",
+            "physical instruction inspection text v1",
+            f"raw {isa} machine code (one function, no imports or globals)",
+        ],
+        "address_width": 64,
+        "endian": "little",
+        "schedule": ["input order (default)", "verified pure-region ordering; no latency model"],
+        "pic": "assembly-only .option pic with GAS la address materialization",
+        "optimizer": "none",
+        "oracle": False,
+    }
+    if not has_m:
+        manifest["expanded_mir"] = {"mul": "RV64I shift-and-add modulo 2^64"}
+        manifest["unsupported_mir"] = [
+            "div_s", "rem_s", "div_u", "rem_u", "div_checked_s", "mul_checked_s",
+        ]
+    files = {name: (_SOURCE_DIR / name).read_text(encoding="utf-8")
+              for name in (*_RV64_SOURCES, "NativeDriver.c", "NativeInternal.h", "Backend.h")}
+    files["NativeABIData.c"] = _render_abi(facts["abi_facts"])
+    files["NativeEncodingData.c"] = _render_rv64_encodings(facts, opcodes)
+    files["TargetNative.h"] = (
+        "#ifndef ARCHON_TARGET_NATIVE_H\n#define ARCHON_TARGET_NATIVE_H\n"
+        f'#define AN_TARGET_NAME "{target}/{abi}"\n'
+        f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
+        f"#define AN_RV64_HAS_M {int(has_m)}\n"
+        + "\n".join(definitions) + "\n#endif\n"
+    )
+    files["CMakeLists.txt"] = _render_backend_cmake(
+        (*_RV64_SOURCES, "NativeABIData.c", "NativeEncodingData.c"),
+    )
+    return files, manifest
+
+
+def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
+    abi = facts["abi_facts_v2"]
+    fingerprint = facts["fingerprint"]
+    stack = abi["stack_pointer"]
+    ret = abi["return_address"]
+    sources = (*_GAS_SOURCES, emitter, "NativeABIData.c")
+    files = {name: (_SOURCE_DIR / name).read_text(encoding="utf-8")
+             for name in (*_GAS_SOURCES, emitter, "NativeDriver.c", "NativeInternal.h",
+                          "Backend.h", "ScalarGAS.h")}
+    files["TargetNative.h"] = (
+        "#ifndef ARCHON_TARGET_NATIVE_H\n#define ARCHON_TARGET_NATIVE_H\n"
+        f'#define AN_TARGET_NAME "{facts["name"]}/{facts["abi"]}"\n'
+        f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
+        "#define AN_SCALAR_GAS 1\n"
+        "#define AN_SCALAR_GAS_PIC 1\n"
+        "#endif\n"
+    )
+    stack_reg = registers[stack["index"]] if stack["kind"] == "register" else "sp"
+    link = f'"{registers[ret["index"]]}"' if ret["kind"] == "register" else "NULL"
+    files["NativeABIData.c"] = (
+        '#include "ScalarGAS.h"\n\n'
+        '/* ABI v2 data qualified and pinned by native_target.py. The common MIR\n'
+        ' * verifier only needs the ABI name and local/stack alignment. */\n'
+        'const ANABI an_abi = {\n'
+        f'    .name = "{abi["name"]}", .stack_align = {abi["stack_align"]}u,\n'
+        '};\n'
+        'const ANGasABI an_gas_abi = {\n'
+        f'    .argc = {len(abi["args"])}u,\n'
+        '    .args = {' + ', '.join(f'"{registers[r]}"' for r in abi["args"]) + '},\n'
+        + f'    .result = "{registers[abi["result"]]}", .sp = "{stack_reg}", .link = {link},\n'
+        + "".join(f'    .{key} = {abi[key]}u,\n' for key in (
+            "stack_entry_remainder", "stack_slot_bytes", "stack_arg_offset",
+        ))
+        + '};\n'
+    )
+    files["CMakeLists.txt"] = _render_backend_cmake(sources)
+    return files, {
+        "schema_version": 1,
+        "backend_abi_version": 1,
+        "machineir_schema_version": 1,
+        "target": facts["name"],
+        "abi": facts["abi"],
+        "archdb_version": archdb_version,
+        "archdb_sha256": fingerprint,
+        "provider": facts["provider"],
+        "isa": facts["isa"],
+        "isa_features": facts["isa_features"],
+        "abi_facts_v2": abi,
+        "instruction_evidence": "reviewed baseline GAS sequences; not derived encodings or ArchSem",
+        "input": ["in-memory generic MachineIR v1", "canonical MachineIR text v1"],
+        "artifact": ["ELF-oriented GAS assembly (default or PIC)"],
+        "address_width": 64,
+        "endian": "little",
+        "schedule": ["input order only"],
+        "stack_frame_limit_bytes": 65536,
+        "pic": pic,
+        "optimizer": "none",
+        "oracle": False,
+    }
+
+
+def _emit_amd64(facts, archdb_version):
+    return _emit_scalar_gas(facts, archdb_version, emitter="AMD64GAS.c",
+                            pic="assembly-only via RIP-relative GOTPCREL addresses and ELF direct calls",
+                            registers=tuple("%" + register for register in _AMD64_REGISTERS))
+
+
+def _emit_aarch64(facts, archdb_version):
+    return _emit_scalar_gas(facts, archdb_version, emitter="AArch64GAS.c",
+                            pic="assembly-only via page-relative GOT addresses and ELF direct calls",
+                            registers=tuple(f"x{i}" for i in range(31)))
+
+
+# The provider owns the lowering sources and generated encoding/ABI data.
+# Architecture spellings and arbitrary ArchDB records cannot select C code.
+_NATIVE_EMITTERS = {
+    "riscv64-elf-lp64": _emit_rv64,
+    "amd64-sysv-elf-lp64": _emit_amd64,
+    "aarch64-aapcs64-elf-lp64": _emit_aarch64,
+}
+
+
+def emit(context):
+    options = context["options"]
+    check_options(options)
+    if options.get("profile") != "native":
+        return {}
+
+    from .native_target import resolve_native_target
+
+    db = context["database"]
+    if db is None:
+        raise ArchonError("native backend generation requires a compiled ArchDB")
+    facts = resolve_native_target(db)
+    if options.get("abi", facts["abi"]) != facts["abi"]:
+        raise ArchonError("compiled target does not support the requested native ABI")
+    provider = _NATIVE_EMITTERS.get(facts["provider"])
+    if provider is None:
+        raise ArchonError("no native lowering provider for this architecture and ABI")
+    files, manifest = provider(facts, db["version"])
     if context["ir"] == "gated":
         from .gated_native import emit_gated_adapter
 

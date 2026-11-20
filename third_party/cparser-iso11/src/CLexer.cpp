@@ -8,10 +8,12 @@
 #include "../include/Lexer.h"
 #include "../include/CLexer.h"
 
+#include <cerrno>
+#include <cctype>
+#include <cstdlib>
 #include <cstdio>
-#include <ctype.h>
-#include <iostream>
-#include <map>
+#include <limits>
+#include <string>
 
 namespace cparser
 {
@@ -29,7 +31,7 @@ unsigned CLexer::keyword(const char *s)
     {
         // Search of keyword that can be first in a statement
         it = _fstmtmap.find(s);
-        return (it != _fstmtmap.end()) ? (it->second) : TK_IDENT;
+        return (it != _fstmtmap.end()) ? it->second : unsigned(TK_IDENT);
     }
 }
 
@@ -39,7 +41,8 @@ void CLexer::readName(Token *t)
     t->sval.push_back(_ch);
     nextCh();
 
-    while (isalnum(_ch) || _ch == '_')
+    while (_ch != EOF &&
+           (std::isalnum(static_cast<unsigned char>(_ch)) || _ch == '_'))
     {
         t->sval.push_back(_ch);
         nextCh();
@@ -48,150 +51,245 @@ void CLexer::readName(Token *t)
     t->kind = keyword(t->sval.c_str());
 }
 
-void CLexer::readNumberLit(Token *t)
+void CLexer::readNumberLit(Token *t, bool leadingDot)
 {
-    char buffer[32];
-    int n = 1;
-    bool hex = false, real = false;
+    std::string spelling;
+    bool floating = leadingDot;
+    bool exponentSign = false;
 
-    t->kind = TK_INT_LIT;
-    buffer[0] = _ch;
-    nextCh();
+    if (leadingDot)
+        spelling.push_back('.');
 
-    if (_ch == 'x' && buffer[0] == '0')
+    while (_ch != EOF)
     {
-        nextCh();
-        hex = true;
-        while (isdigit(_ch) || isHexDigit(_ch))
+        const char ch = static_cast<char>(_ch);
+        const bool digit = std::isalnum(static_cast<unsigned char>(ch)) != 0;
+        if (digit || ch == '.')
         {
-            buffer[n++] = _ch;
+            spelling.push_back(ch);
+            exponentSign = ch == 'e' || ch == 'E' || ch == 'p' || ch == 'P';
             nextCh();
         }
-        // TODO: Handle this
-        if (_ch == 'L')
-            nextCh();
-    }
-    else
-    {
-        while (isdigit(_ch))
+        else if ((ch == '+' || ch == '-') && exponentSign)
         {
-            buffer[n++] = _ch;
-            nextCh();
-        }
-    }
-
-    if (_ch == '.')
-    {
-        real = true;
-        nextCh();
-    }
-
-    if (hex)
-    {
-        int currentDigit, result = 0, power = 0;
-
-        n--;
-        while (n >= 0)
-        {
-            if (isdigit(buffer[n]))
-                currentDigit = buffer[n] - '0';
-            else
-                currentDigit = buffer[n] - '7';
-
-            result += currentDigit * powr(16, power);
-            power++;
-            n--;
-        }
-        t->info.ival = result;
-    }
-    else
-    {
-        int i, digitcnt = 10;
-
-        t->info.ival = buffer[0] - '0';
-        for (i = 1; i < n; i++)
-            t->info.ival = t->info.ival * 10 + buffer[i] - '0';
-
-        if (real)
-        {
-            int mantissa = _ch - '0';
-
-            t->kind = TK_FLOAT_LIT;
-            nextCh();
-            while (isdigit(_ch))
-            {
-                mantissa = mantissa * 10 + _ch - '0';
-                digitcnt *= 10;
-                nextCh();
-            }
-            t->info.fval =
-                ((float)t->info.ival) + ((float)mantissa / (float)digitcnt);
-        }
-    }
-}
-
-// TODO: Handle escape characters like: \", \n, \t, ...
-void CLexer::readStringLit(Token *t)
-{
-    // Skip the "
-    nextCh();
-    t->kind = TK_STRING_LIT;
-    t->sval.clear();
-    t->sval.push_back(_ch);
-    nextCh();
-
-    while (_ch != '"')
-    {
-        t->sval.push_back(_ch);
-        nextCh();
-    }
-
-    // Skip again the "
-    nextCh();
-
-    bool searchNextStringLit = true;
-
-    do
-    {
-        while (isspace(_ch))
-            nextCh();
-
-        if (_ch == '"')
-        {
-            nextCh();
-            while (_ch != '"')
-            {
-                t->sval.push_back(_ch);
-                nextCh();
-            }
-            // Skip again the "
+            spelling.push_back(ch);
+            exponentSign = false;
             nextCh();
         }
         else
         {
-            searchNextStringLit = false;
+            break;
         }
     }
-    while (searchNextStringLit);
+
+    t->spelling = spelling;
+    t->sval = spelling;
+    const bool hexadecimal = spelling.size() > 2 && spelling[0] == '0' &&
+                             (spelling[1] == 'x' || spelling[1] == 'X');
+    floating = floating || spelling.find('.') != std::string::npos ||
+               (hexadecimal
+                    ? spelling.find_first_of("pP") != std::string::npos
+                    : spelling.find_first_of("eE") != std::string::npos ||
+                      (!spelling.empty() &&
+                       (spelling.back() == 'f' || spelling.back() == 'F')));
+    errno = 0;
+    char *end = nullptr;
+    if (floating)
+    {
+        if (hexadecimal ? spelling.find_first_of("pP") == std::string::npos :
+                          spelling.find_first_of(".eE") == std::string::npos)
+            error(t->line, t->col, "invalid floating constant '%s'",
+                  spelling.c_str());
+        const long double value = std::strtold(spelling.c_str(), &end);
+        if (errno == ERANGE || end == spelling.c_str())
+            error(t->line, t->col, "floating constant is out of range");
+        if (*end == 'f' || *end == 'F' || *end == 'l' || *end == 'L')
+            ++end;
+        if (*end != '\0')
+            error(t->line, t->col, "invalid floating constant '%s'",
+                  spelling.c_str());
+        t->kind = TK_FLOAT_LIT;
+        t->info.fval = value;
+        return;
+    }
+
+    std::size_t suffix = spelling.size();
+    while (suffix > 0)
+    {
+        const char ch = spelling[suffix - 1];
+        if (ch != 'u' && ch != 'U' && ch != 'l' && ch != 'L')
+            break;
+        --suffix;
+    }
+    const std::string digits = spelling.substr(0, suffix);
+    const std::string suffixText = spelling.substr(suffix);
+    unsigned uCount = 0, lCount = 0;
+    const bool matchingLongs = suffixText.find('l') == std::string::npos ||
+                               suffixText.find('L') == std::string::npos;
+    for (char ch : suffixText)
+        (ch == 'u' || ch == 'U') ? ++uCount : ++lCount;
+    if (uCount > 1 || lCount > 2 || !matchingLongs || digits.empty() ||
+        (lCount == 2 && uCount == 1 &&
+         (suffixText[1] == 'u' || suffixText[1] == 'U')))
+        error(t->line, t->col, "invalid integer constant '%s'",
+              spelling.c_str());
+
+    errno = 0;
+    end = nullptr;
+    const unsigned long long value = std::strtoull(digits.c_str(), &end, 0);
+    if (errno == ERANGE)
+        error(t->line, t->col, "integer constant is out of 64-bit range");
+    if (!end || *end != '\0')
+        error(t->line, t->col, "invalid integer constant '%s'",
+              spelling.c_str());
+    t->kind = TK_INT_LIT;
+    t->info.uval = static_cast<std::uint64_t>(value);
+}
+
+void CLexer::readStringLit(Token *t)
+{
+    t->kind = TK_STRING_LIT;
+    t->sval.clear();
+    t->spelling.clear();
+
+    const auto hexValue = [](int ch) {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        return -1;
+    };
+    const auto appendEscape = [&](std::string &value, std::string &raw) {
+        raw.push_back('\\');
+        nextCh();
+        if (_ch == EOF)
+            error(t->line, t->col, "unterminated escape sequence");
+        raw.push_back(static_cast<char>(_ch));
+        switch (_ch)
+        {
+            case '\'': value.push_back('\''); nextCh(); return;
+            case '"': value.push_back('"'); nextCh(); return;
+            case '?': value.push_back('?'); nextCh(); return;
+            case '\\': value.push_back('\\'); nextCh(); return;
+            case 'a': value.push_back('\a'); nextCh(); return;
+            case 'b': value.push_back('\b'); nextCh(); return;
+            case 'f': value.push_back('\f'); nextCh(); return;
+            case 'n': value.push_back('\n'); nextCh(); return;
+            case 'r': value.push_back('\r'); nextCh(); return;
+            case 't': value.push_back('\t'); nextCh(); return;
+            case 'v': value.push_back('\v'); nextCh(); return;
+            case 'x':
+            {
+                nextCh();
+                int decoded = 0, count = 0;
+                while (_ch != EOF && hexValue(_ch) >= 0)
+                {
+                    raw.push_back(static_cast<char>(_ch));
+                    decoded = (decoded << 4) | hexValue(_ch);
+                    if (decoded > 255)
+                        error(t->line, t->col, "hex escape exceeds one byte");
+                    ++count;
+                    nextCh();
+                }
+                if (!count)
+                    error(t->line, t->col, "hex escape requires a digit");
+                value.push_back(static_cast<char>(decoded));
+                return;
+            }
+            default:
+                if (_ch >= '0' && _ch <= '7')
+                {
+                    int decoded = 0, count = 0;
+                    while (count < 3 && _ch >= '0' && _ch <= '7')
+                    {
+                        if (count)
+                            raw.push_back(static_cast<char>(_ch));
+                        decoded = (decoded << 3) | (_ch - '0');
+                        ++count;
+                        nextCh();
+                    }
+                    value.push_back(static_cast<char>(decoded));
+                    return;
+                }
+                error(t->line, t->col, "unsupported escape sequence");
+        }
+    };
+
+    do
+    {
+        t->spelling.push_back('"');
+        nextCh();
+        while (_ch != '"' && _ch != EOF && _ch != '\n')
+        {
+            if (_ch == '\\')
+                appendEscape(t->sval, t->spelling);
+            else
+            {
+                t->sval.push_back(static_cast<char>(_ch));
+                t->spelling.push_back(static_cast<char>(_ch));
+                nextCh();
+            }
+        }
+        if (_ch != '"')
+            error(t->line, t->col, "unterminated string literal");
+        t->spelling.push_back('"');
+        nextCh();
+
+        std::string separator;
+        while (_ch != EOF && std::isspace(static_cast<unsigned char>(_ch)))
+        {
+            separator.push_back(static_cast<char>(_ch));
+            nextCh();
+        }
+        if (_ch == '"')
+            t->spelling += separator;
+    } while (_ch == '"');
 }
 
 void CLexer::readCharLit(Token *t)
 {
-    // Skip the '
+    t->spelling.clear();
+    t->spelling.push_back('\'');
     nextCh();
     t->kind = TK_CHAR_LIT;
 
     if (_ch == '\\')
     {
+        t->spelling.push_back('\\');
         nextCh();
+        t->spelling.push_back(static_cast<char>(_ch));
+        const auto hexValue = [](int ch) {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+            return -1;
+        };
+        bool consumed = false;
         switch (_ch)
         {
             case '0':
-                t->info.ival = 0;
-                break; // Null char
+            {
+                int value = 0, digits = 0;
+                while (digits < 3 && _ch >= '0' && _ch <= '7')
+                {
+                    if (digits)
+                        t->spelling.push_back(static_cast<char>(_ch));
+                    value = (value << 3) | (_ch - '0');
+                    ++digits;
+                    nextCh();
+                }
+                consumed = true;
+                t->info.ival = value;
+                break;
+            }
             case 'b':
                 t->info.ival = 8;
                 break; // Backspace
+            case 'a':
+                t->info.ival = 7;
+                break;
+            case '?':
+                t->info.ival = '?';
+                break;
             case 't':
                 t->info.ival = 9;
                 break; // Horizontal tab
@@ -213,66 +311,105 @@ void CLexer::readCharLit(Token *t)
             case '\\':
                 t->info.ival = 92;
                 break; // Backslash
-            default:
-                error(_line, "invalid character constant");
+            case '"':
+                t->info.ival = 34;
                 break;
+            case 'x':
+            {
+                nextCh();
+                consumed = true;
+                int value = 0, digits = 0;
+                while (_ch != EOF && hexValue(_ch) >= 0)
+                {
+                    t->spelling.push_back(static_cast<char>(_ch));
+                    value = (value << 4) | hexValue(_ch);
+                    if (value > 255)
+                        error(t->line, t->col, "hex escape exceeds one byte");
+                    ++digits;
+                    nextCh();
+                }
+                if (!digits || value > 255)
+                    error(t->line, t->col, "invalid hex character escape");
+                t->info.ival = value;
+                break;
+            }
+            default:
+                if (_ch >= '1' && _ch <= '7')
+                {
+                    int value = 0, digits = 0;
+                    while (digits < 3 && _ch >= '0' && _ch <= '7')
+                    {
+                        if (digits)
+                            t->spelling.push_back(static_cast<char>(_ch));
+                        value = (value << 3) | (_ch - '0');
+                        ++digits;
+                        nextCh();
+                    }
+                    consumed = true;
+                    t->info.ival = value;
+                    break;
+                }
+                error(t->line, t->col, "unsupported character escape");
         }
-        nextCh();
+        if (!consumed)
+            nextCh();
     }
     else
     {
         t->info.ival = _ch;
+        t->spelling.push_back(static_cast<char>(_ch));
         nextCh();
     }
 
     if (_ch != '\'')
     {
-        error(_line, "character expected");
-        while (_ch != '\'' && _ch != EOF)
-        {
-            // error
-            nextCh();
-        }
+        error(t->line, t->col, "unterminated or multi-character constant");
     }
 
-    // Skip '
+    t->spelling.push_back('\'');
     nextCh();
 }
 
-void CLexer::comment()
+void CLexer::comment(int line, int column)
 {
+    // The opening slash and star have already been consumed.
+    bool terminated = false;
     while (_ch != EOF)
     {
-        nextCh();
         if (_ch == '*')
         {
             nextCh();
             if (_ch == '/')
+            {
+                nextCh();
+                terminated = true;
                 break;
+            }
         }
-        else if (_ch == '/')
-        {
+        else
             nextCh();
-            if (_ch == '*')
-                comment();
-        }
     }
-    nextCh();
+    if (!terminated)
+        error(line, column, "unterminated block comment");
 }
 
 unsigned CLexer::next(Token *t)
 {
-    while (isspace(_ch))
+nextToken:
+    while (_ch != EOF && std::isspace(static_cast<unsigned char>(_ch)))
         nextCh();
 
     t->line = _line;
     t->col = _col;
+    t->sval.clear();
+    t->spelling.clear();
 
-    if (isalpha(_ch) || _ch == '_')
+    if (_ch != EOF &&
+        (std::isalpha(static_cast<unsigned char>(_ch)) || _ch == '_'))
     {
         readName(t);
     }
-    else if (isdigit(_ch))
+    else if (_ch != EOF && std::isdigit(static_cast<unsigned char>(_ch)))
     {
         readNumberLit(t);
     }
@@ -287,9 +424,11 @@ unsigned CLexer::next(Token *t)
                 readCharLit(t);
                 break;
             case '#':
-                while (_ch != '\n')
+                if (getDiagnosticHandler())
+                    error(t->line, t->col, "unsupported preprocessor directive in C parser input");
+                while (_ch != '\n' && _ch != EOF)
                     nextCh();
-                return next(t);
+                goto nextToken;
             case '&':
                 nextCh();
                 if (_ch == '&')
@@ -423,14 +562,16 @@ unsigned CLexer::next(Token *t)
                 nextCh();
                 if (_ch == '/')
                 {
-                    while (_ch != '\n')
+                    while (_ch != '\n' && _ch != EOF)
                         nextCh();
-                    return next(t);
+                    goto nextToken;
                 }
                 else if (_ch == '*')
                 {
-                    comment();
-                    return next(t);
+                    const int line = t->line, column = t->col;
+                    nextCh();
+                    comment(line, column);
+                    goto nextToken;
                 }
                 else if (_ch == '=')
                 {
@@ -542,7 +683,12 @@ unsigned CLexer::next(Token *t)
                 break;
             case '.':
                 nextCh();
-                if (_ch == '.')
+                if (_ch != EOF &&
+                    std::isdigit(static_cast<unsigned char>(_ch)))
+                {
+                    readNumberLit(t, true);
+                }
+                else if (_ch == '.')
                 {
                     nextCh();
                     if (_ch == '.')
@@ -562,9 +708,12 @@ unsigned CLexer::next(Token *t)
                 t->kind = TK_EOF;
                 break;
             default:
+            {
+                const int invalid = _ch;
                 nextCh();
-                t->kind = TK_UNKNOWN;
-                break;
+                error(t->line, t->col, "invalid character 0x%02x",
+                      static_cast<unsigned>(invalid) & 0xffU);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 """Generate the final assembly emitter and pipeline driver.
 
 The emitter is data driven: instruction spellings, operand order, register
-names, and immediate constraints are embedded from the selected ArchDB.  It
+names, and operand constraints are embedded from the selected ArchDB.  It
 does not fall back to printing an opcode when a dialect has no validated
 template; an unsupported dialect is a diagnostic unless an explicit dialect
 hook handles the instruction.
@@ -21,8 +21,13 @@ NAME = "emitter"
 ALIASES = ("emit", "assembly", "asm")
 
 _RISCV = re.compile(r"(?:RV|RISCV)[_-]?(?:32|64)?", re.IGNORECASE)
+_RISCV_M = re.compile(r"(?:RV|RISCV)[_-]?64IM", re.IGNORECASE)
 _AARCH64 = re.compile(r"(?:AARCH64|ARM64)", re.IGNORECASE)
 _MIPS = re.compile(r"MIPS(?:32)?", re.IGNORECASE)
+_AMD64_REGISTERS = (
+    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+)
 
 
 def _oracle_enabled(context: object) -> bool:
@@ -150,14 +155,29 @@ def _explicit_template(db: dict, instruction: dict, dialect: str):
     return None
 
 
+def _gas_amd64(db: dict) -> bool:
+    registers = db.get("registers") or {}
+    return (
+        db.get("architecture") == "AMD64"
+        and db.get("address_width") == 64
+        and db.get("endian") == "little"
+        and registers.get("prefix") == "gpr"
+        and registers.get("width") == 64
+        and registers.get("count") == 16
+        and all(registers.get("aliases", {}).get(name) == index
+                for index, name in enumerate(_AMD64_REGISTERS))
+    )
+
+
 def _validated_builtin(db: dict, dialect: str) -> bool:
     table = _dialect_table(db, dialect)
     if table.get("supported") is True:
         return True
     architecture = db.get("architecture", "")
+    if dialect == "gas" and (_RISCV_M.fullmatch(architecture) or _gas_amd64(db)):
+        return True
     # These profiles' canonical Archon syntax is intentionally the overlap
     # supported by GAS and Sandstone's checked-in architecture profiles.
-    # x86 is excluded: Intel and AT&T spellings cannot be inferred safely.
     patterns = (_RISCV, _AARCH64, _MIPS)
     return any(pattern.fullmatch(architecture) for pattern in patterns)
 
@@ -182,22 +202,31 @@ def _template(db: dict, instruction: dict, dialect: str):
     return assembly if isinstance(assembly, str) else None
 
 
-def _metadata(db: dict) -> dict[str, str]:
-    from .isel import _legacy_registers_supported
+def _is_stack_target(db: Mapping) -> bool:
+    return db.get("registers") is None and bool((db.get("state") or {}).get("stacks"))
 
-    # Also reject these forms in directly supplied Regallocated.i artifacts,
-    # which need not have passed through the selector.
-    instructions = sorted(
-        (row for row in db["instructions"] if _legacy_registers_supported(row)),
-        key=lambda row: row["name"],
-    )
+
+def _metadata(db: dict) -> dict[str, str]:
+    from ..database import _operand_register_range
+
+    instructions = sorted(db["instructions"], key=lambda row: row["name"])
+    registers = db.get("registers")
+    prefix = registers["prefix"] if registers is not None else ""
+    count = registers["count"] if registers is not None else 0
+    architecture = str(db.get("architecture", "unknown"))
     operands = []
     rows = []
     for instruction in instructions:
         first = len(operands)
         for operand in instruction["operands"]:
+            register_min, register_max = (
+                _operand_register_range(
+                    operand, count, operand["width"], instruction["name"]
+                )
+                if operand["kind"] == "reg" else (0, 0)
+            )
             operands.append(
-                "    {%s, %s, %s, %uu, %uu},"
+                "    {%s, %s, %s, %uu, %uu, %uu, %uu},"
                 % (
                     _c_string(operand["name"]),
                     "EMITTER_META_REGISTER"
@@ -210,31 +239,32 @@ def _metadata(db: dict) -> dict[str, str]:
                     }.get(operand.get("direction"), "EMITTER_ROLE_INPUT"),
                     operand["width"],
                     int(operand["signed"]),
+                    register_min,
+                    register_max,
                 )
             )
         rows.append(
-            "    {%s, %s, %s, %s, %s, %uu, %uu, %uu},"
+            "    {%s, %s, %s, %s, %s, %s, %uu, %uu, %uu, %uu},"
             % (
                 _c_string(instruction["name"]),
                 _c_string(c_identifier(instruction["name"])),
                 _c_string(_instruction_primitive(instruction)),
                 _c_string(_template(db, instruction, "gas")),
                 _c_string(_template(db, instruction, "sandstone")),
+                _c_string(instruction.get("assembly")),
                 first,
                 len(instruction["operands"]),
                 max(1, (int(instruction.get("width", 8)) + 7) // 8),
+                int(instruction.get("semantics") is not None),
             )
         )
     if not operands:
         operands.append(
-            "    {NULL, EMITTER_META_IMMEDIATE, EMITTER_ROLE_INPUT, 0u, 0u},"
+            "    {NULL, EMITTER_META_IMMEDIATE, EMITTER_ROLE_INPUT, 0u, 0u, 0u, 0u},"
         )
     if not rows:
-        rows.append("    {NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u},")
+        rows.append("    {NULL, NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u},")
 
-    registers = db.get("registers")
-    prefix = registers["prefix"] if registers is not None else ""
-    count = registers["count"] if registers is not None else 0
     aliases = []
     if registers is not None:
         # Prefer a stable numbered spelling.  Aliases remain metadata for
@@ -244,7 +274,6 @@ def _metadata(db: dict) -> dict[str, str]:
     if not aliases:
         aliases.append("    {NULL, 0u},")
 
-    architecture = str(db.get("architecture", "unknown"))
     target_names = [architecture, architecture.lower()]
     if _RISCV.fullmatch(architecture):
         target_names.append("riscv64" if "64" in architecture else "riscv")
@@ -254,7 +283,15 @@ def _metadata(db: dict) -> dict[str, str]:
         "@TARGET@": _c_string(architecture),
         "@TARGET_LUA_NAMES@": lua_names,
         "@REGISTER_PREFIX@": _c_string(prefix),
-        "@REGISTER_COUNT@": str(count),
+        "@STACK_TARGET@": str(int(_is_stack_target(db))),
+        "@GAS_AMD64_INTEL@": str(int(_gas_amd64(db))),
+        "@GAS_AMD64_REGISTERS@": ", ".join(map(_c_string, _AMD64_REGISTERS)),
+        "@GAS_MIPS_REGISTERS@": str(int(bool(_MIPS.fullmatch(architecture)))),
+        "@GAS_AARCH64_ZERO@": str(
+            registers["zero"] if registers is not None
+            and registers.get("zero") is not None and _AARCH64.fullmatch(architecture)
+            else -1
+        ),
         "@OPERANDS@": "\n".join(operands),
         "@INSTRUCTIONS@": "\n".join(rows),
         "@INSTRUCTION_COUNT@": str(len(instructions)),
@@ -298,8 +335,8 @@ def emit(context) -> dict[str, str]:
     )
     replacements["@ORACLE_COMMENT@"] = (
         "    if (context->oracle_comment[0] != '\\0') {\n"
-        "        const char *prefix = context->dialect == EMITTER_DIALECT_GAS\n"
-        '            ? "# Oracle: " : "; Oracle: ";\n'
+        "        const char *prefix = context->dialect == EMITTER_DIALECT_SANDSTONE\n"
+        '            ? "; Oracle: " : "# Oracle: ";\n'
         "        if (fprintf(context->output, \"%s%s\\n\", prefix,\n"
         "                context->oracle_comment) < 0)\n"
         "            return Emitter_fail(\n"
@@ -353,6 +390,12 @@ def emit(context) -> dict[str, str]:
         if oracle_enabled and ir is not None
         else "",
     )
+    options = _get(context, "options") or {}
+    driver = driver.replace(
+        "@DEFAULT_DIALECT@",
+        "EMITTER_DIALECT_ARCHON" if options.get("assembler") == "archon"
+        else "EMITTER_DIALECT_GAS",
+    )
     return {
         "Emitter.h": _render(_EMITTER_H, replacements),
         "Emitter.c": _render(_EMITTER_C, replacements),
@@ -388,12 +431,14 @@ typedef enum Emitter_Status {
     EMITTER_STATUS_IO_ERROR,
     EMITTER_STATUS_HOOK_ERROR,
     EMITTER_STATUS_ORACLE_ERROR,
-    EMITTER_STATUS_OUT_OF_MEMORY
+    EMITTER_STATUS_OUT_OF_MEMORY,
+    EMITTER_STATUS_UNSUPPORTED_INSTRUCTION
 } Emitter_Status;
 
 typedef enum Emitter_Dialect {
     EMITTER_DIALECT_GAS = 0,
-    EMITTER_DIALECT_SANDSTONE = 1
+    EMITTER_DIALECT_SANDSTONE = 1,
+    EMITTER_DIALECT_ARCHON = 2
 } Emitter_Dialect;
 
 typedef enum Emitter_Operand_Kind {
@@ -441,7 +486,7 @@ typedef struct Emitter_Hooks {
 typedef struct Emitter_Options {
     Emitter_Dialect dialect;
     const char *input_path;  /* NULL selects Regallocated.i. */
-    const char *output_path; /* NULL selects Program.s or Program.asm. */
+    const char *output_path; /* NULL selects Program.s, .asm, or .archs. */
     FILE *diagnostics;       /* NULL suppresses automatic diagnostic text. */
     const Emitter_Hooks *hooks;
 @ORACLE_OPTION_FIELD@
@@ -453,6 +498,7 @@ typedef struct Emitter_Instruction_Info {
     const char *primitive;
     size_t operand_count;
     unsigned encoding_bytes;
+    unsigned semantics_known;
 } Emitter_Instruction_Info;
 
 typedef struct Emitter_Operand_Info {
@@ -461,6 +507,8 @@ typedef struct Emitter_Operand_Info {
     Emitter_Operand_Role role;
     unsigned width;
     unsigned is_signed;
+    unsigned register_min;
+    unsigned register_max;
 } Emitter_Operand_Info;
 
 Emitter_Operand Emitter_register(uint32_t index);
@@ -560,10 +608,11 @@ static Emitter_Status Emitter_validate_oracle_annotations(
         } else if (strcmp(entry->key, "emitter.dialect") == 0) {
             if (entry->kind != ARCHON_ORACLE_ANNOTATION_STRING ||
                     (strcmp(entry->value.string, "gas") != 0 &&
-                     strcmp(entry->value.string, "sandstone") != 0))
+                     strcmp(entry->value.string, "sandstone") != 0 &&
+                     strcmp(entry->value.string, "archon") != 0))
                 return Emitter_fail(
                     context, EMITTER_STATUS_ORACLE_ERROR, 0u,
-                    "Oracle emitter dialect must be gas or sandstone");
+                    "Oracle emitter dialect must be gas, sandstone, or archon");
         }
     }
     return EMITTER_STATUS_OK;
@@ -586,7 +635,9 @@ static void Emitter_commit_oracle_annotations(
                 "%s", entry->value.string);
         } else if (strcmp(entry->key, "emitter.dialect") == 0) {
             context->dialect = strcmp(entry->value.string, "gas") == 0
-                ? EMITTER_DIALECT_GAS : EMITTER_DIALECT_SANDSTONE;
+                ? EMITTER_DIALECT_GAS
+                : strcmp(entry->value.string, "sandstone") == 0
+                    ? EMITTER_DIALECT_SANDSTONE : EMITTER_DIALECT_ARCHON;
         }
     }
 }
@@ -668,6 +719,8 @@ typedef struct Emitter_Operand_Metadata {
     Emitter_Operand_Role role;
     unsigned width;
     unsigned is_signed;
+    unsigned register_min;
+    unsigned register_max;
 } Emitter_Operand_Metadata;
 
 typedef struct Emitter_Instruction_Metadata {
@@ -676,9 +729,11 @@ typedef struct Emitter_Instruction_Metadata {
     const char *primitive;
     const char *gas_template;
     const char *sandstone_template;
+    const char *archon_template;
     size_t first_operand;
     size_t operand_count;
     unsigned encoding_bytes;
+    unsigned semantics_known;
 } Emitter_Instruction_Metadata;
 
 typedef struct Emitter_Register_Alias {
@@ -688,7 +743,12 @@ typedef struct Emitter_Register_Alias {
 
 static const char Emitter_target[] = @TARGET@;
 static const char Emitter_register_prefix[] = @REGISTER_PREFIX@;
-enum { Emitter_register_count = @REGISTER_COUNT@ };
+enum {
+    Emitter_stack_target = @STACK_TARGET@,
+    Emitter_gas_amd64_intel = @GAS_AMD64_INTEL@,
+    Emitter_gas_mips_registers = @GAS_MIPS_REGISTERS@,
+    Emitter_gas_aarch64_zero = @GAS_AARCH64_ZERO@
+};
 static const size_t Emitter_instruction_metadata_count = @INSTRUCTION_COUNT@u;
 enum { Emitter_alias_count = @ALIAS_COUNT@ };
 
@@ -796,6 +856,8 @@ int Emitter_dialect_supported(Emitter_Dialect dialect) {
         return @GAS_SUPPORTED@;
     if (dialect == EMITTER_DIALECT_SANDSTONE)
         return @SANDSTONE_SUPPORTED@;
+    if (dialect == EMITTER_DIALECT_ARCHON)
+        return 1;
     return 0;
 }
 
@@ -804,6 +866,8 @@ const char *Emitter_default_output(Emitter_Dialect dialect) {
         return "Program.s";
     if (dialect == EMITTER_DIALECT_SANDSTONE)
         return "Program.asm";
+    if (dialect == EMITTER_DIALECT_ARCHON)
+        return "Program.archs";
     return NULL;
 }
 
@@ -828,6 +892,7 @@ const char *Emitter_status_name(Emitter_Status status) {
     case EMITTER_STATUS_HOOK_ERROR: return "dialect hook failed";
     case EMITTER_STATUS_ORACLE_ERROR: return "Oracle error";
     case EMITTER_STATUS_OUT_OF_MEMORY: return "out of memory";
+    case EMITTER_STATUS_UNSUPPORTED_INSTRUCTION: return "unsupported instruction";
     }
     return "unknown emitter status";
 }
@@ -869,6 +934,7 @@ int Emitter_instruction_info(size_t instruction,
     info->primitive = metadata->primitive;
     info->operand_count = metadata->operand_count;
     info->encoding_bytes = metadata->encoding_bytes;
+    info->semantics_known = metadata->semantics_known;
     return 1;
 }
 
@@ -902,6 +968,8 @@ int Emitter_operand_info(size_t instruction, size_t operand,
     info->role = row->role;
     info->width = row->width;
     info->is_signed = row->is_signed;
+    info->register_min = row->register_min;
+    info->register_max = row->register_max;
     return 1;
 }
 
@@ -1011,7 +1079,10 @@ static Emitter_Status Emitter_write_label(Emitter_Context *context,
     Emitter_Status status = Emitter_track_label(context, id, 1, line);
     if (status != EMITTER_STATUS_OK)
         return status;
-    if (fprintf(context->output, ".Larchon_%" PRIu32 ":\n", id) < 0)
+    if (fprintf(context->output,
+            context->dialect == EMITTER_DIALECT_ARCHON
+                ? "Larchon_%" PRIu32 ":\n" : ".Larchon_%" PRIu32 ":\n",
+            id) < 0)
         return Emitter_fail(context, EMITTER_STATUS_IO_ERROR, line,
                             "cannot write assembly label");
     context->emitted_anything = 1;
@@ -1043,17 +1114,15 @@ static Emitter_Status Emitter_validate_operand(
     Emitter_Context *context, const Emitter_Operand_Metadata *metadata,
     const Emitter_Operand *operand, unsigned line) {
     if (metadata->kind == EMITTER_META_REGISTER) {
-        uint64_t available_registers =
-            (uint64_t)(unsigned)Emitter_register_count;
         if (operand->kind != EMITTER_OPERAND_REGISTER)
             return Emitter_fail(context, EMITTER_STATUS_OPERAND_KIND, line,
                                 "operand %s must be a register",
                                 metadata->name);
-        if (operand->value < 0 ||
-            (uint64_t)operand->value >= available_registers)
+        if (operand->value < (int64_t)metadata->register_min ||
+            operand->value > (int64_t)metadata->register_max)
             return Emitter_fail(context, EMITTER_STATUS_OPERAND_RANGE, line,
-                                "register %" PRId64 " is not available",
-                                operand->value);
+                                "register %" PRId64 " is not available for %s",
+                                operand->value, metadata->name);
         return EMITTER_STATUS_OK;
     } else if (operand->kind == EMITTER_OPERAND_IMMEDIATE) {
         if (!(metadata->is_signed
@@ -1107,13 +1176,27 @@ static Emitter_Status Emitter_format_operand(
         buffer[result] = '\0';
         return EMITTER_STATUS_OK;
     }
-    if (metadata->kind == EMITTER_META_REGISTER)
-        written = snprintf(buffer, capacity, "%s%" PRId64,
-                           Emitter_register_prefix, operand->value);
-    else if (operand->kind == EMITTER_OPERAND_IMMEDIATE)
+    if (metadata->kind == EMITTER_META_REGISTER) {
+        const char *prefix = Emitter_register_prefix;
+        if (context->dialect == EMITTER_DIALECT_GAS &&
+                Emitter_gas_mips_registers)
+            prefix = "$";
+        if (context->dialect == EMITTER_DIALECT_GAS &&
+                operand->value == Emitter_gas_aarch64_zero)
+            written = snprintf(buffer, capacity, "xzr");
+        else if (context->dialect == EMITTER_DIALECT_GAS &&
+                   Emitter_gas_amd64_intel) {
+            static const char *const names[] = {@GAS_AMD64_REGISTERS@};
+            written = snprintf(buffer, capacity, "%s", names[(size_t)operand->value]);
+        } else
+            written = snprintf(buffer, capacity, "%s%" PRId64,
+                               prefix, operand->value);
+    } else if (operand->kind == EMITTER_OPERAND_IMMEDIATE)
         written = snprintf(buffer, capacity, "%" PRId64, operand->value);
     else if (operand->kind == EMITTER_OPERAND_LABEL)
-        written = snprintf(buffer, capacity, ".Larchon_%" PRIu32,
+        written = snprintf(buffer, capacity,
+                           context->dialect == EMITTER_DIALECT_ARCHON
+                               ? "Larchon_%" PRIu32 : ".Larchon_%" PRIu32,
                            (uint32_t)operand->value);
     else
         written = snprintf(buffer, capacity, "%s", operand->symbol);
@@ -1130,6 +1213,8 @@ static const char *Emitter_template(
         return instruction->gas_template;
     if (dialect == EMITTER_DIALECT_SANDSTONE)
         return instruction->sandstone_template;
+    if (dialect == EMITTER_DIALECT_ARCHON)
+        return instruction->archon_template;
     return NULL;
 }
 
@@ -1215,6 +1300,11 @@ static Emitter_Status Emitter_write_instruction(
         return Emitter_fail(context, EMITTER_STATUS_UNKNOWN_INSTRUCTION, line,
                             "Regallocated.i names unknown instruction %s",
                             opcode != NULL ? opcode : "(null)");
+    if (Emitter_stack_target && !instruction->semantics_known)
+        return Emitter_fail(
+            context, EMITTER_STATUS_UNSUPPORTED_INSTRUCTION, line,
+            "%s is encoding-only on %s; stack semantics are not modeled",
+            instruction->name, Emitter_target);
     if (operand_count != instruction->operand_count)
         return Emitter_fail(
             context, EMITTER_STATUS_OPERAND_COUNT, line,
@@ -1264,11 +1354,20 @@ static Emitter_Status Emitter_write_prelude(Emitter_Context *context) {
             context, EMITTER_STATUS_UNSUPPORTED_DIALECT, 0u,
             "target %s has no validated built-in syntax for this dialect",
             Emitter_target);
-    if (context->dialect == EMITTER_DIALECT_GAS) {
+    if (context->dialect == EMITTER_DIALECT_ARCHON) {
+        if (fprintf(context->output, "# Generated by Archon for %s.\n",
+                    Emitter_target) < 0)
+            return Emitter_fail(context, EMITTER_STATUS_IO_ERROR, 0u,
+                                "cannot write Archon prelude");
+    } else if (context->dialect == EMITTER_DIALECT_GAS) {
         if (fprintf(context->output,
                     "# Generated by Archon for %s.\n.text\n", Emitter_target) < 0)
             return Emitter_fail(context, EMITTER_STATUS_IO_ERROR, 0u,
                                 "cannot write GAS prelude");
+        if (Emitter_gas_amd64_intel &&
+                fputs(".intel_syntax noprefix\n", context->output) == EOF)
+            return Emitter_fail(context, EMITTER_STATUS_IO_ERROR, 0u,
+                                "cannot select GAS Intel syntax");
     } else if (context->dialect == EMITTER_DIALECT_SANDSTONE) {
         /*
          * SandAS Lua executes before target assembly.  The check is conditional
@@ -1690,7 +1789,8 @@ Emitter_Status Emitter_emit(const Emitter_Options *options,
     context.diagnostic = diagnostic;
     if (options == NULL ||
         (options->dialect != EMITTER_DIALECT_GAS &&
-         options->dialect != EMITTER_DIALECT_SANDSTONE))
+         options->dialect != EMITTER_DIALECT_SANDSTONE &&
+         options->dialect != EMITTER_DIALECT_ARCHON))
         return Emitter_fail(&context, EMITTER_STATUS_INVALID_ARGUMENT, 0u,
                             "invalid emitter options");
     context.dialect = options->dialect;
@@ -1802,7 +1902,8 @@ _DRIVER_ARTIFACTS = r'''    "Program.i",
     "RegMap.i",
     "Regallocated.i",
     "Program.s",
-    "Program.asm"
+    "Program.asm",
+    "Program.archs"
 '''
 
 
@@ -1822,7 +1923,8 @@ _ORACLE_DRIVER_ARTIFACTS = r'''    "Program.i",
     "Regallocated.i",
     "Regallocated.oracle.i",
     "Program.s",
-    "Program.asm"
+    "Program.asm",
+    "Program.archs"
 '''
 
 
@@ -1889,7 +1991,7 @@ static int Driver_stage(
 static void Driver_usage(FILE *output, const char *program) {
     (void)fprintf(
         output,
-        "usage: %s [--dialect gas|sandstone] [--output FILE]\n"
+        "usage: %s [--dialect gas|sandstone|archon] [--output FILE]\n"
         "          [--rewrite conventional|egraph]\n"
         "          [--stop-after STAGE] [--keep-artifacts]\n"
         "       %s --list-artifacts\n"
@@ -1911,7 +2013,7 @@ static int Driver_clean(int include_outputs) {
     size_t count = sizeof Driver_artifacts / sizeof Driver_artifacts[0];
     /* Program.i is pipeline input, not disposable generated state. */
     for (index = 1u; index < count; ++index) {
-        if (!include_outputs && index + 2u >= count)
+        if (!include_outputs && index + 3u >= count)
             continue;
         if (remove(Driver_artifacts[index]) != 0 && errno != ENOENT) {
             (void)fprintf(
@@ -1933,7 +2035,7 @@ int main(int argc, char **argv) {
     int index;
     memset(&emitter, 0, sizeof emitter);
     memset(&pipeline, 0, sizeof pipeline);
-    emitter.dialect = EMITTER_DIALECT_GAS;
+    emitter.dialect = @DEFAULT_DIALECT@;
     emitter.diagnostics = stderr;
     pipeline.stop_after = ARCHON_PIPELINE_EMIT;
     pipeline.rewrite = ARCHON_PIPELINE_REWRITE_CONVENTIONAL;
@@ -1966,6 +2068,8 @@ int main(int argc, char **argv) {
                 emitter.dialect = EMITTER_DIALECT_GAS;
             else if (strcmp(argv[index], "sandstone") == 0)
                 emitter.dialect = EMITTER_DIALECT_SANDSTONE;
+            else if (strcmp(argv[index], "archon") == 0)
+                emitter.dialect = EMITTER_DIALECT_ARCHON;
             else {
                 (void)fprintf(
                     stderr, "driver: unknown dialect %s\n", argv[index]);

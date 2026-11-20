@@ -1,0 +1,67 @@
+# Cephyr configuration. Unknown keys and wrong TOML types are errors.
+#
+# Relative paths are resolved from this file's directory. Built-in resource,
+# Archon, and XDG/HOME cache defaults are used when their entries are omitted.
+
+target = "x86_64-linux-gnu" # Or "auto" to require a supported native host/ABI.
+representation = "gated"
+assembler_style = "driver"  # "driver" (clang/gcc) or "as" (raw GNU as)
+stdlib = "cephyr"            # "cephyr", "system", or "none"
+cache_enabled = true
+static_link = true
+
+# Uncomment to override paths. An empty cache_path disables cache storage
+# when XDG_CACHE_HOME and HOME are intentionally not used by the embedding app.
+#
+# [paths]
+# triple_dir = "triples"
+# triple_script = "triples/x86_64-linux-gnu.lua" # explicit script bypasses host detection
+# archon_root = "../Archon"
+# stdlib_root = "stdlib"
+# cache_path = ".cephyr-cache"
+# sysroot = "/opt/target/sysroot"
+
+[tools]
+# A string is one executable with no fixed arguments. An array is an argv
+# vector; it is passed directly and is never interpreted by a shell.
+# Executable paths containing "/" are relative to this file unless absolute;
+# bare executable names are looked up on PATH.
+host_cc = "cc"
+
+# Target tools and their required flags normally come from triples/<target>.lua.
+# An explicit tool replaces that bank command, so include all required fixed
+# target arguments in the argv array:
+# assembler = [
+#   "clang", "--target=x86_64-linux-gnu"
+# ]
+# linker = "ld.lld"
+# archiver = "llvm-ar"
+#
+# Linking with stdlib = "system" requires an explicit compiler-driver linker,
+# such as ["clang", "--target=x86_64-linux-gnu"], rather than raw ld.
+# Set assembler_style = "as" with a GNU-compatible raw assembler; configure
+# runtime_cc separately as a compiler driver when building Cephyr libc.
+
+# runtime_cc is only for building Cephyr's packaged libc, never user C.
+# Omit it to inherit the resolved target assembler command.
+# runtime_cc = ["clang", "--target=x86_64-linux-gnu"]
+
+[flags]
+compile = []
+assemble = []
+link = []
+# With an inherited tool these follow its required bank flags; with an explicit
+# tool they follow only that tool's fixed argv above. When runtime_cc is omitted,
+# runtime flags follow the inherited assembler flags.
+# runtime = []
+
+[preprocess]
+include_dirs = []
+system_include_dirs = []
+forced_includes = []
+defines = []
+undefines = []
+trigraphs = true
+keep_comments = false
+line_markers = true
+hosted = true

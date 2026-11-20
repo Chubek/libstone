@@ -30,6 +30,7 @@ typedef struct {
     size_t instructions;
     int physical;
     int machine_code;
+    int pic;
     ANLayout *layout;
     const char *detail;
 } ANOut;
@@ -55,7 +56,9 @@ typedef enum {
     AN_ADD, AN_SUB, AN_MUL, AN_DIV, AN_REM, AN_DIVU, AN_REMU,
     AN_AND, AN_OR, AN_XOR, AN_SLL, AN_SRL, AN_SRA, AN_SLT, AN_SLTU,
     AN_ADDI, AN_SLLI, AN_LD, AN_SD, AN_JALR, AN_EBREAK,
-    AN_BEQ, AN_BNE, AN_AUIPC, AN_OPCODE_COUNT
+    AN_BEQ, AN_BNE, AN_AUIPC,
+    AN_LB, AN_LBU, AN_LH, AN_LHU, AN_LW, AN_LWU,
+    AN_SB, AN_SH, AN_SW, AN_OPCODE_COUNT
 } ANOpcode;
 
 typedef struct { unsigned operand, lsb, width, source_lsb; } ANEncodingField;
@@ -87,7 +90,7 @@ int an_symbol(const char *);
 int an_verify(ANContext *, const ArchonMIRModule *);
 int an_compile_module(ANContext *, const ArchonMIRModule *, ANOut *);
 /* Operand roles: RRR rd,rs1,rs2; ADDI/SLLI rd,rs1,0,imm;
- * LD rd,base,0,disp; SD source,base,0,disp; JALR rd,base,0,disp. */
+ * loads rd,base,0,disp; stores source,base,0,disp; JALR rd,base,0,disp. */
 void an_emit(ANOut *, ANOpcode, unsigned, unsigned, unsigned, int);
 void an_label(ANOut *, size_t fn, unsigned label);
 void an_jump(ANOut *, size_t fn, unsigned label);
