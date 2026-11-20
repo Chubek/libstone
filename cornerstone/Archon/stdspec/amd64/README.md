@@ -12,10 +12,11 @@ source second). `NOT` uses `F7 /2`. `XCHG` uses `87`, with the first register in
 `r/m` and the second in `reg`. `BSWAP` has no ModR/M byte; it uses `0F C8+r`.
 
 Assembly uses Intel operand order and lowercase register aliases: `rax`, `rcx`,
-`rdx`, `rbx`, `rsp`, `rbp`, `rsi`, `rdi`, in encoding order. These aliases are
-accepted as input; Archon disassembly and execution output use the internal
-names `gpr0` through `gpr7`. The numbered names are accepted by Archon but are
-not AMD64 assembly syntax.
+`rdx`, `rbx`, `rsp`, `rbp`, `rsi`, `rdi`, in encoding order. Disassembly
+prints the internal names `gpr0` through `gpr7`. The numbered names are
+accepted by Archon but are not AMD64 assembly syntax. Machine state has all
+16 GPR slots; the explicit `LegacyGPR` operand range still rejects `r8`–`r15`
+and `gpr8`–`gpr15` in these instruction forms.
 
 From `cornerstone/Archon`:
 
@@ -55,13 +56,30 @@ They can also choose the accumulator short form or encode `xchg rax, rax` as
 
 ## Limits
 
-Only the eight classic 64-bit GPRs and the listed encodings are modeled. There
-are no other REX combinations, register widths or aliases (such as `eax`),
-alternate `MOV` encodings, immediates, memory forms, other prefixes, or
-variable-length decoding. The register state does not include RFLAGS, RIP,
-memory, faults, or the ABI. In particular, the exchange semantics are only for
-registers; this spec does not model the locking behavior of memory `XCHG`.
+Only the eight classic 64-bit GPRs have encodable operands here. There are no
+other REX combinations, register widths or aliases (such as `eax`), alternate
+`MOV` encodings, immediates, memory forms, other prefixes, or variable-length
+decoding. The runtime does not model RFLAGS, RIP, memory, faults, or calls.
+The exchange semantics are only for registers; this spec does not model the
+locking behavior of memory `XCHG`.
 `MOVSXD r64, r/m32` is not included: its register-direct form reads a
 32-bit register name and writes a 64-bit register name, which the current
 Archon register operands cannot distinguish. Flag-writing ALU operations and
 stack or control-transfer operations are not included as runnable instructions.
+
+### Calling convention
+
+[`abi_facts_v2 SysVAMD64`](root.arch) follows the [System V AMD64 psABI]
+Function Calling Sequence for single-eightbyte integer and pointer values in
+the LP64 model. Arguments use `rdi`, `rsi`, `rdx`, `rcx`, `r8`, and `r9`, in
+that order; a single-register result uses `rax`. `rbx`, `rbp`, `rsp` and
+`r12`–`r15` are preserved.
+
+A near `CALL` pushes an eight-byte return PC, which is at `[rsp+0]` on
+callee entry. With ordinary 16-byte alignment before the call, the entry
+invariant is `rsp % 16 == 8` (or `(rsp + 8) % 16 == 0`). The first scalar
+stack argument is at `[rsp+8]`. The profile does not describe wider
+alignments or values, aggregates, FP/SIMD or variadic calls, or the red zone.
+It does not add runnable `CALL`/`RET` or a native backend.
+
+[System V AMD64 psABI]: https://gitlab.com/x86-psABIs/x86-64-ABI/-/blob/master/x86-64-ABI/low-level-sys-info.tex

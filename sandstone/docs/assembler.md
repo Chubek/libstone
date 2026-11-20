@@ -12,11 +12,14 @@ sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
 
 ## Pipeline
 
-0. **Expand source** (`preprocess.cpp`): includes, conditional assembly,
-   macros, repetitions, SDK directives and inline Lua execute in source
-   order, before layout. Generated output re-enters this processor. Expansion
-   is limited to 64 nested calls, 100,000 steps and 16 MiB of source.
-1. **Parse** (`parser.c`): each line is `[label:] (directive | mnemonic
+0. **Expand source** (`preprocess.cpp`): the optional `--lua` hook runs first.
+   Includes, conditional assembly, macros, repetitions, SDK directives and
+   inline Lua then execute in source order. Generated output re-enters this
+   processor. Expansion is limited to 64 nested calls, 100,000 steps and
+   16 MiB of source.
+1. **Optionally rewrite expanded assembly** (`asm_opt.cpp`): `--asm-opt`
+   supplies one complete replacement for the expanded assembly.
+2. **Parse** (`parser.c`): each line is `[label:] (directive | mnemonic
    operands...)`. Comments follow the selected syntax record (a comment
    token starts a comment at line start, or when surrounded by
    whitespace, so `#4`-style immediates survive a `#` comment).
@@ -24,11 +27,11 @@ sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
    is blank), aware of `[...]` memory expressions and quotes. AT&T-style
    syntaxes (`operand_order == 1`) have their operands un-reversed before
    encoding.
-2. **Operand classification**: registers resolve through the bank
+3. **Operand classification**: registers resolve through the bank
    (syntax prefix stripped, case-insensitive fallback), `$`-prefixed and
    bare literals become immediates, `[base+...]` becomes a memory
    operand, anything else a symbol reference.
-3. **Binarize** (`binarizer.c`): pass 1 assigns addresses and sizes,
+4. **Binarize** (`binarizer.c`): pass 1 assigns addresses and sizes,
    iterating up to 8 rounds until the layout converges, so `.equ`
    constants and directive sizes may reference forward labels; pass 2
    re-encodes and resolves relocations against locally defined labels.
@@ -99,7 +102,8 @@ shifts, division by zero and signed arithmetic overflow are errors.
 ## Bundled Lua and Kaguya (`lua.cpp`)
 
 The assembler links `third_party/lua` through `third_party/kaguya`; no system
-Lua ABI is guessed. Each assembly invocation starts a fresh Lua state.
+Lua ABI is guessed. Each assembly invocation starts a fresh preprocessing
+Lua state.
 Blocks begin with `<:` at the start of a source line and end with `:>` outside
 Lua strings/comments. Globals persist between blocks in that invocation;
 block-local variables follow ordinary Lua scope. Known constants are available
@@ -123,8 +127,64 @@ newline. `lsandas.symas` exposes targets/opcodes/forms, registers, features,
 sections, relocations, syntaxes and linkages.
 
 `--lua hook.lua` / `sandstone_asm_load_hook` also supports a whole-source
-`preprocess(source, name)` function returning a string. Lua runs with its
-standard libraries; these are executable build scripts.
+`preprocess(source, name)` function returning a string, before expansion.
+Preprocessing Lua runs with its standard libraries; these are executable build
+scripts.
+
+## Optional post-expansion Lua hook
+
+```sh
+sandstone-as --bank x86.symas --syntax intel --asm-opt optimizer.lua \
+    -o prog.bin prog.s
+```
+
+`optimizer.lua` defines one global function that returns the **complete**
+replacement assembly (return `source` unchanged to keep it as-is):
+
+```lua
+function asm_optimize(source, name)
+    return source
+end
+```
+
+Sandstone calls it once per assembly unit, after all source expansion and
+before parsing, layout and relocation resolution. `name` is the same
+top-level source name passed to `preprocess` and used for parsing diagnostics.
+For multiple CLI inputs they are still concatenated into one unit, with the
+first input filename as `name`. The string assembly API uses `src_name`, or
+`<string>` if it is null. The returned string is parsed directly:
+macros, includes, SDK directives and inline Lua are **not** expanded again.
+Sandstone does not rewrite instructions on its own. Use a script written for
+the selected bank and syntax.
+
+The hook can read these fields in its own read-only `asm_context` table:
+
+- `arch`: the architecture name from the loaded SymAS bank, or `nil` if no
+  bank provides an unambiguous architecture.
+- `syntax`: the selected SymAS syntax record's name, or `nil` if none is
+  selected.
+- `riscv64_nop_alias`: `true` only for an RV64 bank when `addi x0,x0,0` and
+  `nop` each produce the same four bytes and neither produces a relocation.
+  The check uses the configured syntax and enabled features. Otherwise the
+  field is `false`.
+
+The hook runs in its own fresh Lua state, with no `lsandas`, SDK callbacks or
+preprocessing globals. It has Lua's base, string, table, math and UTF-8
+libraries, but no file, module, console or dynamic code loading APIs,
+`setmetatable`, `rawset` or `xpcall`. Script and output text are each limited
+to 16 MiB and cannot contain NUL bytes. Lua memory is limited to 128 MiB and
+execution to 50 million Lua VM instructions. These limits are not a sandbox
+or a wall-clock time limit; use trusted build scripts.
+
+The C API can install a copy with `sandstone_asm_set_asm_opt_hook(ctx, text,
+size)` or `sandstone_asm_load_asm_opt_hook(ctx, path)`, and disable it with
+`sandstone_asm_clear_asm_opt_hook(ctx)`. Installation checks syntax without
+running the script; a failed installation leaves the previous hook in place.
+If the function is missing, fails or returns invalid output, the assembly
+fails instead of falling back to the original text. Failed assembly with
+the hook enabled exposes no partial C assembly results, and the CLI leaves
+any existing output file untouched. `sandstone_asm_preprocess` never calls
+`asm_optimize`.
 
 ## ArchML
 

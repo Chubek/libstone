@@ -14,6 +14,17 @@ from .diagnostics import ArchonError
 from .runtime import Target
 
 
+_IRGEN_ASSEMBLERS = ("gas", "nasm", "fasm", "llvm", "sandstone", "archon")
+_IRGEN_LINKERS = ("gnu", "gold", "mold", "lld", "yld")
+_IRGEN_TOOL_OPTIONS = (
+    "assembler", "assembler_program", "assembler_format", "llvm_triple", "llvm_mattr",
+    "sandstone_bank", "sandstone_archml", "sandstone_syntax",
+    "linker", "linker_program", "linker_script", "lto", "lto_driver",
+)
+_IRGEN_TOOL_INPUTS = ("linker_script", "sandstone_bank", "sandstone_archml")
+_IRGEN_TOOL_PROGRAMS = ("assembler_program", "linker_program", "lto_driver")
+
+
 def _assignment(text):
     name, sep, value = text.partition("=")
     if not sep or not name or not value:
@@ -92,6 +103,9 @@ def _inspect(args):
     params = ", ".join(f"{name}={db['parameters'][name]}" for name in sorted(db["parameters"]))
     print(f"Parameters: {params or '(none)'}")
     print(f"Features: {', '.join(db['features']) or '(none)'}")
+    abi = db.get("abi_facts_v2", db.get("abi_facts"))
+    if abi is not None:
+        print(f"Scalar ABI facts: {abi['name']} (schema {abi['schema_version']})")
     print(f"Instructions ({len(db['instructions'])}):")
     for inst in db["instructions"]:
         print(f"  {inst['name']} ({inst['width']} bits)")
@@ -166,6 +180,21 @@ def _ir_generate(args):
                 "target was specified by both --target and --option"
             )
         options["target"] = args.target
+    for name in ("profile", "abi", *_IRGEN_TOOL_OPTIONS):
+        value = getattr(args, name)
+        if value is not None:
+            if name in options:
+                flag = "no-lto" if name == "lto" and not value else name.replace("_", "-")
+                raise ArchonError(f"{name} was specified by both --{flag} and --option")
+            options[name] = value
+    # --force must not replace a configured script, bank, or executable
+    # supplied by path under the destination.
+    inputs = [*inputs]
+    for name in (*_IRGEN_TOOL_INPUTS, *_IRGEN_TOOL_PROGRAMS):
+        value = options.get(name)
+        if (isinstance(value, str) and value and "\0" not in value
+                and (name in _IRGEN_TOOL_INPUTS or "/" in value or "\\" in value)):
+            inputs.append(value)
     outputs = generate_ir(args.ir, architectures, options=options)
     write_generated_directory(
         outputs, args.output, input_paths=inputs, force=args.force,
@@ -177,6 +206,19 @@ def _write_c99(path, text):
         sys.stdout.write(text)
     else:
         Path(path).write_text(text, encoding="utf-8", newline="\n")
+
+
+def _native_object(args):
+    from .irgen.objectwriter import assemble_object
+
+    assemble_object(args.backend, args.assembler, args.assembler_flavor,
+                    args.source, args.output)
+
+
+def _native_link(args):
+    from .irgen.objectwriter import link_executable
+
+    link_executable(args.linker, args.objects, args.entry, args.output)
 
 
 def _same_path(first, second):
@@ -401,11 +443,95 @@ def _parser():
         help="omit the generated Oracle IPC and annotation support",
     )
     irgen.add_argument(
+        "--profile", choices=("legacy", "native"),
+        help="include the native runtime backend for a supported compiled target",
+    )
+    irgen.add_argument(
+        "--abi", metavar="ABI",
+        help="native backend ABI (currently LP64 only)",
+    )
+    irgen.add_argument(
+        "--assembler", choices=_IRGEN_ASSEMBLERS,
+        help="provider for generated Assembler.sh (default: gas; llvm uses llvm-mc)",
+    )
+    irgen.add_argument(
+        "--assembler-program", metavar="PROGRAM",
+        help="override the selected external assembler executable",
+    )
+    irgen.add_argument(
+        "--assembler-format", metavar="FORMAT",
+        help="select a provider-specific output format",
+    )
+    irgen.add_argument(
+        "--llvm-triple", metavar="TRIPLE",
+        help="select an explicit target triple for llvm-mc",
+    )
+    irgen.add_argument(
+        "--llvm-mattr", metavar="FEATURES",
+        help="set comma-separated llvm-mc attributes such as +m",
+    )
+    irgen.add_argument(
+        "--sandstone-bank", metavar="PATH",
+        help="SymAS bank for the Sandstone assembler",
+    )
+    irgen.add_argument(
+        "--sandstone-archml", metavar="PATH",
+        help="optional Sandstone ArchML profile (may replace a SymAS bank)",
+    )
+    irgen.add_argument(
+        "--sandstone-syntax", metavar="NAME",
+        help="syntax from the selected SymAS bank",
+    )
+    irgen.add_argument(
+        "--linker", choices=_IRGEN_LINKERS,
+        help="provider for generated Linker.sh (default: gnu; yld uses qobjld)",
+    )
+    irgen.add_argument(
+        "--linker-program", metavar="PROGRAM",
+        help="override the selected linker executable",
+    )
+    irgen.add_argument(
+        "--linker-script", metavar="PATH",
+        help="layout script for Linker.sh (.lua is specific to Yellowstone)",
+    )
+    irgen.add_argument(
+        "--lto-driver", metavar="PROGRAM",
+        help="GCC driver for GNU ld, Gold or Mold LTO",
+    )
+    lto = irgen.add_mutually_exclusive_group()
+    lto.add_argument(
+        "--lto", dest="lto", action="store_true", default=None,
+        help="enable link-time optimization in Linker.sh",
+    )
+    lto.add_argument(
+        "--no-lto", dest="lto", action="store_false",
+        help="disable link-time optimization (the default)",
+    )
+    irgen.add_argument(
         "--force",
         action="store_true",
         help="replace a nonempty output directory (input paths remain protected)",
     )
     irgen.set_defaults(handler=_ir_generate)
+
+    native_obj = commands.add_parser(
+        "native-object", help="compile runtime MachineIR to an RV64IM ELF object using an external assembler",
+    )
+    native_obj.add_argument("source", help="runtime MachineIR text path (or '-' for stdin)")
+    native_obj.add_argument("--backend", required=True, help="generated archon-backend executable")
+    native_obj.add_argument("--assembler", required=True, help="configured Clang or RISC-V GNU assembler")
+    native_obj.add_argument("--assembler-flavor", choices=("clang", "gnu"), default="clang")
+    native_obj.add_argument("-o", "--output", required=True, help="destination ELF object file")
+    native_obj.set_defaults(handler=_native_object)
+
+    native_link = commands.add_parser(
+        "native-link", help="link RV64IM ELF objects into a static executable using a configured linker",
+    )
+    native_link.add_argument("objects", nargs="+", help="RV64IM LP64 relocatable ELF objects")
+    native_link.add_argument("--linker", required=True, help="configured ld.lld executable")
+    native_link.add_argument("--entry", default="_start", help="entry symbol (default: _start)")
+    native_link.add_argument("-o", "--output", required=True, help="destination ELF executable")
+    native_link.set_defaults(handler=_native_link)
 
     asm = commands.add_parser("asm", help="assemble one instruction")
     asm.add_argument("database", help="compiled .archdb file")

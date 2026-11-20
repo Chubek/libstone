@@ -1,0 +1,133 @@
+-- archon-translate-begin
+-- {
+--   "version": 1,
+--   "integer_type": "i32",
+--   "productions": {
+--     "program": {
+--       "type": "program",
+--       "alternatives": [
+--         {"rhs": ["/module\\b/", "name", "';'", "functions"], "build": {"node": "program", "fields": {"name": 2, "functions": 4}}}
+--       ]
+--     },
+--     "functions": {
+--       "type": "function*",
+--       "alternatives": [
+--         {"rhs": ["function", "functions"], "build": {"cons": [1, 2]}},
+--         {"rhs": [], "build": {"list": []}}
+--       ]
+--     },
+--     "function": {
+--       "type": "function",
+--       "alternatives": [
+--         {"rhs": ["/fn\\b/", "name", "'('", "parameters", "')'", "'->'", "name", "'{'", "statements", "'}'"], "build": {"node": "function", "fields": {"name": 2, "params": 4, "result": 7, "body": 9}}}
+--       ]
+--     },
+--     "parameters": {
+--       "type": "parameter*",
+--       "alternatives": [
+--         {"rhs": ["parameter", "more_params"], "build": {"cons": [1, 2]}},
+--         {"rhs": [], "build": {"list": []}}
+--       ]
+--     },
+--     "more_params": {
+--       "type": "parameter*",
+--       "alternatives": [
+--         {"rhs": ["','", "parameter", "more_params"], "build": {"cons": [2, 3]}},
+--         {"rhs": [], "build": {"list": []}}
+--       ]
+--     },
+--     "parameter": {
+--       "type": "parameter",
+--       "alternatives": [
+--         {"rhs": ["name", "':'", "name"], "build": {"node": "parameter", "fields": {"name": 1, "type": 3}}}
+--       ]
+--     },
+--     "statements": {
+--       "type": "stmt*",
+--       "alternatives": [
+--         {"rhs": ["statement", "statements"], "build": {"cons": [1, 2]}},
+--         {"rhs": [], "build": {"list": []}}
+--       ]
+--     },
+--     "statement": {
+--       "type": "stmt",
+--       "alternatives": [
+--         {"rhs": ["/let\\b/", "name", "':'", "name", "'='", "expr", "';'"], "build": {"node": "Annotated", "fields": {"binding": 2, "type": 4, "value": 6}}},
+--         {"rhs": ["/let\\b/", "name", "'='", "expr", "';'"], "build": {"node": "Let", "fields": {"binding": 2, "value": 4}}},
+--         {"rhs": ["/return\\b/", "expr", "';'"], "build": {"node": "Return", "fields": {"value": 2}}}
+--       ]
+--     },
+--     "expr": {
+--       "type": "expr",
+--       "alternatives": [
+--         {"rhs": ["sum", "'=='", "sum"], "build": {"node": "Equal", "fields": {"lhs": 1, "rhs": 3}}},
+--         {"rhs": ["sum"], "build": {"take": 1}}
+--       ]
+--     },
+--     "sum": {
+--       "type": "expr",
+--       "alternatives": [
+--         {"rhs": ["sum", "'+'", "term"], "build": {"node": "Add", "fields": {"lhs": 1, "rhs": 3}}},
+--         {"rhs": ["sum", "'-'", "term"], "build": {"node": "Subtract", "fields": {"lhs": 1, "rhs": 3}}},
+--         {"rhs": ["term"], "build": {"take": 1}}
+--       ]
+--     },
+--     "term": {
+--       "type": "expr",
+--       "alternatives": [
+--         {"rhs": ["term", "'*'", "factor"], "build": {"node": "Multiply", "fields": {"lhs": 1, "rhs": 3}}},
+--         {"rhs": ["factor"], "build": {"take": 1}}
+--       ]
+--     },
+--     "factor": {
+--       "type": "expr",
+--       "alternatives": [
+--         {"rhs": ["'('", "expr", "')'"], "build": {"take": 2}},
+--         {"rhs": ["/true\\b/"], "build": {"node": "True", "fields": {}}},
+--         {"rhs": ["/false\\b/"], "build": {"node": "False", "fields": {}}},
+--         {"rhs": ["/[0-9]+/"], "build": {"node": "Integer", "fields": {"value": 1}}},
+--         {"rhs": ["name"], "build": {"node": "Variable", "fields": {"name": 1}}}
+--       ]
+--     },
+--     "name": {
+--       "type": "identifier",
+--       "alternatives": [
+--         {"rhs": ["/[[:alpha:]_][[:alnum:]_]*/"], "build": {"take": 1}}
+--       ]
+--     }
+--   },
+--   "lowering": {
+--     "program": {"op": "program", "name": "name", "functions": "functions"},
+--     "function": {"op": "function", "name": "name", "params": "params", "result": "result", "body": "body"},
+--     "parameter": {"op": "parameter", "name": "name", "type": "type"},
+--     "Let": {"op": "let", "name": "binding", "value": "value"},
+--     "Annotated": {"op": "let_typed", "name": "binding", "type": "type", "value": "value"},
+--     "Return": {"op": "return", "value": "value"},
+--     "Integer": {"op": "integer", "value": "value"},
+--     "Variable": {"op": "var", "name": "name"},
+--     "Add": {"op": "add", "left": "lhs", "right": "rhs"},
+--     "Subtract": {"op": "sub", "left": "lhs", "right": "rhs"},
+--     "Multiply": {"op": "mul", "left": "lhs", "right": "rhs"},
+--     "Equal": {"op": "eq", "left": "lhs", "right": "rhs"},
+--     "True": {"op": "true"},
+--     "False": {"op": "false"}
+--   }
+-- }
+-- archon-translate-end
+
+module MiniCalc {
+    program = (identifier name, function* functions)
+    function = (identifier name, parameter* params, identifier result, stmt* body)
+    parameter = (identifier name, identifier type)
+    stmt = Let(identifier binding, expr value)
+         | Annotated(identifier binding, identifier type, expr value)
+         | Return(expr value)
+    expr = Integer(int value)
+         | Variable(identifier name)
+         | Add(expr lhs, expr rhs)
+         | Subtract(expr lhs, expr rhs)
+         | Multiply(expr lhs, expr rhs)
+         | Equal(expr lhs, expr rhs)
+         | True
+         | False
+}

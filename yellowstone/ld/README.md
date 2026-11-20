@@ -10,7 +10,7 @@ This is a bounded native implementation, **not full GNU ld/LLD parity**:
 
 | Native format | Implemented | Explicitly unsupported |
 | --- | --- | --- |
-| ELF | Static/partial emitter and scripts; ELF64 x86-64 shared objects, PIE and fixed-address dynamic executables; PIC GOT/PLT, runtime RELA, DSO imports, `DT_NEEDED`/SONAME/RUNPATH/RPATH, SysV/GNU hashes, init/fini arrays, `-z now` and RELRO; static archives and `-L/-l` | Native dynamic TLS, IFUNC, symbol versions, copy relocations, dynamic linker scripts, COMDAT/LTO and non-x86-64 dynamic output; unsupported relocations |
+| ELF | Static/partial emitter and scripts; opt-in whole-link section GC for static executables; ELF64 x86-64 shared objects, PIE and fixed-address dynamic executables; PIC GOT/PLT, runtime RELA, DSO imports, `DT_NEEDED`/SONAME/RUNPATH/RPATH, SysV/GNU hashes, init/fini arrays, `-z now` and RELRO; static archives and `-L/-l` | Native dynamic TLS, IFUNC, symbol versions, copy relocations, dynamic linker scripts, COMDAT, compiler bitcode LTO and non-x86-64 dynamic output; unsupported relocations |
 | PE/COFF | x86/x64 fixed-base console images, static archives, absolute/relative/RVA/section relocations, x64 `.pdata` ordering | DLLs/imports/exports, COMDAT, weak externals, TLS/CRT directives, ASLR, partial links, section GC |
 | Mach-O | x86-64 fixed-base `MH_EXECUTE`, `LC_UNIXTHREAD`, segments, symbols, static archives, unsigned/signed/branch relocations | Dylibs/imports, PIE, ARM64, GOT/TLV/subtractor relocations, unwind/initializers, code signing, partial links, section GC |
 
@@ -154,6 +154,68 @@ build-yellowstone/ld/qobjld -T yellowstone/ld/examples/memory.lua \
 
 Both example layouts are compiled, linked and executed by the script tests.
 See [the script manual](../manual/19-scripts.md) for placement rules and limits.
+
+## Native ELF whole-link optimization hook
+
+`--lto-script optimize.lua` enables a **native input-section reachability
+pass**, not LLVM/GCC bitcode LTO. The flag works with static ELF executable
+links using ET_REL objects or ELF archives; it is separate from `-T` and
+from the legacy `--gc-sections` switch.
+
+```sh
+qobjld --lto-script optimize.lua -T layout.ld start.o helpers.o -o program
+```
+
+```lua
+function optimize(link)
+    return { gc_sections = true, keep = { "optional_export" } }
+end
+```
+
+The hook is called once after native input and symbol resolution, before
+layout/relocation. It must return exactly one table with a boolean
+`gc_sections`; `keep` is optional and is a dense array of up to 128 distinct,
+NUL-free symbol names (1–255 bytes each). Each name must be an already-resolved,
+section-defined global/weak symbol. Unknown names fail; naming a symbol does
+not extract otherwise unselected archive members. An empty or omitted `keep`
+works with either boolean; `false` requests no optimization.
+
+`link` is a read-only table with `format` (`"elf"`), `mode` (`"static-exec"`),
+`architecture` (e.g. `"x86-64"`), `entry` (effective entry symbol),
+`elf_class` (`32` or `64`), `object_count` (selected objects), and
+`symbol_count` (resolved input definitions).
+
+GC requires an entry defined in allocated input code. It traces relocations
+through local/section symbols and prevailing global definitions. Ordinary
+allocatable `.text`, `.rodata`, `.data`, `.bss`, `.sdata`, `.sbss` and their
+dot-suffix sections can be removed, together with their symbol definitions.
+Other sections, including unwind data, startup tables, `SHF_GNU_RETAIN` and
+unstripped debug sections, are kept conservatively and can keep additional
+code/data live. The pass does not analyze raw addresses, rewrite instructions,
+or shrink within a section; declare dependencies with no relocation using
+`keep` or the layout script's `KEEP`. It validates relocation types/offsets
+before GC, and the normal writer applies and range-checks live relocations.
+The GC path limits input section payloads and placed output sections to
+256 MiB, with fewer than 65,276 input or output sections and at most
+1,048,576 relocations.
+
+`-T` can still specify an entry, section placement, `MEMORY`, and `KEEP`
+selectors. A `/DISCARD/` that removes a required section is an error. With GC
+enabled, the hook does not support layout symbol assignments (other than `.`),
+nonconstant script data directives, or initialized inputs placed in `NOLOAD`.
+Existing layout limitations still apply.
+
+Pass only trusted, explicitly configured Lua source. The private state has
+`assert`, `error`, `ipairs` and `type`, without the `qld` layout SDK, module
+loading, I/O, debug, protected calls or coroutines. The source is limited to
+64 KiB of NUL-free text, about 1 million Lua VM instructions, and 2 MiB of live
+Lua memory. No positional input or archive member is executed as script code.
+Raw and embedded compiler bitcode, dynamic inputs, shared/PIE/partial links,
+non-ELF formats and all external bridge invocations are rejected.
+
+No image or map is published on a hook or link failure. If requested, both
+outputs are staged after the link succeeds and each regular-file destination
+is replaced atomically (map first, then image; not a multi-file transaction).
 
 ## Portable backend registration manifests
 

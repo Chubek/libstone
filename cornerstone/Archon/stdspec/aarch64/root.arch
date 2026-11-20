@@ -5,4 +5,26 @@ architecture AArch64 {
     address_width = XLEN;
     feature Base = enabled;
     import integer;
+
+    // No instruction in this subset uses SP as an encoded operand.
+    state SP: bits<XLEN>;
+
+    abi_facts_v2 AAPCS64 {
+        schema_version = 2;
+        register_file = IntegerRegisters;
+        args = [x0, x1, x2, x3, x4, x5, x6, x7];
+        result = x0;
+        stack_pointer = state(SP);
+        return_address = register(x30);
+        stack_align = 16;
+        stack_entry_remainder = 0;
+        stack_slot_bytes = 8;
+        stack_arg_offset = 0;
+        stack_growth = downward;
+        caller_saved = [x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11,
+                        x12, x13, x14, x15, x16, x17, x30];
+        callee_saved = [x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29];
+        // x18 is platform-specific; this portable profile does not allocate it.
+        unallocatable = [x18, xzr];
+    }
 }

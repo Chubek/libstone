@@ -122,6 +122,28 @@ int main(void) {
                 ):
                     generate(db)
 
+    def test_registerless_semantic_word_width_is_checked_even_without_expressions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "wide.arch"
+            source.write_text("""
+architecture Wide {
+    endian = little;
+    address_width = 65;
+    format Op: bits<8> { field opcode: bits<8> @ [7:0]; }
+    instruction NOP {
+        encoding Op { opcode = 0; }
+        assembly "nop";
+        semantics {}
+    }
+}
+""", encoding="ascii")
+            db = compile_file(source)
+        for generate in (generate_emulator, generate_emulator_header):
+            with self.subTest(generate=generate), self.assertRaisesRegex(
+                ArchonError, "semantic widths of up to 64 bits in 'NOP'",
+            ):
+                generate(db)
+
 
 if __name__ == "__main__":
     unittest.main()

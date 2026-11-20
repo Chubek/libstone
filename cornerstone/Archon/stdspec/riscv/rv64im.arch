@@ -1,0 +1,31 @@
+architecture RISCV64IM {
+    description = "RV64IM subset for the native LP64 provider";
+    endian = little;
+    parameter XLEN: nat in {64} = 64;
+    parameter SHAMT: nat in {6} = 6;
+    address_width = XLEN;
+    feature I = enabled;
+    feature M = enabled requires I;
+
+    import base;
+    import rv64im_backend;
+
+    // Scalar I64/PTR calls of the reviewed integer LP64 profile. This is not
+    // a classifier for aggregates, variadics, or multi-register results.
+    abi_facts LP64 {
+        schema_version = 1;
+        register_file = IntegerRegisters;
+        args = [a0, a1, a2, a3, a4, a5, a6, a7];
+        result = a0;
+        stack_pointer = sp;
+        return_address = ra;
+        stack_align = 16;
+        stack_slot_bytes = 8;
+        stack_arg_offset = 0;
+        stack_growth = downward;
+        caller_saved = [ra, t0, t1, t2, a0, a1, a2, a3, a4, a5, a6, a7, t3, t4, t5, t6];
+        callee_saved = [sp, s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11];
+        // sp is both fixed-purpose and preserved; zero, gp, and tp are fixed.
+        unallocatable = [zero, sp, gp, tp];
+    }
+}

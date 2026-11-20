@@ -6,8 +6,8 @@ disassemble, and execute instructions without ISA-specific code in the runtime.
 
 ## Quick start
 
-Use Python 3.10 or newer; there are no third-party dependencies or installation
-steps. Run these commands from `cornerstone/Archon` in the repository:
+Use Python 3.10 or newer for the core tools; they have no third-party Python
+dependencies. Run these commands from `cornerstone/Archon` in the repository:
 
 ```sh
 python3 -m archon check stdspec/riscv/rv32i.arch
@@ -49,7 +49,8 @@ python3 -m archon run-program toy8.archdb examples/toy8.s
 Program commands take an optional `--base ADDRESS` for byte layout; it doesn't
 insert padding. Assembly and disassembly read stdin when their input path
 is `-` and write to stdout by default. `asm-program` outputs raw bytes.
-`run-program` executes in file order with no PC, memory, or branches.
+`run-program` executes in file order. Instructions may use modeled memory and
+scalar state, but there is no PC-driven fetch or branch-driven execution.
 
 Generate a standalone C99 encoder and decoder from the same database:
 
@@ -99,9 +100,10 @@ PDP-11 register-direct operations include condition-code effects; the virtual
 machine targets execute only the stack operations whose behavior is faithfully
 representable by the current straight-line semantics. None is a complete ISA
 or virtual-machine implementation.
-Whole-file assembly supports local labels in raw instruction streams;
-object files, external relocations, and general program simulation are not
-supported.
+The built-in assembler supports local labels in raw instruction streams,
+not object output or external relocations. The separate native backend and
+generated tool drivers provide the object and linker paths described below.
+The ArchSem emulator is not a general operating-system or machine simulator.
 
 The root `AGENTS.md` (§32) documents the phased roadmap. IR generation now
 provides standalone representation and pipeline libraries; later phases connect
@@ -117,3 +119,19 @@ Run the tests with:
 ```sh
 python3 -m unittest discover -s tests -v
 ```
+
+Full IR generation also provides [assembler and linker drivers, rewrite
+proof tools, an IR printer, a source translator, and a restricted Linux
+program runner](IRTools.md).
+
+## Library APIs
+
+See [Embedding.md](Embedding.md) for the Python and C++ APIs for Archon and
+IRGen, and for the separate C runtime APIs provided by generated code.
+
+## Native backend
+
+The opt-in RV64IM/LP64 profile generates a C99 library and runtime driver for
+typed MachineIR. See [Embedding](Embedding.md), [MachineIR](MachineIR.md),
+[Binary emission](BinaryEmission.md), and the
+[capability matrix](CAPABILITY_MATRIX.json).

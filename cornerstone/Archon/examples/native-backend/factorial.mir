@@ -1,0 +1,18 @@
+archon-mir 1
+module 1 0 0
+function factorial i64 1 5 3 0
+types i64 i64 i64 i64 i64
+block 0 1
+params
+const 1 1
+cbr 0 1 0 2 0
+block 0 3
+params
+sub 2 0 1
+call 3 factorial 1 2
+mul_checked_s 4 0 3
+ret 4
+block 0 0
+params
+ret 1
+end

@@ -1,0 +1,167 @@
+#include "GatedBackend.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Bound adapter work before invoking the Gated verifier. These limits cover
+ * the native MIR v1 value and parameter limits for the straight-line subset. */
+enum { GATED_MAX_VALUES = 4096, GATED_MAX_INPUTS = 2 * GATED_MAX_VALUES,
+       GATED_MAX_PARAMS = 64 };
+
+static ArchonMIROpcode gated_primitive(enum archon_ir_opcode opcode, size_t *arity)
+{
+    *arity = 0;
+    switch (opcode) {
+@GATED_PRIMITIVE_CASES@
+    default: return 0;
+    }
+}
+
+static ArchonBackendStatus gated_error(
+    ArchonBackendDiagnostic *diagnostic, ArchonBackendStatus status,
+    ArchonBackendStage stage, size_t node, const char *message)
+{
+    if (diagnostic) {
+        *diagnostic = (ArchonBackendDiagnostic){
+            .status = status, .stage = stage,
+            .function = stage == ARCHON_BACKEND_VERIFY ? 0 : SIZE_MAX,
+            .block = node == SIZE_MAX ? SIZE_MAX : 0, .instruction = node
+        };
+        (void)snprintf(diagnostic->message, sizeof diagnostic->message, "%s", message);
+    }
+    return status;
+}
+
+ArchonBackendStatus archon_gated_backend_compile_ex(
+    const struct archon_ir_program *program, const char *symbol, uint32_t result_id,
+    const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
+    ArchonBackendDiagnostic *diagnostic)
+{
+    size_t i, param_count = 0, next_value, inst_count = 0;
+    ArchonValue *values = NULL;
+    ArchonMIRType *types = NULL;
+    ArchonMIRInst *insts = NULL;
+    ArchonMIRBlock block = {0};
+    ArchonMIRFunction function = {0};
+    ArchonMIRModule module = {0};
+    ArchonBackendStatus status;
+    char message[192];
+
+    if (!program || !symbol || !artifact || artifact->data || artifact->size)
+        return gated_error(diagnostic, ARCHON_BACKEND_INVALID, ARCHON_BACKEND_INPUT,
+            SIZE_MAX, "a Gated program, symbol, and empty artifact are required");
+    if (options && options->cancelled && options->cancelled(options->user))
+        return gated_error(diagnostic, ARCHON_BACKEND_CANCELLED, ARCHON_BACKEND_INPUT,
+            SIZE_MAX, "native compilation cancelled");
+    /* A failed builder need not have usable tables. Do not pass its error
+     * string to the IR verifier before checking the builder status. */
+    if (program->status != ARCHON_IR_OK)
+        return gated_error(diagnostic,
+            program->status == ARCHON_IR_OUT_OF_MEMORY ? ARCHON_BACKEND_NOMEM
+                                                      : ARCHON_BACKEND_INVALID,
+            ARCHON_BACKEND_VERIFY, SIZE_MAX, "Gated IR builder is in a failed state");
+    if (program->block_count > 1)
+        return gated_error(diagnostic, ARCHON_BACKEND_UNSUPPORTED, ARCHON_BACKEND_VERIFY,
+            SIZE_MAX, "Gated multi-block programs have no executable control-flow contract");
+    if (program->node_count > GATED_MAX_VALUES || program->input_count > GATED_MAX_INPUTS)
+        return gated_error(diagnostic, ARCHON_BACKEND_LIMIT, ARCHON_BACKEND_VERIFY,
+            SIZE_MAX, "Gated native adapter value or input limit");
+    if (archon_ir_verify(program, message, sizeof message) != ARCHON_IR_OK)
+        return gated_error(diagnostic, ARCHON_BACKEND_INVALID, ARCHON_BACKEND_VERIFY,
+            SIZE_MAX, message);
+    if (program->block_count != 1 || !result_id || result_id > program->node_count)
+        return gated_error(diagnostic, ARCHON_BACKEND_INVALID, ARCHON_BACKEND_VERIFY,
+            SIZE_MAX, "one block and an existing Gated result ID are required");
+
+    for (i = 0; i < program->node_count; ++i)
+        param_count += program->nodes[i].opcode == ARCHON_IR_OP_PARAMETER;
+    if (param_count > GATED_MAX_PARAMS)
+        return gated_error(diagnostic, ARCHON_BACKEND_LIMIT, ARCHON_BACKEND_VERIFY,
+            SIZE_MAX, "Gated native adapter parameter limit");
+    values = malloc(program->node_count * sizeof *values);
+    types = calloc(program->node_count, sizeof *types);
+    if (program->node_count > param_count)
+        insts = malloc((program->node_count - param_count) * sizeof *insts);
+    if (!values || !types || (program->node_count > param_count && !insts)) {
+        status = gated_error(diagnostic, ARCHON_BACKEND_NOMEM, ARCHON_BACKEND_INPUT,
+            SIZE_MAX, "cannot allocate Gated adapter MachineIR tables");
+        goto done;
+    }
+    next_value = param_count;
+    for (i = 0; i < program->node_count; ++i) {
+        const struct archon_ir_node *node = &program->nodes[i];
+        ArchonMIRInst inst = { .a = ARCHON_MIR_NONE, .b = ARCHON_MIR_NONE };
+        size_t arity;
+
+        if (node->type.width != 64 ||
+            (node->type.kind != ARCHON_IR_TYPE_BITS &&
+             node->type.kind != ARCHON_IR_TYPE_UINT &&
+             node->type.kind != ARCHON_IR_TYPE_SINT)) {
+            status = gated_error(diagnostic, ARCHON_BACKEND_UNSUPPORTED, ARCHON_BACKEND_VERIFY,
+                i, "Gated native adapter supports only 64-bit scalar values, not effects");
+            goto done;
+        }
+        if (node->opcode == ARCHON_IR_OP_PARAMETER) {
+            if (node->payload >= param_count || types[node->payload] != ARCHON_MIR_VOID) {
+                status = gated_error(diagnostic, ARCHON_BACKEND_INVALID, ARCHON_BACKEND_VERIFY,
+                    i, "Gated parameter indices must be unique and dense");
+                goto done;
+            }
+            values[i] = (ArchonValue)node->payload;
+            types[values[i]] = ARCHON_MIR_I64;
+            continue;
+        }
+
+        values[i] = (ArchonValue)next_value++;
+        types[values[i]] = ARCHON_MIR_I64;
+        inst.dst = values[i];
+        if (node->opcode == ARCHON_IR_OP_CONSTANT) {
+            inst.op = ARCHON_MIR_CONST;
+            inst.imm = node->payload;
+        } else {
+            inst.op = gated_primitive(node->opcode, &arity);
+            if (!inst.op) {
+                status = gated_error(diagnostic, ARCHON_BACKEND_UNSUPPORTED, ARCHON_BACKEND_VERIFY,
+                    i, "Gated opcode has no reviewed exact native primitive");
+                goto done;
+            }
+            if (node->input_count != arity || node->payload) {
+                status = gated_error(diagnostic, ARCHON_BACKEND_INVALID, ARCHON_BACKEND_VERIFY,
+                    i, "Gated primitive has an invalid input count or payload");
+                goto done;
+            }
+            /* Gated verification excludes forward uses on ordinary nodes. */
+            inst.a = values[program->inputs[node->first_input].value - 1u];
+            if (arity == 2)
+                inst.b = values[program->inputs[node->first_input + 1u].value - 1u];
+        }
+        insts[inst_count++] = inst;
+    }
+
+    block.insts = insts;
+    block.inst_count = inst_count;
+    block.term = (ArchonMIRTerm){ .kind = ARCHON_MIR_RETURN, .value = values[result_id - 1u] };
+    function = (ArchonMIRFunction){
+        .name = symbol, .result = ARCHON_MIR_I64, .types = types,
+        .value_count = program->node_count, .param_count = param_count,
+        .blocks = &block, .block_count = 1
+    };
+    module = (ArchonMIRModule){
+        .version = ARCHON_MIR_SCHEMA_VERSION, .functions = &function, .function_count = 1
+    };
+    status = archon_backend_compile_ex(&module, options, flags, artifact, diagnostic);
+
+done:
+    free(insts);
+    free(types);
+    free(values);
+    return status;
+}
+
+ArchonBackendStatus archon_gated_backend_compile(
+    const struct archon_ir_program *program, const char *symbol, uint32_t result_id,
+    const ArchonBackendOptions *options, ArchonBackendArtifact *artifact,
+    ArchonBackendDiagnostic *diagnostic)
+{
+    return archon_gated_backend_compile_ex(program, symbol, result_id, options, 0, artifact, diagnostic);
+}

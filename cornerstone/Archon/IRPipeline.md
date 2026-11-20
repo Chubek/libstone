@@ -1,5 +1,9 @@
 # Generated C pipeline
 
+For the opt-in runtime RV64IM/LP64 backend, see [Embedding.md](Embedding.md)
+and [MachineIR.md](MachineIR.md). The `Program.i` pipeline below remains the
+default and retains its existing artifact contracts.
+
 Every `archon irgen IR` form emits a shell-free C99 driver for the path from
 that representation's checked `Program.i` to target assembly. The driver links
 stage APIs directly; it never constructs or executes a command line.

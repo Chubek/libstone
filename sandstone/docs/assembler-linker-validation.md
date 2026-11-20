@@ -132,9 +132,10 @@ Python reports `BINDINGS_OK`.
   compatibility is partial. Expansion diagnostics carry file/line context;
   flattened assembler parse/layout diagnostics do not yet retain an expansion
   source map.
-- Callback data must outlive registrations. Lua executes ordinary build scripts,
-  without a sandbox or execution-time quota. Generated-source limits do not
-  bound arbitrary Lua computation.
+- Callback data must outlive registrations. Preprocessing Lua and linker Lua
+  execute ordinary build scripts without a sandbox or execution-time quota.
+  Sandstone's separate [post-expansion hook](assembler.md#optional-post-expansion-lua-hook)
+  has memory and Lua instruction limits.
 - The most sensitive changes are preprocessing order, script-before-input
   discovery, relocation offsets after script-emitted padding, and LOAD permission
   merging when RX/RW sections share a page. Those paths have executable regressions.

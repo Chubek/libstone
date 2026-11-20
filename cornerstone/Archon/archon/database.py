@@ -12,8 +12,16 @@ from .semantics import (
 
 
 SCHEMA_VERSION = 1
+ABI_FACTS_SCHEMA_VERSION = 1
+ABI_FACTS_V2_SCHEMA_VERSION = 2
 _MAX_REGISTERS = 65536
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_ABI_STACK_BOUND = 1 << 30
+_ABI_COMMON_KEYS = {
+    "schema_version", "name", "register_file", "args", "result", "caller_saved",
+    "callee_saved", "unallocatable", "stack_pointer", "return_address",
+    "stack_align", "stack_slot_bytes", "stack_arg_offset", "stack_growth",
+}
 
 
 def _expect(value, kind, key):
@@ -51,6 +59,179 @@ def _compatible_types(actual, expected):
         actual[1] == expected[1]
         and (actual[0] == expected[0] or "bits" in {actual[0], expected[0]})
     )
+
+
+def _abi_header(value, regs, path, expected_version):
+    facts = _expect(value, dict, path)
+    version = _member(facts, "schema_version", int, path)
+    if version != expected_version:
+        raise ArchonError(f"unsupported ArchDB {path} schema version {version} "
+                          f"(expected {expected_version})")
+    if not _IDENTIFIER.fullmatch(_member(facts, "name", str, path)):
+        raise ArchonError(f"invalid ArchDB: {path}.name must be an identifier")
+    file = _member(facts, "register_file", str, path)
+    if regs is None or file != regs["name"]:
+        raise ArchonError(f"invalid ArchDB: {path}.register_file must name the register file")
+    return facts
+
+
+def _abi_roles(facts, path, count):
+    _reg_index(_member(facts, "result", int, path), count, f"{path}.result")
+    roles = {}
+    for key in ("args", "caller_saved", "callee_saved", "unallocatable"):
+        indices = _member(facts, key, list, path)
+        seen = set()
+        for i, index in enumerate(indices):
+            _reg_index(index, count, f"{path}.{key}[{i}]")
+            if index in seen:
+                raise ArchonError(f"invalid ArchDB: duplicate register in {path}.{key}")
+            seen.add(index)
+        if key != "args" and indices != sorted(seen):
+            raise ArchonError(f"invalid ArchDB: {path}.{key} must be sorted by register index")
+        roles[key] = seen
+    return roles
+
+
+def _check_abi_roles(facts, regs, roles, return_index, path):
+    caller = roles["caller_saved"]
+    callee = roles["callee_saved"]
+    fixed = roles["unallocatable"]
+    if caller & (callee | fixed):
+        raise ArchonError(f"invalid ArchDB: {path}.caller_saved overlaps preserved or fixed registers")
+    if regs["zero"] is not None and regs["zero"] not in fixed - callee:
+        raise ArchonError(f"invalid ArchDB: {path} must classify the zero register as fixed only")
+    if len(caller | callee | fixed) != regs["count"]:
+        raise ArchonError(f"invalid ArchDB: {path} must classify every register")
+    if not roles["args"] <= caller - {return_index} or facts["result"] not in caller - {return_index}:
+        raise ArchonError(f"invalid ArchDB: {path} argument and result registers must be "
+                          "caller-saved and distinct from the return address")
+
+
+def _abi_stack_layout(facts, path):
+    for key in ("stack_slot_bytes", "stack_align"):
+        size = _member(facts, key, int, path)
+        if not 1 <= size <= _ABI_STACK_BOUND or size & (size - 1):
+            raise ArchonError(f"invalid ArchDB: {path}.{key} must be a positive power of two "
+                              "no larger than 2^30")
+    if facts["stack_align"] < facts["stack_slot_bytes"]:
+        raise ArchonError(f"invalid ArchDB: {path}.stack_align is smaller than a stack slot")
+    if _member(facts, "stack_growth", str, path) not in {"downward", "upward"}:
+        raise ArchonError(f"invalid ArchDB: {path}.stack_growth must be downward or upward")
+
+
+def _abi_keys(value, keys, path):
+    extra = value.keys() - keys
+    if extra:
+        raise ArchonError(f"invalid ArchDB: unknown {path} member(s): "
+                          f"{', '.join(sorted(map(repr, extra)))}")
+
+
+def _validate_abi_facts(value, regs):
+    """Validate the unchanged version-1 integer-register ABI subsection."""
+    path = "abi_facts"
+    facts = _abi_header(value, regs, path, ABI_FACTS_SCHEMA_VERSION)
+    for key in ("stack_pointer", "return_address"):
+        _reg_index(_member(facts, key, int, path), regs["count"], f"{path}.{key}")
+    roles = _abi_roles(facts, path, regs["count"])
+    sp, ra = facts["stack_pointer"], facts["return_address"]
+    if sp not in roles["callee_saved"] & roles["unallocatable"] or ra not in roles["caller_saved"]:
+        raise ArchonError("invalid ArchDB: abi_facts requires a preserved, fixed stack pointer "
+                          "and a caller-saved return address")
+    _check_abi_roles(facts, regs, roles, ra, path)
+    _abi_stack_layout(facts, path)
+    offset = _member(facts, "stack_arg_offset", int, path)
+    if not 0 <= offset <= _ABI_STACK_BOUND or offset % facts["stack_slot_bytes"]:
+        raise ArchonError("invalid ArchDB: abi_facts.stack_arg_offset must be a nonnegative, "
+                          "slot-aligned byte offset no larger than 2^30")
+    _abi_keys(facts, _ABI_COMMON_KEYS, path)
+
+
+def _validate_abi_facts_v2(value, regs, scalars, address_width):
+    """Validate tagged entry locations without requiring an executable call ISA."""
+    path = "abi_facts_v2"
+    facts = _abi_header(value, regs, path, ABI_FACTS_V2_SCHEMA_VERSION)
+    roles = _abi_roles(facts, path, regs["count"])
+    _abi_stack_layout(facts, path)
+    slot_size, align = facts["stack_slot_bytes"], facts["stack_align"]
+    address_space_size = 1 << address_width
+    if align > address_space_size:
+        raise ArchonError(f"invalid ArchDB: {path}.stack_align exceeds the address space")
+    remainder = _member(facts, "stack_entry_remainder", int, path)
+    if not 0 <= remainder < align:
+        raise ArchonError(
+            f"invalid ArchDB: {path}.stack_entry_remainder must be in [0, stack_align)"
+        )
+
+    def offset(obj, key, prefix, size):
+        distance = _member(obj, key, int, prefix)
+        if (abs(distance) > _ABI_STACK_BOUND
+                or not -address_space_size < distance <= address_space_size - size):
+            raise ArchonError(
+                f"invalid ArchDB: {prefix}.{key} is outside the supported byte offset range"
+            )
+        return distance
+
+    def location(key, payloads):
+        loc = _member(facts, key, dict, path)
+        prefix = f"{path}.{key}"
+        kind = _member(loc, "kind", str, prefix)
+        if kind not in payloads:
+            raise ArchonError(f"invalid ArchDB: invalid location kind {kind!r} for {prefix}")
+        _abi_keys(loc, {"kind"} | payloads[kind], prefix)
+        return kind, loc, prefix
+
+    def register(loc, prefix):
+        index = _member(loc, "index", int, prefix)
+        _reg_index(index, regs["count"], f"{prefix}.index")
+        if regs["width"] != address_width:
+            raise ArchonError(f"invalid ArchDB: {prefix} must use an address-width register")
+        return index
+
+    first_arg = offset(facts, "stack_arg_offset", path, slot_size)
+    if (remainder + first_arg) % slot_size:
+        raise ArchonError(f"invalid ArchDB: {path}.stack_arg_offset must give a slot-aligned "
+                          "address at entry")
+
+    kind, sp, prefix = location("stack_pointer", {"register": {"index"}, "state": {"name"}})
+    if kind == "register":
+        if register(sp, prefix) not in roles["callee_saved"] & roles["unallocatable"]:
+            raise ArchonError(f"invalid ArchDB: {prefix} must be a preserved, fixed register")
+    else:
+        name = _member(sp, "name", str, prefix)
+        if name not in scalars:
+            raise ArchonError(f"invalid ArchDB: {prefix}.name must name a declared scalar state cell")
+        ty = scalars[name]["type"]
+        if ty["width"] != address_width or ty["kind"] == "sint":
+            raise ArchonError(f"invalid ArchDB: {prefix} must use address-width bits or uint state")
+
+    kind, ra, prefix = location("return_address", {
+        "register": {"index"}, "stack_slot": {"offset", "size_bytes"},
+    })
+    return_index = None
+    if kind == "register":
+        return_index = register(ra, prefix)
+        if return_index not in roles["caller_saved"]:
+            raise ArchonError(f"invalid ArchDB: {prefix} must be a caller-saved register")
+    else:
+        size = _member(ra, "size_bytes", int, prefix)
+        if size != (address_width + 7) // 8:
+            raise ArchonError(f"invalid ArchDB: {prefix}.size_bytes must store one architectural "
+                              "address (ceil(address_width / 8) bytes)")
+        start = offset(ra, "offset", prefix, size)
+        return_end = start + size
+        first_arg_end = first_arg + slot_size
+        outside_args = (
+            return_end <= first_arg if facts["stack_growth"] == "downward"
+            else start >= first_arg_end
+        )
+        if not outside_args:
+            raise ArchonError(f"invalid ArchDB: {prefix} stack slot must be outside the "
+                              "incoming scalar argument area")
+        if max(return_end, first_arg_end) - min(start, first_arg) > address_space_size:
+            raise ArchonError(f"invalid ArchDB: {prefix} and the first argument slot "
+                              "cannot fit in the address space together")
+    _check_abi_roles(facts, regs, roles, return_index, path)
+    _abi_keys(facts, _ABI_COMMON_KEYS | {"stack_entry_remainder"}, path)
 
 
 def _state_model(db, address_width):
@@ -390,6 +571,12 @@ def _validate(db):
             _reg_index(index, count, f"registers.aliases.{alias}")
 
     state = _state_model(db, address_width)
+    if "abi_facts" in db and "abi_facts_v2" in db:
+        raise ArchonError("invalid ArchDB: cannot contain both abi_facts and abi_facts_v2")
+    if "abi_facts" in db:
+        _validate_abi_facts(db["abi_facts"], regs)
+    if "abi_facts_v2" in db:
+        _validate_abi_facts_v2(db["abi_facts_v2"], regs, state["scalars"], address_width)
 
     for i, inst in enumerate(_member(db, "instructions", list)):
         path = f"instructions[{i}]"
@@ -405,26 +592,46 @@ def _validate(db):
                 raise ArchonError(f"invalid ArchDB: {path}.{key} must fit in {width} bits")
         _member(inst, "assembly", str, path)
         operands = {}
+        scoped = set()
         for j, row in enumerate(_member(inst, "operands", list, path)):
             operand_path = f"{path}.operands[{j}]"
             _expect(row, dict, operand_path)
             name = _member(row, "name", str, operand_path)
             kind = _member(row, "kind", str, operand_path)
             _member(row, "signed", bool, operand_path)
-            _width(row, operand_path)
+            operand_width = _width(row, operand_path)
             if kind not in {"reg", "imm"}:
                 raise ArchonError(f"invalid ArchDB: invalid operand kind at {operand_path}.kind")
             if kind == "reg" and regs is None:
                 raise ArchonError(
                     f"invalid ArchDB: register operand at {operand_path} without a register file"
                 )
+            if name in operands:
+                raise ArchonError(f"invalid ArchDB: duplicate operand {name!r} at {operand_path}")
+            _operand_register_range(row, count, operand_width, operand_path)
+            if "register_range" in row:
+                scoped.add(name)
             operands[name] = row
+        scoped_fields = set()
         for j, row in enumerate(_member(inst, "fields", list, path)):
             field_path = f"{path}.fields[{j}]"
             _expect(row, dict, field_path)
-            _member(row, "operand", str, field_path)
-            _member(row, "lsb", int, field_path)
-            _width(row, field_path)
+            name = _member(row, "operand", str, field_path)
+            lsb = _member(row, "lsb", int, field_path)
+            field_width = _width(row, field_path)
+            if name in scoped:
+                if name in scoped_fields:
+                    raise ArchonError(f"invalid ArchDB: multiple fields for scoped operand "
+                                      f"{name!r} at {field_path}")
+                if field_width != operands[name]["width"]:
+                    raise ArchonError(f"invalid ArchDB: {field_path} width differs from its "
+                                      "scoped register operand")
+                if not 0 <= lsb <= width - field_width:
+                    raise ArchonError(f"invalid ArchDB: {field_path} is outside the instruction encoding")
+                scoped_fields.add(name)
+        if scoped_fields != scoped:
+            raise ArchonError(f"invalid ArchDB: missing encoding field for scoped operand(s) "
+                              f"{', '.join(sorted(scoped - scoped_fields))} at {path}")
         if "semantics" not in inst:
             raise ArchonError(f"invalid ArchDB: missing {path}.semantics")
         _semantics(
@@ -436,6 +643,32 @@ def _validate(db):
 def _reg_index(value, count, key):
     if not 0 <= _expect(value, int, key) < count:
         raise ArchonError(f"invalid ArchDB: {key} must index one of the {count} registers")
+
+
+def _operand_register_range(row, count, width, path):
+    """Return inclusive operand bounds, or None for an immediate."""
+    key = f"{path}.register_range"
+    if row["kind"] != "reg":
+        if "register_range" in row:
+            raise ArchonError(f"invalid ArchDB: {key} is only valid on register operands")
+        return None
+    if "register_range" not in row:
+        if (count - 1).bit_length() > width:
+            raise ArchonError(f"invalid ArchDB: {path} cannot encode the register file")
+        return 0, count - 1
+    bounds = _member(row, "register_range", list, path)
+    if len(bounds) != 2:
+        raise ArchonError(f"invalid ArchDB: {key} must have two inclusive register indices")
+    first, last = bounds
+    _reg_index(first, count, f"{key}[0]")
+    _reg_index(last, count, f"{key}[1]")
+    if first > last:
+        raise ArchonError(f"invalid ArchDB: {key} must be an ordered range")
+    if last.bit_length() > width:
+        raise ArchonError(f"invalid ArchDB: {key} does not fit the operand's encoding width")
+    if row["signed"]:
+        raise ArchonError(f"invalid ArchDB: a scoped register operand cannot be signed at {path}")
+    return first, last
 
 
 def _object(pairs):

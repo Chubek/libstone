@@ -110,6 +110,41 @@ bool writeOutput(const std::string& path, const std::vector<uint8_t>& bytes,
   return true;
 }
 
+bool writeLtoOutputs(const qld::detail::LinkState& state, const std::vector<uint8_t>& bytes,
+                     std::string& error) {
+  namespace fs = std::filesystem;
+  using qld::detail::toolchain::Workspace;
+  auto destination = [](const std::string& name) -> fs::path {
+    if (name.empty()) return {};
+    const auto path = fs::absolute(name);
+    std::error_code ec;
+    auto status = fs::symlink_status(path, ec);
+    if ((ec && ec != std::errc::no_such_file_or_directory) ||
+        (fs::exists(status) && !fs::is_regular_file(status)))
+      throw std::runtime_error("cannot write regular output file: " + name);
+    return path;
+  };
+  auto image = destination(state.options.output);
+  auto map = destination(state.options.mapFile);
+  std::optional<Workspace> imageWork, mapWork;
+  fs::path stagedImage, stagedMap;
+  if (!image.empty()) {
+    imageWork.emplace(image.parent_path());
+    stagedImage = imageWork->path / "image";
+    if (!writeOutput(stagedImage.string(), bytes, error)) return false;
+  }
+  if (!map.empty()) {
+    mapWork.emplace(map.parent_path());
+    stagedMap = mapWork->path / "map";
+    qld::detail::toolchain::writeText(stagedMap, state.mapText.empty() ? "(empty map)\n" : state.mapText);
+  }
+  // Finish generating and staging both artifacts before publishing anything.
+  // Each destination is replaced atomically; the primary image is last.
+  if (!map.empty()) fs::rename(stagedMap, map);
+  if (!image.empty()) fs::rename(stagedImage, image);
+  return true;
+}
+
 int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
                 char** errmsg, const qld::ScriptSDK *sdk = nullptr,
                 const qld::detail::ElfOptions *elf = nullptr,
@@ -132,8 +167,12 @@ int runInternal(const qld_options_t* opts, std::vector<uint8_t>& outBytes,
     setErr(errmsg, error.empty() ? "link failed" : error);
     return 1;
   }
-  // Write -o and -Map side effects here so both C and C++ paths share them.
-  if (!state.options.output.empty()) {
+  if (!state.options.ltoScript.empty()) {
+    if (!writeLtoOutputs(state, bytes, error)) {
+      setErr(errmsg, error);
+      return 1;
+    }
+  } else if (!state.options.output.empty()) {
     if (!writeOutput(state.options.output, bytes, error)) {
       setErr(errmsg, error);
       return 1;

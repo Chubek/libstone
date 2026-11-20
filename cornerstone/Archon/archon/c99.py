@@ -36,9 +36,14 @@ def generate_codec(db: dict, prefix: str = "archon") -> str:
             width, lsb = field["width"], field["lsb"]
             if operand["width"] != width or not (0 < width <= 64 and 0 <= lsb <= 64 - width):
                 raise ArchonError(f"cannot represent the fields of {name!r} in the C99 codec")
-            register_limit = register_count if operand["kind"] == "reg" else 0
+            if operand["kind"] == "reg":
+                first, last = operand.get("register_range", (0, register_count - 1))
+                register_limit = last + 1
+            else:
+                first = register_limit = 0
             fields.append(
-                f"    {{{lsb}, {width}, {int(operand['signed'])}, UINT64_C({register_limit})}},"
+                f"    {{{lsb}, {width}, {int(operand['signed'])}, "
+                f"UINT64_C({first}), UINT64_C({register_limit})}},"
             )
         rows.append(
             f'    {{"{name}", UINT64_C(0x{inst["mask"]:x}), UINT64_C(0x{inst["value"]:x}), '
@@ -46,7 +51,7 @@ def generate_codec(db: dict, prefix: str = "archon") -> str:
         )
 
     replacements = {
-        "@FIELDS@": "\n".join(fields or ["    {0, 0, 0, 0},"]),
+        "@FIELDS@": "\n".join(fields or ["    {0, 0, 0, 0, 0},"]),
         "@ROWS@": "\n".join(rows or ["    {NULL, 0, 0, 0, 0, 0},"]),
         "@COUNT@": str(len(rows)),
         "@LITTLE@": str(int(db["endian"] == "little")),
@@ -71,7 +76,7 @@ enum @PREFIX@_status {
 
 struct @PREFIX@_field {
     unsigned lsb, width, is_signed;
-    uint64_t register_limit;
+    uint64_t first_register, register_limit;
 };
 
 struct @PREFIX@_instruction {
@@ -97,6 +102,11 @@ static uint64_t @PREFIX@_low_mask(unsigned width) {
 static uint64_t @PREFIX@_sign_extend(uint64_t value, unsigned width) {
     uint64_t top = UINT64_C(1) << (width - 1u);
     return (value ^ top) - top;
+}
+
+static int @PREFIX@_register_allowed(const struct @PREFIX@_field *field, uint64_t value) {
+    return !field->register_limit ||
+           (value >= field->first_register && value < field->register_limit);
 }
 
 static size_t @PREFIX@_byte_shift(size_t pos, size_t count) {
@@ -125,7 +135,7 @@ enum @PREFIX@_status @PREFIX@_encode(const char *name, const uint64_t *operands,
     for (i = 0; i < operand_count; ++i) {
         const struct @PREFIX@_field *field = &@PREFIX@_fields[inst->first_field + i];
         uint64_t value = operands[i], low = value & @PREFIX@_low_mask(field->width);
-        if ((field->register_limit && value >= field->register_limit) ||
+        if (!@PREFIX@_register_allowed(field, value) ||
                 value != (field->is_signed ? @PREFIX@_sign_extend(low, field->width) : low))
             return @UPPER@_OPERAND_RANGE;
         word |= low << field->lsb;
@@ -162,7 +172,7 @@ enum @PREFIX@_status @PREFIX@_decode(const uint8_t *data, size_t data_len,
     for (i = 0; i < inst->operand_count; ++i) {
         const struct @PREFIX@_field *field = &@PREFIX@_fields[inst->first_field + i];
         uint64_t low = (word >> field->lsb) & @PREFIX@_low_mask(field->width);
-        if (field->register_limit && low >= field->register_limit)
+        if (!@PREFIX@_register_allowed(field, low))
             return @UPPER@_OPERAND_RANGE;
     }
     for (i = 0; i < inst->operand_count; ++i) {

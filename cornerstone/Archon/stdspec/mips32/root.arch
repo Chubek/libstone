@@ -5,4 +5,5 @@ architecture MIPS32 {
     address_width = XLEN;
     feature Base = enabled;
     import integer;
+    import o32_nonpic;
 }

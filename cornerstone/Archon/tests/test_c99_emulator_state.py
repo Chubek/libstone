@@ -268,10 +268,18 @@ int main(void) {{
     assert(NS_EMU_MEMORY_RAM_SIZE == 8);
     assert(ns_emu_register_count() == 0 && ns_emu_register_width() == 0);
 
+    assert(ns_emu_execute_state("NOOP", mutate, 3, NULL) == NS_EMU_INVALID_ARGUMENT);
+    assert(ns_emu_step_state(NULL, 0, &state) == NS_EMU_INVALID_ARGUMENT);
     state.stack_Data.values = stack;
     state.memory_RAM = memory;
     state.scalar_PC = 1;
     state.scalar_Flags = 2;
+    assert(ns_emu_execute_state("NOOP", NULL, 3, &state) == NS_EMU_INVALID_ARGUMENT);
+    assert(ns_emu_step_state(NULL, 0, &state) == NS_EMU_TRUNCATED_INSTRUCTION);
+    assert(ns_emu_step_state(NULL, sizeof good, &state) == NS_EMU_INVALID_ARGUMENT);
+    assert(ns_emu_run_state(good, sizeof good, &state, NULL) == NS_EMU_INVALID_ARGUMENT);
+    assert(ns_emu_run_state(NULL, 0, &state, &consumed) == NS_EMU_OK);
+    assert(consumed == 0 && state.scalar_PC == 1 && state.scalar_Flags == 2);
 
     /* The legacy ABI remains useful for state-independent instructions. */
     assert(ns_emu_execute("NOOP", mutate, 3, NULL, 0) == NS_EMU_OK);
@@ -334,6 +342,12 @@ int main(void) {{
     assert(ns_emu_step_state(good, sizeof good, &state) == NS_EMU_INVALID_ARGUMENT);
     assert(stack[0] == 256);
     stack[0] = 3;
+    state.stack_Data.size = NS_EMU_STACK_Data_CAPACITY + 1u;
+    assert(ns_emu_step_state(good, sizeof good, &state) == NS_EMU_INVALID_ARGUMENT);
+    state.stack_Data.size = 0;
+    state.stack_Data.values = NULL;
+    assert(ns_emu_step_state(good, sizeof good, &state) == NS_EMU_INVALID_ARGUMENT);
+    state.stack_Data.values = stack;
     state.memory_RAM = NULL;
     assert(ns_emu_execute_state("NOOP", mutate, 3, &state)
             == NS_EMU_INVALID_ARGUMENT);
@@ -366,16 +380,34 @@ int main(void) {{
 
             allocation_harness = root / "allocation.c"
             allocation_harness.write_text(
-                """#include <stddef.h>
-void *always_fail(size_t);
-#define malloc always_fail
+                """#include <stdlib.h>
+static void *tracked_malloc(size_t);
+static void tracked_free(void *);
+#define malloc tracked_malloc
+#define free tracked_free
 #include "native.c"
 #undef malloc
+#undef free
 #include <assert.h>
 
-void *always_fail(size_t size) {
-    (void)size;
-    return NULL;
+static size_t attempts, fail_on, live;
+
+static void *tracked_malloc(size_t size) {
+    void *result;
+    if (++attempts == fail_on)
+        return NULL;
+    result = malloc(size);
+    assert(result);
+    ++live;
+    return result;
+}
+
+static void tracked_free(void *pointer) {
+    if (pointer) {
+        assert(live);
+        --live;
+    }
+    free(pointer);
 }
 
 int main(void) {
@@ -388,11 +420,26 @@ int main(void) {
     state.stack_Data.values = stack;
     state.stack_Data.size = 1;
     state.memory_RAM = memory;
-    assert(ns_emu_execute_state("MUTATE", mutate, 3, &state)
+    fail_on = 1;
+    assert(ns_emu_execute_state("NOOP", mutate, 3, &state) == NS_EMU_OK);
+    assert(attempts == 0 && live == 0);
+    for (size_t failure = 1; failure <= 2; ++failure) {
+        attempts = 0;
+        fail_on = failure;
+        assert(ns_emu_execute_state("MUTATE", mutate, 3, &state)
             == NS_EMU_ALLOCATION_FAILURE);
-    assert(state.scalar_PC == 9 && state.scalar_Flags == 10);
-    assert(state.stack_Data.size == 1 && stack[0] == 11);
-    assert(memory[0] == 12);
+        assert(attempts == failure && live == 0);
+        assert(state.scalar_PC == 9 && state.scalar_Flags == 10);
+        assert(state.stack_Data.size == 1 && stack[0] == 11 && stack[1] == 0);
+        assert(memory[0] == 12 && memory[2] == 0);
+    }
+    /* Read-only memory is read directly; popping requires only stack staging. */
+    attempts = 0;
+    fail_on = 2;
+    assert(ns_emu_execute_state("POP_LOAD", mutate, 3, &state) == NS_EMU_OK);
+    assert(attempts == 1 && live == 0);
+    assert(state.scalar_PC == 0 && state.scalar_Flags == 11);
+    assert(state.stack_Data.size == 0);
     return 0;
 }
 """,

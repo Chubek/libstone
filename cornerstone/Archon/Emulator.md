@@ -12,13 +12,15 @@ python3 -m archon asm-program toy8.archdb examples/toy8.s -o toy8.bin
 python3 -m archon gen toy8.archdb --emulator --prefix toy8 \
     -o toy8_emu.c --header toy8_emu.h
 cc -std=c99 -Wall -Wextra -Werror -pedantic -I. \
-    examples/toy8_runner.c -o toy8-runner
+    toy8_emu.c examples/toy8_runner.c -o toy8-runner
 ./toy8-runner toy8.bin
 ```
 
 The [runner](examples/toy8_runner.c) prints `r1 = 254`, `r2 = 6`, and
 `r3 = 4` among the final registers. Generated code needs neither Python nor an
 ArchDB at runtime.
+This runs modeled instructions, not a native ELF process. For the latter,
+see the separate [Linux runner](IRTools.md#running-a-linked-program).
 
 ## APIs
 
@@ -96,16 +98,17 @@ Addresses are byte offsets. Multi-byte loads and stores use the architecture's
 declared endianness.
 
 The generated C cannot discover the size of a pointer's allocation. Callers
-must provide every required buffer at its generated bound. State buffers must
-not overlap one another or the encoded input stream.
+must provide every required buffer at its generated bound. The state struct
+and its backing buffers must be disjoint. For stream execution, the encoded
+input and the optional byte-count output must also be disjoint from each
+other and from mutable state.
 
 ## Transactions and errors
 
-Every instruction runs on a private deep snapshot. Registers, scalars, stack
-contents and depths, and all memory bytes are committed together only when the
-instruction returns `*_EMU_OK`. This includes failures after earlier semantic
-writes, conflicting parallel writes or stores, stack underflow/overflow, and
-out-of-bounds memory access.
+An instruction stages its writes and commits them only when it returns
+`*_EMU_OK`. Failures roll back earlier semantic writes in the same
+instruction, including when the failure is a parallel write conflict, stack
+underflow or overflow, or an out-of-bounds memory access.
 
 `*_emu_run_state` commits each successful instruction separately. On failure,
 earlier instructions remain committed and `bytes_executed` reports their byte
@@ -125,13 +128,15 @@ Relevant statuses include:
 - `*_EMU_STACK_UNDERFLOW` / `*_EMU_STACK_OVERFLOW`
 - `*_EMU_MEMORY_OUT_OF_BOUNDS`
 
-The complete-state functions allocate scratch storage proportional to the
-declared register file, all stack capacities, and all memories. `run_state`
-allocates it once and reuses it for the stream. Every allocation is checked and
-released; allocation failure leaves caller state unchanged. Each instruction
-still copies the complete modeled state. Parallel memory stores additionally
-use bounded automatic staging proportional to the bytes stored by that
-parallel block.
+The complete-state functions use the validated SemIR write sets to stage only
+writable backing buffers. `run_state` allocates each such scratch buffer on
+first use and reuses it for the rest of the stream. Untouched memories are not
+copied, and stack scratch copies only live entries. A memory an instruction can
+write is still staged at its full declared size. An allocation failure leaves
+the failing instruction's state unchanged; any successful prefix remains
+committed. Parallel memory stores use at most 32 automatically allocated
+byte records; larger parallel blocks allocate reusable scratch on the heap
+for the duration of the instruction.
 
 ## Exact limits
 

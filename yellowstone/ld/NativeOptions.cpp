@@ -6,7 +6,7 @@
 
 namespace qld::detail {
 namespace {
-const ToolchainOptions& config(const LinkOptions& o, Backend kind) {
+ToolchainOptions& config(LinkOptions& o, Backend kind) {
   return kind == Backend::PE ? o.pe : kind == Backend::MachO ? o.macho : o.elf;
 }
 uint64_t number(const std::string& text) {
@@ -16,28 +16,8 @@ uint64_t number(const std::string& text) {
   if (used != text.size()) throw std::runtime_error("invalid address: " + text);
   return result;
 }
-}
 
-bool externalBackendRequested(const LinkOptions& o, Backend kind) {
-  const auto& c = config(o, kind);
-  if (!c.linker.empty()) return true;
-  // Only explicit requests select the compatibility bridges.
-  auto args = toolchain::expandArguments(c.arguments, kind == Backend::PE ?
-      toolchain::Quoting::Windows : toolchain::Quoting::GNU);
-  for (size_t i = 0; i < args.size(); ++i) {
-    const auto& a = args[i];
-    if (a == "--") break;
-    if (a == "--dynamic" || a == "--elf-linker" || a.starts_with("--elf-linker=") ||
-        a == "--pe-linker" || a.starts_with("--pe-linker=") ||
-        a == "--macho-linker" || a.starts_with("--macho-linker=")) return true;
-    i += toolchain::optionArity(a);
-  }
-  return false;
-}
-
-void parseNativeArguments(LinkOptions& o, Backend kind) {
-  const auto args = toolchain::expandArguments(config(o, kind).arguments,
-      kind == Backend::PE ? toolchain::Quoting::Windows : toolchain::Quoting::GNU);
+void parseNativeArguments(LinkOptions& o, Backend kind, const std::vector<std::string>& args) {
   // GNU-style ELF library search is dynamic by default; --static/-Bstatic
   // switch it back to archives. Other formats retain their native defaults.
   bool dynamicLibraries =
@@ -76,8 +56,12 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
     else if (a.starts_with("-Map=") || a.starts_with("--Map=")) o.mapFile = a.substr(a.find('=') + 1);
     else if (a == "-T" || a == "--script") o.script = value();
     else if (a.starts_with("--script=")) o.script = a.substr(9);
-    else if (a.starts_with("-T") && !a.starts_with("-Ttext") &&
-             !a.starts_with("-Tdata") && !a.starts_with("-Tbss")) o.script = a.substr(2);
+    else if (a == "--lto-script" || a.starts_with("--lto-script=")) {
+      if (!o.ltoScript.empty()) throw std::runtime_error("specify --lto-script only once");
+      o.ltoScript = a == "--lto-script" ? value() : a.substr(13);
+      if (o.ltoScript.empty()) throw std::runtime_error("--lto-script needs a file");
+    } else if (a.starts_with("-T") && !a.starts_with("-Ttext") &&
+               !a.starts_with("-Tdata") && !a.starts_with("-Tbss")) o.script = a.substr(2);
     else if (a == "--script-text" || a.starts_with("--script-text=")) {
       o.scriptText = a == "--script-text" ? value() : a.substr(14); o.scriptIsText = true;
     } else if (a == "--image-base" || a.starts_with("--image-base=")) {
@@ -157,6 +141,10 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
       throw std::runtime_error("unsupported native linker option: " + a);
     else o.inputs.push_back(a);
   }
+  if (!o.ltoScript.empty() && (kind != Backend::ELF || o.mode != Mode::Exec || o.pie ||
+                              !o.dynamicLinker.empty() || !o.soname.empty() ||
+                              !o.runpath.empty() || o.exportDynamic))
+    throw std::runtime_error("--lto-script requires a native static ELF executable link");
   if (kind != Backend::ELF && (o.mode == Mode::Shared || o.pie))
     throw std::runtime_error("native PE/Mach-O linker does not yet support shared/PIE images");
   if (o.mode == Mode::Relocatable && o.pie)
@@ -168,5 +156,31 @@ void parseNativeArguments(LinkOptions& o, Backend kind) {
   o.preferSharedLibraries = dynamicLibraries;
   if (kind != Backend::ELF && (o.scriptIsText || !o.script.empty()))
     throw std::runtime_error("native PE/Mach-O linker does not support ELF linker scripts");
+}
+} // namespace
+
+bool configureLinkerArguments(LinkOptions& o, Backend kind) {
+  auto& c = config(o, kind);
+  auto args = toolchain::expandArguments(c.arguments, kind == Backend::PE ?
+      toolchain::Quoting::Windows : toolchain::Quoting::GNU);
+  // Only explicit requests select a bridge. Never forward a native hook.
+  bool external = !c.linker.empty(), lto = !o.ltoScript.empty();
+  for (size_t i = 0; i < args.size(); ++i) {
+    const auto& a = args[i];
+    if (a == "--") break;
+    if (a == "--dynamic" || a == "--elf-linker" || a.starts_with("--elf-linker=") ||
+        a == "--pe-linker" || a.starts_with("--pe-linker=") ||
+        a == "--macho-linker" || a.starts_with("--macho-linker=")) external = true;
+    if (a == "--lto-script" || a.starts_with("--lto-script=")) lto = true;
+    i += toolchain::optionArity(a);
+  }
+  if (external) {
+    if (lto) throw std::runtime_error("--lto-script cannot be used with an external linker");
+    // Use the inspected arguments, not a second read of a response file.
+    c.arguments = std::move(args);
+  } else {
+    parseNativeArguments(o, kind, args);
+  }
+  return external;
 }
 } // namespace qld::detail

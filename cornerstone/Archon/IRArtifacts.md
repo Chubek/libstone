@@ -76,6 +76,12 @@ standalone tool's output and feed it to the next parser. A basename such as
 `MIR.i` therefore does not identify a schema by itself. The fixtures under
 `examples/ir-pipeline/expected/v1` remain separated by producer and consumer.
 
+The generated [IR tools](IRTools.md) consume explicit paths. The shell
+drivers run after assembly source has been produced; they are not C pipeline
+passes and do not change any X-macro contract. Build `RunSandbox.c` separately
+to execute a supported, already-linked native Linux ELF. It does not take IR,
+assembly, or a raw function image and does not emulate a foreign target.
+
 The allocator's canonical report includes `MacroABI.h` when used as a C
 X-macro stream, so C consumers must provide that companion header. The assembly
 emitter reads the report as checked text and does not invoke a preprocessor.
@@ -259,3 +265,28 @@ Compatibility aliases are added only at plug-in invocation. A stage that
 writes into the process working directory, returns paths instead of
 `dict[str, str]`, or rejects the shared context is an integration error and is
 reported rather than silently skipped.
+## Native runtime interchange
+
+The optional native backend accepts typed `ArchonMIRModule` views and the
+independent `archon-mir 1` text grammar documented in [MachineIR.md](MachineIR.md).
+The runtime never preprocesses its inputs. Native generation publishes
+`BackendManifest.json`, with a validated target identity, ArchDB fingerprint,
+ABI, and separately versioned public API and MachineIR schema. It does not
+publish `MIR.i` or any of the legacy artifacts described above.
+
+The `--emit-physical` driver option writes `archon-physical 1`, the target name
+and ArchDB SHA-256, then functions, labels, physical instructions, symbolic
+branch/call/address records and data definitions. Symbolic transfers are
+retained until the assembler/linker resolves them; the stream ends with `end`.
+This format is for inspection, not a compiler restart point.
+
+`--emit-code` is an alternative output mode for a single function with no
+imports or globals. It returns plain RV64IM instruction bytes starting at the
+entry point, not a serialized MachineIR artifact or an ELF container. See
+[BinaryEmission.md](BinaryEmission.md#raw-instruction-bytes).
+
+The generated target facts carry declared ABI v1 or v2 as JSON. The optional
+`ARCHON_TARGET_OPERAND_REGISTER_RANGE` callback reports explicitly bounded
+register operands without changing the existing operand callback. The C
+`archon_target_operand_register_range` query also supplies the effective
+range for an unbounded register class.

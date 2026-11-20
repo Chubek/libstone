@@ -1,32 +1,20 @@
 // A separate, restricted Lua environment for portable registration records.
 // Do not use the unrestricted layout-script runtime or invoke a native linker.
 #include "ld.h"
-
-extern "C" {
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
-}
+#include "RestrictedLua.hpp"
 
 #include <array>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <string_view>
 
 namespace {
-constexpr size_t maxSource = 64 * 1024;
-constexpr size_t maxLuaBytes = 2 * 1024 * 1024;
-constexpr int hookInterval = 1000;
-constexpr int maxInstructions = 1000000;
+namespace restricted = qld::detail::restrictedLua;
 constexpr size_t maxRecords = 128;
 constexpr size_t maxName = 64;
 constexpr size_t maxRegistrar = 128;
 
 struct Manifest {
-  size_t luaBytes = 0;
-  bool allocationLimitHit = false;
-  int instructions = 0;
   size_t count = 0;
   size_t size = 0;
   std::array<char, maxRecords * (maxName + maxRegistrar + 2)> bytes;
@@ -34,37 +22,8 @@ struct Manifest {
   std::array<std::string_view, maxRecords> registrars;
 };
 
-void *allocate(void *user, void *ptr, size_t oldSize, size_t newSize) {
-  auto &manifest = *static_cast<Manifest *>(user);
-  if (!ptr) oldSize = 0; // For a new block Lua supplies an object type, not a size.
-  if (!newSize) {
-    std::free(ptr);
-    manifest.luaBytes -= oldSize;
-    return nullptr;
-  }
-  const size_t otherBytes = manifest.luaBytes - oldSize;
-  if (newSize > maxLuaBytes - otherBytes) {
-    manifest.allocationLimitHit = true;
-    return nullptr;
-  }
-  if (void *next = std::realloc(ptr, newSize)) {
-    manifest.luaBytes = otherBytes + newSize;
-    return next;
-  }
-  return nullptr;
-}
-
 Manifest &context(lua_State *lua) {
-  void *user = nullptr;
-  lua_getallocf(lua, &user);
-  return *static_cast<Manifest *>(user);
-}
-
-void countInstructions(lua_State *lua, lua_Debug *) {
-  auto &manifest = context(lua);
-  manifest.instructions += hookInterval;
-  if (manifest.instructions >= maxInstructions)
-    luaL_error(lua, "backend manifest instruction limit exceeded");
+  return *static_cast<Manifest *>(lua_touserdata(lua, lua_upvalueindex(1)));
 }
 
 bool lower(char c) { return c >= 'a' && c <= 'z'; }
@@ -122,17 +81,12 @@ int initialize(lua_State *lua) {
   // Install only these base functions in a fresh global environment. No
   // libraries are reachable, including load/loadfile, package, io, os,
   // coroutine, debug, or pcall (which could catch quota/validation errors).
-  luaopen_base(lua);
+  restricted::installGlobals(lua);
   lua_newtable(lua);
-  for (const char *name : {"assert", "error", "ipairs", "type"}) {
-    lua_getfield(lua, -2, name);
-    lua_setfield(lua, -2, name);
-  }
-  lua_newtable(lua);
-  lua_pushcfunction(lua, addBackend);
+  lua_pushvalue(lua, 1);
+  lua_pushcclosure(lua, addBackend, 1);
   lua_setfield(lua, -2, "backend");
   lua_setfield(lua, -2, "qld");
-  lua_rawseti(lua, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
   return 0;
 }
 
@@ -150,11 +104,11 @@ int fail(char **error, int status, std::string_view message) {
   return status;
 }
 
-int luaFailure(lua_State *lua, const Manifest &manifest, int status, char **error) {
+int luaFailure(lua_State *lua, const restricted::Budget &budget, int status, char **error) {
   if (status == LUA_ERRMEM)
-    return fail(error, QLD_OUT_OF_MEMORY, manifest.allocationLimitHit ?
+    return fail(error, QLD_OUT_OF_MEMORY, budget.allocationLimitHit ?
         "backend manifest Lua allocation limit exceeded" : "backend manifest out of memory");
-  if (manifest.instructions >= maxInstructions)
+  if (budget.instructions >= restricted::maxInstructions)
     return fail(error, QLD_ERROR, "backend manifest instruction limit exceeded");
   size_t length = 0;
   if (lua_type(lua, -1) == LUA_TSTRING) {
@@ -172,26 +126,27 @@ int qld_backend_manifest(const char *source, size_t source_size,
   if (errmsg) *errmsg = nullptr;
   if (!source || !out_bytes || !out_size)
     return fail(errmsg, QLD_INVALID_ARGUMENT, "null backend manifest source or output");
-  if (source_size > maxSource)
+  if (source_size > restricted::maxSource)
     return fail(errmsg, QLD_ERROR, "backend manifest source size limit exceeded");
   if (std::memchr(source, '\0', source_size))
     return fail(errmsg, QLD_PARSE_ERROR, "NUL in backend manifest source");
 
   Manifest manifest;
-  std::unique_ptr<lua_State, decltype(&lua_close)> lua(
-      lua_newstate(allocate, &manifest, luaL_makeseed(nullptr)), lua_close);
+  restricted::Budget budget{.name = "backend manifest"};
+  auto lua = restricted::create(budget, luaL_makeseed(nullptr));
   if (!lua) return fail(errmsg, QLD_OUT_OF_MEMORY, "cannot allocate backend manifest Lua state");
   // All operations that can raise a Lua error run under lua_pcall or the
   // loader's own protected parser; the state stays owned in this caller.
   lua_pushcfunction(lua.get(), initialize);
-  int status = lua_pcall(lua.get(), 0, 0, 0);
+  lua_pushlightuserdata(lua.get(), &manifest);
+  int status = lua_pcall(lua.get(), 1, 0, 0);
   if (status == LUA_OK)
     status = luaL_loadbufferx(lua.get(), source, source_size, "=backend manifest", "t");
   if (status == LUA_OK) {
-    lua_sethook(lua.get(), countInstructions, LUA_MASKCOUNT, hookInterval);
+    lua_sethook(lua.get(), restricted::countInstructions, LUA_MASKCOUNT, restricted::hookInterval);
     status = lua_pcall(lua.get(), 0, 0, 0);
   }
-  if (status != LUA_OK) return luaFailure(lua.get(), manifest, status, errmsg);
+  if (status != LUA_OK) return luaFailure(lua.get(), budget, status, errmsg);
   if (!manifest.count)
     return fail(errmsg, QLD_PARSE_ERROR, "backend manifest registered no backends");
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from urllib.parse import quote
 
 from ..diagnostics import ArchonError
 
@@ -35,19 +36,16 @@ def _oracle_enabled(context: object) -> bool:
 def emit(context):
     """Emit the rewrite runtime and one macro pattern bank per selected ArchDB."""
 
-    databases = _selected_databases(context)
     outputs: dict[str, str] = {}
     bank_names: list[str] = []
     fact_count = 0
-    rule_count = 0
-    opcode_claims: dict[int, str] = {}
-    for database, safe in zip(databases, _bank_stems(databases)):
-        filename = f"PatternBank_{safe}.i"
-        bank, facts, rules = _pattern_bank(database, opcode_claims)
-        outputs[filename] = bank
+    rule_ids = []
+    for database, filename, facts, rules in generated_rule_banks(context):
+        architecture = str(database.get("architecture", "architecture"))
+        outputs[filename] = _pattern_bank(architecture, facts, rules)
         bank_names.append(filename)
-        fact_count += facts
-        rule_count += rules
+        fact_count += len(facts)
+        rule_ids.extend(rule["id"] for rule in rules)
 
     includes = "\n".join(f'#include "{name}"' for name in bank_names)
     oracle_enabled = _oracle_enabled(context)
@@ -65,7 +63,12 @@ def emit(context):
     outputs["Rewrite.c"] = (
         _SOURCE.replace("@PATTERN_BANK_INCLUDES@", includes)
         .replace("@GENERATED_FACT_COUNT@", str(fact_count))
-        .replace("@GENERATED_RULE_COUNT@", str(rule_count))
+        .replace("@GENERATED_RULE_COUNT@", str(len(rule_ids)))
+        .replace(
+            "@GENERATED_RULE_IDS@",
+            "\n".join(f"    {_c_string(rule_id)}," for rule_id in rule_ids)
+            or "    NULL,",
+        )
         .replace("@ORACLE_INCLUDE@", oracle_include)
         .replace("@ORACLE_IMPLEMENTATION@", oracle_implementation)
     )
@@ -370,14 +373,24 @@ def _claim_opcode(claims: dict[int, str], opcode: int, key: str) -> None:
     claims[opcode] = key
 
 
-def _pattern_bank(
-    database: dict, opcode_claims: dict[int, str] | None = None
-) -> tuple[str, int, int]:
+def stable_rule_id(*parts: object) -> str:
+    """Namespace generated rule IDs without relying on source order."""
+    return ":".join(quote(str(part), safe="") for part in parts)
+
+
+def generated_rule_banks(context):
+    """Yield (ArchDB, filename, target facts, rule rows) used by Rewrite.c."""
+    databases = _selected_databases(context)
+    opcode_claims: dict[int, str] = {}
+    for database, stem in zip(databases, _bank_stems(databases)):
+        facts, rules = _pattern_facts(database, opcode_claims)
+        yield database, f"PatternBank_{stem}.i", facts, rules
+
+
+def _pattern_facts(database: dict, opcode_claims: dict[int, str]) -> tuple[list, list]:
     architecture = str(database.get("architecture", "architecture"))
-    if opcode_claims is None:
-        opcode_claims = {}
     facts = []
-    direct_rules = []
+    rules = []
     semantic_operations: dict[tuple, dict] = {}
     for instruction in sorted(
         database.get("instructions", []), key=lambda row: str(row.get("name", ""))
@@ -418,7 +431,16 @@ def _pattern_bank(
         rule = _direct_semantic_rule(database, dict(instruction))
         if rule is None:
             continue
-        direct_rules.append((name, rule, max(1, (width + 7) // 8)))
+        label = "lower." + name
+        rules.append({
+            **rule,
+            "kind": "rename",
+            "name": label,
+            "id": stable_rule_id("rewrite", architecture, label),
+            "instruction": name,
+            "engines": 3,
+            "target_cost": max(1, (width + 7) // 8),
+        })
         root = rule["root"]
         _claim_opcode(
             opcode_claims, rule["semantic_opcode"], _semantic_key(root)
@@ -437,29 +459,27 @@ def _pattern_bank(
         )
         semantic_operations[key] = rule
 
-    rule_lines = []
-    for name, rule, target_cost in direct_rules:
-        mapping = list(rule["map"]) + [0] * (_MAX_PATTERN_ARITY - len(rule["map"]))
-        rule_lines.append(
-            "ARCHON_RENAME_RULE("
-            f"{_c_string('lower.' + name)}, {_u32(rule['target_opcode'])}, "
-            f"{_u32(rule['semantic_opcode'])}, {rule['arity']}u, "
-            + ", ".join(f"{index}u" for index in mapping)
-            + f", 3u, {target_cost}u, 1u)"
-        )
-
     for key in sorted(semantic_operations):
         rule = semantic_operations[key]
         root = rule["root"]
         operation = root["op"]
-        opcode = rule["semantic_opcode"]
         width = int((root.get("type") or {}).get("width", 0))
+        signature = ".".join(f"{kind}{size}" for kind, size in (key[1:3], *key[3]))
+        common = {
+            "root": root,
+            "semantic_opcode": rule["semantic_opcode"],
+            "child_types": rule["child_types"],
+            "arity": rule["arity"],
+        }
         if operation in {"+%", "*%", "&", "|", "^"}:
-            rule_lines.append(
-                "ARCHON_COMMUTATIVE_RULE("
-                f"{_c_string('commute.' + operation + '.' + str(width))}, "
-                f"{_u32(opcode)}, 2u)"
-            )
+            label = f"commute.{operation}.{width}"
+            rules.append({
+                **common,
+                "kind": "commute",
+                "name": label,
+                "id": stable_rule_id("rewrite", architecture, label, signature),
+                "engines": 2,
+            })
         identities = []
         if operation in {"+%", "|", "^"}:
             identities = [(0, 0), (1, 0)]
@@ -486,11 +506,42 @@ def _pattern_bank(
                 f"{child_type.get('kind', 'bits')}:{child_width}"
             )
             _claim_opcode(opcode_claims, constant_opcode, constant_key)
+            label = f"identity.{operation}.{width}.{side}"
+            rules.append({
+                **common,
+                "kind": "identity",
+                "name": label,
+                "id": stable_rule_id("rewrite", architecture, label, signature),
+                "engines": 3,
+                "side": side,
+                "value": value,
+                "constant_opcode": constant_opcode,
+            })
+    return facts, rules
+
+
+def _pattern_bank(architecture: str, facts: list, rules: list) -> str:
+    rule_lines = []
+    for rule in rules:
+        kind = rule["kind"]
+        name = _c_string(rule["name"])
+        opcode = _u32(rule["semantic_opcode"])
+        engines = rule["engines"]
+        if kind == "rename":
+            mapping = list(rule["map"]) + [0] * (_MAX_PATTERN_ARITY - len(rule["map"]))
             rule_lines.append(
-                "ARCHON_IDENTITY_RULE("
-                f"{_c_string('identity.' + operation + '.' + str(width) + '.' + str(side))}, "
-                f"{_u32(opcode)}, {_u32(constant_opcode)}, {_u64(value)}, "
-                f"{side}u, 3u)"
+                f"ARCHON_RENAME_RULE({name}, {_u32(rule['target_opcode'])}, "
+                f"{opcode}, {rule['arity']}u, "
+                + ", ".join(f"{index}u" for index in mapping)
+                + f", {engines}u, {rule['target_cost']}u, 1u)"
+            )
+        elif kind == "commute":
+            rule_lines.append(f"ARCHON_COMMUTATIVE_RULE({name}, {opcode}, {engines}u)")
+        else:
+            assert kind == "identity"
+            rule_lines.append(
+                f"ARCHON_IDENTITY_RULE({name}, {opcode}, {_u32(rule['constant_opcode'])}, "
+                f"{_u64(rule['value'])}, {rule['side']}u, {engines}u)"
             )
 
     lines = [
@@ -515,7 +566,7 @@ def _pattern_bank(
         )
     lines.extend(rule_lines)
     lines.append("ARCHON_PATTERN_BANK_END()")
-    return "\n".join(lines) + "\n", len(facts), len(rule_lines)
+    return "\n".join(lines) + "\n"
 
 
 _HEADER = r"""/* Generated by Archon: bounded graph rewriting and e-graphs. */
@@ -696,6 +747,9 @@ extern const size_t archon_generated_rewrite_rule_count;
 extern const ArchonTargetFact archon_generated_target_facts[];
 extern const size_t archon_generated_target_fact_count;
 
+/* Stable Proof.py inventory ID for this generated array index, or NULL. */
+const char *archon_rewrite_generated_rule_id(size_t index);
+
 ArchonRewriteLimits archon_rewrite_default_limits(void);
 const char *archon_rewrite_status_string(ArchonRewriteStatus status);
 uint32_t archon_rewrite_opcode(const char *stable_name);
@@ -717,6 +771,26 @@ ArchonRewriteStatus archon_rewrite_run_generated(
     const ArchonRewriteLimits *limits,
     ArchonGraphsNodeId *result,
     ArchonRewriteStats *stats);
+
+/*
+ * The callback runs once per counted application in this invocation. Directed
+ * events indicate replacements; e-graph events indicate additions or unions,
+ * not necessarily rewrites selected by extraction. Events can precede an
+ * error and are observations, not proof certificates. The callback must not
+ * change the graph or re-enter this invocation.
+ */
+typedef void (*ArchonRewriteApplicationFn)(
+    void *user, const char *stable_rule_id, ArchonRewriteEngine engine);
+
+ArchonRewriteStatus archon_rewrite_run_generated_observed(
+    const ArchonGraphsAPI *graphs,
+    ArchonGraphsNodeId root,
+    ArchonRewriteEngine engine,
+    const ArchonRewriteLimits *limits,
+    ArchonGraphsNodeId *result,
+    ArchonRewriteStats *stats,
+    ArchonRewriteApplicationFn observe,
+    void *user);
 
 /*
  * Defining ARCHON_REWRITE_PROGRAM_FILE to a quoted include path while
@@ -1028,6 +1102,28 @@ const ArchonRewriteRule archon_generated_rewrite_rules[] = {
 
 const size_t archon_generated_rewrite_rule_count =
     (size_t)@GENERATED_RULE_COUNT@;
+
+static const char *const archon_generated_rewrite_rule_ids[] = {
+@GENERATED_RULE_IDS@
+};
+
+const char *archon_rewrite_generated_rule_id(size_t index) {
+    return index < archon_generated_rewrite_rule_count
+        ? archon_generated_rewrite_rule_ids[index] : NULL;
+}
+
+typedef struct ArchonRewriteObserver {
+    ArchonRewriteApplicationFn call;
+    void *user;
+} ArchonRewriteObserver;
+
+static void archon_rewrite_observe(
+        const ArchonRewriteObserver *observer,
+        size_t rule, ArchonRewriteEngine engine) {
+    if (observer && observer->call)
+        observer->call(observer->user, archon_rewrite_generated_rule_id(rule),
+                       engine);
+}
 
 typedef struct ArchonDirectedMemo {
     ArchonGraphsNodeId input;
@@ -1416,7 +1512,8 @@ static ArchonRewriteStatus archon_apply_directed(
         size_t rule_count,
         const ArchonRewriteLimits *limits,
         ArchonGraphsNodeId *result,
-        ArchonRewriteStats *stats) {
+        ArchonRewriteStats *stats,
+        const ArchonRewriteObserver *observer) {
     ArchonGraphsNodeId current = start;
     for (;;) {
         ArchonGraphsNodeView view;
@@ -1467,6 +1564,7 @@ static ArchonRewriteStatus archon_apply_directed(
             if (stats->applications >= limits->max_applications)
                 return ARCHON_REWRITE_RESOURCE_LIMIT;
             ++stats->applications;
+            archon_rewrite_observe(observer, i, ARCHON_REWRITE_DIRECTED);
             current = replacement;
             changed = 1;
             break;
@@ -1485,7 +1583,8 @@ static ArchonRewriteStatus archon_run_directed(
         size_t rule_count,
         const ArchonRewriteLimits *limits,
         ArchonGraphsNodeId *result,
-        ArchonRewriteStats *stats) {
+        ArchonRewriteStats *stats,
+        const ArchonRewriteObserver *observer) {
     ArchonDirectedMemo *memos = NULL;
     ArchonWorkFrame *frames = NULL;
     size_t memo_count = 0u, memo_capacity = 0u;
@@ -1564,7 +1663,7 @@ static ArchonRewriteStatus archon_run_directed(
             }
             status = archon_apply_directed(
                 graphs, rebuilt, rules, rule_count, limits,
-                &memos[memo_index].output, stats);
+                &memos[memo_index].output, stats, observer);
             if (status != ARCHON_REWRITE_OK)
                 goto directed_done;
             memos[memo_index].state = 2u;
@@ -1912,7 +2011,8 @@ static ArchonRewriteStatus archon_saturate(
         const ArchonRewriteRule *rules,
         size_t rule_count,
         const ArchonRewriteLimits *limits,
-        ArchonRewriteStats *stats) {
+        ArchonRewriteStats *stats,
+        const ArchonRewriteObserver *observer) {
     size_t iteration;
     ArchonRewriteStatus status = archon_egraph_rebuild(graph);
     if (status != ARCHON_REWRITE_OK)
@@ -1976,6 +2076,8 @@ static ArchonRewriteStatus archon_saturate(
                     if (stats->applications >= limits->max_applications)
                         return ARCHON_REWRITE_RESOURCE_LIMIT;
                     ++stats->applications;
+                    archon_rewrite_observe(
+                        observer, rule_index, ARCHON_REWRITE_EQUALITY_SATURATION);
                     changed = 1;
                 }
             }
@@ -2201,7 +2303,8 @@ static ArchonRewriteStatus archon_run_equality(
         size_t rule_count,
         const ArchonRewriteLimits *limits,
         ArchonGraphsNodeId *result,
-        ArchonRewriteStats *stats) {
+        ArchonRewriteStats *stats,
+        const ArchonRewriteObserver *observer) {
     ArchonEGraph graph;
     uint32_t root_class = UINT32_MAX;
     ArchonRewriteStatus status = archon_egraph_init(&graph, limits);
@@ -2211,7 +2314,7 @@ static ArchonRewriteStatus archon_run_equality(
         graphs, root, &graph, limits, &root_class);
     if (status == ARCHON_REWRITE_OK)
         status = archon_saturate(
-            &graph, rules, rule_count, limits, stats);
+            &graph, rules, rule_count, limits, stats, observer);
     /*
      * A resource-bound saturation still has a valid rebuilt e-graph, but an
      * explicit limit status must not be silently reported as a proof of
@@ -2226,7 +2329,7 @@ static ArchonRewriteStatus archon_run_equality(
     return status;
 }
 
-ArchonRewriteStatus archon_rewrite_run(
+static ArchonRewriteStatus archon_rewrite_run_impl(
         const ArchonGraphsAPI *graphs,
         ArchonGraphsNodeId root,
         ArchonRewriteEngine engine,
@@ -2234,7 +2337,8 @@ ArchonRewriteStatus archon_rewrite_run(
         size_t rule_count,
         const ArchonRewriteLimits *limits_argument,
         ArchonGraphsNodeId *result,
-        ArchonRewriteStats *stats_argument) {
+        ArchonRewriteStats *stats_argument,
+        const ArchonRewriteObserver *observer) {
     ArchonRewriteLimits defaults;
     const ArchonRewriteLimits *limits = limits_argument;
     ArchonRewriteStats local_stats;
@@ -2261,9 +2365,37 @@ ArchonRewriteStatus archon_rewrite_run(
         return ARCHON_REWRITE_RESOURCE_LIMIT;
     if (engine == ARCHON_REWRITE_DIRECTED)
         return archon_run_directed(
-            graphs, root, rules, rule_count, limits, result, stats);
+            graphs, root, rules, rule_count, limits, result, stats, observer);
     return archon_run_equality(
-        graphs, root, rules, rule_count, limits, result, stats);
+        graphs, root, rules, rule_count, limits, result, stats, observer);
+}
+
+ArchonRewriteStatus archon_rewrite_run(
+        const ArchonGraphsAPI *graphs,
+        ArchonGraphsNodeId root,
+        ArchonRewriteEngine engine,
+        const ArchonRewriteRule *rules,
+        size_t rule_count,
+        const ArchonRewriteLimits *limits,
+        ArchonGraphsNodeId *result,
+        ArchonRewriteStats *stats) {
+    return archon_rewrite_run_impl(
+        graphs, root, engine, rules, rule_count, limits, result, stats, NULL);
+}
+
+ArchonRewriteStatus archon_rewrite_run_generated_observed(
+        const ArchonGraphsAPI *graphs,
+        ArchonGraphsNodeId root,
+        ArchonRewriteEngine engine,
+        const ArchonRewriteLimits *limits,
+        ArchonGraphsNodeId *result,
+        ArchonRewriteStats *stats,
+        ArchonRewriteApplicationFn observe,
+        void *user) {
+    ArchonRewriteObserver observer = {observe, user};
+    return archon_rewrite_run_impl(
+        graphs, root, engine, archon_generated_rewrite_rules,
+        archon_generated_rewrite_rule_count, limits, result, stats, &observer);
 }
 
 ArchonRewriteStatus archon_rewrite_run_generated(

@@ -21,9 +21,9 @@ const char *defaultElfLinker();
 bool linkElf(LinkState&, std::vector<uint8_t>&, std::string&, const ScriptSDK&);
 bool linkPe(LinkState&, std::vector<uint8_t>&, std::string&);
 bool linkMachO(LinkState&, std::vector<uint8_t>&, std::string&);
-// Native format selection never implies permission to spawn a toolchain.
-bool externalBackendRequested(const LinkOptions&, Backend);
-void parseNativeArguments(LinkOptions&, Backend);
+// Expand arguments and parse native options. Return true only for an explicit
+// toolchain bridge request, which never accepts native-only hooks.
+bool configureLinkerArguments(LinkOptions&, Backend);
 bool linkNativeImage(LinkState&, std::vector<uint8_t>&, std::string&);
 
 namespace toolchain {
@@ -33,7 +33,7 @@ std::string readText(const std::filesystem::path&, size_t limit = sourceLimit);
 void writeText(const std::filesystem::path&, const std::string&);
 struct Workspace {
   std::filesystem::path path;
-  Workspace();
+  explicit Workspace(const std::filesystem::path& directory = std::filesystem::temp_directory_path());
   ~Workspace();
   Workspace(const Workspace&) = delete;
   Workspace& operator=(const Workspace&) = delete;

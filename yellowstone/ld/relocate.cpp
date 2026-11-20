@@ -66,6 +66,7 @@ bool applyRelocations(LinkState& state,
   bool isPPC = state.arch == qbfd::Arch::PowerPC ||
                state.arch == qbfd::Arch::PowerPC64;
   bool relocatable = state.options.mode == Mode::Relocatable;
+  const bool strictSections = state.ltoPlan.gcSections;
 
   for (const auto& in : state.inputSections) {
     if (!in.kept) continue;
@@ -82,7 +83,13 @@ bool applyRelocations(LinkState& state,
       }
       if (outIdx != SIZE_MAX) break;
     }
-    if (outIdx == SIZE_MAX) continue;  // dropped section
+    if (outIdx == SIZE_MAX) {
+      if (strictSections) {
+        error = "internal error: live relocation section has no output placement";
+        return false;
+      }
+      continue;
+    }
     const OutputSection& o = state.outSections[outIdx];
     const auto& obj = state.objects[in.objectIndex];
     uint64_t place = o.vma + in.outOffset;  // P for PC-relative
@@ -136,13 +143,20 @@ bool applyRelocations(LinkState& state,
               }
               if (found) break;
             }
-            if (!found) S = sym->value;
+            if (!found) {
+              if (strictSections) {
+                error = obj.label + ": live relocation refers to an unplaced section";
+                return false;
+              }
+              S = sym->value;
+            }
           } else {
             S = sym->value;
           }
           haveSym = true;
         } else {
-          auto it = state.symAddr.find(sym->name);
+          auto it = !strictSections || usesGlobalRelocationSymbol(*sym)
+                        ? state.symAddr.find(sym->name) : state.symAddr.end();
           if (it != state.symAddr.end()) {
             S = it->second;
           } else {
@@ -162,7 +176,14 @@ bool applyRelocations(LinkState& state,
                 }
                 if (found) break;
               }
-              if (!found) S = sym->value;
+              if (!found) {
+                if (strictSections) {
+                  error = obj.label + ": live relocation refers to an unplaced definition of `" +
+                          symName + "'";
+                  return false;
+                }
+                S = sym->value;
+              }
             } else {
               S = sym->value;
             }
@@ -182,13 +203,21 @@ bool applyRelocations(LinkState& state,
       uint32_t type = r.nativeType;
 
       auto needBytes = [&](unsigned w) -> bool {
-        if (loc + w > img.size()) {
+        if (r.offset > UINT64_MAX - baseOff || loc > img.size() || w > img.size() - loc) {
           error = obj.label + ": relocation offset outside section " +
                   in.section.name;
           return false;
         }
         return true;
       };
+      // Combine addresses and signed addends in unsigned arithmetic, then
+      // check signed field widths. Signed address arithmetic can overflow.
+      auto signedAddend = [&](unsigned w) {
+        if (r.hasAddend) return uint64_t(A);
+        auto value = readVal(img, loc, w, state.endian);
+        return w == 4 ? uint64_t(int64_t(int32_t(value))) : value;
+      };
+      auto fitsS32 = [](uint64_t v) { return v == uint64_t(int64_t(int32_t(v))); };
 
       if (relocatable) {
         // Partial link: leave relocations for later; nothing to apply.
@@ -225,11 +254,8 @@ bool applyRelocations(LinkState& state,
           }
           case 11: {  // R_X86_64_32S
             if (!needBytes(4)) return false;
-            int64_t v = (int64_t)S + A;
-            if (!r.hasAddend)
-              v = (int64_t)S + (int64_t)(int32_t)readVal(img, loc, 4,
-                                                         state.endian);
-            if (v != (int64_t)(int32_t)v) {
+            uint64_t v = S + signedAddend(4);
+            if (!fitsS32(v)) {
               error = obj.label + ": relocation truncated to fit: " +
                       "R_X86_64_32S against `" + symName + "'";
               return false;
@@ -240,13 +266,8 @@ bool applyRelocations(LinkState& state,
           case 2:   // R_X86_64_PC32
           case 4: {  // R_X86_64_PLT32 (relaxes to PC32 statically)
             if (!needBytes(4)) return false;
-            int64_t v = (int64_t)S + A - (int64_t)P;
-            if (!r.hasAddend) {
-              int32_t inplace =
-                  (int32_t)readVal(img, loc, 4, state.endian);
-              v = (int64_t)S + inplace - (int64_t)P;
-            }
-            if (v != (int64_t)(int32_t)v) {
+            uint64_t v = S + signedAddend(4) - P;
+            if (!fitsS32(v)) {
               error = obj.label + ": relocation truncated to fit: " +
                       std::string(type == 2 ? "R_X86_64_PC32" : "R_X86_64_PLT32") +
                       " against `" + symName + "'";
@@ -283,12 +304,7 @@ bool applyRelocations(LinkState& state,
           }
           case 2: {  // R_386_PC32
             if (!needBytes(4)) return false;
-            int64_t v = (int64_t)S + A - (int64_t)P;
-            if (!r.hasAddend) {
-              int32_t inplace =
-                  (int32_t)readVal(img, loc, 4, state.endian);
-              v = (int64_t)S + inplace - (int64_t)P;
-            }
+            uint64_t v = S + signedAddend(4) - P;
             writeVal(img, loc, (uint64_t)(uint32_t)v, 4, state.endian);
             break;
           }
@@ -330,17 +346,14 @@ bool applyRelocations(LinkState& state,
           case 260: {  // R_AARCH64_PREL64
             if (!isAArch64) break;
             if (!needBytes(8)) return false;
-            int64_t v = int64_t(S) + A - int64_t(P);
-            if (!r.hasAddend) v = int64_t(S) + int64_t(readVal(img, loc, 8, state.endian)) - int64_t(P);
-            writeVal(img, loc, uint64_t(v), 8, state.endian);
+            writeVal(img, loc, S + signedAddend(8) - P, 8, state.endian);
             break;
           }
           case 261: {  // R_AARCH64_PREL32
             if (!isAArch64) break;
             if (!needBytes(4)) return false;
-            int64_t v = int64_t(S) + A - int64_t(P);
-            if (!r.hasAddend) v = int64_t(S) + int32_t(readVal(img, loc, 4, state.endian)) - int64_t(P);
-            if (v != int64_t(int32_t(v))) {
+            uint64_t v = S + signedAddend(4) - P;
+            if (!fitsS32(v)) {
               error = obj.label + ": relocation truncated to fit: R_AARCH64_PREL32";
               return false;
             }
@@ -405,11 +418,8 @@ bool applyRelocations(LinkState& state,
               break;
             }
             if (!needBytes(4)) return false;
-            int64_t v = (int64_t)S + A - (int64_t)P;
-            if (!r.hasAddend)
-              v = (int64_t)S + (int32_t)readVal(img, loc, 4, state.endian) -
-                  (int64_t)P;
-            if (v != (int64_t)(int32_t)v) {
+            uint64_t v = S + signedAddend(4) - P;
+            if (!fitsS32(v)) {
               error = obj.label + ": relocation truncated to fit: " +
                       r.typeName + " against `" + symName + "'";
               return false;
@@ -419,11 +429,8 @@ bool applyRelocations(LinkState& state,
           }
           case 26: { // PPC/RISC-V 32_PCREL
             if (!needBytes(4)) return false;
-            int64_t v = (int64_t)S + A - (int64_t)P;
-            if (!r.hasAddend)
-              v = (int64_t)S + (int32_t)readVal(img, loc, 4, state.endian) -
-                  (int64_t)P;
-            if (v != (int64_t)(int32_t)v) {
+            uint64_t v = S + signedAddend(4) - P;
+            if (!fitsS32(v)) {
               error = obj.label + ": relocation truncated to fit: " +
                       r.typeName + " against `" + symName + "'";
               return false;
@@ -440,9 +447,7 @@ bool applyRelocations(LinkState& state,
           }
           case 44: { // PPC64 REL64
             if (!needBytes(8)) return false;
-            int64_t v = int64_t(S) + A - int64_t(P);
-            if (!r.hasAddend) v = int64_t(S) + int64_t(readVal(img, loc, 8, state.endian)) - int64_t(P);
-            writeVal(img, loc, uint64_t(v), 8, state.endian);
+            writeVal(img, loc, S + signedAddend(8) - P, 8, state.endian);
             break;
           }
           default:

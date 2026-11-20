@@ -63,6 +63,18 @@ golden file hash, reject the other 128 single bytes, check the exact executable
 set, exercise `nop` and `drop`, and verify rollback after a partially completed
 two-stack `drop`.
 
+## ABI coverage
+
+This entry point does not emit `abi_facts`. In the [Wasm core execution model][wasm-invoke],
+function calls consume typed operands, initialize the callee's parameter locals,
+and return results to the operand stack. Function frames and control flow are
+not modeled by this subset (`return` is encoding-only, and calls are absent).
+There is no register file, stack-pointer register, or return-address register
+for `abi_facts` v1. The operand and tag stack slots describe VM state, not a
+native calling convention or host interface.
+
+[wasm-invoke]: https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/#exec-invoke
+
 ## References and cross-check
 
 Opcodes come from the W3C WebAssembly Core Specification 1.0 sections on

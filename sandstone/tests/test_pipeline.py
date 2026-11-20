@@ -8,6 +8,7 @@ freshly built sandstone-as CLI and checks the emitted bytes.
 import argparse
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -82,6 +83,88 @@ def assemble(asm_bin, bank, source, out_path, syntax=None, fmt="bin"):
         os.unlink(src_path)
 
 
+def check_asm_opt(asm_bin, bank, tmp):
+    with tempfile.TemporaryDirectory(dir=tmp, prefix="asm-opt-") as work:
+        root = Path(work)
+        (root / "src").mkdir()
+        (root / "src/gap.s").write_text(".macro gap\n    nop\n    nop\n.endm\n",
+                                       encoding="utf-8")
+        (root / "src/main.s").write_text('.include "gap.s"\n.text\ncall target\n    gap\n',
+                                        encoding="utf-8")
+        (root / "tail.s").write_text("target:\n    ret\n", encoding="utf-8")
+        (root / "pre.lua").write_text(r'''
+function preprocess(source, name)
+    assert(name == 'src/main.s', name)
+    assert(source:find('.include "gap.s"', 1, true))
+    assert(asm_context == nil)
+    before_opt = true
+    return source .. "\n<: assert(before_opt); lsandas.inject('.byte 42\\n') :>\n"
+end
+''', encoding="utf-8")
+        (root / "opt.lua").write_text(r'''
+function asm_optimize(source, name)
+    assert(name == 'src/main.s', name)
+    assert(not before_opt and not lsandas)
+    assert(asm_context.arch == 'x86' and asm_context.syntax == 'intel')
+    assert(asm_context.riscv64_nop_alias == false)
+    assert(not source:find('gap') and not source:find('<:', 1, true))
+    assert(source:find('.byte 42', 1, true))
+    local output, count = source:gsub('\n    nop\n    nop\n', '\n    nop\n')
+    assert(count == 1)
+    return output
+end
+''', encoding="utf-8")
+        cmd = [os.path.abspath(asm_bin), "--bank", bank, "--syntax", "intel", "--lua", "pre.lua"]
+        inputs = ["src/main.s", "tail.s"]
+        run(cmd + ["-o", "out.bin"] + inputs, cwd=root, timeout=30)
+        output = root / "out.bin"
+        assert output.read_bytes() == bytes.fromhex("e8020000009090c32a")
+        run(cmd + ["--asm-opt", "opt.lua", "-o", "out.bin"] + inputs, cwd=root, timeout=30)
+        # Removing a macro-expanded NOP shifts the branch target and its rel32.
+        optimized = bytes.fromhex("e80100000090c32a")
+        assert output.read_bytes() == optimized
+
+        (root / "reject.lua").write_text(r'''
+function asm_optimize(source)
+    return source .. '\0.byte 0\n'
+end
+''', encoding="utf-8")
+        proc = subprocess.run(cmd + ["--asm-opt", "reject.lua", "-o", "out.bin"] + inputs, cwd=root,
+                              capture_output=True, text=True, timeout=30)
+        assert proc.returncode != 0 and "NUL in asm_optimize output" in proc.stderr, proc
+        assert output.read_bytes() == optimized, "rejection changed existing output"
+
+        (root / "bad.lua").write_text("function asm_optimize(", encoding="utf-8")
+        proc = subprocess.run(cmd + ["--asm-opt", "bad.lua", "-o", "bad.bin"] + inputs, cwd=root,
+                              capture_output=True, text=True, timeout=30)
+        assert proc.returncode != 0 and "asm-opt 'bad.lua'" in proc.stderr, proc
+        assert not (root / "bad.bin").exists(), "invalid script produced output"
+
+
+def check_riscv_asm_context(asm_bin, bank, tmp):
+    root = Path(tmp)
+    source = root / "context.s"
+    source.write_text(".macro zero\naddi x0, x0, 0\n.endm\nzero\n", encoding="utf-8")
+    opt = root / "context.lua"
+    output = root / "context.bin"
+    for syntax, args in [("default", []), ("abi", ["--syntax", "abi"])]:
+        opt.write_text(r'''
+function asm_optimize(source, name)
+    assert(asm_context.arch == 'riscv64')
+    assert(asm_context.syntax == '%s')
+    assert(asm_context.riscv64_nop_alias == true)
+    local expanded, n = source:gsub('addi x0, x0, 0', 'nop')
+    assert(n == 1)
+    return expanded .. (asm_context.syntax == 'default' and '.byte 1\n' or '.byte 0\n')
+end
+''' % syntax, encoding="utf-8")
+        run([asm_bin, "--bank", bank, "--asm-opt", str(opt), "-o", str(output)] + args + [str(source)],
+            timeout=30)
+        # The marker proves the hook saw each syntax, in addition to the NOP
+        # verified against the real bank and assembled from the expanded macro.
+        assert output.read_bytes() == bytes.fromhex("13000000") + bytes([syntax == "default"])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-dir", required=True)
@@ -108,6 +191,8 @@ def main():
     disp = int.from_bytes(code[4:8], "little", signed=True)
     assert disp == 1, (code.hex(), disp)  # target is 1 byte past next insn
     assert code[8:] == bytes([0xC3, 0x90]), code.hex()
+
+    check_asm_opt(asm_bin, x86_bank, tmp)
 
     # Same bank through the obj (JSON) output: one kept relocation is
     # impossible here (all labels local), so relocs must be empty and the
@@ -156,6 +241,8 @@ def main():
         rv = f.read()
     assert rv[:4] == bytes.fromhex("b3003100"), rv.hex()
     assert len(rv) == 16, rv.hex()
+
+    check_riscv_asm_context(asm_bin, rv_bank, tmp)
 
     # jal against a local label needs linker-style immediate splicing, so
     # flat output keeps a relocation (obj) instead of patching it.

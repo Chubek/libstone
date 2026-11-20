@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ struct LinkOptions {
   std::string script;                   // -T path
   std::string scriptText;               // -T text via --script-text (or GROUP)
   bool scriptIsText = false;
+  std::string ltoScript;                // --lto-script (native static ELF only)
   bool hasBase = false;
   uint64_t base = 0x400000;             // --image-base / -Ttext
   Mode mode = Mode::Exec;               // -shared / -r / default exec
@@ -141,6 +143,13 @@ struct OutputSection {
   uint32_t index = 0;                   // output section index (0 == NULL)
 };
 
+struct LtoPlan {
+  bool gcSections = false;
+  std::vector<std::string> keepSymbols;
+};
+inline constexpr size_t ltoSectionLimit = 0xff00 - 4; // ELF numbering below SHN_LORESERVE
+inline constexpr uint64_t ltoImageLimit = 256 * 1024 * 1024;
+
 struct LinkState {
   LinkOptions options;
   qbfd::Format format = qbfd::Format::ELF;
@@ -168,6 +177,7 @@ struct LinkState {
   bool scriptExtrasOnly = false;
   bool scriptPrepared = false;
   std::set<std::string> scriptSymbols;
+  LtoPlan ltoPlan;
 };
 
 struct LinkError {
@@ -190,7 +200,7 @@ struct ArchiveCandidate {
   qbfd::Archive::Member member;
   std::vector<uint8_t> bytes;
 };
-std::vector<ArchiveCandidate> expandArchive(LoadedArchive& archive,
+std::vector<ArchiveCandidate> expandArchive(LoadedArchive& archive, bool lto,
                                             std::string& error);
 
 // Symbol handling (symbol.cpp).
@@ -203,7 +213,23 @@ bool discoverSymbols(LinkState& state, std::string& error);
 
 // Address assignment (position_dependenc.cpp). Honours the linker script
 // when one is present, otherwise uses the default layout.
+bool collectInputSections(LinkState& state, bool scriptLayout, std::string& error);
 bool assignAddresses(LinkState& state, std::string& error);
+
+// Native static ELF optimization (--lto-script).
+bool validateLtoInput(std::span<const uint8_t> bytes, const std::string& label,
+                      std::string& error);
+bool validateLtoObject(const qbfd::ObjectFile& object, const std::string& label,
+                       std::string& error);
+bool runLtoScript(LinkState& state, std::string& error);
+enum class LtoSectionUse { Available, Keep, Discard };
+bool collectLtoSections(LinkState& state, const std::vector<LtoSectionUse>& uses,
+                        const std::set<std::string>& scriptRoots, std::string& error);
+inline bool usesGlobalRelocationSymbol(const qbfd::Symbol& symbol) {
+  return (symbol.flags & qbfd::sym::Undefined) ||
+         (symbol.binding != qbfd::SymbolBinding::Local &&
+          symbol.kind != qbfd::SymbolKind::Section && symbol.kind != qbfd::SymbolKind::File);
+}
 
 // Relocation (relocate.cpp). Applies relocations to the staged section
 // contents after assignAddresses() has fixed every symbol address.

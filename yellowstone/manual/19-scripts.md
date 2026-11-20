@@ -103,6 +103,32 @@ Supported keys are `patterns` (required ordered list), `address`, `region`,
 and invalid selector/name strings fail. Expression strings are still ordinary
 linker expressions, not sandboxed inputs. See the executed `ld/examples/memory.*`.
 
+## Separate Lua optimization hook
+
+`qobjld --lto-script optimize.lua -T layout.ld start.o helpers.o -o program`
+uses the explicitly named hook for whole-link section reachability, and `-T`
+continues to specify the layout. `-T` may also name a Lua layout script.
+
+```lua
+function optimize(link)
+    return { gc_sections = true, keep = {} }
+end
+```
+
+This is section GC for native static ELF executables, **not compiler bitcode
+LTO**. The effective entry, relocation dependencies, ELF retain flags and
+layout `KEEP` selectors preserve their input sections. `keep` may name
+additional already-resolved section-defined symbols when the program uses
+them without a relocation. A required section cannot also be discarded.
+With GC enabled, use constant values in script data directives and omit
+layout symbol assignments other than `.`. `--check-script` only checks layout
+scripts; exercise an optimization hook with a real link.
+
+The hook uses a restricted Lua runtime with a read-only link overview, not
+the `qld` API or standard Lua libraries used by layout scripts. See the
+[qobjld README](../ld/README.md#native-elf-whole-link-optimization-hook) for
+the result schema, resource bounds and supported inputs.
+
 ## Current limits
 
 This is a supported subset, not GNU ld parity. `PHDRS`, `VERSION`, `INSERT`,

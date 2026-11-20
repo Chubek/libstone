@@ -1,11 +1,11 @@
-/* Generate toy8_emu.c with --emulator --prefix toy8 before building this example. */
-#include "toy8_emu.c"
+/* Build with the matching generated toy8_emu.c and toy8_emu.h. */
+#include "toy8_emu.h"
 
 #include <inttypes.h>
 #include <stdio.h>
 
 int main(int argc, char **argv) {
-    uint64_t registers[8] = {0};
+    uint64_t registers[TOY8_EMU_REGISTER_COUNT] = {0};
     struct toy8_emu_state state = {0};
     uint8_t instruction[2];
     size_t offset = 0, size, i;

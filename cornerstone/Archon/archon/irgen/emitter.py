@@ -162,10 +162,9 @@ def _validated_builtin(db: dict, dialect: str) -> bool:
     return any(pattern.fullmatch(architecture) for pattern in patterns)
 
 
-def _dialect_supported(db: dict, dialect: str) -> bool:
+def _dialect_supported(db: dict, dialect: str, instructions: list[dict]) -> bool:
     if _validated_builtin(db, dialect):
         return True
-    instructions = db.get("instructions", ())
     return bool(instructions) and all(
         isinstance(instruction, Mapping)
         and _explicit_template(db, instruction, dialect) is not None
@@ -184,7 +183,14 @@ def _template(db: dict, instruction: dict, dialect: str):
 
 
 def _metadata(db: dict) -> dict[str, str]:
-    instructions = sorted(db["instructions"], key=lambda row: row["name"])
+    from .isel import _legacy_registers_supported
+
+    # Also reject these forms in directly supplied Regallocated.i artifacts,
+    # which need not have passed through the selector.
+    instructions = sorted(
+        (row for row in db["instructions"] if _legacy_registers_supported(row)),
+        key=lambda row: row["name"],
+    )
     operands = []
     rows = []
     for instruction in instructions:
@@ -254,8 +260,8 @@ def _metadata(db: dict) -> dict[str, str]:
         "@INSTRUCTION_COUNT@": str(len(instructions)),
         "@ALIASES@": "\n".join(aliases),
         "@ALIAS_COUNT@": str(0 if registers is None else len(registers.get("aliases", {}))),
-        "@GAS_SUPPORTED@": str(int(_dialect_supported(db, "gas"))),
-        "@SANDSTONE_SUPPORTED@": str(int(_dialect_supported(db, "sandstone"))),
+        "@GAS_SUPPORTED@": str(int(_dialect_supported(db, "gas", instructions))),
+        "@SANDSTONE_SUPPORTED@": str(int(_dialect_supported(db, "sandstone", instructions))),
     }
 
 
@@ -683,7 +689,7 @@ typedef struct Emitter_Register_Alias {
 static const char Emitter_target[] = @TARGET@;
 static const char Emitter_register_prefix[] = @REGISTER_PREFIX@;
 enum { Emitter_register_count = @REGISTER_COUNT@ };
-enum { Emitter_instruction_metadata_count = @INSTRUCTION_COUNT@ };
+static const size_t Emitter_instruction_metadata_count = @INSTRUCTION_COUNT@u;
 enum { Emitter_alias_count = @ALIAS_COUNT@ };
 
 static const Emitter_Operand_Metadata Emitter_operand_metadata[] = {
@@ -841,21 +847,21 @@ Emitter_find_instruction(const char *name) {
     size_t index;
     if (name == NULL)
         return NULL;
-    for (index = 0u; index < (size_t)Emitter_instruction_metadata_count; ++index)
+    for (index = 0u; index < Emitter_instruction_metadata_count; ++index)
         if (Emitter_name_equal(name, Emitter_instruction_metadata[index].name))
             return &Emitter_instruction_metadata[index];
     return NULL;
 }
 
 size_t Emitter_instruction_count(void) {
-    return (size_t)Emitter_instruction_metadata_count;
+    return Emitter_instruction_metadata_count;
 }
 
 int Emitter_instruction_info(size_t instruction,
                              Emitter_Instruction_Info *info) {
     const Emitter_Instruction_Metadata *metadata;
     if (info == NULL ||
-        instruction >= (size_t)Emitter_instruction_metadata_count)
+        instruction >= Emitter_instruction_metadata_count)
         return 0;
     metadata = &Emitter_instruction_metadata[instruction];
     info->name = metadata->name;
@@ -871,7 +877,7 @@ int Emitter_lookup_instruction(const char *name, size_t *instruction) {
     if (name == NULL || instruction == NULL)
         return 0;
     for (index = 0u;
-         index < (size_t)Emitter_instruction_metadata_count; ++index)
+         index < Emitter_instruction_metadata_count; ++index)
         if (strcmp(name, Emitter_instruction_metadata[index].name) == 0) {
             *instruction = index;
             return 1;
@@ -884,7 +890,7 @@ int Emitter_operand_info(size_t instruction, size_t operand,
     const Emitter_Instruction_Metadata *metadata;
     const Emitter_Operand_Metadata *row;
     if (info == NULL ||
-        instruction >= (size_t)Emitter_instruction_metadata_count)
+        instruction >= Emitter_instruction_metadata_count)
         return 0;
     metadata = &Emitter_instruction_metadata[instruction];
     if (operand >= metadata->operand_count)
@@ -909,7 +915,7 @@ int Emitter_select_instruction(const char *primitive, int has_result,
         (input_count != 0u && inputs == NULL))
         return 0;
     for (candidate = 0u;
-         candidate < (size_t)Emitter_instruction_metadata_count; ++candidate) {
+         candidate < Emitter_instruction_metadata_count; ++candidate) {
         const Emitter_Instruction_Metadata *metadata =
             &Emitter_instruction_metadata[candidate];
         size_t operand;

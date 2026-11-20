@@ -1,3 +1,34 @@
+# Native ELF whole-link section GC hook — 2026-11-20
+
+`qld-lto-script` assembles Linux ELF64 x86-64 inputs and links with `PATH`
+unavailable and the subprocess recursion guard set. It runs the linked image
+(exit status 42) and inspects the ELF bytes and symbol table. The legacy
+`--gc-sections` keeps the dead allocatable marker; the hook removes its code
+and symbol while retaining a cross-object call and its transitive data
+dependencies. Additional cases cover prevailing weak/strong resolution,
+named roots, ELF retain flags, static library extraction, repeatable bytes,
+and separate GNU/Lua `-T` layouts with `KEEP`.
+
+The regression also exercises malformed hooks, Lua resource limits,
+read-only input, unsupported bitcode/dynamic/foreign/bridge inputs, explicit
+discard conflicts, invalid live and dead relocations, and preserving prior
+image/map files on failure.
+
+| Build (Linux x86-64, warnings as errors) | Tests |
+| --- | --- |
+| GCC Debug, bridges OFF | Full Yellowstone: 31 passed, 1 skipped (`qbfd_source_notes`) |
+| GCC Release, all bridges ON | `^qld-`: 10 passed |
+| Clang Debug, ASan/UBSan with leak detection | Frontend, script SDK, script executable, backend manifest and LTO script: 5 passed |
+
+Archon's `test_generated_yld_hook_drops_dead_function_across_objects` also
+passed with `ARCHON_YLD` pointing at the Debug build, including the generated
+driver's separate Lua layout and its non-GC control case.
+
+Only Linux x86-64 execution of the hook-produced image was tested. The pass
+does not load LLVM/GCC bitcode or use an external optimizer.
+
+---
+
 # Portable backend registration manifest — 2026-11-19
 
 Base revision: `934b6ed029bfea28bbf23b5dc77c476154b0dd0d`. Tested on Linux

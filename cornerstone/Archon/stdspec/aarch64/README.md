@@ -12,7 +12,8 @@ complement the second source before applying AND, OR, or XOR. `MADD` adds
 the low 64 bits of the product `Rn × Rm` to `Ra`; `MSUB` subtracts that product
 from `Ra`. Register encoding 31 is `xzr` in every operand position: reads
 return zero and writes are discarded. The specification uses `x[31]` as its
-internal slot for `xzr`; this is not SP.
+internal slot for `xzr`. The 64-bit `SP` is separate scalar state; none of these
+instructions accepts or mutates it.
 
 ## Golden encodings
 
@@ -42,7 +43,24 @@ These aliases are not accepted by Archon. Run the local tests from
 
 ## Limits
 
-This is not a complete AArch64 implementation. No W-register, stack-pointer,
+This is not a complete AArch64 implementation. No W-register, SP-operand,
 immediate, extended-register, nonzero-shift, widening-multiply, or flag-setting
 forms are modeled. Explicit shift syntax is not defined. The semantics model
-GPR updates only, not NZCV, the PC, branches, memory, exceptions, or ABI.
+GPR updates only, not NZCV, the PC, branches, memory, exceptions, or calls.
+
+### Calling convention
+
+[`abi_facts_v2 AAPCS64`](root.arch) records the [AAPCS64] LP64 calling
+convention for ordinary, single-slot integer and pointer arguments and
+results. The first eight arguments use `x0`–`x7`; a single-register result
+uses `x0`. `x30` is the link register. On entry at a public interface,
+`SP % 16 == 0`; the first scalar stack argument is at `SP+0`, with
+eight-byte slots.
+
+`x19`–`x29` and SP are preserved. The platform-specific `x18` is reserved
+without promising a particular volatility, and the XZR slot is fixed. The
+profile does not specify platform frame-chain rules, aggregate and indirect
+results, floating-point or vector calls, or variadic calls. It does not add SP
+operand forms, `BL`/`RET`, or a native backend.
+
+[AAPCS64]: https://github.com/ARM-software/abi-aa/blob/2025Q1/aapcs64/aapcs64.rst

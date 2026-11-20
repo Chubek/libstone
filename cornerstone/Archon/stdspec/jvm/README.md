@@ -57,6 +57,18 @@ ArchDB, pin and round-trip all golden bytes, reject every other opcode byte,
 check the exact executable set, and cover successful and rolled-back stack
 updates.
 
+## ABI coverage
+
+This entry point does not emit `abi_facts`. In [JVMS §2.6][jvms-frames],
+invocation takes arguments from the caller's operand stack and places them in
+the new frame's local variables; on normal return a result, if any, is pushed
+onto the caller's operand stack. The subset does not model method invocation,
+frames, or returns. Its operand and kind stacks do not supply the register file,
+stack pointer, or return-address register required by `abi_facts` v1. Native
+method interfaces are outside this bytecode subset.
+
+[jvms-frames]: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-2.html#jvms-2.6
+
 ## References and limits
 
 See [JVMS §6.5](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5)

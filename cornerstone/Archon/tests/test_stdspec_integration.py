@@ -41,7 +41,7 @@ class StandardSpecifications(unittest.TestCase):
                     bounds = {}
                     for op in inst["operands"]:
                         if op["kind"] == "reg":
-                            low, high = 0, db["registers"]["count"] - 1
+                            low, high = op.get("register_range", (0, db["registers"]["count"] - 1))
                         elif op["signed"]:
                             low, high = -(1 << (op["width"] - 1)), (1 << (op["width"] - 1)) - 1
                         else:

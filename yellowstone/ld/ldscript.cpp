@@ -67,6 +67,85 @@ bool fileMatches(const std::string& pattern, const std::string& label) {
   return false;
 }
 
+bool inputMatches(const LinkState& state, const script::SectionPattern& pattern,
+                  const InputSection& input) {
+  return fileMatches(pattern.file, state.objects[input.objectIndex].label) &&
+         globMatch(pattern.section, input.section.name);
+}
+
+// Only DATA expressions with no address dependence can be mixed with GC.
+// Other expressions govern layout, and names they read root input definitions.
+bool collectExpressionRoots(const script::Expr* expr, std::set<std::string>& roots) {
+  using namespace script;
+  if (!expr || dynamic_cast<const NumberExpr*>(expr)) return true;
+  if (auto* symbol = dynamic_cast<const SymbolExpr*>(expr)) roots.insert(symbol->name);
+  else if (auto* unary = dynamic_cast<const UnaryExpr*>(expr))
+    return collectExpressionRoots(unary->arg.get(), roots);
+  else if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
+    const bool lhs = collectExpressionRoots(binary->lhs.get(), roots);
+    const bool rhs = collectExpressionRoots(binary->rhs.get(), roots);
+    return lhs && rhs;
+  } else if (auto* ternary = dynamic_cast<const TernaryExpr*>(expr)) {
+    const bool cond = collectExpressionRoots(ternary->cond.get(), roots);
+    const bool yes = collectExpressionRoots(ternary->yes.get(), roots);
+    const bool no = collectExpressionRoots(ternary->no.get(), roots);
+    return cond && yes && no;
+  } else if (auto* call = dynamic_cast<const CallExpr*>(expr)) {
+    if (call->name != "ADDR" && call->name != "SIZEOF" && call->name != "LOADADDR" &&
+        call->name != "ALIGNOF" && call->name != "ORIGIN" && call->name != "LENGTH")
+      for (const auto& arg : call->args) collectExpressionRoots(arg.get(), roots);
+  }
+  return false;
+}
+
+bool applyScriptGC(LinkState& state, const script::ScriptFile& script, std::string& error) {
+  using Action = script::SectionPattern::Action;
+  std::vector<LtoSectionUse> uses(state.inputSections.size(), LtoSectionUse::Available);
+  std::vector<bool> matched(uses.size());
+  std::set<std::string> roots;
+  for (const auto& region : script.memory) {
+    collectExpressionRoots(region.origin.get(), roots);
+    collectExpressionRoots(region.length.get(), roots);
+  }
+  for (const auto& statement : script.sectionsBody) {
+    if (auto* assign = dynamic_cast<const script::AssignStmt*>(statement.get())) {
+      if (assign->name != ".")
+        throw std::runtime_error("--lto-script section GC does not support layout symbol assignments; use KEEP for implicit roots");
+      collectExpressionRoots(assign->value.get(), roots);
+    } else if (auto* assertion = dynamic_cast<const script::AssertStmt*>(statement.get())) {
+      collectExpressionRoots(assertion->cond.get(), roots);
+    } else if (auto* output = dynamic_cast<const script::OutputSectionStmt*>(statement.get())) {
+      const auto& section = output->section;
+      const bool discard = section.name == "/DISCARD/";
+      collectExpressionRoots(section.address.get(), roots);
+      collectExpressionRoots(section.alignExpr.get(), roots);
+      collectExpressionRoots(section.fillExpr.get(), roots);
+      for (const auto& pattern : section.inputs) {
+        if (discard && (pattern.action != Action::Input || pattern.section == "COMMON" || pattern.keep))
+          throw std::runtime_error("unsupported KEEP/directive/COMMON selector in /DISCARD/");
+        if (pattern.action != Action::Input) {
+          if (pattern.action == Action::Assign && pattern.symbol != ".")
+            throw std::runtime_error("--lto-script section GC does not support layout symbol assignments; use KEEP for implicit roots");
+          if (!collectExpressionRoots(pattern.expression.get(), roots) && pattern.action == Action::Data)
+            throw std::runtime_error("--lto-script section GC supports only constant script data expressions");
+          continue;
+        }
+        for (size_t i = 0; i < uses.size(); ++i) {
+          if (!inputMatches(state, pattern, state.inputSections[i])) continue;
+          if (!matched[i] && discard) uses[i] = LtoSectionUse::Discard;
+          if (pattern.keep) {
+            if (uses[i] == LtoSectionUse::Discard)
+              throw std::runtime_error("KEEP conflicts with /DISCARD/ for " + state.inputSections[i].section.name);
+            uses[i] = LtoSectionUse::Keep;
+          }
+          matched[i] = true;
+        }
+      }
+    }
+  }
+  return collectLtoSections(state, uses, roots, error);
+}
+
 // GNU attributes select an unassigned section if any positive flag matches
 // and no flag following '!' matches. They are selectors, not CPU permissions.
 bool regionMatches(const std::string& attrs, uint32_t flags, bool noload) {
@@ -351,11 +430,14 @@ bool loadScriptExtras(LinkState& state, std::string& error) {
       la.archive = std::move(opened->archive);
       state.archives.push_back(std::move(la));
     } else {
+      const bool lto = !state.options.ltoScript.empty();
+      if (lto && !validateLtoInput(bytes, resolved, error)) return false;
       auto opened = qbfd::open(bytes, resolved);
       if (!opened) {
         error = resolved + ": INPUT expects an ELF object/archive; use INCLUDE for nested scripts";
         return false;
       }
+      if (lto && !validateLtoObject(*opened->object, resolved, error)) return false;
       LoadedObject lo;
       lo.label = resolved;
       lo.bytes = std::move(bytes);
@@ -378,40 +460,8 @@ bool runScript(LinkState& state, std::string& error) try {
   if (!script::parseText(src, sf, error)) return false;
   if (sf.entry && !state.options.hasEntry) state.options.entry = *sf.entry;
 
-  // Collect input sections exactly like the default layout.
-  state.inputSections.clear();
-  for (size_t oi = 0; oi < state.objects.size(); ++oi) {
-    const auto& obj = state.objects[oi];
-    if (obj.isScript || !obj.object) continue;
-    for (const auto& s : obj.object->sections()) {
-      if (s.index == 0 && s.name.empty() && s.size == 0) continue;
-      if (s.name == ".symtab" || s.name == ".strtab" ||
-          s.name == ".shstrtab")
-        continue;
-      if (s.flags & qbfd::sec::Reloc) continue;
-      if (s.name.starts_with(".rel.") || s.name.starts_with(".rela."))
-        continue;
-      if (state.options.stripDebug && (s.flags & qbfd::sec::Debug))
-        continue;
-      InputSection in;
-      in.objectIndex = oi;
-      in.sectionIndex = s.index;
-      in.section = s;
-      if (s.flags & qbfd::sec::Bss) {
-        in.contents.clear();
-      } else {
-        auto c = obj.object->sectionContents(s);
-        if (!c) {
-          error = obj.label + ": cannot read section " + s.name;
-          return false;
-        }
-        in.contents.assign(c->begin(), c->end());
-      }
-      auto r = obj.object->relocations(s);
-      if (r) in.relocs = std::move(*r);
-      state.inputSections.push_back(std::move(in));
-    }
-  }
+  if (!collectInputSections(state, true, error)) return false;
+  if (state.ltoPlan.gcSections && !applyScriptGC(state, sf, error)) return false;
 
   // MEMORY regions.
   std::map<std::string, std::pair<uint64_t, uint64_t>> mem;  // name->(org,len)
@@ -482,9 +532,7 @@ bool runScript(LinkState& state, std::string& error) try {
     for (size_t i = 0; i < state.inputSections.size(); ++i) {
       if (consumed[i]) continue;
       const auto& in = state.inputSections[i];
-      if (!fileMatches(pat.file, state.objects[in.objectIndex].label))
-        continue;
-      if (!globMatch(pat.section, in.section.name)) continue;
+      if (!in.kept || !inputMatches(state, pat, in)) continue;
       hits.push_back(i);
     }
     if (pat.sort == "SORT" || pat.sort == "SORT_BY_NAME")
@@ -702,7 +750,8 @@ bool runScript(LinkState& state, std::string& error) try {
       for (size_t hit : takeMatches(pat)) {
         consumed[hit] = true;
         auto& in = state.inputSections[hit];
-        in.kept = true;
+        if (state.ltoPlan.gcSections && noload && !in.contents.empty())
+          throw std::runtime_error("--lto-script section GC cannot place initialized input in NOLOAD: " + in.section.name);
         uint64_t a = in.section.alignment ? in.section.alignment : 1;
         out.alignment = std::max(out.alignment, a);
         out.flags |= in.section.flags;
@@ -768,7 +817,7 @@ bool runScript(LinkState& state, std::string& error) try {
     for (size_t i = 0; i < state.inputSections.size(); ++i) {
       if (consumed[i]) continue;
       auto& in = state.inputSections[i];
-      in.kept = true;
+      if (!in.kept) continue;
       std::string name = in.section.name.empty() ? ".orphan" : in.section.name;
       if (!orphans.count(name)) oorder.push_back(name);
       orphans[name].push_back(i);

@@ -60,7 +60,18 @@ python3 -m archon irgen anf rv32.archdb rv64.archdb \
 
 `--option target='"RISCV64"'` is the equivalent generic-option spelling.
 
+Full generation also includes `Assembler.sh`, `Linker.sh`, `Proof.py`,
+`Proofs.smt`, `PrettyPrint.py`, `Translate.py`, and `RunSandbox.c`. The shell
+wrappers have executable permissions when written by `archon-irgen`. See
+[IRTools.md](IRTools.md) for provider selection and the generated tools' input
+and output formats. The sandbox runner is a separate Linux executable, not
+part of the portable C99 IR libraries or a stage that runs at generation time.
+
 ## Python API and plug-in contract
+
+New callers can use `archon.irgen.api`; the original `archon.irgen` API
+shown below remains available and exposes plug-in modules for callers that
+need them. See [Embedding.md](Embedding.md) for both library languages.
 
 ```python
 from archon.irgen import generate_ir, write_generated_directory
@@ -68,7 +79,7 @@ from archon.irgen import generate_ir, write_generated_directory
 files = generate_ir(
     "gated",
     [rv32_db, wasm_db],
-    options={"profile": "debug"},
+    options={"oracle": False},
 )
 write_generated_directory(
     files,
@@ -122,7 +133,7 @@ The context is plain JSON-compatible data:
   "ir": "gated",
   "architectures": ["validated ArchDB objects"],
   "architecture_names": ["RISCV32"],
-  "options": {"profile": "debug"}
+  "options": {"oracle": false}
 }
 ```
 
@@ -202,3 +213,11 @@ v1 Program contract. Every generated `Pipeline.h` exposes
 `archon_pipeline_emit_program`, which decodes and verifies the native input and
 writes canonical `ARCHON_PROGRAM_*` records to a caller-selected stream without
 modifying the source `Program.i`.
+
+## Native runtime profile
+
+`--profile native --abi LP64` adds a standalone C99 backend library and
+runtime driver for the reviewed `RISCV64IM` ArchDB. It does not replace the
+eight generated representations or change the default legacy pipeline. See
+[Embedding.md](Embedding.md) for the build and [MachineIR.md](MachineIR.md)
+for the runtime input contract.

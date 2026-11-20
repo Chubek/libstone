@@ -71,6 +71,7 @@ class IRGenerationCore(unittest.TestCase):
         stage_names = {stage.__name__.rsplit(".", 1)[-1] for stage in pipeline_stages()}
         self.assertIn("graphs", stage_names)
         self.assertIn("oracle", stage_names)
+        self.assertIn("sandbox", stage_names)
 
     def test_generation_is_deterministic_and_runs_stages(self):
         first = generate_ir("gated", [self.rv32], run_stages=False)
@@ -93,7 +94,16 @@ class IRGenerationCore(unittest.TestCase):
             "ISel.c",
             "Regalloc.c",
             "Emitter.c",
+            "Assembler.sh",
+            "Linker.sh",
+            "PrettyPrint.py",
+            "Proof.py",
+            "Proofs.smt",
+            "Translate.py",
+            "RunSandbox.c",
         } <= complete.keys())
+        self.assertNotIn("AsmOPT.lua", complete)
+        self.assertNotIn("LTO.lua", complete)
         self.assertTrue(all(callable(stage.emit) for stage in pipeline_stages()))
 
     def test_oracle_option_is_default_on_strict_and_can_be_disabled(self):
@@ -150,16 +160,28 @@ class IRGenerationCore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "generated"
-            files = {"IR.c": "c\n", "nested/IR.h": "h\n"}
+            files = {
+                "IR.c": "c\n", "nested/IR.h": "h\n",
+                "Assembler.sh": "#!/bin/sh\n", "Linker.sh": "#!/bin/sh\n",
+            }
             written = write_generated_directory(files, output)
             self.assertEqual(written, output.resolve())
             self.assertEqual((output / "IR.c").read_text(), "c\n")
             self.assertEqual((output / "nested" / "IR.h").read_text(), "h\n")
+            if os.name == "posix":
+                for name in ("Assembler.sh", "Linker.sh"):
+                    self.assertEqual((output / name).stat().st_mode & 0o111, 0o111)
 
             # An identical rerun is a deterministic no-op.
             before = (output / "IR.c").stat().st_ino
             write_generated_directory(files, output)
             self.assertEqual((output / "IR.c").stat().st_ino, before)
+            if os.name == "posix":
+                (output / "Assembler.sh").chmod(0o644)
+                with self.assertRaisesRegex(ArchonError, "nonempty"):
+                    write_generated_directory(files, output)
+                write_generated_directory(files, output, force=True)
+                self.assertEqual((output / "Assembler.sh").stat().st_mode & 0o111, 0o111)
 
             with self.assertRaisesRegex(ArchonError, "nonempty"):
                 write_generated_directory({"IR.c": "changed\n"}, output)

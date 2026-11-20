@@ -186,9 +186,10 @@ static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
     return n > 0;
 }
 
-/* Trial-encode one line; returns the winning form and byte length. */
-static int select_form(sandstone_asm_t *ctx, const sand_line_t *line,
-                       uint32_t *form_out, uint32_t *len_out) {
+/* Trial-encode one line with the first usable form. */
+static int trial_encode(sandstone_asm_t *ctx, const sand_line_t *line,
+                        uint32_t *form_out, DomSymAs_Bytes *bytes_out,
+                        uint32_t *nrelocs_out) {
     uint32_t forms[64];
     uint32_t n = 0;
     if (!candidate_forms(ctx, line, forms, 64, &n)) {
@@ -209,9 +210,11 @@ static int select_form(sandstone_asm_t *ctx, const sand_line_t *line,
                                            &bytes, &relocs, &nrelocs);
         free(vals);
         if (e == DOMSYMAS_OK) {
-            *form_out = forms[i];
-            *len_out = (uint32_t)bytes.len;
-            domsymas_free_bytes(&bytes);
+            if (form_out)
+                *form_out = forms[i];
+            if (nrelocs_out)
+                *nrelocs_out = nrelocs;
+            *bytes_out = bytes;
             domsymas_free_relocs(relocs, nrelocs);
             return 1;
         }
@@ -221,6 +224,56 @@ static int select_form(sandstone_asm_t *ctx, const sand_line_t *line,
     sand_set_error(ctx, "%s:%u: cannot encode '%s' (tried %u form(s))",
                    line->src_name, line->lineno, line->mnemonic, n);
     return 0;
+}
+
+static int select_form(sandstone_asm_t *ctx, const sand_line_t *line,
+                       uint32_t *form_out, uint32_t *len_out) {
+    DomSymAs_Bytes bytes;
+    if (!trial_encode(ctx, line, form_out, &bytes, NULL))
+        return 0;
+    *len_out = (uint32_t)bytes.len;
+    domsymas_free_bytes(&bytes);
+    return 1;
+}
+
+/* Check a literal instruction using the selected syntax and features, but
+ * without layout, live symbols, extensions or diagnostics on the real context.
+ * Only an exact-size encoding with no relocations is eligible as evidence. */
+int sand_encode_literal(const sandstone_asm_t *ctx, const char *source,
+                        uint8_t *out, size_t size) {
+    if (!size)
+        return 0;
+    sandstone_asm_t probe = {
+        .bank = ctx->bank,
+        .comment = ctx->comment,
+        .reg_prefix = ctx->reg_prefix,
+        .imm_prefix = ctx->imm_prefix,
+        .separator = ctx->separator,
+        .operand_order = ctx->operand_order,
+        .enabled = ctx->enabled,
+        .n_enabled = ctx->n_enabled,
+    };
+    DomSymAs_Bytes bytes = {NULL, 0};
+    uint32_t nrelocs = 0;
+    int ok = 0;
+    if (!sand_parse_source(&probe, source, "<asm-opt probe>") || probe.n_lines != 1)
+        goto done;
+    const sand_line_t *line = probe.lines;
+    if (line->kind != SAND_LINE_INSN || line->label)
+        goto done;
+    for (size_t i = 0; i < line->n_operands; i++) {
+        if (line->operands[i].kind != SAND_OP_REG && line->operands[i].kind != SAND_OP_IMM)
+            goto done;
+    }
+    if (trial_encode(&probe, line, NULL, &bytes, &nrelocs) &&
+        bytes.len == size && !nrelocs) {
+        memcpy(out, bytes.data, size);
+        ok = 1;
+    }
+done:
+    domsymas_free_bytes(&bytes);
+    sand_free_lines(&probe);
+    return ok;
 }
 
 static uint64_t align_up(uint64_t v, uint64_t align) {

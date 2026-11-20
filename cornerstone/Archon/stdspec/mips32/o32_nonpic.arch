@@ -1,0 +1,24 @@
+module O32ABI {
+    // Scalar word-sized integer and pointer calls, non-PIC and no abicalls.
+    // System V MIPS RISC Processor Supplement, 3rd ed., pp. 3-11 to 3-21.
+    abi_facts O32NonPIC {
+        schema_version = 1;
+        register_file = IntegerRegisters;
+        args = [a0, a1, a2, a3];
+        result = v0;
+        stack_pointer = sp;
+        return_address = ra;
+        stack_align = 8;
+        stack_slot_bytes = 4;
+        stack_arg_offset = 16;
+        stack_growth = downward;
+
+        // The call instruction overwrites ra; a non-leaf callee still saves
+        // its own incoming return address before making a nested call.
+        caller_saved = [v0, v1, a0, a1, a2, a3, t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, ra];
+        callee_saved = [s0, s1, s2, s3, s4, s5, s6, s7, s8, gp, sp];
+        // gp and sp are fixed-purpose and preserved in this profile.
+        // at is reserved for the assembler; k0 and k1 are reserved to the OS.
+        unallocatable = [zero, at, k0, k1, gp, sp];
+    }
+}

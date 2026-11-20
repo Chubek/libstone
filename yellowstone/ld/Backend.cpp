@@ -48,19 +48,18 @@ void writeText(const std::filesystem::path& path, const std::string& text) {
   if (!out) throw std::runtime_error("cannot write " + path.string());
 }
 
-Workspace::Workspace() {
+Workspace::Workspace(const std::filesystem::path& directory) {
 #ifdef _WIN32
   // CreateDirectory is exclusive; never adopt an existing temporary directory.
-  const auto base = std::filesystem::temp_directory_path();
   for (unsigned i = 0; i != 1024; ++i) {
-    auto candidate = base / ("qobjld-" + std::to_string(GetCurrentProcessId()) +
+    auto candidate = directory / ("qobjld-" + std::to_string(GetCurrentProcessId()) +
                             "-" + std::to_string(GetTickCount64()) + "-" + std::to_string(i));
     if (CreateDirectoryW(candidate.c_str(), nullptr)) { path = candidate; return; }
     if (GetLastError() != ERROR_ALREADY_EXISTS) break;
   }
   throw std::runtime_error("cannot create linker workspace");
 #else
-  auto pattern = (std::filesystem::temp_directory_path() / "qobjld-XXXXXX").string();
+  auto pattern = (directory / "qobjld-XXXXXX").string();
   if (!::mkdtemp(pattern.data()))
     throw std::runtime_error("cannot create linker workspace: " + std::string(std::strerror(errno)));
   path = pattern;
@@ -111,11 +110,11 @@ void expand(const std::vector<std::string>& args, std::vector<std::string>& out,
   for (const auto& arg : args) {
     if (arg.size() + 1 > budget) throw std::runtime_error("linker argument size limit exceeded");
     budget -= arg.size() + 1;
-    // Mach-O loader tokens and inline scripts are literal option values.
+    // Mach-O loader tokens and explicit hook/inline-script values are literal.
     if (arg.starts_with('@') && !arg.starts_with("@rpath/") &&
         !arg.starts_with("@loader_path/") && !arg.starts_with("@executable_path/") &&
         arg != "@rpath" && arg != "@loader_path" && arg != "@executable_path" &&
-        (out.empty() || out.back() != "--script-text")) {
+        (out.empty() || (out.back() != "--script-text" && out.back() != "--lto-script"))) {
       auto path = std::filesystem::canonical(arg.substr(1));
       if (!active.insert(path).second) throw std::runtime_error("response file cycle: " + path.string());
       auto text = readText(path, budget);
@@ -289,7 +288,7 @@ void rejectIgnoredOptions(const std::string& diagnostics) {
 unsigned optionArity(const std::string& arg) {
   static const std::set<std::string> one = {
     "-o", "--output", "-output", "-e", "--entry", "-L", "--library-path", "-l", "--library",
-    "-m", "--emulation", "-T", "--script", "--script-text", "-Map", "--Map", "-map",
+    "-m", "--emulation", "-T", "--script", "--script-text", "--lto-script", "-Map", "--Map", "-map",
     "--image-base", "--format", "--pe-linker", "--macho-linker", "--elf-linker",
     "-arch", "-install_name", "-dylib_install_name", "-dylinker_install_name", "-final_output",
     "-compatibility_version", "-current_version", "-macos_version_min", "-syslibroot",

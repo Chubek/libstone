@@ -259,6 +259,7 @@ void sandstone_asm_free(sandstone_asm_t *ctx) {
     if (!ctx)
         return;
     sand_lua_reset(ctx);
+    sandstone_asm_clear_asm_opt_hook(ctx);
     sand_extension_free(ctx);
     free_results(ctx);
     if (ctx->bank)
@@ -334,28 +335,37 @@ int sandstone_asm_disable_feature(sandstone_asm_t *ctx, const char *name) {
 }
 
 int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
-                                  const char *src_name) {
+                                   const char *src_name) {
     if (!ctx) return -1;
+    const char *name = src_name ? src_name : "<string>";
     ctx->error[0] = 0;
     sand_lua_reset(ctx);
     free_results(ctx);
-    char *processed = sand_run_hook(ctx, src ? src : "",
-                                    src_name ? src_name : "<string>");
+    char *processed = sand_run_hook(ctx, src ? src : "", name);
     if (!processed) {
         return -1;
     }
-    char *expanded = sand_preprocess_source(ctx, processed,
-                                           src_name ? src_name : "<string>");
+    char *expanded = sand_preprocess_source(ctx, processed, name);
     free(processed);
     if (!expanded)
         return -1;
-    int ok = sand_parse_source(ctx, expanded,
-                               src_name ? src_name : "<string>");
+    if (ctx->asm_opt_hook) {
+        char *optimized = sand_run_asm_opt_hook(ctx, expanded, name);
+        free(expanded);
+        if (!optimized)
+            return -1;
+        expanded = optimized;
+    }
+    int ok = sand_parse_source(ctx, expanded, name);
     free(expanded);
-    if (!ok)
+    if (!ok || !sand_assemble_lines(ctx)) {
+        if (ctx->asm_opt_hook) {
+            free_results(ctx);
+            if (!ctx->error[0])
+                sand_set_error(ctx, "%s: cannot assemble asm-opt output", name);
+        }
         return -1;
-    if (!sand_assemble_lines(ctx))
-        return -1;
+    }
     snprintf(ctx->error, sizeof ctx->error, "ok");
     return 0;
 }

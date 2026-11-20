@@ -1,0 +1,16 @@
+module MiniCalc;
+
+# Parentheses and precedence are enforced by Lang.g.
+fn compute(x: i32, y: i32) -> i32 {
+    let scaled: i32 = (x + 2) * y;
+    let adjusted = scaled - 3 - 1;
+    return adjusted;
+}
+
+fn is_two(x: i32) -> bool {
+    return x == 2;
+}
+
+fn ready() -> bool {
+    return true;
+}

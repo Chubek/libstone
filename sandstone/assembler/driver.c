@@ -1,7 +1,7 @@
 /* sandstone-as: SymAS-driven assembler command line.
  *
  * Usage: sandstone-as --bank ARCH.symas [-s SYNTAX] [-f bin|obj]
- *          [-F FEATURE]... [--lua HOOK.lua] [-o OUT] FILE...
+ *          [-F FEATURE]... [--lua HOOK.lua] [--asm-opt FILE.lua] [-o OUT] FILE...
  */
 #include <getopt.h>
 #include <stdio.h>
@@ -26,6 +26,7 @@ static void usage(const char *argv0) {
             "  -F, --feature NAME  enable feature (repeatable); prefix with\n"
             "                      '-' to disable (e.g. -F -avx)\n"
             "  --lua HOOK.lua      source preprocessing hook\n"
+            "  --asm-opt FILE.lua  run asm_optimize after source expansion\n"
             "  -o, --output OUT    output path (default: out.bin / out.obj)\n"
             "  --list-syntaxes     list syntax records in the bank and exit\n"
             "  -h, --help          print this text\n",
@@ -39,6 +40,7 @@ int main(int argc, char **argv) {
     const char *format = "bin";
     const char *output = NULL;
     const char *hook = NULL;
+    const char *asm_opt = NULL;
     int list_syntaxes = 0;
     char *features[256];
     size_t n_features = 0;
@@ -50,6 +52,7 @@ int main(int argc, char **argv) {
         {"format", required_argument, NULL, 'f'},
         {"feature", required_argument, NULL, 'F'},
         {"lua", required_argument, NULL, 'L'},
+        {"asm-opt", required_argument, NULL, 'O'},
         {"output", required_argument, NULL, 'o'},
         {"list-syntaxes", no_argument, NULL, 'l'},
         {"help", no_argument, NULL, 'h'},
@@ -67,6 +70,7 @@ int main(int argc, char **argv) {
                 features[n_features++] = optarg;
             break;
         case 'L': hook = optarg; break;
+        case 'O': asm_opt = optarg; break;
         case 'o': output = optarg; break;
         case 'l': list_syntaxes = 1; break;
         case 'h':
@@ -138,6 +142,11 @@ int main(int argc, char **argv) {
         }
     }
     if (hook && sandstone_asm_load_hook(ctx, hook) != 0) {
+        fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
+        sandstone_asm_free(ctx);
+        return 1;
+    }
+    if (asm_opt && sandstone_asm_load_asm_opt_hook(ctx, asm_opt) != 0) {
         fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
         sandstone_asm_free(ctx);
         return 1;

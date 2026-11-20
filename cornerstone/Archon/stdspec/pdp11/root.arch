@@ -29,6 +29,24 @@ architecture PDP11 {
     }
     register_class GPR { members = Registers.*; }
 
+    // Research Unix V7 C, one-word integer/pointer calls; not an ISA-wide ABI.
+    abi_facts_v2 UnixV7Scalar {
+        schema_version = 2;
+        register_file = Registers;
+        args = [];
+        result = r0;
+        stack_pointer = register(sp);
+        return_address = stack_slot(0, 2);
+        stack_align = 2;
+        stack_entry_remainder = 0;
+        stack_slot_bytes = 2;
+        stack_arg_offset = 2;
+        stack_growth = downward;
+        caller_saved = [r0, r1];
+        callee_saved = [r2, r3, r4, r5, sp];
+        unallocatable = [r5, sp, pc]; // csv/cret frame pointer, SP, current PC.
+    }
+
     format Fixed: bits<16> {
         field word: bits<16> @ [15:0];
     }

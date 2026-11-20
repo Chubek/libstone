@@ -1,8 +1,8 @@
 module Integer {
     register_file IntegerRegisters {
-        count = 8;
+        count = 16;
         width = XLEN;
-        register gpr[0..7];
+        register gpr[0..15];
         alias rax = gpr[0];
         alias rcx = gpr[1];
         alias rdx = gpr[2];
@@ -11,10 +11,18 @@ module Integer {
         alias rbp = gpr[5];
         alias rsi = gpr[6];
         alias rdi = gpr[7];
+        alias r8  = gpr[8];
+        alias r9  = gpr[9];
+        alias r10 = gpr[10];
+        alias r11 = gpr[11];
+        alias r12 = gpr[12];
+        alias r13 = gpr[13];
+        alias r14 = gpr[14];
+        alias r15 = gpr[15];
     }
 
-    register_class GPR {
-        members = IntegerRegisters.*;
+    register_class LegacyGPR {
+        members = IntegerRegisters.[0..7];
     }
 
     // The little-endian encoding word puts the first byte (REX) in bits 7:0.
@@ -36,8 +44,8 @@ module Integer {
     instruction MOV {
         requires feature(Base);
         operands {
-            out dst: GPR;
-            in src: GPR;
+            out dst: LegacyGPR;
+            in src: LegacyGPR;
         }
         encoding RegisterDirect {
             rex = 0x48;
@@ -52,7 +60,7 @@ module Integer {
 
     instruction NOT {
         requires feature(Base);
-        operands { inout dst: GPR; }
+        operands { inout dst: LegacyGPR; }
         encoding RegisterDirect {
             rex = 0x48;
             opcode = 0xF7;
@@ -66,7 +74,7 @@ module Integer {
 
     instruction BSWAP {
         requires feature(Base);
-        operands { inout dst: GPR; }
+        operands { inout dst: LegacyGPR; }
         encoding OpcodeRegister {
             rex = 0x48;
             escape = 0x0F;
@@ -87,8 +95,8 @@ module Integer {
     instruction XCHG {
         requires feature(Base);
         operands {
-            inout lhs: GPR;
-            inout rhs: GPR;
+            inout lhs: LegacyGPR;
+            inout rhs: LegacyGPR;
         }
         encoding RegisterDirect {
             rex = 0x48;

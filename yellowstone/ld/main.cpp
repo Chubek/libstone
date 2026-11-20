@@ -23,6 +23,8 @@ constexpr OptionSpec kEntry{'e', "entry", true, "symbol", "entry symbol"};
 constexpr OptionSpec kScript{'T', "script", true, "file", "linker script file (ld syntax or .lua)"};
 constexpr OptionSpec kScriptText{0, "script-text", true, "text",
                                  "linker script text"};
+constexpr OptionSpec kLtoScript{0, "lto-script", true, "file",
+                               "run a Lua optimization hook for native static ELF"};
 constexpr OptionSpec kLibPath{'L', "library-path", true, "dir",
                               "add a -l search directory"};
 constexpr OptionSpec kLib{'l', "library", true, "name",
@@ -57,14 +59,15 @@ constexpr OptionSpec kMachOLinker{0, "macho-linker", true, "executable", "select
 
 // Dynamic invocations retain the original token order, which is essential for
 // --as-needed, archive groups, -Bstatic/-Bdynamic and compiler-driver use.
-bool elfInvocation(int argc, char **argv) {
+bool elfInvocation(const std::vector<std::string>& args) {
   bool selected = false;
-  for (int i = 1; i < argc; ++i) {
-    std::string_view a = argv[i];
+  for (size_t i = 0; i < args.size(); ++i) {
+    std::string_view a = args[i];
     if (a == "--help" || a == "--version" || a == "--check-script") return false;
     if (a == "--") break;
     if (a == "--dynamic" || a == "--shared" || a == "-shared" || a == "--pie" || a == "-pie" ||
         a == "--elf-linker" || a.starts_with("--elf-linker=") ||
+        a == "--lto-script" || a.starts_with("--lto-script=") ||
         a == "--dynamic-linker" || a == "-dynamic-linker" ||
         a.starts_with("--dynamic-linker=") || a.starts_with("-dynamic-linker=") ||
         a == "--static" || a == "-static" || a == "-Bstatic" || a == "-Bdynamic" ||
@@ -73,6 +76,7 @@ bool elfInvocation(int argc, char **argv) {
         a == "--whole-archive" || a == "-z" || a.starts_with("--soname") ||
         a.starts_with("--rpath") || a.starts_with("--version-script") ||
         a.starts_with('@')) selected = true;
+    i += qld::detail::toolchain::optionArity(args[i]);
   }
   return selected;
 }
@@ -129,12 +133,14 @@ uint64_t parseAddr(const std::string& t, bool& ok) {
 }  // namespace
 
 int main(int argc, char** argv) try {
-  std::vector<std::string> raw;
+  std::vector<std::string> raw(argv + 1, argv + argc);
   bool query = false, explicitFormat = false;
-  for (int i = 1; i < argc; ++i) {
-    raw.emplace_back(argv[i]);
-    if (raw.back() == "--help" || raw.back() == "--version" || raw.back() == "--check-script") query = true;
-    if (raw.back().starts_with("--format=") || raw.back() == "--format") explicitFormat = true;
+  for (size_t i = 0; i < raw.size(); ++i) {
+    const auto& a = raw[i];
+    if (a == "--") break;
+    if (a == "--help" || a == "--version" || a == "--check-script") query = true;
+    if (a.starts_with("--format=") || a == "--format") explicitFormat = true;
+    i += qld::detail::toolchain::optionArity(a);
   }
   if (!query) {
     auto backend = qld::detail::invocationBackend(raw);
@@ -142,10 +148,10 @@ int main(int argc, char** argv) try {
       return foreignMain(argc, argv, backend);
     if (explicitFormat && backend == qld::detail::Backend::ELF) return elfMain(argc, argv);
   }
-  if (elfInvocation(argc, argv)) return elfMain(argc, argv);
+  if (elfInvocation(raw)) return elfMain(argc, argv);
   std::vector<OptionSpec> specs = {
       kHelp,      kVersion,   kOutput,    kEntry,     kScript,
-      kScriptText, kLibPath,  kLib,       kMap,       kEmulator,
+      kScriptText, kLtoScript, kLibPath,  kLib,       kMap,       kEmulator,
       kShared,    kPie,       kReloc,     kStatic,    kGc,
       kStrip,     kAllowUndef, kBase,     kVerbose,   kCheckScript, kDynamic, kElfLinker,
       kFormat, kPeLinker, kMachOLinker,
@@ -185,6 +191,10 @@ int main(int argc, char** argv) try {
   }
 
   if (options.has(kCheckScript)) {
+    if (options.has(kLtoScript)) {
+      std::cerr << "qobjld: --lto-script needs a link, not --check-script\n";
+      return 2;
+    }
     std::string text = options.value("script-text");
     if (text.empty() && options.has(kScript)) {
       try {

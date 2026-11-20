@@ -66,6 +66,7 @@ class TargetFactsTests(unittest.TestCase):
             for index, (architecture, filename) in enumerate(zip(facts, macro_files)):
                 macro_checks.append(_macro_count("INSTRUCTION", filename, index))
                 macro_checks.append(_macro_count("REGISTER", filename, index))
+                macro_checks.append(_macro_count("OPERAND_REGISTER_RANGE", filename, index))
             # C99 has no static_assert. Keep the macro includes at file scope
             # and test their enumerator values at runtime.
             macro_source = "\n".join(macro_checks)
@@ -77,6 +78,8 @@ class TargetFactsTests(unittest.TestCase):
                         f"{len(architecture['instructions'])});",
                         f"    assert(target_macro_register_{index} == "
                         f"{len(architecture['registers'])});",
+                        f"    assert(target_macro_operand_register_range_{index} == "
+                        f"{sum(op['register_range_explicit'] for inst in architecture['instructions'] for op in inst['operands'])});",
                     ]
                 )
 
@@ -87,6 +90,9 @@ class TargetFactsTests(unittest.TestCase):
 #include <assert.h>
 #include <stddef.h>
 {macro_source}
+static const int expects_abi[] = {{
+    {", ".join(str(int(arch["abi_known"])) for arch in facts)}
+}};
 int main(void) {{
     size_t i;
     assert(archon_target_facts_validate());
@@ -98,11 +104,15 @@ int main(void) {{
             archon_target_architecture(i);
         assert(target != NULL);
         assert(archon_target_find_architecture(target->identifier) == target);
-        assert(target->abi_knowledge == ARCHON_TARGET_UNKNOWN);
+        assert(target->abi_knowledge ==
+            (expects_abi[i] ? ARCHON_TARGET_KNOWN : ARCHON_TARGET_UNKNOWN));
+        assert((target->abi_json != NULL) == expects_abi[i]);
     }}
     for (i = 0u; i < archon_target_instruction_count; ++i) {{
         const ArchonTargetInstructionFact *instruction =
             archon_target_instruction(i);
+        const ArchonTargetArchitectureFact *target =
+            archon_target_architecture(instruction->target_index);
         const ArchonTargetCostFact *code_size;
         const ArchonTargetScheduleFact *schedule;
         size_t j;
@@ -126,6 +136,22 @@ int main(void) {{
                ARCHON_TARGET_UNKNOWN);
         assert(schedule->conservative_barrier);
         assert(!schedule->may_reorder && !schedule->may_speculate);
+        for (j = 0u; j < instruction->operand_count; ++j) {{
+            size_t child = instruction->first_operand + j;
+            const ArchonTargetOperandFact *operand = &archon_target_operands[child];
+            const ArchonTargetOperandClassFact *facts =
+                &archon_target_operand_classes[operand->operand_class_index];
+            uint32_t first = UINT32_MAX, last = UINT32_MAX;
+            if (facts->kind == ARCHON_TARGET_OPERAND_REGISTER) {{
+                assert(archon_target_operand_register_range(child, &first, &last));
+                assert(first <= last && last < target->register_count);
+                if (target->register_count == 16u && facts->encoding_width == 3u)
+                    assert(first == 0u && last == 7u);
+            }} else {{
+                assert(!archon_target_operand_register_range(child, &first, &last));
+                assert(first == UINT32_MAX && last == UINT32_MAX);
+            }}
+        }}
     }}
     return 0;
 }}
@@ -174,6 +200,19 @@ int main(void) {{
         aliases = {row["name"]: row["register"] for row in riscv["aliases"]}
         self.assertEqual(aliases["sp"], 2)
         self.assertEqual(aliases["a0"], 10)
+        add = next(row for row in riscv["instructions"] if row["name"] == "ADD")
+        self.assertTrue(all(op["register_range"] == (0, 31) for op in add["operands"]))
+
+        for name, expected in (("AArch64", "AAPCS64"), ("AMD64", "SysVAMD64")):
+            with self.subTest(target=name):
+                target = by_name[name]
+                self.assertTrue(target["abi_known"])
+                facts = json.loads(target["abi_json"])
+                self.assertEqual((facts["schema_version"], facts["name"]), (2, expected))
+        amd64 = by_name["AMD64"]
+        self.assertEqual(amd64["register_count"], 16)
+        mov = next(row for row in amd64["instructions"] if row["name"] == "MOV")
+        self.assertTrue(all(op["register_range"] == (0, 7) for op in mov["operands"]))
 
         pdp11 = by_name["PDP11"]
         resources = {(row["kind"], row["name"]) for row in pdp11["resources"]}

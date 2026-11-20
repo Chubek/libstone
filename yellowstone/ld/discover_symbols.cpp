@@ -117,7 +117,7 @@ bool discoverSymbols(LinkState& state, std::string& error) {
   std::vector<std::vector<ArchiveCandidate>> candidates(state.archives.size());
   std::vector<std::vector<bool>> taken(state.archives.size());
   for (size_t a = 0; a < state.archives.size(); ++a) {
-    candidates[a] = expandArchive(state.archives[a], error);
+    candidates[a] = expandArchive(state.archives[a], !state.options.ltoScript.empty(), error);
     if (!error.empty()) return false;
     for (auto& c : candidates[a]) c.archiveIndex = a;
     taken[a].assign(candidates[a].size(), false);

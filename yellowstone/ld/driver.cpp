@@ -35,7 +35,7 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
   try {
     auto backend = selectBackend(state.options);
     if (backend == Backend::Auto) backend = Backend::ELF;
-    if (externalBackendRequested(state.options, backend)) {
+    if (configureLinkerArguments(state.options, backend)) {
       switch (backend) {
         case Backend::ELF: return linkElf(state, out, error, sdk ? *sdk : ScriptSDK{});
         case Backend::PE: return linkPe(state, out, error);
@@ -43,10 +43,9 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
         case Backend::Auto: break;
       }
     }
-    parseNativeArguments(state.options, backend);
     state.format = backend == Backend::PE ? qbfd::Format::COFF :
                    backend == Backend::MachO ? qbfd::Format::MachO : qbfd::Format::ELF;
-    toolchain::checkDestinations(state.options.output, {state.options.mapFile});
+    toolchain::checkDestinations(state.options.output, {state.options.mapFile, state.options.ltoScript});
     if (sdk && (state.options.scriptIsText || !state.options.script.empty())) {
       state.options.scriptText = sdk->preprocess(state.options.scriptIsText ?
           state.options.scriptText : toolchain::readText(state.options.script),
@@ -114,6 +113,10 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
       }
     }
   }
+  if (!state.options.ltoScript.empty()) {
+    if (state.options.entry.empty()) state.options.entry = "_start";
+    if (!runLtoScript(state, error)) return false;
+  }
   bool ok = false;
   if (state.format != qbfd::Format::ELF) {
     ok = linkNativeImage(state, out, error);
@@ -127,7 +130,7 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
     case Mode::Relocatable: ok = linkRelocatable(state, out, error); break;
   }
   if (!ok) return false;
-  if (!state.options.mapFile.empty()) {
+  if (!state.options.mapFile.empty() && state.options.ltoScript.empty()) {
     std::string m = state.mapText;
     if (m.empty()) m = "(empty map)\n";
     std::vector<uint8_t> mb(m.begin(), m.end());

@@ -22,7 +22,30 @@ one to `0xffffffff` yields `0` on RV32 and `0x100000000` on RV64.
 These are **not complete RV32I or RV64I implementations**. The subset omits
 immediate shifts, comparisons, `auipc`, RV64 `*W` operations, loads and stores,
 control flow (including PC updates), fences, system instructions, and assembly
-pseudo-instructions. The ABI register names are aliases, not a calling convention.
+pseudo-instructions.
+
+## Legacy integer ABI facts
+
+`rv32i.arch` publishes ILP32 facts with 4-byte stack argument slots, and
+`rv64i.arch` publishes LP64 facts with 8-byte slots. Both follow the
+[RISC-V psABI integer register convention] and [integer calling convention]
+for fixed-arity calls with one-word integer or pointer arguments and results:
+
+- The first eight arguments use `a0`–`a7` (`x10`–`x17`), in order. A
+  single-register result uses `a0`; `ra` (`x1`) holds the return address.
+- The stack grows downward and is aligned to 16 bytes. The first stack
+  argument is at offset zero from `sp` (`x2`) on callee entry.
+- `ra`, `a0`–`a7`, and `t0`–`t6` are caller-saved. `sp` and `s0`–`s11`
+  are preserved. `zero`, `sp`, `gp`, and `tp` are not allocatable.
+
+These are scalar facts in the ArchDB `abi_facts` record, not a full psABI
+classifier. They do not describe narrower-scalar extensions, multi-register
+arguments or returns, aggregates, variadic calls, or floating-point calling
+conventions. They do not change the legacy instruction subsets or qualify
+either target for the native backend.
+
+[RISC-V psABI integer register convention]: https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_integer_register_convention
+[integer calling convention]: https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#integer-cc
 
 ## Encoding goldens
 
@@ -52,3 +75,13 @@ done
 
 The LLVM comparison checks encoding only; neither suite establishes full
 ISA conformance.
+
+## RV64IM native profile
+
+`rv64im.arch` is a separate entry point for the first native compiler backend.
+It adds the selected M operations, comparisons, immediate left shift and
+encodable control and memory forms; it does not claim full ISA or emulator
+coverage. ArchDB v1 has no scattered instruction fields, so the native
+provider supplies reviewed forms for stores and branches and delegates final
+encoding and relocations to an assembler. See [Embedding](../../Embedding.md)
+and [implementation boundaries](../../IMPLEMENTATION.md).

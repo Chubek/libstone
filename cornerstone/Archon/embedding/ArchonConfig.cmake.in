@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Python3 @Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@ EXACT
+    COMPONENTS Development.Embed)
+set_and_check(Archon_PYTHON_DIR "@PACKAGE_Archon_PYTHON_DIR@")
+include("${CMAKE_CURRENT_LIST_DIR}/ArchonTargets.cmake")
+check_required_components(Archon)

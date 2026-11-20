@@ -63,6 +63,18 @@ ArchDB, pin and round-trip all golden bytes, reject every other opcode byte,
 check the exact executable set, and cover successful and rolled-back stack
 updates.
 
+## ABI coverage
+
+This entry point does not emit `abi_facts`. The [CLI virtual calling convention][cil-calls]
+takes values from the caller's evaluation stack, exposes them as callee argument
+slots, and passes any result back on the caller's evaluation stack. The subset
+does not model managed method calls, argument slots, or `ret`. Its value and kind
+stacks do not supply the register file, stack pointer, or return-address register
+required by `abi_facts` v1. Platform-specific unmanaged interop is a separate
+boundary and is not described by this bytecode subset.
+
+[cil-calls]: https://carlwa.com/ecma-335/#i.12.4.1.4-virtual-calling-convention.md
+
 ## References and limits
 
 All 68 mnemonic/byte pairs were checked against the

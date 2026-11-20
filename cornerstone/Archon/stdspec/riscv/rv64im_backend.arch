@@ -1,0 +1,157 @@
+module RV64IMBackend {
+    format ShiftIType: bits<32> {
+        field opcode: bits<7> @ [6:0];
+        field rd: bits<5> @ [11:7];
+        field funct3: bits<3> @ [14:12];
+        field rs1: bits<5> @ [19:15];
+        field shamt: uint<SHAMT> @ [25:20];
+        field funct6: bits<6> @ [31:26];
+    }
+
+    format FixedWord: bits<32> {
+        field word: bits<32> @ [31:0];
+    }
+
+    instruction MUL {
+        requires feature(M);
+        operands { out rd: GPR; in rs1: GPR; in rs2: GPR; }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 0;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 1;
+        }
+        assembly "mul {rd}, {rs1}, {rs2}";
+        semantics { write(rd, read(rs1) *% read(rs2)); }
+    }
+
+    // ArchSem v1 has no division primitive. The native provider binds these
+    // encodings to RISC-V M behavior, including architectural corner cases.
+    template Rv64DivRem<Mnemonic: string, Funct3: bits<3>> {
+        instruction self {
+            requires feature(M);
+            operands { out rd: GPR; in rs1: GPR; in rs2: GPR; }
+            encoding RType {
+                opcode = 0x33;
+                rd = encode_register(rd);
+                funct3 = Funct3;
+                rs1 = encode_register(rs1);
+                rs2 = encode_register(rs2);
+                funct7 = 1;
+            }
+            assembly "{Mnemonic} {rd}, {rs1}, {rs2}";
+        }
+    }
+    def DIV  = Rv64DivRem<"div",  4>;
+    def DIVU = Rv64DivRem<"divu", 5>;
+    def REM  = Rv64DivRem<"rem",  6>;
+    def REMU = Rv64DivRem<"remu", 7>;
+
+    instruction SLT {
+        requires feature(I);
+        operands { out rd: GPR; in rs1: GPR; in rs2: GPR; }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 2;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0;
+        }
+        assembly "slt {rd}, {rs1}, {rs2}";
+        semantics {
+            let a = read(rs1);
+            let b = read(rs2);
+            let diff = a ^ b;
+            // If signs differ, a is less exactly when it is negative.
+            // Otherwise the difference cannot overflow.
+            write(rd, ((diff & a) | (~diff & (a -% b))) >> 63);
+        }
+    }
+
+    instruction SLTU {
+        requires feature(I);
+        operands { out rd: GPR; in rs1: GPR; in rs2: GPR; }
+        encoding RType {
+            opcode = 0x33;
+            rd = encode_register(rd);
+            funct3 = 3;
+            rs1 = encode_register(rs1);
+            rs2 = encode_register(rs2);
+            funct7 = 0;
+        }
+        assembly "sltu {rd}, {rs1}, {rs2}";
+        semantics {
+            let a = read(rs1);
+            let b = read(rs2);
+            // The high bit of this expression is the unsigned borrow out.
+            write(rd, ((~a & b) | (~(a ^ b) & (a -% b))) >> 63);
+        }
+    }
+
+    instruction SLLI {
+        requires feature(I);
+        operands { out rd: GPR; in rs1: GPR; in shamt: imm<uint<SHAMT>>; }
+        encoding ShiftIType {
+            opcode = 0x13;
+            rd = encode_register(rd);
+            funct3 = 1;
+            rs1 = encode_register(rs1);
+            shamt = shamt;
+            funct6 = 0;
+        }
+        assembly "slli {rd}, {rs1}, {shamt}";
+        semantics { write(rd, read(rs1) << shamt); }
+    }
+
+    // A bounded emulator memory does not model the native process address
+    // space. V1 has no implicit PC update, breakpoint transition, or
+    // relocation semantics. These instructions declare only their encodings.
+    instruction LD {
+        requires feature(I);
+        operands { out rd: GPR; in rs1: GPR; in imm: imm<sint<12>>; }
+        encoding IType {
+            opcode = 0x03;
+            rd = encode_register(rd);
+            funct3 = 3;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "ld {rd}, {imm}({rs1})";
+    }
+
+    instruction JALR {
+        requires feature(I);
+        operands { out rd: GPR; in rs1: GPR; in imm: imm<sint<12>>; }
+        encoding IType {
+            opcode = 0x67;
+            rd = encode_register(rd);
+            funct3 = 0;
+            rs1 = encode_register(rs1);
+            imm = imm;
+        }
+        assembly "jalr {rd}, {imm}({rs1})";
+    }
+
+    instruction AUIPC {
+        requires feature(I);
+        operands { out rd: GPR; in imm: imm<uint<20>>; }
+        encoding UType {
+            opcode = 0x17;
+            rd = encode_register(rd);
+            imm = imm;
+        }
+        assembly "auipc {rd}, {imm}";
+    }
+
+    instruction EBREAK {
+        requires feature(I);
+        encoding FixedWord { word = 0x00100073; }
+        assembly "ebreak";
+    }
+
+    // SD, BEQ, BNE and JAL have scattered immediates. Their GAS forms belong
+    // to the native provider manifest, not the contiguous-field v1 database.
+}

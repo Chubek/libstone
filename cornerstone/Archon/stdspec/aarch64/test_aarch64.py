@@ -48,6 +48,19 @@ class AArch64SubsetTests(unittest.TestCase):
             with self.subTest(word=f"{word:08x}"), self.assertRaises(ArchonError):
                 self.target.decode(word.to_bytes(4, "little"))
 
+    def test_sp_is_distinct_from_xzr(self):
+        initial = self.target.new_state(registers=[3] * 32, scalars={"SP": 0x1000})
+        result = self.target.execute_state(*self.target.assemble("add x1, xzr, x2"), initial)
+        self.assertEqual(result.registers[1], 3)
+        self.assertEqual(result.registers[31], 0)
+        self.assertEqual(result.scalars, {"SP": 0x1000})
+        result = self.target.execute_state(*self.target.assemble("add xzr, x1, x2"), result)
+        self.assertEqual(result.registers[31], 0)
+        self.assertEqual(result.scalars, {"SP": 0x1000})
+        for spelling in ("sp", "SP"):
+            with self.subTest(spelling=spelling), self.assertRaises(ArchonError):
+                self.target.assemble(f"add {spelling}, x1, x2")
+
 
 if __name__ == "__main__":
     unittest.main()

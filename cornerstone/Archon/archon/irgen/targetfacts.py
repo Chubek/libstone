@@ -223,9 +223,10 @@ def _validate_for_adapter(db: dict, db_index: int) -> None:
                     raise ArchonError(
                         f"invalid target facts: {operand_path} register encoding is signed"
                     )
-                if registers["count"] - 1 >= (1 << operand["width"]):
+                _, last = operand.get("register_range", (0, registers["count"] - 1))
+                if last >= (1 << operand["width"]):
                     raise ArchonError(
-                        f"invalid target facts: {operand_path} cannot encode the register file"
+                        f"invalid target facts: {operand_path} cannot encode its register range"
                     )
             elif direction != "in":
                 raise ArchonError(
@@ -437,6 +438,11 @@ def _normalise_architecture(
                     "position": position,
                     "name": operand["name"],
                     "class_local_id": class_lookup[key],
+                    "register_range": (
+                        tuple(operand.get("register_range", (0, registers["count"] - 1)))
+                        if operand["kind"] == "reg" else None
+                    ),
+                    "register_range_explicit": "register_range" in operand,
                 }
             )
             operand_positions[operand["name"]] = position
@@ -528,7 +534,8 @@ def _normalise_architecture(
             }
         )
 
-    abi_known = "abi" in db
+    abi_key = next((key for key in ("abi_facts_v2", "abi_facts", "abi") if key in db), None)
+    abi_known = abi_key is not None
     return {
         "index": target_index,
         "identifier": identifier,
@@ -540,7 +547,7 @@ def _normalise_architecture(
         "address_width": db["address_width"],
         "endian": db["endian"],
         "abi_known": abi_known,
-        "abi_json": _canonical_json(db["abi"]) if abi_known else None,
+        "abi_json": _canonical_json(db[abi_key]) if abi_known else None,
         "register_file": registers is not None,
         "register_file_name": registers["name"] if registers is not None else "",
         "register_prefix": registers["prefix"] if registers is not None else "",
@@ -872,6 +879,11 @@ def _source(tables: dict) -> str:
         "},"
         for row in tables["operands"]
     ]
+    register_range_rows = [
+        ("    {UINT32_MAX, UINT32_MAX}," if row["register_range"] is None
+         else f"    {{{row['register_range'][0]}u, {row['register_range'][1]}u}},")
+        for row in tables["operands"]
+    ]
     field_rows = [
         "    {"
         f"{row['instruction']}u, {row['operand_index']}u, "
@@ -924,6 +936,7 @@ def _source(tables: dict) -> str:
         "@INSTRUCTION_COUNT@": str(len(instruction_rows)),
         "@OPERANDS@": _array(operand_rows, "    {0},"),
         "@OPERAND_COUNT@": str(len(operand_rows)),
+        "@REGISTER_RANGES@": _array(register_range_rows, "    {UINT32_MAX, UINT32_MAX},"),
         "@FIELDS@": _array(field_rows, "    {0},"),
         "@FIELD_COUNT@": str(len(field_rows)),
         "@EFFECTS@": _array(effect_rows, "    {0},"),
@@ -993,6 +1006,7 @@ _MACROS = (
         "MAY_REORDER, MAY_SPECULATE",
     ),
     ("ARCHON_TARGET_END", ""),
+    ("ARCHON_TARGET_OPERAND_REGISTER_RANGE", "INSTRUCTION_ID, POSITION, FIRST, LAST"),
 )
 
 
@@ -1076,6 +1090,12 @@ def _macro_file(architecture: dict) -> str:
                 f"{local_id}u, {operand['position']}u, {_c_string(operand['name'])}, "
                 f"{operand['class_local_id']}u)"
             )
+            if operand["register_range_explicit"]:
+                first, last = operand["register_range"]
+                lines.append(
+                    "ARCHON_TARGET_OPERAND_REGISTER_RANGE("
+                    f"{local_id}u, {operand['position']}u, {first}u, {last}u)"
+                )
         for field in instruction["fields"]:
             lines.append(
                 "ARCHON_TARGET_ENCODING_FIELD("
@@ -1396,6 +1416,10 @@ const ArchonTargetInstructionFact *archon_target_find_instruction(
     const ArchonTargetArchitectureFact *target, const char *name);
 const ArchonTargetAliasFact *archon_target_find_alias(
     const ArchonTargetArchitectureFact *target, const char *name);
+/* Inclusive bounds of a register operand. Returns zero without writing
+ * outputs for immediate operands, invalid indices, or null outputs. */
+int archon_target_operand_register_range(size_t operand_index,
+    uint32_t *first, uint32_t *last);
 
 /* Returns one only when every generated range and cross-reference is valid. */
 int archon_target_facts_validate(void);
@@ -1405,7 +1429,8 @@ int archon_target_facts_validate(void);
  * ARCHON_TARGET_BEGIN, ARCHON_TARGET_REGISTER_FILE, ARCHON_TARGET_REGISTER,
  * ARCHON_TARGET_ALIAS, ARCHON_TARGET_STATE_RESOURCE,
  * ARCHON_TARGET_OPERAND_CLASS, ARCHON_TARGET_INSTRUCTION,
- * ARCHON_TARGET_OPERAND, ARCHON_TARGET_ENCODING_FIELD,
+ * ARCHON_TARGET_OPERAND, ARCHON_TARGET_OPERAND_REGISTER_RANGE (when explicit),
+ * ARCHON_TARGET_ENCODING_FIELD,
  * ARCHON_TARGET_SEMANTICS, ARCHON_TARGET_EFFECT, ARCHON_TARGET_COST,
  * ARCHON_TARGET_SCHEDULE, and ARCHON_TARGET_END.
  *
@@ -1460,6 +1485,20 @@ const ArchonTargetOperandFact archon_target_operands[] = {
 @OPERANDS@
 };
 const size_t archon_target_operand_count = @OPERAND_COUNT@u;
+
+static const uint32_t archon_target_register_ranges[][2] = {
+@REGISTER_RANGES@
+};
+
+int archon_target_operand_register_range(size_t operand_index,
+        uint32_t *first, uint32_t *last) {
+    if (operand_index >= archon_target_operand_count || first == NULL ||
+        last == NULL || archon_target_register_ranges[operand_index][0] == UINT32_MAX)
+        return 0;
+    *first = archon_target_register_ranges[operand_index][0];
+    *last = archon_target_register_ranges[operand_index][1];
+    return 1;
+}
 
 const ArchonTargetEncodingFieldFact archon_target_encoding_fields[] = {
 @FIELDS@
@@ -1714,6 +1753,8 @@ static int archon_target_validate_instructions(void) {
         for (j = 0u; j < instruction->operand_count; ++j) {
             const ArchonTargetOperandFact *operand =
                 &archon_target_operands[instruction->first_operand + j];
+            const uint32_t *bounds =
+                archon_target_register_ranges[instruction->first_operand + j];
             const ArchonTargetOperandClassFact *operand_class;
             if (operand->instruction_index != i || operand->position != j ||
                 operand->name == NULL ||
@@ -1723,6 +1764,14 @@ static int archon_target_validate_instructions(void) {
                 &archon_target_operand_classes[operand->operand_class_index];
             if (operand_class->target_index != instruction->target_index)
                 return 0;
+            if (operand_class->kind == ARCHON_TARGET_OPERAND_REGISTER) {
+                if (bounds[0] > bounds[1] || bounds[1] >= target->register_count ||
+                    (operand_class->encoding_width < 32u &&
+                        bounds[1] >= (UINT32_C(1) << operand_class->encoding_width)))
+                    return 0;
+            } else if (bounds[0] != UINT32_MAX || bounds[1] != UINT32_MAX) {
+                return 0;
+            }
         }
         for (j = 0u; j < instruction->encoding_field_count; ++j) {
             const ArchonTargetEncodingFieldFact *field =

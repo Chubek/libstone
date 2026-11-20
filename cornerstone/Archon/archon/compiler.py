@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 import re
 
+from . import database
 from .archdef import elaborate_instructions
 from .diagnostics import ArchonError, Location
 from .frontend import parse
@@ -19,7 +20,8 @@ _MAX_WIDTH = 4096
 _MAX_REGISTERS = 65536
 _DECLARATIONS = {
     "setting", "parameter", "feature", "type", "register_file", "register_class",
-    "state", "stack", "memory", "format", "instruction", "template", "def",
+    "abi_facts", "abi_facts_v2", "state", "stack", "memory", "format", "instruction",
+    "template", "def",
 }
 
 
@@ -221,7 +223,7 @@ class _Types:
         return dict(sorted(self.resolved.items()))
 
 
-def _registers(files, classes, parameters, root):
+def _registers(files, classes, parameters):
     if not files:
         if classes:
             _fail(next(iter(classes.values())), "a register_class requires a register file")
@@ -250,8 +252,63 @@ def _registers(files, classes, parameters, root):
     for register_class in classes.values():
         if register_class["file"] != name:
             _fail(register_class, f"unknown register file {register_class['file']!r}")
+        if "register_range" in register_class:
+            first, last = register_class["register_range"]
+            if not 0 <= first <= last < count:
+                _fail(register_class, f"register class range [{first}..{last}] must be an "
+                                      f"ordered range within 0..{count - 1}")
     return {"name": name, "prefix": prefix, "count": count, "width": width,
             "zero": zero, "aliases": aliases}
+
+
+def _abi_facts(section, declarations, registers, state, address_width):
+    if not declarations:
+        return None
+    if len(declarations) != 1:
+        _fail(list(declarations.values())[1], f"only one {section} declaration is supported")
+    name, decl = next(iter(declarations.items()))
+    facts = {"name": name, **decl["members"]}
+    v2 = section == "abi_facts_v2"
+    version = database.ABI_FACTS_V2_SCHEMA_VERSION if v2 else database.ABI_FACTS_SCHEMA_VERSION
+    if facts["schema_version"] != version:
+        _fail(decl, f"unsupported {section} schema version {facts['schema_version']} "
+                    f"(expected {version})")
+    if registers is None or facts["register_file"] != registers["name"]:
+        _fail(decl, f"unknown {section} register file {facts['register_file']!r}")
+    aliases = registers["aliases"]
+
+    def resolve(spelling, key):
+        if spelling in aliases:
+            return aliases[spelling]
+        prefix = registers["prefix"]
+        suffix = spelling[len(prefix):]
+        if spelling.startswith(prefix) and re.fullmatch(r"[0-9]+", suffix):
+            digits = suffix.lstrip("0") or "0"
+            if len(digits) <= len(str(registers["count"] - 1)):
+                index = int(digits)
+                if index < registers["count"]:
+                    return index
+        _fail(decl, f"unknown register alias or numbered register {spelling!r} "
+                    f"for {section}.{key}")
+
+    facts["result"] = resolve(facts["result"], "result")
+    for key in ("stack_pointer", "return_address"):
+        if not v2:
+            facts[key] = resolve(facts[key], key)
+        elif facts[key]["kind"] == "register":
+            facts[key] = {"kind": "register", "index": resolve(facts[key]["name"], key)}
+    facts["args"] = [resolve(alias, "args") for alias in facts["args"]]
+    for key in ("caller_saved", "callee_saved", "unallocatable"):
+        facts[key] = sorted(resolve(alias, key) for alias in facts[key])
+    try:
+        if v2:
+            scalars = {row["name"]: row for row in state["scalars"]}
+            database._validate_abi_facts_v2(facts, registers, scalars, address_width)
+        else:
+            database._validate_abi_facts(facts, registers)
+    except ArchonError as exc:
+        _fail(decl, exc.message.removeprefix("invalid ArchDB: "))
+    return facts
 
 
 def _machine_state(scalars, stacks, memories, resolver, parameters, address_width):
@@ -370,6 +427,8 @@ def _instruction(
             if registers is None:
                 _fail(operand, "a register operand requires a register file")
             normalized.update(kind="reg", signed=False)
+            if "register_range" in classes[spec]:
+                normalized["register_range"] = classes[spec]["register_range"].copy()
         else:
             if direction != "in":
                 _fail(operand, "an immediate operand must have 'in' direction")
@@ -412,7 +471,8 @@ def _instruction(
             _fail(decl, f"operand {binding!r} is encoded by multiple fields")
         operand = operands[binding]
         if operand["kind"] == "reg":
-            if signed or registers["count"] - 1 > field_mask:
+            _, last = operand.get("register_range", (0, registers["count"] - 1))
+            if signed or last > field_mask:
                 _fail(decl, f"field {field_name!r} cannot encode register operand {binding!r}")
             operand["width"] = field_width
         elif operand["width"] != field_width or operand["signed"] != signed:
@@ -456,10 +516,15 @@ def compile_file(path, *, parameters=None, features=None) -> dict:
     width, endian = _settings(groups["setting"], parameters, root)
     resolver = _Types(groups["type"], parameters)
     types = resolver.resolve_all()
-    registers = _registers(groups["register_file"], groups["register_class"], parameters, root)
+    registers = _registers(groups["register_file"], groups["register_class"], parameters)
     state = _machine_state(
         groups["state"], groups["stack"], groups["memory"], resolver, parameters, width,
     )
+    abi_section = "abi_facts_v2" if groups["abi_facts_v2"] else "abi_facts"
+    if groups["abi_facts"] and groups["abi_facts_v2"]:
+        _fail(next(iter(groups["abi_facts_v2"].values())),
+              "an architecture cannot declare both abi_facts and abi_facts_v2")
+    abi_facts = _abi_facts(abi_section, groups[abi_section], registers, state, width)
     formats = _formats(groups["format"], resolver, parameters)
 
     instructions = []
@@ -495,8 +560,11 @@ def compile_file(path, *, parameters=None, features=None) -> dict:
         mnemonics[mnemonic] = decl["name"]
         instructions.append(instruction)
 
-    return {
+    db = {
         "version": 1, "architecture": root["name"], "address_width": width, "endian": endian,
         "parameters": parameters, "features": sorted(enabled), "types": types,
         "registers": registers, "state": state, "instructions": instructions,
     }
+    if abi_facts is not None:
+        db[abi_section] = abi_facts
+    return db

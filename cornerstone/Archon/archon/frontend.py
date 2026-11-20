@@ -253,6 +253,8 @@ class _Parser:
             "type": self._type,
             "register_file": self._register_file,
             "register_class": self._register_class,
+            "abi_facts": self._abi_facts,
+            "abi_facts_v2": self._abi_facts,
             "state": self._state,
             "stack": self._stack,
             "memory": self._memory,
@@ -451,14 +453,74 @@ class _Parser:
         self._expect("=")
         file = self._identifier().text
         self._expect(".")
-        self._expect("*")
+        bounds = {}
+        if not self._accept("*"):
+            self._expect("[")
+            first = self._integer()
+            self._expect("..")
+            last = self._integer()
+            self._expect("]")
+            bounds["register_range"] = [first, last]
         self._expect(";")
         if self.current.text == "members":
             raise self._error("duplicate register_class member 'members'")
         if self.current.kind != "eof" and self.current.text != "}":
             raise self._error(f"unsupported register_class member {self.current.text!r}")
         self._expect("}")
-        return {"file": file}
+        return {"file": file, **bounds}
+
+    def _abi_facts(self, keyword: _Token) -> dict:
+        """Parse the fixed-shape scalar calling-convention facts declaration."""
+        context = keyword.text
+        numbers = {"schema_version", "stack_align", "stack_slot_bytes", "stack_arg_offset"}
+        names = {"register_file", "result", "stack_growth"}
+        lists = {"args", "caller_saved", "callee_saved", "unallocatable"}
+        locations = {"stack_pointer", "return_address"}
+        if context == "abi_facts":
+            names |= locations
+            locations = set()
+        else:
+            numbers.add("stack_entry_remainder")
+        allowed = numbers | names | lists | locations
+        self._expect("{")
+        members = {}
+        while not self._accept("}"):
+            member = self._member(allowed, context)
+            self._unique(members, member, f"{context} member")
+            self._expect("=")
+            if member.text in numbers:
+                value = self._integer()
+            elif member.text in names:
+                value = self._identifier().text
+            elif member.text in locations:
+                value = self._abi_location(member.text)
+            else:
+                value = []
+                self._expect("[")
+                if not self._accept("]"):
+                    value.append(self._identifier().text)
+                    while self._accept(","):
+                        value.append(self._identifier().text)
+                    self._expect("]")
+            self._expect(";")
+            members[member.text] = value
+        missing = allowed - members.keys()
+        if missing:
+            raise self._error(f"{context} requires {', '.join(sorted(missing))}", keyword)
+        return {"members": members}
+
+    def _abi_location(self, member: str) -> dict:
+        kinds = {"register", "state"} if member == "stack_pointer" else {"register", "stack_slot"}
+        kind = self._member(kinds, f"abi_facts_v2.{member} location kind").text
+        self._expect("(")
+        if kind == "stack_slot":
+            offset = self._integer()
+            self._expect(",")
+            location = {"offset": offset, "size_bytes": self._integer()}
+        else:
+            location = {"name": self._identifier().text}
+        self._expect(")")
+        return {"kind": kind, **location}
 
     def _format(self, keyword: _Token) -> dict:
         self._expect(":")

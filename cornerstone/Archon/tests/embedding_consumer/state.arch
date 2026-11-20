@@ -1,0 +1,21 @@
+architecture SDKState {
+    endian = little;
+    address_width = 8;
+    state PC: uint<8>;
+    stack Data: uint<8> { capacity = 2; }
+    memory RAM { size = 4; }
+    format I: bits<16> {
+        field opcode: bits<8> @ [15:8];
+        field value: uint<8> @ [7:0];
+    }
+    instruction PUSH {
+        operands { in value: imm<uint<8>>; }
+        encoding I { opcode = 1; value = value; }
+        assembly "push {value}";
+        semantics {
+            push(Data, value);
+            PC := value;
+            store<uint<8>>(RAM, 1, value);
+        }
+    }
+}

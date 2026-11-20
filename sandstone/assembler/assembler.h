@@ -111,11 +111,23 @@ int sandstone_asm_write(const sandstone_asm_t *ctx, const char *path,
 /* Last error for this context (never NULL). */
 const char *sandstone_asm_error(const sandstone_asm_t *ctx);
 
-/* Optional Lua hook (lua.c): run `source` through a user preprocessing
+/* Optional Lua preprocessing hook: run `source` through a user preprocessing
  * script. Without a script this is the identity function. Returns a
  * malloc'd string the caller owns, or NULL on error (see error()). */
 char *sandstone_asm_preprocess(sandstone_asm_t *ctx, const char *source);
 int sandstone_asm_load_hook(sandstone_asm_t *ctx, const char *lua_path);
+
+/* Optional post-expansion Lua hook. Set/load copy a nonempty Lua text chunk
+ * (max 16 MiB) and check its syntax without executing it. They return 0 on
+ * success, or -1 on failure, leaving the old hook in place. Each assembly
+ * runs the chunk in a fresh state, calls its global asm_optimize(source, name)
+ * once, and parses the complete string it returns without re-expansion. The
+ * result may not contain NUL bytes or exceed 16 MiB. This does not affect
+ * sandstone_asm_preprocess(). Clear disables the hook. */
+int sandstone_asm_set_asm_opt_hook(sandstone_asm_t *ctx, const char *lua_source,
+                                    size_t lua_size);
+int sandstone_asm_load_asm_opt_hook(sandstone_asm_t *ctx, const char *lua_path);
+void sandstone_asm_clear_asm_opt_hook(sandstone_asm_t *ctx);
 
 #ifdef __cplusplus
 }

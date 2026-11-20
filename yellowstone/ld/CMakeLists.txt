@@ -29,6 +29,8 @@ add_library(qld STATIC
   ElfBackend.cpp
   Backend.cpp
   BackendManifest.cpp
+  LtoScript.cpp
+  SectionGC.cpp
   PeBackend.cpp
   MachOBackend.cpp
   NativeOptions.cpp
@@ -157,6 +159,11 @@ if(YELLOWSTONE_BUILD_TESTS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME qld-script-executable COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")
+    add_test(NAME qld-lto-script COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/lto_script.py" "$<TARGET_FILE:qobjld>"
+      "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
+    set_tests_properties(qld-lto-script PROPERTIES TIMEOUT 45
+      ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
     if(YELLOWSTONE_ENABLE_ELF_BACKEND)
       add_test(NAME qld-backend-hardening COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/backend_hardening.py" "$<TARGET_FILE:qobjld>" "${CMAKE_C_COMPILER}")

@@ -115,6 +115,7 @@ struct sandstone_asm {
     sandstone_sym_t *pub_syms;
 
     char *hook_path; /* optional Lua preprocess script */
+    struct sand_asm_opt_hook *asm_opt_hook; /* owned post-expansion Lua script */
     void *lua_state; /* persistent state shared by Lua blocks in one source */
     void *extensions; /* SDK registrations and optional ArchML profile */
     char error[2048];
@@ -160,10 +161,14 @@ int sand_directive_symbol(sandstone_asm_t *ctx, const sand_line_t *line,
 
 /* binarizer.c */
 int sand_assemble_lines(sandstone_asm_t *ctx);
+int sand_encode_literal(const sandstone_asm_t *ctx, const char *source,
+                        uint8_t *out, size_t size);
 
-/* lua.c */
+/* lua.cpp / asm_opt.cpp */
 char *sand_run_hook(sandstone_asm_t *ctx, const char *source,
                     const char *src_name);
+char *sand_run_asm_opt_hook(sandstone_asm_t *ctx, const char *source,
+                            const char *src_name);
 
 /* shared small utilities (assembler.c) */
 char *sand_strdup(const char *s);

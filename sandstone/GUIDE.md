@@ -57,6 +57,11 @@ sandstone-as --bank x86.symas --list-syntaxes
 sandstone-as --bank x86.symas -F avx -F -sse2 -o out.bin prog.s
 ```
 
+To run a Lua assembly optimizer explicitly, add `--asm-opt optimizer.lua`.
+It rewrites the complete expanded assembly before layout, unlike `--lua`,
+which runs before source expansion. See the
+[hook contract](docs/assembler.md#optional-post-expansion-lua-hook).
+
 Flat (`bin`) output requires every symbol to resolve locally; external
 references need `obj` output, which records sections, symbols, and
 relocations as JSON (see `docs/object.md`). Yellowstone currently requires ELF

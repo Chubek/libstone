@@ -7,6 +7,9 @@ from .diagnostics import ArchonError
 
 _BINARY_OPERATORS = {"+%": "+", "-%": "-", "*%": "*", "&": "&", "|": "|", "^": "^"}
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Fixed upper bound on generated parallel-memory automatic storage. Larger
+# blocks share a heap workspace within the instruction.
+_LOCAL_MEMORY_SLOTS = 32
 
 
 def _uint(value: int) -> str:
@@ -43,27 +46,57 @@ def lower_instruction(
     if endian not in {"little", "big"}:
         raise ArchonError(f"C99 emulator cannot lower {inst['name']!r}: invalid endianness")
     stateful_signature = state is not None
-    lowerer = _Lowerer(inst, prefix, zero, state or _empty_state(), endian)
+    name = f"{prefix}_emu_sem_{index}"
+    lowerer = _Lowerer(inst, prefix, zero, state or _empty_state(), endian, name)
+    statements = inst["semantics"]["statements"]
+    memory_slots = lowerer.parallel_memory_slots(statements)
     parameters = "const uint64_t *operands, uint64_t *regs"
     if stateful_signature:
         parameters += f", struct {prefix}_emu_state *state"
-    lowerer.lines.append(
-        f"static enum {prefix}_emu_status {prefix}_emu_sem_{index}({parameters}) {{"
-    )
+    if memory_slots:
+        lowerer.lines.append(_PARALLEL_MEMORY.replace("@NAME@", name))
+    heap_stage = memory_slots > _LOCAL_MEMORY_SLOTS
+    signature = f"static enum {prefix}_emu_status {name}"
+    if heap_stage:
+        lowerer.lines.append(
+            f"{signature}_body({parameters}, struct {name}_byte *pending_memory) {{"
+        )
+    else:
+        lowerer.lines.append(f"{signature}({parameters}) {{")
+        if memory_slots:
+            lowerer.emit(f"struct {name}_byte pending_memory[{memory_slots}];")
     # Empty programs and immediate-only lets need not use every parameter.
     lowerer.emit("(void)operands;")
     lowerer.emit("(void)regs;")
     if stateful_signature:
         lowerer.emit("(void)state;")
-    lowerer.block(inst["semantics"]["statements"])
+    lowerer.block(statements)
     lowerer.emit(f"return {lowerer.status}_OK;")
     lowerer.lines.append("}")
+    if heap_stage:
+        args = "operands, regs, state" if stateful_signature else "operands, regs"
+        lowerer.lines.append(f"""
+typedef char {name}_size_check[
+    SIZE_MAX / sizeof(struct {name}_byte) >= UINTMAX_C({memory_slots}) &&
+    SIZE_MAX / 2u >= UINTMAX_C({memory_slots}) ? 1 : -1];
+
+{signature}({parameters}) {{
+    enum {prefix}_emu_status status;
+    struct {name}_byte *pending_memory = malloc({memory_slots}u * sizeof *pending_memory);
+    if (!pending_memory)
+        return {lowerer.status}_ALLOCATION_FAILURE;
+    status = {name}_body({args}, pending_memory);
+    free(pending_memory);
+    return status;
+}}""")
     return "\n".join(lowerer.lines) + "\n"
 
 
 class _Lowerer:
-    def __init__(self, inst: dict, prefix: str, zero: int | None, state: dict, endian: str):
+    def __init__(self, inst: dict, prefix: str, zero: int | None, state: dict,
+                 endian: str, function: str):
         self.name = inst["name"]
+        self.function = function
         self.status = f"{prefix.upper()}_EMU"
         self.zero = zero
         self.endian = endian
@@ -71,6 +104,13 @@ class _Lowerer:
         self.scalars = self._resources(state, "scalars")
         self.stacks = self._resources(state, "stacks")
         self.memories = self._resources(state, "memories")
+        self.memory_bases = {}
+        offset = 0
+        for name, (_, row) in self.memories.items():
+            self.memory_bases[name] = offset
+            offset += row["size"]
+        if offset > 1 << 64:
+            raise ArchonError("C99 emulator cannot stage more than 2^64 bytes of memory")
         self.locals: dict[str, str] = {}
         self.lines: list[str] = []
         self.indent = 1
@@ -105,6 +145,28 @@ class _Lowerer:
             raise ArchonError(
                 f"C99 emulator cannot lower {self.name!r}: unknown {kind} {name!r}"
             ) from None
+
+    def block_memory_slots(self, statements):
+        slots = 0
+        for stmt in statements:
+            if stmt["op"] == "store":
+                _, row = self.resource(self.memories, stmt["name"], "memory")
+                byte_count = stmt["value"]["type"]["width"] // 8
+                # An access wider than the entire memory never stages a byte.
+                if byte_count <= row["size"]:
+                    slots += byte_count
+        return slots
+
+    def parallel_memory_slots(self, statements):
+        blocks = list(statements)
+        maximum = 0
+        while blocks:
+            stmt = blocks.pop()
+            if stmt["op"] == "sequence":
+                blocks.extend(stmt["statements"])
+            elif stmt["op"] == "parallel":
+                maximum = max(maximum, self.block_memory_slots(stmt["statements"]))
+        return maximum
 
     def fresh(self, stem: str) -> str:
         name = f"{stem}{self.next_temp}"
@@ -163,17 +225,13 @@ class _Lowerer:
             capacity = row["capacity"]
             if op == "peek":
                 depth = expr["depth"]
-                if type(depth) is not int or depth < 0:
+                if type(depth) is not int or not 0 <= depth < capacity:
                     raise ArchonError(
                         f"C99 emulator cannot lower {self.name!r}: invalid stack depth"
                     )
-                if depth >= capacity:
-                    self.emit(f"return {self.status}_STACK_UNDERFLOW;")
-                    value = "UINTMAX_C(0)"
-                else:
-                    self.emit(f"if ({stack}.size <= {depth}u)")
-                    self.emit(f"    return {self.status}_STACK_UNDERFLOW;")
-                    value = f"{stack}.values[{stack}.size - {depth + 1}u]"
+                self.emit(f"if ({stack}.size <= {depth}u)")
+                self.emit(f"    return {self.status}_STACK_UNDERFLOW;")
+                value = f"{stack}.values[{stack}.size - {depth + 1}u]"
             else:
                 self.emit(f"if ({stack}.size == 0)")
                 self.emit(f"    return {self.status}_STACK_UNDERFLOW;")
@@ -189,6 +247,7 @@ class _Lowerer:
                     f"{width} is not byte-aligned"
                 )
             if byte_count > row["size"]:
+                self.emit(f"(void){address};")
                 self.emit(f"return {self.status}_MEMORY_OUT_OF_BOUNDS;")
                 value = "UINTMAX_C(0)"
             else:
@@ -299,7 +358,7 @@ class _Lowerer:
 
     def store(self, statement: dict, *, parallel: bool) -> None:
         name = statement["name"]
-        memory_index, row = self.resource(self.memories, name, "memory")
+        _, row = self.resource(self.memories, name, "memory")
         address = self.expression(statement["address"])
         value = self.expression(statement["value"])
         width = statement["value"]["type"]["width"]
@@ -310,6 +369,10 @@ class _Lowerer:
                 f"{width} is not byte-aligned"
             )
         if byte_count > row["size"]:
+            # The address and value are still evaluated in order. In a
+            # sequence either expression may pop and fail before this access.
+            self.emit(f"(void){address};")
+            self.emit(f"(void){value};")
             self.emit(f"return {self.status}_MEMORY_OUT_OF_BOUNDS;")
             return
         self.emit(f"if ((uintmax_t){address} > UINTMAX_C({row['size'] - byte_count}))")
@@ -324,27 +387,13 @@ class _Lowerer:
         octet = f"(uint8_t)((uintmax_t){value} >> ({shift}))"
         location = f"(size_t){address} + {byte}"
         if parallel:
-            slot = self.fresh("store_slot")
-            self.emit(f"size_t {slot};")
-            self.open(f"for ({slot} = 0; {slot} < pending_memory_used; ++{slot})")
+            base = _uint(self.memory_bases[name])
             self.emit(
-                f"if (pending_memory[{slot}].resource == {memory_index}u && "
-                f"pending_memory[{slot}].address == {location})"
+                f"if (!{self.function}_stage_byte(pending_memory, &pending_memory_root, "
+                f"&pending_memory_used, {base} + ({location}), "
+                f"&{self.memory_member(name)}[{location}], {octet}))"
             )
-            self.emit("    break;")
-            self.close()
-            self.open(f"if ({slot} == pending_memory_used)")
-            self.emit(f"pending_memory[{slot}].resource = {memory_index}u;")
-            self.emit(f"pending_memory[{slot}].address = {location};")
-            self.emit(f"pending_memory[{slot}].value = {octet};")
-            self.emit(
-                f"pending_memory[{slot}].memory = {self.memory_member(name)};"
-            )
-            self.emit("++pending_memory_used;")
-            self.close()
-            self.open(f"else if (pending_memory[{slot}].value != {octet})")
-            self.emit(f"return {self.status}_CONFLICTING_WRITES;")
-            self.close()
+            self.emit(f"    return {self.status}_CONFLICTING_WRITES;")
         else:
             self.emit(f"{self.memory_member(name)}[{location}] = {octet};")
         self.close()
@@ -365,11 +414,7 @@ class _Lowerer:
             )
             register_slots = {name: index for index, name in enumerate(register_names)}
             state_slots = {name: index for index, name in enumerate(state_names)}
-            memory_capacity = sum(
-                stmt["value"]["type"]["width"] // 8
-                for stmt in statements
-                if stmt["op"] == "store"
-            )
+            memory_capacity = self.block_memory_slots(statements)
         if register_slots:
             self.emit(f"enum {{ pending_register_count = {len(register_slots)} }};")
             self.emit(
@@ -383,12 +428,7 @@ class _Lowerer:
                 "pending_state[pending_state_count] = {{0, 0}};"
             )
         if memory_capacity:
-            self.emit(f"enum {{ pending_memory_capacity = {memory_capacity} }};")
-            self.emit(
-                "struct { uint8_t *memory, value; size_t address; unsigned resource; } "
-                "pending_memory[pending_memory_capacity];"
-            )
-            self.emit("size_t pending_memory_used = 0;")
+            self.emit("size_t pending_memory_root = 0, pending_memory_used = 0;")
 
         bindings = []
         for stmt in statements:
@@ -435,8 +475,57 @@ class _Lowerer:
                 )
         if memory_capacity:
             self.open("for (size_t slot = 0; slot < pending_memory_used; ++slot)")
-            self.emit(
-                "pending_memory[slot].memory[pending_memory[slot].address] = "
-                "pending_memory[slot].value;"
-            )
+            self.emit("*pending_memory[slot].destination = pending_memory[slot].value;")
             self.close()
+
+
+# An online compressed binary radix tree over 64-bit byte keys. Each insert
+# creates at most one branch and one leaf, so both fit in one new array slot.
+# Leaf links are odd, branch links are even, and zero is the empty root.
+# Looking up aliases as each store executes preserves failure ordering while
+# bounding the work per byte by the key width, even for adversarial addresses.
+_PARALLEL_MEMORY = """struct @NAME@_byte {
+    uintmax_t key, split;
+    size_t children[2];
+    uint8_t *destination, value;
+};
+
+static int @NAME@_stage_byte(struct @NAME@_byte *slots, size_t *root, size_t *used,
+        uintmax_t key, uint8_t *destination, uint8_t value) {
+    size_t ref = *root;
+    const size_t slot = *used, new_leaf = slot * 2u + 1u;
+    if (ref) {
+        size_t *link = root;
+        uintmax_t split, bits;
+        while (!(ref & 1u)) {
+            const struct @NAME@_byte *branch = &slots[(ref - 2u) / 2u];
+            ref = branch->children[!!(key & branch->split)];
+        }
+        ref /= 2u;
+        bits = key ^ slots[ref].key;
+        if (!bits)
+            return value == slots[ref].value;
+        /* Isolate the most significant bit on which the keys differ. */
+        split = bits;
+        while ((bits >>= 1u) != 0)
+            split |= bits;
+        split ^= split >> 1u;
+        while (!(*link & 1u)) {
+            struct @NAME@_byte *branch = &slots[(*link - 2u) / 2u];
+            if (branch->split < split)
+                break;
+            link = &branch->children[!!(key & branch->split)];
+        }
+        slots[slot].split = split;
+        slots[slot].children[!!(key & split)] = new_leaf;
+        slots[slot].children[!(key & split)] = *link;
+        *link = new_leaf + 1u;
+    } else {
+        *root = new_leaf;
+    }
+    slots[slot].key = key;
+    slots[slot].destination = destination;
+    slots[slot].value = value;
+    ++*used;
+    return 1;
+}"""

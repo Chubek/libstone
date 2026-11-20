@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "standard_spec_abi_facts": {
+    "status": "METADATA_ONLY",
+    "archdb_version": 1,
+    "v1": ["RV32I ILP32", "RV64I LP64", "RV64IM LP64", "MIPS32 O32 non-PIC"],
+    "v2": ["AArch64 AAPCS64", "SysV AMD64 LP64", "PDP-11 Research Unix V7 C word scalars"],
+    "unmodeled": ["WebAssembly", "JVM", "CLR"],
+    "evidence": ["test_stdspec_abi_coverage", "test_abi_facts_v2", "test_register_class_ranges"]
+  },
+  "generated_emulator": {
+    "status": "PARTIAL",
+    "implementation": "Standalone C99 codec and transactional ArchSem execution for fixed-width instructions and modeled registers, scalars, stacks, and memory",
+    "evidence": ["test_c99_emulator", "test_c99_emulator_state", "test_c99_emulator_stdspec", "test_c99_emulator_differential"],
+    "unsupported": ["PC-driven fetch", "Operating-system emulation", "Instructions without executable SemIR"]
+  },
+  "embedding_api": {
+    "status": "EXECUTABLE",
+    "artifacts": ["archon.api", "archon.irgen.api", "Archon.hpp", "Archon-IRGen.hpp"],
+    "implementation": "Explicit Python APIs and a C++17 CPython embedding library; generated C runtimes remain independent of Python",
+    "evidence": ["test_embedding_api"],
+    "unsupported": ["C++ use without CPython", "CPython subinterpreters", "Free-threaded CPython"]
+  },
+  "generated_ir_tools": {
+    "assembly": {
+      "status": "PROVIDER_REQUIRED",
+      "artifacts": ["Assembler.sh", "AsmOPT.lua (Sandstone only)"],
+      "implementation": "GAS, NASM, FASM, LLVM MC and Sandstone wrappers; optional ArchDB-derived fixed-width flat assembler",
+      "evidence": ["test_irgen_assembler_script", "test_irgen_toolchain_integration"],
+      "unsupported": ["Implicit assembly dialect conversion", "General Sandstone-to-ELF conversion"]
+    },
+    "link": {
+      "status": "PROVIDER_REQUIRED",
+      "artifacts": ["Linker.sh", "LTO.lua (YLD LTO only)"],
+      "implementation": "GNU ld, Gold, Mold, LLVM LLD and Yellowstone wrappers; provider-specific LTO and layout scripts",
+      "evidence": ["test_irgen_linker_script", "test_irgen_toolchain_integration", "qld-lto-script"],
+      "unsupported": ["Native LLVM/GCC bitcode LTO in Yellowstone", "Reconstructing compiler IR from assembled objects"]
+    },
+    "proof": {
+      "status": "PARTIAL",
+      "artifacts": ["Proof.py", "Proofs.smt"],
+      "implementation": "Static rewrite and selection obligations in a bounded pure bit-vector fragment and a standalone Satie-derived solver",
+      "evidence": ["test_irgen_proof_engine", "test_irgen_proof_tool"],
+      "unsupported": ["Proofs of all applied pipeline transformations", "Complete SMT-LIB2 and whole-program equivalence"]
+    },
+    "pretty_printing": {
+      "status": "EXECUTABLE",
+      "artifacts": ["PrettyPrint.py"],
+      "implementation": "Literal LaTeX/troff listings of macro streams and user templates",
+      "evidence": ["test_irgen_prettyprint"]
+    },
+    "translation": {
+      "status": "PARTIAL",
+      "artifacts": ["Translate.py"],
+      "implementation": "Vendored Aurocks and ASDL validation and declaratively mapped typed scalar lowering to ANF",
+      "evidence": ["test_irgen_translate_tool"],
+      "unsupported": ["Inferring semantics from syntax", "Host-language grammar actions", "Other IR representations"]
+    },
+    "sandbox": {
+      "status": "PARTIAL",
+      "artifacts": ["RunSandbox.c"],
+      "implementation": "Linux x86-64 launcher for freestanding static ET_EXEC with a sealed image, Landlock, seccomp, and time/resource/output limits",
+      "evidence": ["test_irgen_sandbox", "test_irgen_toolchain_integration"],
+      "unsupported": ["Dynamic executables", "General Linux application syscalls", "Foreign-ISA execution", "Raw machine-code images", "Isolation from host kernel defects"]
+    }
+  },
+  "native_profile": {
+    "architecture": "RV64IM",
+    "abi": "LP64 integer and pointer scalars",
+    "target_selection": "validated ArchDB v1 and reviewed provider fingerprint",
+    "dependencies": {
+      "generated_core": "C99 standard library",
+      "generation": "Python and Archon",
+      "build": "CMake and a host C compiler",
+      "elf_artifacts": "Configured RV64 assembler and LLVM LLD",
+      "execution_tests": "RV64 Unicorn or QEMU"
+    },
+    "facilities": {
+      "backend_generation": {
+        "status": "EXECUTABLE",
+        "implementation": "IRGen native profile and generated C99 static library",
+        "evidence": ["test_native_target", "test_irgen_native"]
+      },
+      "runtime_ingestion": {
+        "status": "EXECUTABLE",
+        "phase": "generic SSA",
+        "implementation": "Borrowed in-memory SSA and bounded MachineIR text v1",
+        "evidence": ["test_native_ingestion", "test_native_text", "test_irgen_native"],
+        "partial": ["Gated SSA single-block scalar adapter", "Typed TAC multi-block scalar adapter", "Read-only physical record publication"],
+        "unsupported": ["Runtime adapters for the other six representations", "Editable selected or allocated MIR"]
+      },
+      "control_flow": {
+        "status": "EXECUTABLE",
+        "phase": "generic CFG to physical transfer",
+        "implementation": "Explicit branches, returns, traps, loops and edge-local block parameter copies",
+        "evidence": ["test_native_cfg", "test_irgen_native", "test_native_typed_tac_adapter"],
+        "unsupported": ["Switch", "Indirect branches", "Exception regions"]
+      },
+      "legalization": {
+        "status": "PARTIAL",
+        "phase": "generic SSA",
+        "implementation": "Typed i64 and pointer legality, narrow-width conversions in i64, signed checked add/subtract/multiply/divide",
+        "evidence": ["test_native_legalizer", "test_irgen_native"],
+        "unsupported": ["Other widths", "Floating point", "Vectors", "General rewrite rules", "Libcalls"]
+      },
+      "instruction_selection": {
+        "status": "PARTIAL",
+        "phase": "verified generic operations to selected physical instructions",
+        "implementation": "Explicit reviewed scalar RV64IM mappings and checked-arithmetic expansions",
+        "evidence": ["test_native_target", "test_irgen_native"],
+        "unsupported": ["Declarative multi-target patterns", "Native equality saturation", "Native superoptimization"]
+      },
+      "memory": {
+        "status": "PARTIAL",
+        "phase": "generic memory operations to physical operands",
+        "implementation": "Aligned eight-byte loads and stores, static locals, and global data",
+        "evidence": ["test_native_legalizer", "test_irgen_native"],
+        "unsupported": ["Atomics", "Explicit volatility", "Unaligned accesses", "Thread-local storage"]
+      },
+      "calling_convention": {
+        "status": "PARTIAL",
+        "phase": "physical ABI lowering",
+        "implementation": "Direct and indirect scalar and void calls with register or stack arguments",
+        "evidence": ["test_native_abi", "test_native_indirect", "test_irgen_native"],
+        "unsupported": ["Variadics", "Aggregates", "Tail calls", "Unwind"]
+      },
+      "allocation_and_frames": {
+        "status": "EXECUTABLE",
+        "phase": "value homes and physical frame operations",
+        "implementation": "Block-local linear scan with eviction, executable spill/reload, independently verified fixed frames and saved return addresses",
+        "evidence": ["test_native_regalloc", "test_native_frame_verify", "test_irgen_native"],
+        "unsupported": ["Global live range splitting", "Callee-saved allocation", "Dynamic stack allocations"]
+      },
+      "scheduling": {
+        "status": "PARTIAL",
+        "phase": "order shared by native allocation and selection",
+        "implementation": "Default input order or optional independently verified pure-region list scheduling",
+        "evidence": ["test_native_scheduler", "test_native_list_schedule"],
+        "unsupported": ["Native latency models", "Native solver integration"]
+      },
+      "assembly": {
+        "status": "EXECUTABLE",
+        "phase": "physical emission",
+        "implementation": "Validated static GAS assembly with function and data symbols",
+        "evidence": ["test_irgen_native", "test_native_text"]
+      },
+      "instruction_encoding": {
+        "status": "PARTIAL",
+        "phase": "physical operands to raw bytes",
+        "implementation": "Table-derived little-endian RV64IM encoding and checked local fixups for a single function",
+        "evidence": ["test_native_machine_code"],
+        "unsupported": ["Multi-function raw modules", "External relocations", "Object containers", "Executable memory"]
+      },
+      "object_and_linker": {
+        "status": "PROVIDER_REQUIRED",
+        "phase": "artifact production",
+        "implementation": "Explicit assembler and LLVM LLD bridges with bounded, validated link inputs and atomic publication",
+        "evidence": ["test_native_text", "test_native_link", "test_irgen_native"],
+        "unsupported": ["Dependency-free ELF writer", "Dynamic linking", "COFF", "Mach-O"]
+      },
+      "verification": {
+        "status": "PARTIAL",
+        "phase": "generic SSA, allocated homes and physical emission",
+        "implementation": "Verified SSA, legality, symbol signatures, allocation contents, physical operands and bounded local fixups",
+        "evidence": ["test_native_verify", "test_native_regalloc", "test_native_text"],
+        "unsupported": ["Universal translation proofs", "Native Oracle admission"]
+      },
+      "jit": {
+        "status": "UNSUPPORTED"
+      }
+    }
+  }
+}

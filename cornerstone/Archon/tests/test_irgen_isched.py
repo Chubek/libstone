@@ -11,7 +11,7 @@ import unittest
 
 from archon.compiler import compile_file
 from archon.diagnostics import ArchonError
-from archon.irgen import isched, oracle, typed_tac
+from archon.irgen import generate_ir, isched, oracle, typed_tac
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,6 +308,15 @@ ARCHON_ORACLE_END()
             self.assertFalse((root / "Scheduled.i").exists())
             self.assertFalse((root / "RegMap.i").exists())
 
+            (root / "InstrMap.i").unlink()
+            result = subprocess.run(
+                [str(root / "isched")], cwd=root, capture_output=True, text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertFalse((root / "Scheduled.i").exists())
+            self.assertFalse((root / "RegMap.i").exists())
+
     def test_oracle_stream_failure_diagnoses_and_removes_outputs(self):
         if os.name != "posix" or not Path("/dev/shm").is_dir():
             self.skipTest("Oracle runtime checks require POSIX shared memory")
@@ -502,6 +511,110 @@ ARCHON_ORACLE_END()
                     else:
                         self.assertEqual(outputs, standalone_baseline)
 
+    def test_streams_keep_inconclusive_search_distinct_from_unsat(self):
+        compilers = _compilers()
+        if not compilers:
+            self.skipTest("GCC/Clang-compatible C99 compiler unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write(root, isched.emit({"options": {"oracle": False}}))
+            _write(root, {
+                "test.c": _ISCHED_STREAM_BOUNDS_DRIVER,
+                "InstrMap.i": """\
+ISCHED_RESOURCE(0, "alu", 2, 0)
+ISCHED_INSTRUCTION("A", 0, 1, 1, 1, 0)
+ISCHED_INSTRUCTION("B", 0, 1, 1, 1, 0)
+""",
+                "MIR.i": """\
+ISCHED_MIR_OP(0, "A", 1, 0, 0)
+ISCHED_MIR_OP(1, "B", -1, 0, 10)
+ISCHED_MIR_DEP(0, 1, 0, 0)
+ISCHED_MIR_DEP(1, 0, 0, 0)
+""",
+            })
+            for index, compiler in enumerate(compilers):
+                with self.subTest(compiler=compiler[0]):
+                    executable = f"isched-stream-bounds-{index}"
+                    subprocess.run(
+                        [
+                            *compiler, "-std=c99", "-Wall", "-Wextra",
+                            "-Werror", "-pedantic", "ISched.c", "test.c",
+                            "-o", executable,
+                        ],
+                        cwd=root,
+                        check=True,
+                    )
+                    subprocess.run(
+                        [str(root / executable)], cwd=root, check=True,
+                        timeout=10,
+                    )
+                    self.assertFalse((root / "UnknownScheduled.i").exists())
+                    self.assertFalse((root / "UnknownRegMap.i").exists())
+                    scheduled = (root / "SatScheduled.i").read_text(
+                        encoding="ascii"
+                    )
+                    self.assertIn("ISCHED_SCHEDULE_BEGIN(1, 2, 0, 1)",
+                                  scheduled)
+                    self.assertLess(
+                        scheduled.index('ISCHED_SCHEDULE_OP(0, 0, 0, 0, "A")'),
+                        scheduled.index('ISCHED_SCHEDULE_OP(1, 0, 0, 0, "B")'),
+                    )
+
+    def test_linked_pipeline_rejects_an_invalid_schedule_before_publication(self):
+        compilers = _compilers()
+        if not compilers:
+            self.skipTest("GCC/Clang-compatible C99 compiler unavailable")
+        generated = generate_ir("anf", [self.rv32], options={"oracle": False})
+        # Inject a corrupt witness inside the generated scheduler, before the
+        # public scheduling API can return it to the unmodified linked pipeline.
+        anchor = "    isched_make_order(problem, cycle, result->order);"
+        self.assertEqual(generated["ISched.c"].count(anchor), 1)
+        generated["ISched.c"] = generated["ISched.c"].replace(
+            anchor, anchor + "\n    if (result->operation_count) ++result->stage[0];"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write(root, generated)
+            _write(root, {"Program.i": _PIPELINE_PROGRAM})
+            subprocess.run(
+                [
+                    *compilers[0], "-std=c99", "-Wall", "-Wextra", "-Werror",
+                    "-pedantic", '-DARCHON_IR_PROGRAM_FILE="Program.i"',
+                    "-DARCHON_ISEL_NO_MAIN", "-DARCHON_REGALLOC_NO_MAIN",
+                    "IR.c", "Graphs.c", "Rewrite.c", "ISel.c", "Pipeline.c",
+                    "ISched.c", "Regalloc.c", "Emitter.c", "Driver.c", "-o",
+                    "driver",
+                ],
+                cwd=root,
+                check=True,
+            )
+            result = subprocess.run(
+                [str(root / "driver"), "--stop-after", "isched",
+                 "--keep-artifacts"],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("isched stage: instruction scheduler failed",
+                          result.stderr)
+            self.assertTrue((root / "InstrMap.i").exists())
+            self.assertFalse((root / "Scheduled.i").exists())
+            self.assertFalse((root / "RegMap.i").exists())
+
+
+_PIPELINE_PROGRAM = """\
+IR_PROGRAM_BEGIN("pipeline-schedule-test");
+IR_FUNCTION_BEGIN(main, "main", IR_TYPE_I32);
+IR_PARAM(left, "left", IR_TYPE_I32);
+IR_BLOCK_BEGIN(entry, "entry");
+IR_LET_BEGIN(sum, IR_TYPE_I32, IR_PRIM_ADD, IR_EFFECT_NONE);
+IR_ARG_VALUE(left);
+IR_ARG_INT(IR_TYPE_I32, 5);
+IR_LET_END();
+IR_RETURN(sum);
+IR_BLOCK_END();
+IR_FUNCTION_END();
+IR_PROGRAM_END();
+"""
 
 _TYPED_PRODUCER = r"""#include "IR.h"
 #include <assert.h>
@@ -1021,6 +1134,101 @@ static void unknown_fallback(void) {
     assert(result.cycle[1] < result.cycle[0]);
     assert(isched_verify(&problem, &result));
     isched_result_destroy(&result);
+
+    resources[0].capacity = 2;
+    config.max_ii = 1;
+    assert(isched_schedule(&problem, &config, &result) ==
+           ISCHED_STATUS_UNKNOWN);  /* Serializing would exceed the II cap. */
+    assert(result.last_solver_status == ISCHED_SOLVER_UNKNOWN);
+    assert(!result.cycle && !result.order);
+    isched_result_destroy(&result);
+
+    config.search_limit = 1;
+    assert(isched_schedule(&problem, &config, &result) == ISCHED_STATUS_UNKNOWN);
+    assert(result.last_solver_status == ISCHED_SOLVER_UNKNOWN);
+    assert(result.explored == 1);
+    isched_result_destroy(&result);
+
+    config.search_limit = 2000000;
+    assert(isched_schedule(&problem, &config, &result) == ISCHED_STATUS_SAT);
+    assert(result.ii == 1);
+    isched_result_destroy(&result);
+
+    operations[0].units = 3;
+    config.max_ii = 32;
+    assert(isched_schedule(&problem, &config, &result) == ISCHED_STATUS_UNSAT);
+    assert(result.last_solver_status == ISCHED_SOLVER_UNSAT);
+    assert(!result.cycle && !result.order);
+    isched_result_destroy(&result);
+}
+
+static void formula_limit_fallback(void) {
+    ISched_Resource resources[] = {{"alu", 18, 0}};
+    ISched_Operation operations[18];
+    ISched_Problem problem = {
+        operations, 18, NULL, 0, resources, 1
+    };
+    ISched_Result result;
+    ISched_Options config = options();
+    unsigned i;
+    for (i = 0; i < 18; ++i) {
+        ISched_Operation row = {i, "a", 0, 1, 1, 1, 0, 0};
+        operations[i] = row;
+    }
+    assert(isched_schedule(&problem, &config, &result) ==
+           ISCHED_STATUS_FALLBACK);
+    assert(result.last_solver_status == ISCHED_SOLVER_UNKNOWN);
+    assert(result.first_ii == 1 && result.ii == 18);
+    assert(result.attempts == 1 && result.explored == 0);
+    assert(isched_verify(&problem, &result));
+    isched_result_destroy(&result);
+}
+
+static void verify_witness(void) {
+    ISched_Resource resources[] = {{"alu", 1, 0}};
+    ISched_Operation operations[] = {
+        {0, "a", 0, 1, 3, 1, 0, 0},
+        {1, "b", 0, 1, 3, 1, 0, 0}
+    };
+    ISched_Dependency dependency = {0, 1, 2, 0, ISCHED_DEP_ORDER, 0, 0};
+    ISched_Problem problem = {
+        operations, 2, &dependency, 1, resources, 1
+    };
+    ISched_Result result;
+    ISched_Options config = options();
+    FILE *scheduled = tmpfile(), *regmap = tmpfile();
+    unsigned original;
+    assert(scheduled && regmap);
+    assert(isched_schedule(&problem, &config, &result) == ISCHED_STATUS_SAT);
+    assert(isched_verify(&problem, &result));
+    result.last_solver_status = ISCHED_SOLVER_UNKNOWN;
+    assert(!isched_verify(&problem, &result));
+    assert(isched_write_streams(scheduled, regmap, &problem, &result) ==
+           ISCHED_STATUS_INVALID);
+    assert(ftell(scheduled) == 0 && ftell(regmap) == 0);
+    result.last_solver_status = ISCHED_SOLVER_SAT;
+
+    original = result.order[1];
+    result.order[1] = result.order[0];
+    assert(!isched_verify(&problem, &result));
+    result.order[1] = original;
+    ++result.stage[0];
+    assert(!isched_verify(&problem, &result));
+    --result.stage[0];
+
+    /* A too-late dependency and a wrapping occupancy conflict each fail. */
+    dependency.latency = 100;
+    assert(!isched_verify(&problem, &result));
+    dependency.latency = 2;
+    operations[1].occupancy = 4;
+    assert(!isched_verify(&problem, &result));
+    operations[1].occupancy = 3;
+    assert(isched_verify(&problem, &result));
+
+    ++result.pressure_area;
+    assert(!isched_verify(&problem, &result));
+    isched_result_destroy(&result);
+    assert(fclose(scheduled) == 0 && fclose(regmap) == 0);
 }
 
 static void pressure_objective(void) {
@@ -1053,10 +1261,35 @@ int main(void) {
     unsat_then_next_ii();
     recurrence_graph();
     unknown_fallback();
+    formula_limit_fallback();
+    verify_witness();
     pressure_objective();
     assert(isched_schedule_streams(
         "MIR.i", "InstrMap.i", "StreamScheduled.i", "StreamRegMap.i",
         NULL) == ISCHED_STATUS_SAT);
+    return 0;
+}
+"""
+
+
+_ISCHED_STREAM_BOUNDS_DRIVER = r"""#include "ISched.h"
+#include <assert.h>
+#include <string.h>
+
+int main(void) {
+    ISched_Options config = isched_default_options();
+    char message[128];
+    config.max_ii = 1;
+    config.max_stage = 1;
+    config.search_limit = 0;
+    assert(isched_schedule_streams_with_diagnostic(
+               "MIR.i", "InstrMap.i", "UnknownScheduled.i", "UnknownRegMap.i",
+               &config, message, sizeof message) == ISCHED_STATUS_UNKNOWN);
+    assert(strstr(message, "search inconclusive") != NULL);
+    config.search_limit = 100;
+    assert(isched_schedule_streams(
+               "MIR.i", "InstrMap.i", "SatScheduled.i", "SatRegMap.i",
+               &config) == ISCHED_STATUS_SAT);
     return 0;
 }
 """

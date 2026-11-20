@@ -5,4 +5,21 @@ architecture AMD64 {
     address_width = XLEN;
     feature Base = enabled;
     import integer;
+
+    abi_facts_v2 SysVAMD64 {
+        schema_version = 2;
+        register_file = IntegerRegisters;
+        args = [rdi, rsi, rdx, rcx, r8, r9];
+        result = rax;
+        stack_pointer = register(rsp);
+        return_address = stack_slot(0, 8);
+        stack_align = 16;
+        stack_entry_remainder = 8; // Near CALL pushed an eight-byte return PC.
+        stack_slot_bytes = 8;
+        stack_arg_offset = 8;
+        stack_growth = downward;
+        caller_saved = [rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11];
+        callee_saved = [rbx, rsp, rbp, r12, r13, r14, r15];
+        unallocatable = [rsp];
+    }
 }

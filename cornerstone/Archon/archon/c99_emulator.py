@@ -12,6 +12,8 @@ _EXTENDED_EFFECTS = (
     "state_reads", "state_writes", "stack_reads", "stack_writes",
     "memory_reads", "memory_writes",
 )
+_UNARY_EXPRESSIONS = {"zext", "sext", "trunc", "~", "extract"}
+_BINARY_EXPRESSIONS = {"+%", "-%", "*%", "&", "|", "^", "concat", "<<", ">>"}
 
 
 def _state(db):
@@ -46,18 +48,23 @@ def _validated_codec(db, prefix):
             )
 
     for inst in db["instructions"]:
-        if inst["semantics"] is None:
+        semantics = inst["semantics"]
+        if semantics is None:
             continue
-        statements = list(inst["semantics"]["statements"])
+        if semantics["word_width"] > 64:
+            raise ArchonError(
+                f"the C99 emulator requires semantic widths of up to 64 bits "
+                f"in {inst['name']!r}"
+            )
+        statements = list(semantics["statements"])
         while statements:
             stmt = statements.pop()
             if stmt["op"] in ("sequence", "parallel"):
                 statements.extend(stmt["statements"])
                 continue
-            expressions = [
-                value for key in ("value", "address")
-                if isinstance(value := stmt.get(key), dict)
-            ]
+            expressions = [stmt["value"]]
+            if stmt["op"] == "store":
+                expressions.append(stmt["address"])
             while expressions:
                 expr = expressions.pop()
                 if expr["type"]["width"] > 64:
@@ -65,9 +72,13 @@ def _validated_codec(db, prefix):
                         f"the C99 emulator requires semantic widths of up to 64 bits "
                         f"in {inst['name']!r}"
                     )
-                for key in ("left", "right", "value", "address"):
-                    if isinstance(child := expr.get(key), dict):
-                        expressions.append(child)
+                op = expr["op"]
+                if op == "load":
+                    expressions.append(expr["address"])
+                elif op in _UNARY_EXPRESSIONS:
+                    expressions.append(expr["value"])
+                elif op in _BINARY_EXPRESSIONS:
+                    expressions.extend((expr["left"], expr["right"]))
     return generate_codec(db, prefix)
 
 
@@ -117,37 +128,56 @@ struct {prefix}_emu_state {{
 """
 
 
-def _transaction_fragments(db, prefix):
-    count, _, _ = _register_model(db)
+def _transaction_fragments(db, prefix, instructions):
+    count, _, zero = _register_model(db)
     state = _state(db)
-    fields = ["    int prepared;", "    uint64_t *registers;"]
-    release = ["    free(transaction->registers);"]
-    allocate = []
-    snapshot = [
-        "    transaction->scratch = *state;",
-        "    transaction->scratch.registers = transaction->registers;",
-    ]
-    commit = ["    (void)state;", "    (void)transaction;"]
-    allocations = 0
+    fields = []
+    release = ["    (void)transaction;"]
+    allocate = ["    (void)transaction;", "    (void)writes;"]
+    snapshot = ["    (void)state;", "    (void)writes;"]
+    commit = ["    (void)state;", "    (void)transaction;", "    (void)writes;"]
+    buffers = [("registers", "writes", None)]
+    bounds = []
+
+    def buffer(field, kind, capacity):
+        fields.append(f"    {kind} *{field};")
+        release.append(f"    free(transaction->{field});")
+        bounds.extend((
+            f"typedef char {prefix}_emu_{field}_size_check[",
+            f"    SIZE_MAX / sizeof({kind}) >= UINTMAX_C({capacity}) ? 1 : -1];",
+        ))
+        allocate.extend((
+            f"    if (writes->{field} && !transaction->{field}) {{",
+            f"        transaction->{field} = malloc({capacity}u * sizeof *transaction->{field});",
+            f"        if (!transaction->{field})",
+            f"            return {prefix.upper()}_EMU_ALLOCATION_FAILURE;",
+            "    }",
+        ))
+
+    def snapshot_buffer(field, member, size):
+        dst, src = f"transaction->scratch.{member}", f"state->{member}"
+        snapshot.extend((
+            f"    {dst} = {src};",
+            f"    if (writes->{field}) {{",
+            f"        {dst} = transaction->{field};",
+            f"        memcpy({dst}, {src}, {size});",
+            "    }",
+        ))
 
     if count:
-        allocations += 1
-        allocate.extend((
-            f"    transaction->registers = malloc({count}u * sizeof *transaction->registers);",
-            "    if (!transaction->registers)",
-            "        goto allocation_failure;",
+        buffer("registers", "uint64_t", count)
+        size = f"{count}u * sizeof *state->registers"
+        snapshot_buffer("registers", "registers", size)
+        commit.extend((
+            "    if (writes->registers)",
+            f"        memcpy(state->registers, transaction->scratch.registers, {size});",
         ))
-        snapshot.append(
-            f"    memcpy(transaction->registers, state->registers, "
-            f"{count}u * sizeof *transaction->registers);"
-        )
-        commit.append(
-            f"    memcpy(state->registers, transaction->scratch.registers, "
-            f"{count}u * sizeof *state->registers);"
-        )
+    else:
+        snapshot.append("    transaction->scratch.registers = NULL;")
 
     for row in state["scalars"]:
         name = row["name"]
+        snapshot.append(f"    transaction->scratch.scalar_{name} = state->scalar_{name};")
         commit.append(
             f"    state->scalar_{name} = transaction->scratch.scalar_{name};"
         )
@@ -155,59 +185,52 @@ def _transaction_fragments(db, prefix):
     for row in state["stacks"]:
         name, capacity = row["name"], row["capacity"]
         field = f"stack_{name}"
-        fields.append(f"    uint64_t *{field};")
-        release.append(f"    free(transaction->{field});")
-        allocations += 1
-        allocate.extend((
-            f"    transaction->{field} = malloc({capacity}u * sizeof *transaction->{field});",
-            f"    if (!transaction->{field})",
-            "        goto allocation_failure;",
-        ))
-        snapshot.extend((
-            f"    transaction->scratch.{field}.values = transaction->{field};",
-            f"    memcpy(transaction->{field}, state->{field}.values, "
-            f"{capacity}u * sizeof *transaction->{field});",
-        ))
+        buffers.append((field, "stack_writes", name))
+        buffer(field, "uint64_t", capacity)
+        snapshot.append(f"    transaction->scratch.{field}.size = state->{field}.size;")
+        snapshot_buffer(field, f"{field}.values",
+                        f"state->{field}.size * sizeof *state->{field}.values")
         commit.extend((
-            f"    memcpy(state->{field}.values, transaction->scratch.{field}.values, "
-            f"{capacity}u * sizeof *state->{field}.values);",
-            f"    state->{field}.size = transaction->scratch.{field}.size;",
+            f"    if (writes->{field}) {{",
+            f"        state->{field}.size = transaction->scratch.{field}.size;",
+            f"        memcpy(state->{field}.values, transaction->scratch.{field}.values, "
+            f"state->{field}.size * sizeof *state->{field}.values);",
+            "    }",
         ))
 
     for row in state["memories"]:
         name, size = row["name"], row["size"]
         field = f"memory_{name}"
-        fields.append(f"    uint8_t *{field};")
-        release.append(f"    free(transaction->{field});")
-        allocations += 1
-        allocate.extend((
-            f"    transaction->{field} = malloc({size}u);",
-            f"    if (!transaction->{field})",
-            "        goto allocation_failure;",
+        buffers.append((field, "memory_writes", name))
+        buffer(field, "uint8_t", size)
+        snapshot_buffer(field, field, f"{size}u")
+        commit.extend((
+            f"    if (writes->{field})",
+            f"        memcpy(state->{field}, transaction->scratch.{field}, {size}u);",
         ))
-        snapshot.extend((
-            f"    transaction->scratch.{field} = transaction->{field};",
-            f"    memcpy(transaction->{field}, state->{field}, {size}u);",
-        ))
-        commit.append(
-            f"    memcpy(state->{field}, transaction->scratch.{field}, {size}u);"
-        )
 
     fields.append(f"    struct {prefix}_emu_state scratch;")
-    failure = ""
-    if allocations:
-        failure = (
-            "allocation_failure:\n"
-            f"    {prefix}_emu_transaction_release(transaction);\n"
-            f"    return {prefix.upper()}_EMU_ALLOCATION_FAILURE;"
-        )
+    write_rows = []
+    for inst in instructions:
+        semantics = inst["semantics"]
+        effects = semantics["effects"] if semantics is not None else {}
+        writable = []
+        for field, effect, name in buffers:
+            if field == "registers":
+                if zero is not None or effects.get("writes"):
+                    writable.append(".registers = 1")
+            elif name in effects.get(effect, ()):
+                writable.append(f".{field} = 1")
+        write_rows.append("    {" + (", ".join(writable) if writable else "0") + "},")
     return {
         "TRANSACTIONFIELDS": "\n".join(fields),
         "TRANSACTIONRELEASE": "\n".join(release),
         "TRANSACTIONALLOCATE": "\n".join(allocate),
-        "TRANSACTIONFAILURE": failure,
         "TRANSACTIONSNAPSHOT": "\n".join(snapshot),
         "TRANSACTIONCOMMIT": "\n".join(commit),
+        "WRITEFIELDS": "\n".join(f"    unsigned char {field};" for field, _, _ in buffers),
+        "WRITEROWS": "\n".join(write_rows or ["    {0},"]),
+        "BUFFERBOUNDS": "\n".join(bounds),
     }
 
 
@@ -263,6 +286,7 @@ def generate_emulator(db: dict, prefix: str = "archon") -> str:
     codec = _validated_codec(db, prefix)
     count, width, zero = _register_model(db)
     state = _state(db)
+    has_extended_state = any(state[key] for key in ("scalars", "stacks", "memories"))
     instructions = sorted(db["instructions"], key=lambda inst: inst["name"])
     functions, rows, needs_state = [], [], []
     for index, inst in enumerate(instructions):
@@ -274,7 +298,7 @@ def generate_emulator(db: dict, prefix: str = "archon") -> str:
                 state=state, endian=db["endian"],
             ))
             rows.append(f"    {prefix}_emu_sem_{index},")
-        needs_state.append(f"    {int(_needs_extended_state(inst))},")
+        needs_state.append(f"    {int(has_extended_state and _needs_extended_state(inst))},")
 
     normalize = f"    (*scratch)[{zero}] = 0;\n" if zero is not None else ""
     state_normalize = (
@@ -293,7 +317,7 @@ def generate_emulator(db: dict, prefix: str = "archon") -> str:
         "STATENORMALIZE": state_normalize,
         "VALIDSTATE": _valid_state_body(db, prefix),
     }
-    replacements.update(_transaction_fragments(db, prefix))
+    replacements.update(_transaction_fragments(db, prefix, instructions))
     api = _state_types(db, prefix) + "\n" + _EMU_API
     return codec + _render(
         "\n#include <stdlib.h>\n\n" + api + "\n" + _EMU,
@@ -355,8 +379,9 @@ unsigned @PREFIX@_emu_register_width(void);
 
 /*
  * Legacy register-only API. Registers contain exactly the architectural
- * number of unsigned, word-width values. An instruction that accesses scalar,
- * stack, or memory state returns STATE_REQUIRED. An error changes no register.
+ * number of unsigned, word-width values (NULL is allowed for zero registers).
+ * An instruction that accesses scalar, stack, or memory state returns
+ * STATE_REQUIRED. A failed instruction changes no register.
  */
 enum @PREFIX@_emu_status @PREFIX@_emu_execute(const char *name, const uint64_t *operands,
         size_t operand_count, uint64_t *registers, size_t register_count);
@@ -367,13 +392,22 @@ enum @PREFIX@_emu_status @PREFIX@_emu_run(const uint8_t *data, size_t size,
 
 /*
  * Complete-state API. The state owns all pointed-to buffers. Every pointer
- * required by the generated struct must address the capacity/size declared by
- * the corresponding enum constant. A failed instruction changes no state.
+ * required by the generated struct must address writable storage of the
+ * capacity/size declared by the corresponding enum constant, even for an
+ * empty stack. Only its first size elements are live and need initialization;
+ * inactive elements are not architectural state. The registers pointer is
+ * ignored when the target has zero registers. The struct and its backing
+ * regions must be disjoint. A failed instruction changes no state.
  */
 enum @PREFIX@_emu_status @PREFIX@_emu_execute_state(const char *name,
         const uint64_t *operands, size_t operand_count, struct @PREFIX@_emu_state *state);
 enum @PREFIX@_emu_status @PREFIX@_emu_step_state(const uint8_t *data, size_t size,
         struct @PREFIX@_emu_state *state);
+/*
+ * Both run variants commit the successful prefix, report its byte count, and
+ * stop at the first failure. Instruction bytes and the count output must not
+ * overlap each other or mutable state. Data can be NULL when size is zero.
+ */
 enum @PREFIX@_emu_status @PREFIX@_emu_run_state(const uint8_t *data, size_t size,
         struct @PREFIX@_emu_state *state, size_t *bytes_executed);
 """
@@ -391,9 +425,15 @@ static const unsigned char @PREFIX@_emu_needs_state[] = {
 };
 static const size_t @PREFIX@_emu_instruction_bytes = @BYTES@;
 
-#if SIZE_MAX / 8 < @REGISTERS@
-#error "Archon emulator register vector is not representable in size_t"
-#endif
+@BUFFERBOUNDS@
+
+/* Staging is lazy and follows the validated SemIR write effects. */
+struct @PREFIX@_emu_writes {
+@WRITEFIELDS@
+};
+static const struct @PREFIX@_emu_writes @PREFIX@_emu_write_sets[] = {
+@WRITEROWS@
+};
 
 size_t @PREFIX@_emu_register_count(void) {
     return @REGISTERS@;
@@ -435,7 +475,7 @@ static enum @PREFIX@_emu_status @PREFIX@_emu_validate_operands(
     for (i = 0; i < operand_count; ++i) {
         const struct @PREFIX@_field *field = &@PREFIX@_fields[inst->first_field + i];
         uint64_t value = operands[i], low = value & @PREFIX@_low_mask(field->width);
-        if ((field->register_limit && value >= field->register_limit) ||
+        if (!@PREFIX@_register_allowed(field, value) ||
                 value != (field->is_signed ? @PREFIX@_sign_extend(low, field->width) : low))
             return @UPPER@_EMU_OPERAND_RANGE;
     }
@@ -452,6 +492,8 @@ static enum @PREFIX@_emu_status @PREFIX@_emu_apply(size_t index, const uint64_t 
         return @UPPER@_EMU_NO_SEMANTICS;
     if (@PREFIX@_emu_needs_state[index])
         return @UPPER@_EMU_STATE_REQUIRED;
+    if (!@PREFIX@_emu_write_sets[index].registers)
+        return semantics(operands, registers, NULL);
     if (bytes && !*scratch) {
         *scratch = malloc(bytes);
         if (!*scratch)
@@ -472,28 +514,26 @@ struct @PREFIX@_emu_transaction {
 static void @PREFIX@_emu_transaction_release(
         struct @PREFIX@_emu_transaction *transaction) {
 @TRANSACTIONRELEASE@
-    memset(transaction, 0, sizeof *transaction);
 }
 
 static enum @PREFIX@_emu_status @PREFIX@_emu_transaction_prepare(
-        struct @PREFIX@_emu_transaction *transaction) {
-    if (transaction->prepared)
-        return @UPPER@_EMU_OK;
+        struct @PREFIX@_emu_transaction *transaction,
+        const struct @PREFIX@_emu_writes *writes) {
 @TRANSACTIONALLOCATE@
-    transaction->prepared = 1;
     return @UPPER@_EMU_OK;
-@TRANSACTIONFAILURE@
 }
 
 static void @PREFIX@_emu_transaction_snapshot(
         struct @PREFIX@_emu_transaction *transaction,
-        const struct @PREFIX@_emu_state *state) {
+        const struct @PREFIX@_emu_state *state,
+        const struct @PREFIX@_emu_writes *writes) {
 @TRANSACTIONSNAPSHOT@
 }
 
 static void @PREFIX@_emu_transaction_commit(
         struct @PREFIX@_emu_state *state,
-        const struct @PREFIX@_emu_transaction *transaction) {
+        const struct @PREFIX@_emu_transaction *transaction,
+        const struct @PREFIX@_emu_writes *writes) {
 @TRANSACTIONCOMMIT@
 }
 
@@ -501,17 +541,18 @@ static enum @PREFIX@_emu_status @PREFIX@_emu_apply_state(
         size_t index, const uint64_t *operands, struct @PREFIX@_emu_state *state,
         struct @PREFIX@_emu_transaction *transaction) {
     @PREFIX@_emu_fn semantics = @PREFIX@_emu_dispatch[index];
+    const struct @PREFIX@_emu_writes *writes = &@PREFIX@_emu_write_sets[index];
     enum @PREFIX@_emu_status status;
     if (!semantics)
         return @UPPER@_EMU_NO_SEMANTICS;
-    status = @PREFIX@_emu_transaction_prepare(transaction);
+    status = @PREFIX@_emu_transaction_prepare(transaction, writes);
     if (status != @UPPER@_EMU_OK)
         return status;
-    @PREFIX@_emu_transaction_snapshot(transaction, state);
+    @PREFIX@_emu_transaction_snapshot(transaction, state, writes);
 @STATENORMALIZE@    status = semantics(
         operands, transaction->scratch.registers, &transaction->scratch);
     if (status == @UPPER@_EMU_OK)
-        @PREFIX@_emu_transaction_commit(state, transaction);
+        @PREFIX@_emu_transaction_commit(state, transaction, writes);
     return status;
 }
 

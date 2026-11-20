@@ -10,6 +10,7 @@ from archon.runtime import Target
 
 HERE = Path(__file__).resolve().parent
 ALIASES = ("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi")
+REGISTER_COUNT = 16
 MASK = (1 << 64) - 1
 
 
@@ -33,7 +34,7 @@ class AMD64SubsetTests(unittest.TestCase):
         self.assertEqual(self.target.disassemble(bytes.fromhex("4889d8")), "mov gpr0, gpr3")
 
     def test_two_register_forms(self):
-        original = [0x8000000000000000 + index for index in range(8)]
+        original = [0x8000000000000000 + index for index in range(REGISTER_COUNT)]
         for mnemonic, opcode in (("mov", 0x89), ("xchg", 0x87)):
             for lhs, lhs_alias in enumerate(ALIASES):
                 for rhs, rhs_alias in enumerate(ALIASES):
@@ -63,7 +64,7 @@ class AMD64SubsetTests(unittest.TestCase):
                         self.assertEqual(self.target.encode(name, operands), data)
                         self.assertEqual(self.target.decode(data), (name, operands))
 
-                        original = list(range(8))
+                        original = list(range(REGISTER_COUNT))
                         original[index] = value
                         expected = original.copy()
                         if mnemonic == "not":
@@ -93,11 +94,24 @@ class AMD64SubsetTests(unittest.TestCase):
                 self.target.decode(bytes.fromhex(data))
 
     def test_rejects_assembly_outside_subset(self):
-        for assembly in ("mov r8, rbx", "mov eax, ebx", "mov [rax], rbx", "mov rax, 1",
+        for assembly in ("mov r8, rbx", "mov gpr8, gpr3", "mov rax, r15",
+                         "mov eax, ebx", "mov [rax], rbx", "mov rax, 1",
                          "movsxd rax, ebx", "lock xchg rax, rbx", "add rax, rbx",
                          "call rax"):
             with self.subTest(assembly=assembly), self.assertRaises(ArchonError):
                 self.target.assemble(assembly)
+
+    def test_extended_registers_exist_in_state_but_not_in_legacy_operands(self):
+        state = self.target.new_state(registers=list(range(REGISTER_COUNT)))
+        for name, bad in (("MOV", {"dst": 8, "src": 3}), ("MOV", {"dst": 0, "src": 15}),
+                          ("NOT", {"dst": 8}), ("BSWAP", {"dst": 15}),
+                          ("XCHG", {"lhs": 15, "rhs": 0})):
+            with self.subTest(name=name, operands=bad):
+                with self.assertRaisesRegex(ArchonError, r"register class range \[0\.\.7\]"):
+                    self.target.encode(name, bad)
+                with self.assertRaisesRegex(ArchonError, "register class range"):
+                    self.target.execute_state(name, bad, state)
+        self.assertEqual(state.registers, list(range(REGISTER_COUNT)))
 
 
 if __name__ == "__main__":

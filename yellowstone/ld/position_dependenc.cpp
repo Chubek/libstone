@@ -52,7 +52,7 @@ int sectionRank(const std::string& n, uint32_t flags) {
   return 50;  // non-alloc, kept (debug etc.)
 }
 
-bool skipSection(const qbfd::Section& s, const LinkOptions& opts) {
+bool skipSection(const qbfd::Section& s, const LinkOptions& opts, bool scriptLayout) {
   if (s.index == 0 && s.name.empty() && s.size == 0) return true;
   if (s.name == ".symtab" || s.name == ".strtab" ||
       s.name == ".shstrtab")
@@ -62,18 +62,15 @@ bool skipSection(const qbfd::Section& s, const LinkOptions& opts) {
   if (s.name.starts_with(".rel.") || s.name.starts_with(".rela."))
     return true;
   if (opts.stripDebug && (s.flags & qbfd::sec::Debug)) return true;
-  if (s.name == ".comment" && opts.stripDebug) return true;
+  if (s.name == ".comment" && opts.stripDebug && !scriptLayout) return true;
   return false;
 }
 
 }  // namespace
 
-bool assignAddresses(LinkState& state, std::string& error) {
-  // A script replaces the default layout entirely.
-  if (hasScript(state)) return runScript(state, error);
-
-  // Collect input sections.
+bool collectInputSections(LinkState& state, bool scriptLayout, std::string& error) {
   state.inputSections.clear();
+  uint64_t totalFileBytes = 0;
   for (size_t oi = 0; oi < state.objects.size(); ++oi) {
     const auto& obj = state.objects[oi];
     if (obj.isScript || !obj.object) continue;
@@ -81,7 +78,15 @@ bool assignAddresses(LinkState& state, std::string& error) {
     // already-linked sections must never be merged into the new image.
     if (obj.object->fileType() == qbfd::FileType::SharedObject) continue;
     for (const auto& s : obj.object->sections()) {
-      if (skipSection(s, state.options)) continue;
+      if (skipSection(s, state.options, scriptLayout)) continue;
+      if (state.ltoPlan.gcSections) {
+        if (state.inputSections.size() >= ltoSectionLimit || s.size > ltoImageLimit ||
+            s.alignment > ltoImageLimit || s.fileSize > ltoImageLimit - totalFileBytes) {
+          error = "--lto-script section GC: input section count, size, or alignment limit exceeded";
+          return false;
+        }
+        totalFileBytes += s.fileSize;
+      }
       InputSection in;
       in.objectIndex = oi;
       in.sectionIndex = s.index;
@@ -101,7 +106,7 @@ bool assignAddresses(LinkState& state, std::string& error) {
       if (!r) {
         // Some backends report no relocations as empty; treat errors on
         // alloc sections as fatal, on debug as empty.
-        if (s.flags & qbfd::sec::Alloc) {
+        if (state.ltoPlan.gcSections || (!scriptLayout && (s.flags & qbfd::sec::Alloc))) {
           error = obj.label + ": cannot read relocations for " + s.name +
                   ": " + r.error().message;
           return false;
@@ -112,12 +117,18 @@ bool assignAddresses(LinkState& state, std::string& error) {
       state.inputSections.push_back(std::move(in));
     }
   }
+  return true;
+}
 
-  // --gc-sections: drop non-alloc input sections unreferenced by any kept
-  // relocation. Alloc sections are roots. This is a deliberately small
-  // mark/sweep: it matches --gc-sections on -ffunction-sections inputs for
-  // the common case without a full call-graph.
-  if (state.options.gcSections) {
+bool assignAddresses(LinkState& state, std::string& error) {
+  // A script replaces the default layout entirely.
+  if (hasScript(state)) return runScript(state, error);
+  if (!collectInputSections(state, false, error)) return false;
+
+  if (state.ltoPlan.gcSections) {
+    if (!collectLtoSections(state, {}, {}, error)) return false;
+  } else if (state.options.gcSections) {
+    // The legacy --gc-sections flag only drops some non-alloc sections.
     for (auto& in : state.inputSections) {
       if (in.section.flags & qbfd::sec::Alloc) in.kept = true;
       // Keep non-alloc roots that the output always needs.

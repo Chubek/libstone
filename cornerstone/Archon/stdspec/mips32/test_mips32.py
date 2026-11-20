@@ -17,6 +17,12 @@ class Mips32SubsetTests(unittest.TestCase):
     def setUpClass(cls):
         cls.target = Target(compile_file(HERE / "root.arch"))
 
+    def test_o32_aliases_keep_numbered_disassembly(self):
+        numbered = "addu r2, r4, r5"
+        aliased = self.target.assemble("addu v0, a0, a1")
+        self.assertEqual(aliased, self.target.assemble(numbered))
+        self.assertEqual(self.target.disassemble(self.target.encode(*aliased)), numbered)
+
     def test_register_effects(self):
         registers = [0, MASK, 0x8000FFFF, 1, 0x7FFFFFFF] + [0] * 27
         for assembly, dest, result in (

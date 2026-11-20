@@ -43,6 +43,7 @@ _EXPECTED_MODULES = (
 _RESERVED_MODULES = {"core"}
 _MAX_OUTPUT_FILES = 4096
 _MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+_EXECUTABLE_OUTPUTS = frozenset(("Assembler.sh", "Linker.sh"))
 _LAST_IMPORT_ERRORS: dict[str, Exception] = {}
 
 
@@ -386,10 +387,15 @@ def _check_destination(destination: Path, input_paths: Iterable[str | os.PathLik
         raise ArchonError("refusing to replace a filesystem root or the current directory")
     for raw_input in input_paths:
         try:
-            source = Path(raw_input).resolve(strict=False)
+            path = Path(raw_input)
+            source = path.resolve(strict=False)
+            parent_entry = path.parent.resolve(strict=False) / path.name
+            lexical = Path(os.path.abspath(path))
         except (OSError, RuntimeError) as exc:
             raise ArchonError(f"cannot resolve input path {str(raw_input)!r}: {exc}") from exc
-        if source == resolved or _is_relative_to(source, resolved):
+        # Protect the reference as well as its target. A caller's symlink
+        # inside the replaced tree is still an input path even if it points out.
+        if any(_is_relative_to(candidate, resolved) for candidate in (source, parent_entry, lexical)):
             raise ArchonError(
                 f"IR output directory {str(destination)!r} would overwrite input {str(raw_input)!r}"
             )
@@ -409,6 +415,8 @@ def _tree_digest(root: Path) -> str | None:
                 digest.update(b"D\0" + relative.encode("utf-8") + b"\0")
             elif path.is_file():
                 digest.update(b"F\0" + relative.encode("utf-8") + b"\0")
+                if relative in _EXECUTABLE_OUTPUTS:
+                    digest.update(bytes([path.stat().st_mode & 0o111]))
                 digest.update(path.read_bytes())
                 digest.update(b"\0")
             else:
@@ -433,7 +441,7 @@ def _write_tree(root: Path, outputs: Mapping[str, str]) -> None:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chmod(path, 0o644)
+        os.chmod(path, 0o755 if name in _EXECUTABLE_OUTPUTS else 0o644)
 
 
 def write_generated_directory(
@@ -446,8 +454,9 @@ def write_generated_directory(
     """Write a generated tree transactionally and return its absolute path.
 
     Files are first materialized in a sibling temporary directory.  An existing
-    byte-identical tree is left untouched.  Replacing any other nonempty tree
-    requires ``force=True``; input paths are protected even with force.
+    tree with identical contents and wrapper execute bits is left untouched.
+    Replacing any other nonempty tree requires ``force=True``; input paths
+    are protected even with force.
     """
 
     normalized = _outputs(dict(outputs), "IR generator")

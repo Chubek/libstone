@@ -6,6 +6,7 @@ add_library(sandstone_assembler STATIC
   directives.c
   binarizer.c
   lua.cpp
+  asm_opt.cpp
   sdk.cpp
 )
 add_library(Sandstone::assembler ALIAS sandstone_assembler)
@@ -49,4 +50,5 @@ if(SANDSTONE_BUILD_TESTS)
   endif()
   libstone_warnings(sandstone-assembler-test)
   add_test(NAME sandstone-assembler-sdk COMMAND sandstone-assembler-test)
+  set_tests_properties(sandstone-assembler-sdk PROPERTIES TIMEOUT 30)
 endif()

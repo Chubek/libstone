@@ -28,6 +28,23 @@ mode 0 is illegal. Optional and later-model instructions (such as EIS and
 accepted: combined masks other than `ccc` and `scc`, and the alternate
 no-operation word `000260` (octal), are outside this subset.
 
+## ABI coverage
+
+[`abi_facts_v2 UnixV7Scalar`](root.arch) describes the Research Unix V7 C
+convention for word-sized integers and pointers, not an ISA-wide calling
+convention. `JSR PC` pushes the return PC at `0(sp)`; `RTS PC` pops it.
+The stack grows down and is word-aligned (`sp % 2 == 0`). There are no
+register arguments: the first word argument is at `2(sp)` on entry, and a
+word result is in `r0`. [V7 `setjmp`][v7setjmp] shows the argument load,
+the saved return PC and the result in `r0`.
+
+`r0` and `r1` are scratch; `r2`–`r5` and `sp` are preserved across calls.
+The profile reserves the C frame pointer `r5` (see V7 [`csv`/`cret`][v7csv]),
+`sp`, and `r7` (current PC, not a return-address register).
+The profile does not model results or arguments spanning multiple words,
+non-C `JSR` linkage, or a native backend. This subset does not encode or
+execute either `JSR` or `RTS`.
+
 ## Execution limits
 
 All register-direct data instructions, the selected condition-code
@@ -95,3 +112,5 @@ independent table-driven reference model rather than restating the SemIR.
 
 [dec20]: https://bitsavers.trailing-edge.com/pdf/dec/pdp11/handbooks/PDP-1120_Handbook_1972.pdf
 [dec40]: https://bitsavers.trailing-edge.com/pdf/dec/pdp11/handbooks/PDP-11_40_Processor_Handbook_1972.pdf
+[v7setjmp]: https://github.com/dspinellis/unix-history-repo/blob/Research-V7/usr/src/libc/gen/setjmp.s
+[v7csv]: https://github.com/dspinellis/unix-history-repo/blob/Research-V7/usr/src/libc/crt/csv.s

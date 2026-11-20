@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 from string import Formatter
 
+from .database import _operand_register_range
 from .diagnostics import ArchonError, Location
 from .semantics import (
     _KINDS, _MAX_MEMORY_BYTES, _MAX_STACK_CAPACITY,
@@ -79,6 +80,7 @@ class _Operand:
     kind: str
     width: int
     signed: bool
+    register_range: tuple[int, int] | None
     lsb: int
 
     @property
@@ -390,9 +392,10 @@ class Target:
                 raise _invalid(f"{name} operand {operand!r} has an invalid direction")
             operand_width = _uint(raw.get("width"), f"{name} operand {operand!r} width",
                                   minimum=1, maximum=_MAX_WIDTH)
-            if kind == "reg" and (self._register_count - 1).bit_length() > operand_width:
-                raise _invalid(f"{name} operand {operand!r} cannot encode the register file")
-            descriptors[operand] = (kind, operand_width, signed)
+            bounds = _operand_register_range(
+                raw, self._register_count, operand_width, f"{name} operand {operand!r}",
+            )
+            descriptors[operand] = (kind, operand_width, signed, bounds)
 
         used = mask
         fields = {}
@@ -438,8 +441,12 @@ class Target:
             label = f"{inst.name} operand {operand.name!r}"
             if type(value) is not int:
                 raise ArchonError(f"{label} must be an integer")
-            if operand.kind == "reg" and not 0 <= value < self._register_count:
-                raise ArchonError(f"{label} is not a valid register index")
+            if operand.register_range is not None:
+                first, last = operand.register_range
+                if not 0 <= value < self._register_count:
+                    raise ArchonError(f"{label} is not a valid register index")
+                if not first <= value <= last:
+                    raise ArchonError(f"{label} is outside its register class range [{first}..{last}]")
             if not _fits(value, operand.width, operand.signed):
                 signedness = "signed" if operand.signed else "unsigned"
                 raise ArchonError(f"{label} does not fit in {operand.width} {signedness} bits")

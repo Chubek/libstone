@@ -59,11 +59,12 @@ bool openOneObject(LinkState& state, std::vector<uint8_t> bytes,
     error = label + ": unexpected archive in object slot";
     return false;
   }
+  const bool lto = !state.options.ltoScript.empty();
+  if (lto && !validateLtoInput(bytes, label, error)) return false;
   auto opened = qbfd::open(bytes, label);
   if (!opened) {
     // Not an object: maybe a linker script.
-    std::vector<uint8_t> probe = bytes;
-    if (isScriptText(probe)) {
+    if (!lto && isScriptText(bytes)) {
       LoadedObject lo;
       lo.label = label;
       lo.bytes = std::move(bytes);
@@ -75,6 +76,7 @@ bool openOneObject(LinkState& state, std::vector<uint8_t> bytes,
     error = label + ": " + opened.error().message;
     return false;
   }
+  if (lto && !validateLtoObject(*opened->object, label, error)) return false;
   LoadedObject lo;
   lo.label = label;
   lo.archivePath = archivePath;
