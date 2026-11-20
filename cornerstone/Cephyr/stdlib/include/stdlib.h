@@ -24,6 +24,7 @@ typedef struct {
 } lldiv_t;
 
 void *malloc(size_t);
+void *aligned_alloc(size_t, size_t);
 void *calloc(size_t, size_t);
 void *realloc(void *, size_t);
 void free(void *);
@@ -31,8 +32,11 @@ void free(void *);
 _Noreturn void abort(void);
 _Noreturn void exit(int);
 _Noreturn void _Exit(int);
+_Noreturn void quick_exit(int);
 typedef void (*__cephyr_atexit_function)(void);
 int atexit(__cephyr_atexit_function);
+int at_quick_exit(__cephyr_atexit_function);
+char *getenv(const char *);
 
 int atoi(const char *);
 long atol(const char *);
@@ -71,5 +75,11 @@ void *bsearch(const void *, const void *, size_t, size_t,
 
 int rand(void);
 void srand(unsigned);
+
+int mblen(const char *, size_t);
+int mbtowc(wchar_t *, const char *, size_t);
+int wctomb(char *, wchar_t);
+size_t mbstowcs(wchar_t *, const char *, size_t);
+size_t wcstombs(char *, const wchar_t *, size_t);
 
 #endif

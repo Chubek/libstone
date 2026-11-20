@@ -12,6 +12,7 @@ extern "C" {
 #define ARCHON_BACKEND_ABI_VERSION 1u
 #define ARCHON_MIR_SCHEMA_VERSION 1u
 #define ARCHON_MIR_TEXT_MAX_BYTES (4u * 1024u * 1024u)
+#define ARCHON_MIR_MAX_PARAMS 128u /* ABI parameters and call arguments. */
 #define ARCHON_MIR_NONE UINT32_MAX
 typedef uint32_t ArchonValue;
 typedef enum {

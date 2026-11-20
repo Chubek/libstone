@@ -77,18 +77,20 @@ replace the assembler or linker.
 
 ## Memory, errors, and limits
 
-Keep the SDK descriptor, descriptor array and callback state alive for the
-call to `cephyr_compile`. Inputs are read-only borrows for the lifetime of each
-callback. Pass a length-delimited span to `output->set_text` or `output->report`;
-the host copies it before returning, so the callback can use stack storage.
-Neither the input spans nor the output sinks/context may be used after the
-callback returns. Do not reenter `cephyr_compile` on the callback thread or
-throw through the C API. If using the same registration from concurrent calls,
-synchronize mutable callback state.
+Keep the SDK descriptor, hook array, and registration strings alive and
+unchanged for the call to `cephyr_compile`. Keep callback state alive for
+the same duration; if using it from concurrent calls, synchronize mutable
+state. Inputs are read-only borrows for the lifetime of each callback. Pass a
+length-delimited span to `output->set_text` or `output->report`; the host copies
+it before returning, so the callback can use stack storage. Call each sink with
+the exact supplied `output->context`, on the callback's thread before it
+returns. Do not save either interface for later or pass it to another thread.
+Do not reenter `cephyr_compile` on the callback thread or throw through the C API.
 
 Return `CEPHYR_SDK_OK` to commit or `CEPHYR_SDK_REJECT` to stop. Error diagnostics
 and `-Werror`-promoted warnings also stop compilation. A failed sink call
-rejects the callback even if it returns `CEPHYR_SDK_OK`. A failing transformation
+on the active callback thread rejects the callback even if it returns
+`CEPHYR_SDK_OK`. A failing transformation
 does not publish its current translation unit's output; its diagnostics are
 retained. This is not request-wide rollback of earlier translation units or of
 callback side effects.
@@ -106,3 +108,55 @@ isolate memory accesses in trusted callbacks.
 See [`examples/sdk_desugar.c`](examples/sdk_desugar.c) for a small C embedding
 example and [`tests/sdk.c`](tests/sdk.c) for a complete pipeline with diagnostic,
 optimization, and backend callbacks.
+
+## Python
+
+The Python [embedding API](EMBEDDING.md#python) accepts `sdk=` on both
+`Compiler.compile()` and `cephyr.compile()`. Pass an iterable of `Hook`
+descriptors. They use the same v1 stages, ordering, exact target matching,
+and [limits](#memory-errors-and-limits) as C.
+
+```python
+from cephyr import Diagnostic, Hook, HookResult, Severity, Stage, compile
+
+def desugar(data):
+    if data.text == b"export_answer 42;\n":
+        return "int answer(void) { return 42; }\n"
+    return None
+
+def analyze(data):
+    return HookResult(diagnostics=(
+        Diagnostic(Severity.NOTE, "sdk.checked", "Inspected lowered MIR"),
+    ))
+
+result = compile(
+    ["--target=x86_64-linux-gnu", "--emit-mir", "-o", "-", "-"],
+    "export_answer 42;\n",
+    sdk=[
+        Hook(Stage.DESUGAR, "export-answer", desugar),
+        Hook(Stage.ANALYZE, "inspect", analyze, target_triple="x86_64-linux-gnu"),
+    ],
+)
+```
+
+- A hook receives an immutable `HookInput` with copies of `text`, `input_name`,
+  `target_triple`, `target_architecture`, and `target_abi` as `bytes`. It also
+  includes `stage`, `mir_schema_version`, and `flags`. An assembly hook can
+  use `data.position_independent` to check whether it must emit PIC.
+  The input can be retained after compilation. No native sinks are exposed.
+- Return `None` to leave text unchanged, `str` or `bytes` to replace it, or
+  `HookResult(replacement=..., diagnostics=(...), reject=...)` to combine a
+  replacement with diagnostics or explicitly reject the input. `str` values are
+  encoded as UTF-8; use `bytes` for verbatim SDK text. An empty replacement is
+  distinct from `None` and is allowed only for `DESUGAR`. `ANALYZE` cannot
+  replace text. `ASSEMBLY` requires an exact target and must emit assembly
+  according to the [native backend contract](#text-formats-and-locations).
+  On explicit rejection the diagnostics are reported but the replacement is ignored.
+- Explicit rejection, error diagnostics, and native sink validation failures
+  return a `Result` with `Status.COMPILE_ERROR`. If a hook raises, or returns
+  the wrong Python value type, the wrapper rejects the native request and
+  re-raises the Python exception after releasing the native result.
+- Callbacks run synchronously on the compiling thread. Do not reenter Cephyr
+  from that callback thread. Requests can share hook descriptors across
+  threads, but must synchronize mutable callback state. Python hooks are
+  trusted in-process code, not plugins loaded or sandboxed by Cephyr.

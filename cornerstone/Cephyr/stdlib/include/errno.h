@@ -6,6 +6,7 @@
  * global rather than thread-local storage.
  */
 extern int errno;
+#define errno errno
 
 #define EPERM 1
 #define ENOENT 2

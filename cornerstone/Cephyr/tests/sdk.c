@@ -207,6 +207,34 @@ static uint32_t bad_analysis(const cephyr_sdk_input *in, const cephyr_sdk_output
     return CEPHYR_SDK_OK;
 }
 
+static uint32_t bad_context(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
+                            void *user)
+{
+    check_call(in, out, CEPHYR_SDK_DESUGAR);
+    if (user) {
+        int wrong_context = 0;
+        CHECK(!out->report(&wrong_context, CEPHYR_SDK_NOTE, TEXT("sdk.note"),
+                           TEXT("wrong context"), NONE, 0, 0));
+    } else {
+        CHECK(!out->set_text(NULL, TEXT("int replacement;\n")));
+    }
+    return CEPHYR_SDK_OK;
+}
+
+static uint32_t reentry(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
+                        void *user)
+{
+    (void)user;
+    check_call(in, out, CEPHYR_SDK_DESUGAR);
+    const char *const args[] = {"--version"};
+    const cephyr_request request = {sizeof(request), 1, args, NULL, 0, NULL, NULL, NULL};
+    cephyr_result *result = NULL;
+    CHECK(cephyr_compile(&request, &result) == CEPHYR_INVALID_ARGUMENT);
+    CHECK(!result);
+    CHECK(out->set_text(out->context, TEXT("int outer_request;\n")));
+    return CEPHYR_SDK_OK;
+}
+
 static uint32_t too_many_diagnostics(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
                                      void *user)
 {
@@ -398,6 +426,16 @@ static void test_invalid_callbacks(void)
     CHECK(strstr(cephyr_result_diagnostics(result, NULL), "cephyr."));
     cephyr_result_destroy(result);
     CHECK(ctx.step == 1);
+    hook.callback = bad_context;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "invalid callback sink context");
+    hook.user = NULL;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "invalid callback sink context");
+    hook.callback = reentry;
+    result = compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_OK);
+    CHECK(strstr(cephyr_result_output(result, NULL), "outer_request"));
+    cephyr_result_destroy(result);
     hook.stage = CEPHYR_SDK_ANALYZE;
     hook.callback = bad_analysis;
     failed(compile(&sdk, C_SOURCE, AMD64, "-fsyntax-only", NULL, NULL, CEPHYR_COMPILE_ERROR),
@@ -418,6 +456,7 @@ static void test_invalid_callbacks(void)
     failed(compile(&sdk, C_SOURCE, AMD64, "--emit-mir", "-", NULL, CEPHYR_COMPILE_ERROR),
            "text exceeds the stage output limit");
     hook.callback = rewrite;
+    hook.user = &ctx;
     ctx.step = 3;
     failed(compile(&sdk, C_SOURCE, AMD64, "-S", "-", NULL, CEPHYR_COMPILE_ERROR),
            "cephyr.sdk.mir");

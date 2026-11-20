@@ -11,14 +11,14 @@ typedef struct cephyr_result cephyr_result;
 typedef struct cephyr_sdk cephyr_sdk;
 
 typedef struct cephyr_request {
-    size_t struct_size;          /* Set to sizeof(cephyr_request). */
+    size_t struct_size;         /* Set to sizeof(cephyr_request); trailing fields are ignored. */
     size_t argc;
     const char *const *argv;     /* argc arguments; no program name or sentinel. */
     const char *stdin_data;     /* Bytes used for an input operand of "-". */
     size_t stdin_size;          /* Zero for empty input; no terminator needed. */
     const char *resource_root;  /* Directory containing stdlib/ and triples/, or NULL. */
     const char *archon_root;    /* Directory containing archon/ and stdspec/, or NULL. */
-    const cephyr_sdk *sdk;      /* Optional borrowed SDK. */
+    const cephyr_sdk *sdk;      /* Optional borrowed SDK; see CephyrSDK.h. */
 } cephyr_request;
 
 typedef enum cephyr_status {
@@ -34,11 +34,16 @@ const char *cephyr_version(void);
 unsigned cephyr_python_version(void);
 
 /*
- * Compile synchronously. Request storage remains owned by the caller and need
- * only remain valid until this call returns. On success or compilation failure,
- * *result owns a result; release it with cephyr_result_destroy. On API misuse or
- * internal failure, *result may be NULL. An existing *result is not destroyed.
- * Use -o - to capture assembly or MIR; -E captures output by default.
+ * Compile synchronously. Request storage remains owned by the caller and must
+ * stay valid and unmodified throughout this call. On success or compilation
+ * failure, *result owns a result; release it with cephyr_result_destroy. On
+ * API misuse or internal failure, *result may be NULL. The output slot is
+ * overwritten but any existing result in it is not destroyed. Results are
+ * independent of requests and later compilations. A failure can have output.
+ *
+ * Use -o - to capture assembly or MIR; -E captures output by default. Calls
+ * can overlap on different threads, but same-thread recursion is rejected.
+ * See EMBEDDING.md for host CPython lifecycle and native backend requirements.
  */
 int cephyr_compile(const cephyr_request *request, cephyr_result **result);
 

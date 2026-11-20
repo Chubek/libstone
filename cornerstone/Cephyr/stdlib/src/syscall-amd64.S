@@ -30,7 +30,11 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL lseek, 8
     CEPHYR_SYSCALL mmap, 9
     CEPHYR_SYSCALL munmap, 11
+    CEPHYR_SYSCALL __cephyr_ioctl, 16
     CEPHYR_SYSCALL openat, 257
+    CEPHYR_SYSCALL __cephyr_unlinkat, 263
+    CEPHYR_SYSCALL __cephyr_renameat, 264
+    CEPHYR_SYSCALL __cephyr_getrandom, 318
 
     .globl _exit
     .type _exit,@function

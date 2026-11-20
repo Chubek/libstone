@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace cephyr {
@@ -19,10 +20,22 @@ struct CompileOptions {
 
 class CompileResult {
 public:
+    CompileResult(CompileResult &&other) noexcept
+        : status_(std::exchange(other.status_, CEPHYR_INVALID_ARGUMENT)),
+          result_(std::move(other.result_)) {}
+    CompileResult &operator=(CompileResult &&other) noexcept {
+        if (this != &other) {
+            status_ = std::exchange(other.status_, CEPHYR_INVALID_ARGUMENT);
+            result_ = std::move(other.result_);
+        }
+        return *this;
+    }
+
     cephyr_status status() const noexcept { return status_; }
     explicit operator bool() const noexcept { return status_ == CEPHYR_OK; }
 
-    // Views borrow this result's storage.
+    // Views borrow the native storage, whose ownership moves with this result.
+    // A moved-from result has no storage and reports CEPHYR_INVALID_ARGUMENT.
     std::string_view output() const noexcept { return view(cephyr_result_output); }
     std::string_view diagnostics() const noexcept { return view(cephyr_result_diagnostics); }
 

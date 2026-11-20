@@ -88,7 +88,6 @@ SymbolTable::SymbolTable()
     boolType->isSigned = false;
 
     noType = allocType(STTK_NONE);
-    insert("NOTYPE", STOK_TYPE, noType);
 
     nullType = allocType(STTK_POINTER);
 
@@ -169,6 +168,13 @@ void SymbolTable::openScope(void)
     topScope = s;
     topScope->size = 0;
     level++;
+}
+
+void SymbolTable::reopenScope(STScope *scope)
+{
+    assert(scope && scope->outer == topScope);
+    topScope = scope;
+    ++level;
 }
 
 void SymbolTable::closeScope(void)

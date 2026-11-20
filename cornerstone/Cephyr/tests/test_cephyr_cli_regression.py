@@ -537,7 +537,6 @@ class CephyrCLIRegressionTests(unittest.TestCase):
     def test_22_unsupported_constructs_do_not_publish_artifacts(self) -> None:
         cases = (
             ("float", "int f(void) { return 1.5; }\n", rb"floating.point"),
-            ("goto", "int f(void) { goto here; here: return 0; }\n", rb"goto|label"),
         )
         destination = self.work / "protected.mir"
         destination.write_bytes(b"previous output")
@@ -1038,6 +1037,51 @@ class CephyrCLIRegressionTests(unittest.TestCase):
         )
         self.assertIn(b"duplicate case", invalid.stderr)
 
+    def test_88_native_goto_across_c_scopes(self) -> None:
+        self._check_native_c11_fixture("goto")
+
+    def test_89_native_goto_constraints(self) -> None:
+        output = self.work / "protected.mir"
+        output.write_bytes(b"previous output")
+        for source, diagnostic in (
+            (b"int f(void) { return 0; goto nowhere; }\n", b"undefined label 'nowhere'"),
+            (b"int f(void) { goto there; }\nint g(void) { there: return 0; }\n",
+             b"undefined label 'there'"),
+            (b"int f(void) { here: ; { here: return 0; } }\n", b"duplicate label 'here'"),
+            (b"int f(int n) { goto there; { int a[n]; there: return 0; } }\n",
+             b"variable-length arrays are not supported"),
+        ):
+            with self.subTest(source=source):
+                failure = self.invoke(
+                    "--emit-mir", "-x", "c", "-", "-o", output,
+                    input_bytes=source, ok=False,
+                )
+                self.assertIn(diagnostic, failure.stderr)
+                self.assertEqual(output.read_bytes(), b"previous output")
+
+    def _check_native_c11_fixture(self, feature: str) -> None:
+        source = FIXTURES / f"cephyr_cli_native_{feature}.c"
+        for target, machine, runner in (
+            ("--target=x86_64-linux-gnu", 62, os.uname().machine in {"x86_64", "amd64"}),
+            (AARCH64, 183, QEMU_AARCH64 or os.uname().machine in {"aarch64", "arm64"}),
+            (RV64, 243, QEMU),
+        ):
+            with self.subTest(target=target):
+                executable = self.work / f"{feature}-{machine}.elf"
+                build = self.invoke(target, "-std=c11", source, "-o", executable)
+                self.assertNotIn(b"control reaches the end", build.stderr)
+                self.assert_static_executable(executable, machine)
+                if runner and machine == 243:
+                    self.run_rv64(executable)
+                elif runner and machine == 183:
+                    result = self.run_aarch64(executable)
+                    self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+                elif runner:
+                    result = subprocess.run(
+                        [executable], cwd=self.work, capture_output=True, timeout=20,
+                    )
+                    self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+
     def test_90_default_amd64_bundled_runtime(self) -> None:
         source = FIXTURES / "linux_runtime.c"
         executable = self.work / "amd64.elf"
@@ -1117,6 +1161,131 @@ class CephyrCLIRegressionTests(unittest.TestCase):
         self.assert_static_executable(executable, 183)
         result = self.run_aarch64(executable)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_94_native_multidimensional_array_initializers(self) -> None:
+        self._check_native_c11_fixture("array_init")
+
+    def test_95_excess_nested_initializers_are_diagnosed(self) -> None:
+        for declaration in (
+            b"int a[2][2] = {{1, 2, 3}, 4};",
+            b"int a[][2] = {{1, 2, 3}};",
+            b'char a[][2] = {"abc"};',
+        ):
+            for source in (declaration, b"int f(void) { " + declaration + b" return 0; }"):
+                with self.subTest(source=source):
+                    failure = self.invoke(
+                        "-fsyntax-only", "-x", "c", "-", input_bytes=source, ok=False,
+                    )
+                    self.assertRegex(failure.stderr, rb"too many elements|too long")
+
+    def test_96_native_block_static_duration(self) -> None:
+        self._check_native_c11_fixture("block_static")
+        obj = self.work / "block-static.o"
+        self.invoke(RV64, "-c", FIXTURES / "cephyr_cli_native_block_static.c", "-o", obj)
+        symbols = [
+            (bind, section) for name, bind, section in self.elf_symbols(obj)
+            if name.startswith("__cephyr_tu_block_")
+        ]
+        self.assertEqual(len(symbols), 7)
+        self.assertTrue(all(bind == 0 and section for bind, section in symbols), symbols)
+
+    def test_97_block_static_initializer_constraints(self) -> None:
+        for source, message in (
+            (b"int f(int n) { static int x = n; return x; }", b"integer constant expression"),
+            (b"int a; int f(void) { int a; static int *x = &a; return *x; }",
+             b"supported symbol address"),
+            (b"int f(void) { static int a[]; return a != 0; }", b"incomplete type"),
+            (b"int f(void) { for (static int i; ; ) return i; }",
+             rb"auto(?:matic)? or register objects"),
+        ):
+            with self.subTest(source=source):
+                failure = self.invoke(
+                    "-fsyntax-only", "-x", "c", "-", input_bytes=source, ok=False,
+                )
+                self.assertRegex(failure.stderr, message)
+
+    def test_98_native_integer_casts_of_floating_literals(self) -> None:
+        self._check_native_c11_fixture("literal_cast")
+
+    def test_99_out_of_range_literal_integer_cast_is_diagnosed(self) -> None:
+        failure = self.invoke(
+            "-fsyntax-only", "-x", "c", "-", ok=False,
+            input_bytes=b"int f(void) { return (int)1.0e100; }\n",
+        )
+        self.assertIn(b"floating constant is not representable", failure.stderr)
+
+    def test_100_native_function_name_object(self) -> None:
+        self._check_native_c11_fixture("function_name")
+        obj = self.work / "function-name.o"
+        self.invoke(RV64, "-c", FIXTURES / "cephyr_cli_native_function_name.c", "-o", obj)
+        symbols = [
+            (bind, section) for name, bind, section in self.elf_symbols(obj)
+            if name.startswith("__cephyr_tu_func_")
+        ]
+        # Only the three address-taken names require storage; sizeof does not.
+        self.assertEqual(len(symbols), 3)
+        self.assertTrue(all(bind == 0 and section for bind, section in symbols), symbols)
+
+    def test_101_function_name_object_constraints(self) -> None:
+        for source, message in (
+            (b"const char *name = __func__;", rb"only available within a function body"),
+            (b"int f(void) { __func__[0] = 0; return 0; }", rb"modifiable scalar lvalue"),
+        ):
+            with self.subTest(source=source):
+                failure = self.invoke(
+                    "-fsyntax-only", "-x", "c", "-", input_bytes=source + b"\n", ok=False,
+                )
+                self.assertRegex(failure.stderr, message)
+
+    def test_102_native_sizeof_in_integer_constant_expressions(self) -> None:
+        self._check_native_c11_fixture("ice_sizeof")
+        mir = self.work / "ice-sizeof.mir"
+        self.invoke("--emit-mir", FIXTURES / "cephyr_cli_native_ice_sizeof.c", "-o", mir)
+        text = mir.read_text(encoding="ascii")
+        # Neither a runtime nor an ICE sizeof operand references its storage
+        # or callee. In particular, sizeof __func__ needs no name object.
+        for unused in ("argument_value", "external_object", "incomplete", "__cephyr_tu_func_"):
+            self.assertNotIn(unused, text)
+
+    def test_103_sizeof_ice_checks_unevaluated_operand_types(self) -> None:
+        for source, message in (
+            (b'_Static_assert(sizeof future == 1, ""); char future;',
+             rb"no valid declaration for 'future'"),
+            (b'extern int a[]; _Static_assert(1 || sizeof a, "");',
+             rb"sizeof requires a complete object type"),
+            (b'int f(void); _Static_assert(0 ? sizeof f : 1, "");',
+             rb"sizeof requires a complete object type"),
+            (b'_Static_assert(sizeof sizeof(void), "");',
+             rb"sizeof requires a complete object type"),
+            (b'_Static_assert(sizeof(int(void)) > 0, "");',
+             rb"sizeof requires a complete object type"),
+            (b'_Static_assert(_Alignof(int[]) > 0, "");',
+             rb"_Alignof requires a complete object type"),
+            (b'int f(int x); _Static_assert(sizeof(f()) != 0, "");',
+             rb"sizeof requires .*valid operand"),
+            (b'int f(int *x); _Static_assert(sizeof(f(1)) != 0, "");',
+             rb"sizeof requires .*valid operand"),
+            (b'int f(void) { int a[1]; return sizeof(a = 0); }',
+             rb"sizeof requires .*valid operand"),
+            (b'_Static_assert(sizeof(&(1 + 2)), "");',
+             rb"sizeof requires .*valid operand"),
+            (b'int f(register int n) { _Static_assert(sizeof &n, ""); return 0; }',
+             rb"cannot take the address of a register object"),
+            (b'extern int a[]; _Static_assert(sizeof(a + a == a), "");',
+             rb"sizeof requires .*valid operand"),
+            (b'int a[] = { sizeof a };', rb"sizeof requires a complete object type"),
+            (b'int f(void) { int a[] = { sizeof a }; return 0; }',
+             rb"sizeof requires a complete object type"),
+            (b'int f(void) { static int a[] = { sizeof a }; return 0; }',
+             rb"sizeof requires a complete object type"),
+            (b'int f(unsigned n) { char a[n]; return sizeof a; }',
+             rb"variable-length arrays are not supported"),
+        ):
+            with self.subTest(source=source):
+                failure = self.invoke(
+                    "-fsyntax-only", "-x", "c", "-", input_bytes=source + b"\n", ok=False,
+                )
+                self.assertRegex(failure.stderr, message)
 
 
 def parse_arguments() -> tuple[argparse.Namespace, list[str]]:

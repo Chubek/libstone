@@ -20,9 +20,24 @@ namespace cparser
 
 class CParser : public Parser
 {
-    bool _inTypedef;
-    bool _lastParameterListVariadic;
     unsigned _depth = 0;
+    unsigned _loopDepth = 0;
+    std::vector<bool> _switchDefaults;
+    std::map<std::string, Token> _labels;
+    std::vector<Token> _gotos;
+    ASTNode *_returnType = nullptr;
+
+    enum class DeclaratorName { Required, Optional, Forbidden };
+    struct DeclaratorPart
+    {
+        enum Kind { Pointer, Array, Function } kind;
+        int line;
+        int column;
+        unsigned qualifiers = 0;
+        ASTNode *operand = NULL_AST_NODE; // Array bound or function parameters
+        STScope *scope = nullptr;
+        bool variadic = false;
+    };
 
     class ParseDepth
     {
@@ -42,6 +57,7 @@ class CParser : public Parser
     bool isTypeSpecifier(unsigned _kind, int n);
     bool isTypeQualifier(unsigned kind);
     bool isStorageClassSpecifier(unsigned kind);
+    bool startsDeclaration();
 
     // THE PARSER RULES
 
@@ -79,10 +95,12 @@ class CParser : public Parser
     SequenceASTNode *InitDeclaratorList(ASTNode *typeSpec);
     ASTNode *InitDeclarator(ASTNode *typeSpec);
     ASTNode *InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
-                                    ASTNode *name);
+                                    ASTNode *name, STScope *parameterScope,
+                                    bool allowDefinition = false);
     void StorageClassSpecifier(unsigned &flags);
     ASTNode *TypeSpecifier();
     ASTNode *StructOrUnionSpecifier();
+    STType *TagType(const Token &, STTypeKind, bool defining, bool forward);
     SequenceASTNode *StructDeclarationList();
     ASTNode *StructDeclaration();
     ASTNode *SpecifierQualifierList();
@@ -92,25 +110,26 @@ class CParser : public Parser
     SequenceASTNode *EnumeratorList();
     void TypeQualifier(unsigned &flags);
     void FunctionSpecifier();
-    ASTNode *AlignmentSpecifier();
-    ASTNode *Declarator(ASTNode * &typeSpec);
-    ASTNode *DirectDeclarator(ASTNode * &typeSpec);
+    ASTNode *Declarator(ASTNode * &typeSpec,
+                        DeclaratorName mode = DeclaratorName::Required,
+                        STScope **parameterScope = nullptr);
+    ASTNode *DeclaratorParts(std::vector<DeclaratorPart> &, DeclaratorName);
     ASTNode *GccDeclaratorExtension();
     ASTNode *GccAttributeSpecifier();
     ASTNode *GccAttributeList();
     ASTNode *GccAttribute();
-    ASTNode *ParameterTypeList();
+    ASTNode *ParameterTypeList(bool &variadic);
     ASTNode *ParameterList();
     ASTNode *ParameterDeclaration();
     ASTNode *IdentifierList();
     ASTNode *TypeName();
-    ASTNode *AbstractDeclarator();
-    ASTNode *DirectAbstractDeclarator();
     ASTNode *Initializer();
     ASTNode *InitializerList();
 
     // Statements
     ASTNode *Statement();
+    ASTNode *ScopedStatement();
+    ASTNode *LoopBody();
     ASTNode *LabeledStatement();
     ASTNode *CompoundStatement();
     ASTNode *FunctionBody();
@@ -122,16 +141,14 @@ class CParser : public Parser
     ASTNode *ExpressionStatement();
     ASTNode *TranslationUnit();
     ASTNode *ExternalDeclaration();
-    ASTNode *FunctionDefinition(ASTNode *funcType);
-    ASTNode *FunctionDefinition(ASTNode *funcType, ASTNode *name,
-                                unsigned flags);
+    ASTNode *FunctionDeclaration(FunctionTypeASTNode *type, ASTNode *name,
+                                 unsigned flags, STScope *parameterScope,
+                                 bool allowDefinition);
 public:
     void parse(const char *output);
 
     CParser(CLexer *LEX) : Parser(LEX)
     {
-        _inTypedef = false;
-        _lastParameterListVariadic = false;
         initNames();
     }
 };

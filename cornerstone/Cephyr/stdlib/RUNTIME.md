@@ -12,20 +12,33 @@ entry also initializes `gp`.
 `src/syscall-amd64.S`, `src/syscall-aarch64.S`, and `src/syscall.S` provide direct
 Linux wrappers for `read`, `write`, `close`,
 `lseek`, `open`, `openat`, `mmap`, and `munmap`, plus process termination and
-`abort`. Kernel errors become `-1` and update `errno`.
+`abort`. Internal wrappers support terminal detection, file removal/rename,
+and temporary-name entropy. Kernel errors become `-1` and update `errno`.
 
-`src/runtime.c` provides `atexit` and `exit`. It supports up to 32 handlers.
-Stdio can define `__cephyr_stdio_flush_all` to have `exit` flush buffered
-streams.
+`src/runtime.c` provides `getenv`, `atexit`/`exit`, and
+`at_quick_exit`/`quick_exit`. Each exit-handler list supports 32 registrations,
+run in reverse order, and the two lists never mix. `exit` calls the weak stdio
+flush hook after running the handlers. `quick_exit` and `_Exit` do not flush
+stdio. Linux closes the process's descriptors at termination.
 
-`src/allocator.c` provides `malloc`, `calloc`, `realloc`, and `free` using one
-anonymous mapping per allocation. It is intentionally simple rather than an
-arena allocator.
+`src/allocator.c` provides `malloc`, `aligned_alloc`, `calloc`, `realloc`, and
+`free` using one anonymous mapping per allocation. `aligned_alloc` accepts
+power-of-two alignments and requires the requested size to be a multiple of
+the alignment. `free` accepts aligned allocations; `realloc` preserves their
+contents, not the requested extended alignment. This is not an arena allocator.
+
+`src/stream.c` implements buffered byte streams on Linux descriptors. Logical
+file positions account for read-ahead, pending output, and the one-byte pushback
+slot. Append writes use `O_APPEND`; `a+` starts reading from the beginning.
+Temporary files use `O_TMPFILE` when available, or `O_CREAT|O_EXCL` followed by
+unlink. Temporary names use Linux `getrandom`; the fallback is for filesystems
+without `O_TMPFILE`, not for kernels without `getrandom`.
 
 Current boundaries:
 
 - `errno` is process-global, not thread-local.
-- `atexit` has no synchronization and is intended for single-threaded use.
+- Stream state and exit-handler lists have no synchronization and are intended
+  for single-threaded use.
 - Startup does not run ELF init/fini arrays, TLS initialization, C++
   constructors, or dynamic-loader finalizers.
 - The allocator does not promise hardened invalid/double-free detection.

@@ -1,5 +1,7 @@
 #include <cephyr/lower.hpp>
 
+#include "Backend.h"
+
 #include <ASTNode.h>
 
 #include <cstdint>
@@ -13,9 +15,6 @@ namespace cephyr::detail {
 namespace {
 
 using cparser::ASTNodeKind;
-
-// The native MachineIR call/import argument limit.
-constexpr std::size_t max_call_arguments = 64;
 
 CType invalid_type() { return {}; }
 
@@ -101,6 +100,9 @@ CType pointer_composite(const CType &lhs, const CType &rhs) {
   const CType *selected = lhs.element.get();
   if (is_void_pointer(lhs) || is_void_pointer(rhs))
     selected = is_void_pointer(lhs) ? lhs.element.get() : rhs.element.get();
+  else if (selected && selected->kind == CType::Kind::array && !selected->count &&
+           rhs.element && rhs.element->kind == CType::Kind::array)
+    selected = rhs.element.get(); // Keep a known bound in the composite type.
   if (!selected)
     return {};
   auto pointee = *selected;
@@ -216,9 +218,8 @@ std::optional<Binary> binary_children(Node *node) {
   }
 }
 
-CType expression_type(Function &, Node *);
-
-bool is_null_pointer_constant(Function &function, Node *node, const CType &type) {
+bool is_null_pointer_constant(const TypeContext &context, Node *node,
+                              const CType &type) {
   if (!present(node))
     return false;
   if (is_unqualified_void_pointer(type) &&
@@ -229,36 +230,59 @@ bool is_null_pointer_constant(Function &function, Node *node, const CType &type)
   // Probing a runtime expression for an ICE must not diagnose evaluation of
   // an expression that could be short-circuited or otherwise unevaluated.
   Diagnostics probe;
-  const auto value = integer_constant(node, function.unit.source, probe);
+  const auto value = integer_constant(node, context.with_probe(probe));
   return value && value->value == 0;
 }
 
-CType arithmetic_type(Function &function, Node *node) {
-  const auto children = binary_children(node);
-  if (!children)
-    return invalid_type();
-  const auto lhs = expression_type(function, children->lhs);
-  const auto rhs = expression_type(function, children->rhs);
-  if (!lhs.integer() || !rhs.integer())
-    return invalid_type();
-  if (node->getKind() == cparser::NK_LSHIFT_EXPR ||
-      node->getKind() == cparser::NK_RSHIFT_EXPR)
-    return promote(lhs);
-  return common_integer(promote(lhs), promote(rhs));
+bool assignment_compatible(const TypeContext &context, const CType &target,
+                           const CType &source, Node *node) {
+  if (target.integer())
+    return source.integer() || (target.bits == 1 && source.pointer());
+  if (!target.pointer())
+    return false;
+  if (is_null_pointer_constant(context, node, source))
+    return true;
+  if (!source.pointer())
+    return false;
+  if (target.function_pointer() || source.function_pointer())
+    return compatible(unqualified(target), source);
+  return compatible_object_pointers(target, source) &&
+         !drops_qualifiers(source, target);
 }
 
-CType conditional_type(Function &function, Node *then_node, Node *else_node) {
-  const auto lhs = decay(expression_type(function, then_node));
-  const auto rhs = decay(expression_type(function, else_node));
+CType arithmetic_type(ASTNodeKind kind, const CType &lhs, const CType &rhs) {
+  if (kind == cparser::NK_PLUS_EXPR) {
+    if (complete_object_pointer(lhs) && rhs.integer())
+      return lhs;
+    if (complete_object_pointer(rhs) && lhs.integer())
+      return rhs;
+  } else if (kind == cparser::NK_MINUS_EXPR) {
+    if (complete_object_pointer(lhs) && rhs.integer())
+      return lhs;
+    if (complete_object_pointer(lhs) && complete_object_pointer(rhs) &&
+        compatible_object_pointers(lhs, rhs))
+      return difference_type();
+  }
+  if (!lhs.integer() || !rhs.integer())
+    return invalid_type();
+  if (kind == cparser::NK_LSHIFT_EXPR || kind == cparser::NK_RSHIFT_EXPR)
+    return promote(lhs);
+  return common_integer(lhs, rhs);
+}
+
+CType conditional_type(const TypeContext &context, Node *then_node,
+                       Node *else_node) {
+  const auto lhs = decay(expression_type(then_node, context));
+  const auto rhs = decay(expression_type(else_node, context));
   if (!lhs.valid() || !rhs.valid())
     return invalid_type();
   if (lhs.integer() && rhs.integer())
     return common_integer(promote(lhs), promote(rhs));
   if (is_void(lhs) && is_void(rhs))
     return void_type();
-  if (lhs.pointer() && is_null_pointer_constant(function, else_node, rhs))
+  if (lhs.pointer() && is_null_pointer_constant(context, else_node, rhs))
     return lhs;
-  if (rhs.pointer() && is_null_pointer_constant(function, then_node, lhs))
+  if (rhs.pointer() && is_null_pointer_constant(context, then_node, lhs))
     return rhs;
   if (lhs.pointer() && rhs.pointer()) {
     if (lhs.function_pointer() || rhs.function_pointer()) {
@@ -272,157 +296,216 @@ CType conditional_type(Function &function, Node *then_node, Node *else_node) {
   return invalid_type();
 }
 
-CType expression_type(Function &function, Node *node) {
-  const AnalysisDepth depth(function.expression_depth);
+bool describes_lvalue(Node *node) {
+  // Callers have already checked the type and (for indirection) the operand.
+  switch (node->getKind()) {
+  case cparser::NK_IDENT_NODE:
+  case cparser::NK_STRING_CONST:
+  case cparser::NK_INDIRECT_REF:
+  case cparser::NK_ARRAY_REF:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool type_modifiable(Node *node, const CType &type) {
+  return type.scalar() && !type.is_const && describes_lvalue(node);
+}
+
+thread_local unsigned type_expression_depth = 0;
+
+} // namespace
+
+CType expression_type(Node *node, const TypeContext &context) {
+  const AnalysisDepth depth(type_expression_depth);
   if (!present(node))
     return invalid_type();
+  const auto type_of = [&](Node *child) { return expression_type(child, context); };
+  const auto as_value = [&](Node *child) { return decay(type_of(child)); };
+  const auto increment_type = [&](Node *child) {
+    const auto type = type_of(child);
+    return type_modifiable(child, type) &&
+                   (type.integer() || complete_object_pointer(type))
+               ? unqualified(type) : invalid_type();
+  };
+  const auto comma_type = [&](Node *list) {
+    CType result;
+    for (auto *child : elements(list)) {
+      result = as_value(child);
+      if (!result.valid())
+        return invalid_type();
+    }
+    return result;
+  };
 
   switch (node->getKind()) {
   case cparser::NK_INTEGER_CONST:
   case cparser::NK_CHAR_CONST: {
-    auto value =
-        integer_constant(node, function.unit.source, function.unit.diagnostics);
+    auto value = integer_constant(node, context);
     return value ? value->type : invalid_type();
   }
   case cparser::NK_STRING_CONST: {
-    auto value =
-        string_constant(node, function.unit.source, function.unit.diagnostics);
+    auto value = string_constant(node, context.source, context.diagnostics);
     if (!value)
       return invalid_type();
     CType result;
     result.kind = CType::Kind::array;
-    result.element = std::make_shared<CType>(plain_char_type(function.unit.source));
+    result.element = std::make_shared<CType>(plain_char_type(context.source));
     // string_constant includes the terminating null character.
     result.count = value->size();
     return result;
   }
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
-    if (auto local = function.find_local(name))
-      return local->type;
-    const auto symbol = function.unit.symbols.find(name);
-    return symbol == function.unit.symbols.end() ? invalid_type()
-                                                 : symbol->second.type;
+    auto type = context.lookup(name).type;
+    if (!type.valid())
+      context.diagnostics.error("cephyr.type", "no valid declaration for '" + name + "'",
+                                location(context.source, node));
+    return type;
   }
-  case cparser::NK_CAST_EXPR:
-    return read_type(static_cast<cparser::CastExprASTNode *>(node)->getType(),
-                     function.unit.source, function.unit.diagnostics);
+  case cparser::NK_CAST_EXPR: {
+    auto *cast = static_cast<cparser::CastExprASTNode *>(node);
+    auto target = unqualified(read_type(cast->getType(), context, true));
+    if (!target.valid() || !present(cast->getExpr()))
+      return invalid_type();
+    if (cast->getExpr()->getKind() == cparser::NK_REAL_CONST &&
+        (target.integer() || is_void(target)))
+      return target; // Only the type matters, not representability of the value.
+    const auto source = as_value(cast->getExpr());
+    if (!source.valid() || (!is_void(target) && (!target.scalar() || !source.scalar())))
+      return invalid_type();
+    if (target.pointer() && source.pointer() &&
+        target.function_pointer() != source.function_pointer() &&
+        !(target.function_pointer() && is_null_pointer_constant(context, cast->getExpr(), source)))
+      return invalid_type();
+    return target;
+  }
   case cparser::NK_BIT_NOT_EXPR:
-    return promote(expression_type(
-        function, static_cast<cparser::BitNotExprASTNode *>(node)->getExpr()));
+    return promote(as_value(static_cast<cparser::BitNotExprASTNode *>(node)->getExpr()));
   case cparser::NK_UNARY_PLUS_EXPR:
-    return promote(expression_type(
-        function, static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr()));
+    return promote(as_value(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr()));
   case cparser::NK_LOG_NOT_EXPR:
-  case cparser::NK_LOG_AND_EXPR:
-  case cparser::NK_LOG_OR_EXPR:
-  case cparser::NK_LT_EXPR:
-  case cparser::NK_LE_EXPR:
-  case cparser::NK_GT_EXPR:
-  case cparser::NK_GE_EXPR:
-  case cparser::NK_EQ_EXPR:
-  case cparser::NK_NE_EXPR:
-    return int_type();
+    return as_value(static_cast<cparser::LogNotExprASTNode *>(node)->getExpr()).scalar()
+               ? int_type() : invalid_type();
   case cparser::NK_PREDECREMENT_EXPR:
-    return expression_type(
-        function,
-        static_cast<cparser::PredecrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PredecrementExprASTNode *>(node)->getExpr());
   case cparser::NK_PREINCREMENT_EXPR:
-    return expression_type(
-        function,
-        static_cast<cparser::PreincrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PreincrementExprASTNode *>(node)->getExpr());
   case cparser::NK_POSTDECREMENT_EXPR:
-    return expression_type(
-        function,
-        static_cast<cparser::PostdecrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PostdecrementExprASTNode *>(node)->getExpr());
   case cparser::NK_POSTINCREMENT_EXPR:
-    return expression_type(
-        function,
-        static_cast<cparser::PostincrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PostincrementExprASTNode *>(node)->getExpr());
   case cparser::NK_ADDR_EXPR: {
-    auto type = expression_type(
-        function, static_cast<cparser::AddrExprASTNode *>(node)->getExpr());
-    return type.valid() ? pointer_type(type) : invalid_type();
+    auto *operand = static_cast<cparser::AddrExprASTNode *>(node)->getExpr();
+    auto type = type_of(operand);
+    if (type.valid() && operand->getKind() == cparser::NK_IDENT_NODE &&
+        context.lookup(identifier(operand)).register_object) {
+      context.diagnostics.error("cephyr.type", "cannot take the address of a register object",
+                                location(context.source, operand));
+      return invalid_type();
+    }
+    return type.valid() && describes_lvalue(operand) ? pointer_type(type) : invalid_type();
   }
   case cparser::NK_INDIRECT_REF: {
     auto *indirect = static_cast<cparser::IndirectRefASTNode *>(node);
     if (present(indirect->getField()))
       return invalid_type();
-    auto type = decay(expression_type(function, indirect->getExpr()));
+    auto type = as_value(indirect->getExpr());
     return type.pointer() && type.element ? *type.element : invalid_type();
   }
   case cparser::NK_ARRAY_REF: {
     auto *array = static_cast<cparser::ArrayRefASTNode *>(node);
-    auto base = decay(expression_type(function, array->getExpr()));
-    auto index = decay(expression_type(function, array->getIndex()));
+    auto base = as_value(array->getExpr());
+    auto index = as_value(array->getIndex());
     if (base.integer() && index.pointer())
       std::swap(base, index);
     return complete_object_pointer(base) && index.integer() ? *base.element
                                                             : invalid_type();
   }
-  case cparser::NK_PLUS_EXPR:
-  case cparser::NK_MINUS_EXPR: {
-    const auto children = binary_children(node);
-    auto lhs = decay(expression_type(function, children->lhs));
-    auto rhs = decay(expression_type(function, children->rhs));
-    if (node->getKind() == cparser::NK_PLUS_EXPR) {
-      if (complete_object_pointer(lhs) && rhs.integer())
-        return lhs;
-      if (complete_object_pointer(rhs) && lhs.integer())
-        return rhs;
-    } else {
-      if (complete_object_pointer(lhs) && rhs.integer())
-        return lhs;
-      if (complete_object_pointer(lhs) && complete_object_pointer(rhs) &&
-          compatible_object_pointers(lhs, rhs))
-        return difference_type();
-    }
-    return arithmetic_type(function, node);
+  case cparser::NK_ASSIGN_EXPR: {
+    auto *assign = static_cast<cparser::AssignExprASTNode *>(node);
+    const auto target = type_of(assign->getLhs());
+    if (!type_modifiable(assign->getLhs(), target))
+      return invalid_type();
+    const auto source = as_value(assign->getRhs());
+    return assignment_compatible(context, target, source, assign->getRhs())
+               ? unqualified(target) : invalid_type();
   }
-  case cparser::NK_LSHIFT_EXPR:
-  case cparser::NK_RSHIFT_EXPR:
-  case cparser::NK_BIT_IOR_EXPR:
-  case cparser::NK_BIT_XOR_EXPR:
-  case cparser::NK_BIT_AND_EXPR:
-  case cparser::NK_MULT_EXPR:
-  case cparser::NK_TRUNC_DIV_EXPR:
-  case cparser::NK_TRUNC_MOD_EXPR:
-    return arithmetic_type(function, node);
-  case cparser::NK_ASSIGN_EXPR:
-    return expression_type(
-        function, static_cast<cparser::AssignExprASTNode *>(node)->getLhs());
   case cparser::NK_COND_EXPR: {
     auto *conditional = static_cast<cparser::CondExprASTNode *>(node);
-    return conditional_type(function, conditional->getThenClause(),
-                            conditional->getElseClause());
+    return as_value(conditional->getCondition()).scalar()
+               ? conditional_type(context, conditional->getThenClause(),
+                                  conditional->getElseClause())
+               : invalid_type();
   }
   case cparser::NK_CALL_EXPR: {
     auto *call = static_cast<cparser::CallExprASTNode *>(node);
-    auto callee = decay(expression_type(function, call->getExpr()));
-    if (callee.function_pointer() && callee.element->element)
-      return *callee.element->element;
-    return invalid_type();
+    const auto callee = as_value(call->getExpr());
+    if (!callee.function_pointer() || !callee.element->element)
+      return invalid_type();
+    const auto &signature = *callee.element;
+    const auto args = elements(call->getArgs());
+    if (signature.prototype && (args.size() < signature.params.size() ||
+        (!signature.variadic && args.size() != signature.params.size())))
+      return invalid_type();
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const auto argument = as_value(args[i]);
+      if (i < signature.params.size()) {
+        if (!assignment_compatible(context, signature.params[i], argument, args[i]))
+          return invalid_type();
+      } else if (!argument.scalar()) {
+        return invalid_type();
+      }
+    }
+    return *signature.element;
   }
   case cparser::NK_SIZEOF_EXPR:
-  case cparser::NK_ALIGNOF_EXPR:
-    return size_type();
-  case cparser::NK_LIST: {
-    auto nodes = elements(node);
-    return nodes.empty() ? void_type()
-                         : decay(expression_type(function, nodes.back()));
+  case cparser::NK_ALIGNOF_EXPR: {
+    const auto size = size_or_alignment(node, context);
+    return size ? size->type : invalid_type();
   }
-  case cparser::NK_COMPOUND_EXPR: {
-    auto *compound = static_cast<cparser::CompoundExprASTNode *>(node);
-    auto nodes = elements(compound->getElements());
-    return nodes.empty() ? invalid_type()
-                         : decay(expression_type(function, nodes.back()));
-  }
+  case cparser::NK_LIST:
+    return comma_type(node);
+  case cparser::NK_COMPOUND_EXPR:
+    return comma_type(static_cast<cparser::CompoundExprASTNode *>(node)->getElements());
   case cparser::NK_NOP_EXPR:
     return void_type();
   default:
+    break;
+  }
+  const auto children = binary_children(node);
+  if (!children)
     return invalid_type();
+  const auto lhs = as_value(children->lhs);
+  const auto rhs = as_value(children->rhs);
+  switch (node->getKind()) {
+  case cparser::NK_LOG_AND_EXPR:
+  case cparser::NK_LOG_OR_EXPR:
+    return lhs.scalar() && rhs.scalar() ? int_type() : invalid_type();
+  case cparser::NK_EQ_EXPR:
+  case cparser::NK_NE_EXPR:
+    if ((lhs.pointer() && is_null_pointer_constant(context, children->rhs, rhs)) ||
+        (rhs.pointer() && is_null_pointer_constant(context, children->lhs, lhs)))
+      return int_type();
+    if (lhs.function_pointer() && rhs.function_pointer() && compatible(lhs, rhs))
+      return int_type();
+    if (compatible_object_pointers(lhs, rhs))
+      return int_type();
+    return lhs.integer() && rhs.integer() ? int_type() : invalid_type();
+  case cparser::NK_LT_EXPR:
+  case cparser::NK_LE_EXPR:
+  case cparser::NK_GT_EXPR:
+  case cparser::NK_GE_EXPR:
+    return ((lhs.integer() && rhs.integer()) ||
+            (is_object_pointer(lhs) && is_object_pointer(rhs) &&
+             compatible_object_pointers(lhs, rhs))) ? int_type() : invalid_type();
+  default:
+    return arithmetic_type(node->getKind(), lhs, rhs);
   }
 }
+
+namespace {
 
 Expr canonicalize(Function &function, Expr value, Node *at) {
   if (!value.type.integer() || value.id == no_value)
@@ -712,7 +795,8 @@ Expr logical(Function &function, ASTNodeKind kind, Node *lhs_node,
 
 Expr conditional(Function &function, cparser::CondExprASTNode *node) {
   const auto result_type =
-      conditional_type(function, node->getThenClause(), node->getElseClause());
+      conditional_type(TypeContext(function.unit, &function),
+                       node->getThenClause(), node->getElseClause());
   if (!result_type.valid()) {
     function.error(node, "incompatible operands to conditional expression");
     return invalid_expr();
@@ -850,7 +934,7 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
     function.error(node, "function call has the wrong number of arguments");
     return invalid_expr();
   }
-  if (arguments.size() > max_call_arguments) {
+  if (arguments.size() > ARCHON_MIR_MAX_PARAMS) {
     function.error(node, "function call exceeds the native argument limit");
     return invalid_expr();
   }
@@ -937,7 +1021,7 @@ Expr indirect_call(Function &function, cparser::CallExprASTNode *node) {
     function.error(node, "function call has the wrong number of arguments");
     return invalid_expr();
   }
-  if (arguments.size() > max_call_arguments) {
+  if (arguments.size() > ARCHON_MIR_MAX_PARAMS) {
     function.error(node, "function call exceeds the native argument limit");
     return invalid_expr();
   }
@@ -998,37 +1082,11 @@ Expr string_literal(Function &function, Node *node) {
   return {type, function.emit(type, "global_addr", symbol), std::nullopt};
 }
 
-Expr sizeof_expression(Function &function, cparser::SizeOfExprASTNode *node) {
-  auto *operand = node->getExpr();
-  CType type;
-  if (present(operand) && operand->isType())
-    type =
-        read_type(operand, function.unit.source, function.unit.diagnostics, true);
-  else
-    type = expression_type(function, operand);
-  const auto size = size_of(type);
-  if (!size) {
-    function.error(node, "sizeof requires a complete object type");
+Expr lower_size_or_alignment(Function &function, Node *node) {
+  const auto result = size_or_alignment(node, TypeContext(function.unit, &function));
+  if (!result)
     return invalid_expr();
-  }
-  return {size_type(), function.constant(*size, size_type()), *size};
-}
-
-Expr alignof_expression(Function &function, cparser::AlignOfExprASTNode *node) {
-  auto *operand = node->getExpr();
-  CType type;
-  if (present(operand) && operand->isType())
-    type =
-        read_type(operand, function.unit.source, function.unit.diagnostics, true);
-  else
-    type = expression_type(function, operand);
-  const auto object_size = size_of(type);
-  const auto alignment = align_of(type);
-  if (!type.valid() || !object_size || !alignment) {
-    function.error(node, "_Alignof requires a complete object type");
-    return invalid_expr();
-  }
-  return {size_type(), function.constant(alignment, size_type()), alignment};
+  return {result->type, function.constant(result->value, result->type), result->value};
 }
 
 Expr lower_binary(Function &function, Node *node) {
@@ -1060,8 +1118,7 @@ void attach_integer_constant(Function &function, Node *node, Expr &result) {
   if (!result.type.integer() || result.constant)
     return;
   Diagnostics probe;
-  auto value =
-      integer_constant(node, function.unit.source, probe);
+  auto value = integer_constant(node, TypeContext(function.unit, &function).with_probe(probe));
   if (value)
     result.constant = normalize(value->value, result.type);
 }
@@ -1310,8 +1367,14 @@ LValue lower_lvalue(Function &function, Node *node) {
   switch (node->getKind()) {
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
-    if (auto local = function.find_local(name))
+    if (auto local = function.find_local(name)) {
+      if (!local->static_name.empty()) {
+        function.require_static(*local);
+        local->address = function.emit(pointer_type(local->type), "global_addr",
+                                       local->static_name);
+      }
       return *local;
+    }
     auto found = function.unit.symbols.find(name);
     if (found == function.unit.symbols.end()) {
       function.error(node, "use of undeclared identifier");
@@ -1391,8 +1454,7 @@ Expr lower_expr(Function &function, Node *node) {
   switch (node->getKind()) {
   case cparser::NK_INTEGER_CONST:
   case cparser::NK_CHAR_CONST: {
-    auto constant =
-        integer_constant(node, function.unit.source, function.unit.diagnostics);
+    auto constant = integer_constant(node, TypeContext(function.unit, &function));
     if (!constant)
       return invalid_expr();
     constant->value = normalize(constant->value, constant->type);
@@ -1423,9 +1485,22 @@ Expr lower_expr(Function &function, Node *node) {
   }
   case cparser::NK_CAST_EXPR: {
     auto *cast = static_cast<cparser::CastExprASTNode *>(node);
-    const auto type =
-        read_type(cast->getType(), function.unit.source,
-                  function.unit.diagnostics, true);
+    const auto context = TypeContext(function.unit, &function);
+    const auto type = read_type(cast->getType(), context, true);
+    if (type.integer() && present(cast->getExpr()) &&
+        cast->getExpr()->getKind() == cparser::NK_REAL_CONST) {
+      // C11 6.6p6 permits this as an ICE. Use the semantic conversion
+      // directly so even a runtime expression needs no FP MachineIR.
+      const auto errors = function.unit.diagnostics.error_count();
+      const auto value = integer_constant(node, context);
+      if (!value) {
+        if (function.unit.diagnostics.error_count() == errors)
+          function.error(node, "unsupported floating constant in integer cast");
+        return invalid_expr();
+      }
+      result = {value->type, function.constant(value->value, value->type), value->value};
+      break;
+    }
     result = convert(function, lower_expr(function, cast->getExpr()), type, node,
                      true);
     break;
@@ -1514,7 +1589,12 @@ Expr lower_expr(Function &function, Node *node) {
     }
     if (operand->getKind() == cparser::NK_IDENT_NODE) {
       const auto name = identifier(operand);
-      if (!function.find_local(name)) {
+      if (const auto local = function.find_local(name)) {
+        if (local->register_object) {
+          function.error(operand, "cannot take the address of a register object", "cephyr.type");
+          return invalid_expr();
+        }
+      } else {
         auto symbol = function.unit.symbols.find(name);
         if (symbol != function.unit.symbols.end() &&
             symbol->second.type.kind == CType::Kind::function) {
@@ -1586,12 +1666,8 @@ Expr lower_expr(Function &function, Node *node) {
     result = call(function, static_cast<cparser::CallExprASTNode *>(node));
     break;
   case cparser::NK_SIZEOF_EXPR:
-    result = sizeof_expression(
-        function, static_cast<cparser::SizeOfExprASTNode *>(node));
-    break;
   case cparser::NK_ALIGNOF_EXPR:
-    result = alignof_expression(
-        function, static_cast<cparser::AlignOfExprASTNode *>(node));
+    result = lower_size_or_alignment(function, node);
     break;
   case cparser::NK_LIST: {
     const auto expressions = elements(node);

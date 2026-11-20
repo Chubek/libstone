@@ -31,6 +31,8 @@ public:
   cparser::ASTNode *root() const;
 };
 
+// Parses preprocessed C, including syntax and selected declaration and statement
+// constraints. A successful parse does not guarantee native backend support.
 std::optional<ParsedUnit> parse(const Preprocessed &, Diagnostics &);
 
 } // namespace cephyr

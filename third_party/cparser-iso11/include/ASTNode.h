@@ -1938,9 +1938,11 @@ class EnumeralTypeASTNode : public ASTNode
 {
     ASTNode *_name;
     ASTNode *_body;
+    const STType *_identity;
 
 public:
-    EnumeralTypeASTNode(ASTNode *Name, ASTNode *Body)
+    EnumeralTypeASTNode(ASTNode *Name, ASTNode *Body, const STType *identity = nullptr)
+        : _identity(identity)
     {
         kind = NK_ENUMERAL_TYPE;
         ASSIGN_AST_NODE_REF(_name, Name);
@@ -1955,6 +1957,7 @@ public:
 
     ASTNode *getName() { return _name; }
     ASTNode *getBody() { return _body; }
+    const STType *getIdentity() const { return _identity; }
 
     void accept(TreeVisitor *v);
 };

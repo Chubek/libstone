@@ -194,6 +194,7 @@ static struct machine_state {
 	/* after a ' */
 	{ S_CHAR,	{ ANY },	PUT(S_CHAR)		},
 	{ S_CHAR,	{ VCH },	FRZ(S_TRUNC)		},
+	{ S_CHAR,	{ '\n' },	FRZ(S_BEHEAD)		},
 	{ S_CHAR,	{ '\'' },	PUT(STO(CHAR))		},
 	{ S_CHAR,	{ '\\' },	PUT(S_CHAR2)		},
 
@@ -475,6 +476,7 @@ static inline void write_char(struct lexer_state *ls, unsigned char c)
 	if (c == '\n') {
 		ls->oline ++;
 	}
+	ls->output_offset ++;
 }
 
 /*
@@ -546,6 +548,8 @@ static inline int read_char(struct lexer_state *ls)
 		}
 		break;
 	}
+	ls->saw_source_char = 1;
+	ls->last_source_char = c;
 	return c;
 }
 
@@ -613,8 +617,8 @@ static inline int next_char(struct lexer_state *ls)
 	do {
 		c = next_fifo_char(ls);
 		/* check trigraphs */
-		if (c == '?' && char_lka1(ls) == '?'
-			&& (ls->flags & HANDLE_TRIGRAPHS)) {
+		if (c == '?' && (ls->flags & HANDLE_TRIGRAPHS)
+			&& char_lka1(ls) == '?') {
 			int i, d;
 
 			d = char_lka2(ls);
@@ -632,10 +636,13 @@ static inline int next_char(struct lexer_state *ls)
 				break;
 			}
 		}
-		if (c == '\\' && char_lka1(ls) == '\n') {
+		if (c == '\\' && !(ls->flags & PHASE3_INPUT)
+			&& char_lka1(ls) == '\n') {
 			ls->line ++;
 			next_fifo_char(ls);
+			ls->final_splice = 1;
 		} else {
+			if (c >= 0) ls->final_splice = 0;
 			ls->last = c;
 			return c;
 		}
@@ -801,9 +808,9 @@ static inline int read_token(struct lexer_state *ls)
 	int c, outc = 0, ucn_in_id = 0;
 	int shift_state;
 	unsigned long utf8;
-	long l = ls->line;
+	long l;
 
-	ls->ctok->line = l;
+	ls->ctok->line = ls->line;
 	if (ls->pending_token) {
 		if ((ls->ctok->type = ls->pending_token) == BUNCH) {
 			ls->ctok->name[0] = '\\';
@@ -816,6 +823,9 @@ static inline int read_token(struct lexer_state *ls)
 		utf8 = ls->utf8;
 		shift_state = 0;
 	}
+	/* Phase 2 can advance past physical lines before the token starts. */
+	next_char(ls);
+	l = ls->ctok->line = ls->line;
 	if (!(ls->flags & LEXER) && (ls->flags & KEEP_OUTPUT))
 		for (; ls->line > ls->oline;) put_char(ls, '\n');
 	do {
@@ -881,6 +891,7 @@ static inline int read_token(struct lexer_state *ls)
 		case S_ILL:
 			if (ls->flags & CCHARSET) {
 				error(ls->line, "illegal character '%c'", c);
+				discard_char(ls);
 				return 1;
 			}
 			nstat = PUT(STO(BUNCH));
@@ -904,7 +915,8 @@ static inline int read_token(struct lexer_state *ls)
 			nstat = FRZ(STO(DIG_SHARP));
 			break;
 		case S_BEHEAD:
-			error(l, "unfinished string at end of line");
+			error(l, "unfinished %s at end of line",
+				cstat == S_CHAR ? "character constant" : "string");
 			return 1;
 		case S_DECAY:
 			warning(l, "unterminated // comment");

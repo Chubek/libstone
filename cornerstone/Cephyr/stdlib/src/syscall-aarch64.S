@@ -30,6 +30,10 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL openat, 56
     CEPHYR_SYSCALL mmap, 222
     CEPHYR_SYSCALL munmap, 215
+    CEPHYR_SYSCALL __cephyr_ioctl, 29
+    CEPHYR_SYSCALL __cephyr_unlinkat, 35
+    CEPHYR_SYSCALL __cephyr_renameat, 276 /* renameat2; flags argument is zero */
+    CEPHYR_SYSCALL __cephyr_getrandom, 278
 
     .globl open
     .type open,%function

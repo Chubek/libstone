@@ -159,6 +159,9 @@ struct lexer_state {
 	int lka[2];
 	int nlka;
 	int macfile;
+	int saw_source_char;
+	int last_source_char;
+	int final_splice;
 	int last;
 	int discard;
 	unsigned long utf8;
@@ -172,6 +175,10 @@ struct lexer_state {
 	unsigned char *output_buf;
 #endif
 	size_t sbuf;
+	/* Physical byte offsets, independent of presumed #line numbers. */
+	size_t output_offset;
+	void (*line_marker)(void *, size_t, size_t, long, const char *);
+	void *line_marker_context;
 
 	/* token control */
 	struct token *ctok;
@@ -229,10 +236,13 @@ struct lexer_state {
 #define KEEP_OUTPUT	     0x020000UL	/* emit the result of preprocessing */
 #define COPY_LINE	     0x040000UL /* make a copy of the parsed line */
 #define ASSEMBLY_INPUT	     0x200000UL /* permit assembler '#' comment lines */
+#define CHECK_SOURCE_EOF     0x400000UL /* diagnose missing final newline/splice */
+#define PROCESS_TEXT_PRAGMAS 0x800000UL /* execute pragmas rather than dumping them */
 
 /* internal flags */
 #define READ_AGAIN	     0x080000UL	/* emit again the last token */
 #define TEXT_OUTPUT	     0x100000UL	/* output text */
+#define PHASE3_INPUT	    0x1000000UL /* retokenize without trigraphs or splicing */
 
 /*
  * Public function prototypes

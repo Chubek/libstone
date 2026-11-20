@@ -1,4 +1,6 @@
-# Embedding Cephyr in C and C++
+# Embedding Cephyr in C, C++, and Python
+
+## C and C++
 
 Link the shared library with the `Cephyr::Cephyr` CMake target from
 `find_package(Cephyr CONFIG REQUIRED)`, or include `<cephyr/Cephyr.h>` and
@@ -35,8 +37,11 @@ int main(void)
 }
 ```
 
-In C++, `<cephyr/Cephyr.hpp>` provides an owning, movable `CompileResult`,
-whose output and diagnostic views remain valid while the result owns them:
+In C++17 and later, `<cephyr/Cephyr.hpp>` provides an owning, move-only
+`CompileResult`. Its output and diagnostic views borrow the native storage.
+Moving a result transfers ownership without invalidating views into that
+storage. Destruction or replacement by move assignment invalidates views
+into the destroyed storage.
 
 ```cpp
 #include <cephyr/Cephyr.hpp>
@@ -53,9 +58,12 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   without a compiler artifact. Objects and executables go to files.
 - `CEPHYR_OK` and `CEPHYR_COMPILE_ERROR` both return a result. An invalid
   request (`CEPHYR_INVALID_ARGUMENT`) or internal error
-  (`CEPHYR_INTERNAL_ERROR`) can return no result. Buffers returned by the C API
-  are NUL-terminated, but use the reported sizes in bytes. Use
-  `--diagnostics-format=sarif` for SARIF instead of text.
+  (`CEPHYR_INTERNAL_ERROR`) can return no result. The call overwrites the
+  output slot, but doesn't destroy a previous result. Results remain valid
+  across later calls. Failure does not roll back files written for earlier
+  inputs. Buffers are NUL-terminated; use their reported byte lengths, not
+  `strlen`. Use `--diagnostics-format=sarif` for SARIF instead of text.
+  Destroy all results before unloading the library.
 - `resource_root` selects the directory with `triples/` and `stdlib/`;
   `archon_root` selects the Archon package and `stdspec/` root. Explicit roots
   override the corresponding configured paths. Default installed resources
@@ -91,6 +99,41 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   loads its selected Archon resources under a private Python package name,
   without changing `sys.path` or replacing the host's `archon` package. Do not
   initialize or finalize the interpreter concurrently with compilation.
-  Release the GIL before waiting for another thread that needs Cephyr's native
-  backend. Python hosts should check `cephyr_python_version()` matches their
-  CPython major/minor before calling `cephyr_compile`.
+  Do not call from a subinterpreter. Release the GIL before waiting for
+  another thread that needs Cephyr's native backend. Python hosts should
+  check `cephyr_python_version()` matches their CPython major/minor before
+  calling `cephyr_compile`.
+
+## Python
+
+Use the GIL-enabled CPython main interpreter (3.10 or later, with the same
+major/minor as the library). Set `PYTHONPATH` to `<prefix>/<libdir>/cephyr/python`
+for a CMake installation, or to `cornerstone/Cephyr/python` in a source tree.
+
+```python
+import cephyr
+
+compiler = cephyr.Compiler()
+result = compiler.compile(["--emit-mir", "-o", "-", "-"],
+                          "int answer(void) { return 42; }\n")
+if not result.ok:
+    raise RuntimeError(result.diagnostics.decode("utf-8", errors="replace"))
+print(result.output.decode("utf-8"))
+```
+
+Importing `cephyr` does not load the library. Construction checks the library
+ABI and CPython version. It searches an explicit `library=` path first, then
+`CEPHYR_LIBRARY`, then its own directory and the CMake installation's libdir,
+and finally the system loader path. Supply `library=` or `CEPHYR_LIBRARY` for
+a typical source-tree build. The `cephyr.compile(...)` convenience function
+accepts the same options and creates a `Compiler` for each call.
+
+As in C, omit `argv[0]` and use `-` to read in-memory input. `str` source is
+encoded as UTF-8; `bytes` source is passed with its original length. Paths and
+arguments accept `str`, `bytes`, and path-like objects with filesystem encoding.
+`Result` owns copies of output and diagnostics as `bytes`, and `Result.sarif()`
+parses diagnostics requested in SARIF format. Calls from multiple Python
+threads can overlap; Cephyr releases the caller's GIL for native compilation
+and acquires it internally for Archon's Python code and SDK callbacks.
+Pass `sdk=` with an iterable of trusted Python hooks to either compile function.
+See [the Python SDK](SDK.md#python) for supported stages and callback results.

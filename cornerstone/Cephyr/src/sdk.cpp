@@ -93,8 +93,36 @@ struct Invocation {
     }
 };
 
+// Do not interpret a client-supplied context as a pointer to live storage
+// until it matches the active callback on this thread.
+thread_local Invocation *active_invocation = nullptr;
+
+class InvocationScope {
+public:
+    explicit InvocationScope(Invocation &call) noexcept
+        : previous_(std::exchange(active_invocation, &call)) {}
+    ~InvocationScope() { active_invocation = previous_; }
+    InvocationScope(const InvocationScope &) = delete;
+    InvocationScope &operator=(const InvocationScope &) = delete;
+
+private:
+    Invocation *previous_;
+};
+
+Invocation *checked_invocation(void *context) noexcept {
+    auto *call = active_invocation;
+    if (call && context != call) {
+        call->fail("invalid callback sink context");
+        return nullptr;
+    }
+    return call;
+}
+
 int set_text(void *context, cephyr_sdk_text text) noexcept {
-    auto &call = *static_cast<Invocation *>(context);
+    auto *active = checked_invocation(context);
+    if (!active)
+        return 0;
+    auto &call = *active;
     if (call.stage == CEPHYR_SDK_ANALYZE)
         return call.fail("analysis hooks cannot replace text");
     if (call.replacement)
@@ -119,7 +147,10 @@ int set_text(void *context, cephyr_sdk_text text) noexcept {
 int report(void *context, uint32_t severity, cephyr_sdk_text code,
            cephyr_sdk_text message, cephyr_sdk_text file,
            uint32_t line, uint32_t column) noexcept {
-    auto &call = *static_cast<Invocation *>(context);
+    auto *active = checked_invocation(context);
+    if (!active)
+        return 0;
+    auto &call = *active;
     if (call.diagnostic_count >= CEPHYR_SDK_MAX_DIAGNOSTICS)
         return call.fail("diagnostic limit exceeded");
     if ((severity != CEPHYR_SDK_NOTE && severity != CEPHYR_SDK_WARNING &&
@@ -242,6 +273,7 @@ bool SdkPipeline::invoke(const Hook &hook, std::string_view text, const Target &
 
     uint32_t status;
     try {
+        const InvocationScope scope(call);
         status = hook.callback(&input, &output, hook.user);
     } catch (...) {
         return error("callback threw an exception");

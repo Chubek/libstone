@@ -232,7 +232,7 @@ bool string_pointer_compatible(const CType &destination, const Preprocessed &sou
 }
 
 std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination,
-                                            Node *expression) {
+                                            Node *expression, const Function *scope) {
     bool address_of = false;
     if (expression->getKind() == cparser::NK_ADDR_EXPR) {
         address_of = true;
@@ -240,33 +240,46 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
             static_cast<cparser::AddrExprASTNode *>(expression)->getExpr();
     }
 
-    std::int64_t addend = 0;
-    std::string source_name;
-    CType source_type;
-
-    if (expression->getKind() == cparser::NK_IDENT_NODE) {
-        source_name = identifier(expression);
+    // A block-scope object may shadow a file-scope symbol, but only one
+    // with static duration is usable as an address constant (C11 6.6p9).
+    const auto find_storage = [&](Node *id) -> std::optional<std::pair<CType, std::string>> {
+        const auto source_name = identifier(id);
+        if (scope) {
+            if (auto local = scope->find_local(source_name)) {
+                if (local->static_name.empty())
+                    return std::nullopt;
+                scope->require_static(*local);
+                return std::pair{local->type, local->static_name};
+            }
+        }
         const auto found = unit.symbols.find(source_name);
         if (found == unit.symbols.end())
             return std::nullopt;
         auto &target = found->second;
-        if (!valid_symbol(target.name))
-            return std::nullopt;
+        if (target.internal && target.type.kind == CType::Kind::function)
+            target.used = true; // Diagnose an internal declaration without a definition.
+        return std::pair{target.type, target.name};
+    };
 
+    if (expression->getKind() == cparser::NK_IDENT_NODE) {
+        const auto storage = find_storage(expression);
+        if (!storage)
+            return std::nullopt;
+        const auto &[type, name] = *storage;
+
+        CType source_type;
         if (address_of) {
-            source_type = pointer_type(target.type);
-        } else if (target.type.kind == CType::Kind::array && target.type.element) {
-            source_type = pointer_type(*target.type.element);
-        } else if (target.type.kind == CType::Kind::function) {
-            source_type = pointer_type(target.type);
+            source_type = pointer_type(type);
+        } else if (type.kind == CType::Kind::array && type.element) {
+            source_type = pointer_type(*type.element);
+        } else if (type.kind == CType::Kind::function) {
+            source_type = pointer_type(type);
         } else {
             return std::nullopt;
         }
         if (!pointer_compatible(destination, source_type))
             return std::nullopt;
-        if (target.internal && target.type.kind == CType::Kind::function)
-            target.used = true; // Diagnose an internal declaration without a definition.
-        return Relocation{0, target.name, 0};
+        return Relocation{0, name, 0};
     }
 
     if (!address_of || expression->getKind() != cparser::NK_ARRAY_REF)
@@ -276,18 +289,17 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     auto *base = reference->getExpr();
     if (!present(base) || base->getKind() != cparser::NK_IDENT_NODE)
         return std::nullopt;
-    source_name = identifier(base);
-    const auto found = unit.symbols.find(source_name);
-    if (found == unit.symbols.end() ||
-        found->second.type.kind != CType::Kind::array ||
-        !found->second.type.element || !valid_symbol(found->second.name))
+    const auto storage = find_storage(base);
+    if (!storage)
+        return std::nullopt;
+    const auto &[type, name] = *storage;
+    if (type.kind != CType::Kind::array || !type.element)
         return std::nullopt;
 
-    auto index =
-        integer_constant(reference->getIndex(), unit.source, unit.diagnostics);
+    auto index = integer_constant(reference->getIndex(), TypeContext(unit, scope));
     auto signed_index = index ? signed_value(*index) : std::nullopt;
-    const auto count = found->second.type.count;
-    const auto element_size = size_of(*found->second.type.element);
+    const auto count = type.count;
+    const auto element_size = size_of(*type.element);
     if (!signed_index || *signed_index < 0 ||
         (count && static_cast<std::uint64_t>(*signed_index) > count) ||
         !element_size || !*element_size ||
@@ -296,16 +308,15 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
                 *element_size)
         return std::nullopt;
 
-    source_type = pointer_type(*found->second.type.element);
-    if (!pointer_compatible(destination, source_type))
+    if (!pointer_compatible(destination, pointer_type(*type.element)))
         return std::nullopt;
-    addend = static_cast<std::int64_t>(
+    const auto addend = static_cast<std::int64_t>(
         static_cast<std::uint64_t>(*signed_index) * *element_size);
-    return Relocation{0, found->second.name, addend};
+    return Relocation{0, name, addend};
 }
 
 bool initialize_integer(Unit &unit, const CType &type, Node *initializer,
-                        Image &image, std::uint64_t offset) {
+                        Image &image, std::uint64_t offset, const Function *scope) {
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
@@ -314,7 +325,7 @@ bool initialize_integer(Unit &unit, const CType &type, Node *initializer,
         return false;
     }
     const auto errors = unit.diagnostics.error_count();
-    auto value = integer_constant(initializer, unit.source, unit.diagnostics);
+    auto value = integer_constant(initializer, TypeContext(unit, scope));
     if (!value) {
         if (errors == unit.diagnostics.error_count())
             unit.error(
@@ -334,7 +345,7 @@ bool initialize_integer(Unit &unit, const CType &type, Node *initializer,
 }
 
 bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
-                        Image &image, std::uint64_t offset) {
+                         Image &image, std::uint64_t offset, const Function *scope) {
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
@@ -357,7 +368,7 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
         return true;
     }
 
-    if (auto relocation = symbol_relocation(unit, type, initializer)) {
+    if (auto relocation = symbol_relocation(unit, type, initializer, scope)) {
         relocation->offset = offset;
         image.relocations.push_back(std::move(*relocation));
         return true;
@@ -367,7 +378,7 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
     Node *integer_node = initializer;
     if (initializer->getKind() == cparser::NK_CAST_EXPR) {
         auto *cast = static_cast<cparser::CastExprASTNode *>(initializer);
-        auto cast_type = read_type(cast->getType(), unit.source, unit.diagnostics, true);
+        auto cast_type = read_type(cast->getType(), TypeContext(unit, scope), true);
         if (cast_type.pointer()) {
             // A cast of an integer constant zero to void * is itself a
             // null-pointer constant, notably in the packaged NULL macro.
@@ -379,7 +390,7 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
         }
     }
     if (present(integer_node)) {
-        auto value = integer_constant(integer_node, unit.source, unit.diagnostics);
+        auto value = integer_constant(integer_node, TypeContext(unit, scope));
         if (value && normalize(value->value, value->type) == 0)
             return true;
     }
@@ -393,83 +404,27 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
 }
 
 bool initialize_scalar(Unit &unit, const CType &type, Node *initializer,
-                       Image &image, std::uint64_t offset) {
+                        Image &image, std::uint64_t offset, const Function *scope) {
     if (type.integer())
-        return initialize_integer(unit, type, initializer, image, offset);
+        return initialize_integer(unit, type, initializer, image, offset, scope);
     if (type.pointer())
-        return initialize_pointer(unit, type, initializer, image, offset);
+        return initialize_pointer(unit, type, initializer, image, offset, scope);
     unit.error(initializer, "file-scope aggregate initializer is not supported",
                "cephyr.global.type");
     return false;
 }
 
-bool initialize_array(Unit &unit, const CType &type, Node *initializer,
-                      Image &image) {
-    if (!type.element || !type.count) {
-        unit.error(initializer, "incomplete array definition is not supported",
-                   "cephyr.global.incomplete-array");
-        return false;
-    }
-    if (!type.element->scalar()) {
-        unit.error(initializer,
-                   "only one-dimensional scalar arrays have supported initializers",
-                   "cephyr.global.aggregate");
-        return false;
-    }
-
-    Node *string_node = initializer;
-    bool scalar_form = true;
-    if (initializer->getKind() == cparser::NK_LIST) {
-        auto list = elements(initializer);
-        scalar_form = list.size() == 1;
-        if (scalar_form)
-            string_node = list.front();
-    }
-    if (type.element->integer() && type.element->bits == 8 && scalar_form &&
-        string_node->getKind() == cparser::NK_STRING_CONST) {
-        const auto errors = unit.diagnostics.error_count();
-        auto bytes = string_constant(string_node, unit.source, unit.diagnostics);
-        if (!bytes && errors == unit.diagnostics.error_count())
-            unit.error(string_node, "invalid character-array string initializer",
-                       "cephyr.global.string");
-        if (!bytes)
-            return false;
-        const bool omit_terminator =
-            bytes->size() == type.count + 1 && !bytes->empty() &&
-            bytes->back() == '\0';
-        if (bytes->size() > type.count && !omit_terminator) {
-            unit.error(string_node, "string literal is too long for character array",
-                       "cephyr.global.string-size");
+bool initialize_array(Unit &unit, const ArrayInitialization &plan, Image &image,
+                      const Function *scope) {
+    for (const auto &entry : plan.entries) {
+        if (entry.bytes) {
+            std::copy(entry.bytes->begin(), entry.bytes->end(),
+                      image.bytes.begin() + static_cast<std::size_t>(entry.offset));
+        } else if (!initialize_scalar(unit, plan.scalar, entry.source, image, entry.offset,
+                                      scope)) {
             return false;
         }
-        const auto copied =
-            std::min<std::uint64_t>(bytes->size(), type.count);
-        std::copy_n(bytes->begin(), static_cast<std::size_t>(copied),
-                    image.bytes.begin());
-        return true;
     }
-
-    if (initializer->getKind() != cparser::NK_LIST) {
-        unit.error(initializer, "array initializer must be a brace-enclosed list",
-                   "cephyr.global.initializer");
-        return false;
-    }
-    auto values = elements(initializer);
-    if (values.size() > type.count) {
-        unit.error(initializer, "too many values in array initializer",
-                   "cephyr.global.initializer");
-        return false;
-    }
-    const auto element_size = size_of(*type.element);
-    if (!element_size) {
-        unit.error(initializer, "array element has no supported object size",
-                   "cephyr.global.type");
-        return false;
-    }
-    for (std::size_t index = 0; index < values.size(); ++index)
-        if (!initialize_scalar(unit, *type.element, values[index], image,
-                               static_cast<std::uint64_t>(index) * *element_size))
-            return false;
     return true;
 }
 
@@ -512,65 +467,6 @@ bool global_name_available(Unit &unit, std::string_view name, Node *at) {
     return false;
 }
 
-bool complete_array_type(Unit &unit, Symbol &symbol, Node *initializer) {
-    auto &type = symbol.type;
-    if (type.kind != CType::Kind::array || type.count)
-        return true;
-    if (!type.element) {
-        unit.error(symbol.definition, "incomplete array has no element type",
-                   "cephyr.global.incomplete-array");
-        return false;
-    }
-
-    if (!present(initializer)) {
-        if (symbol.internal) {
-            unit.error(symbol.definition,
-                       "tentative definition with internal linkage has incomplete array type",
-                       "cephyr.global.incomplete-array");
-            return false;
-        }
-        // An external tentative definition of incomplete array type is
-        // completed as one element at the end of the translation unit.
-        type.count = 1;
-        return true;
-    }
-
-    Node *string_node = initializer;
-    bool scalar_form = true;
-    if (initializer->getKind() == cparser::NK_LIST) {
-        auto list = elements(initializer);
-        scalar_form = list.size() == 1;
-        if (scalar_form)
-            string_node = list.front();
-    }
-    if (type.element->integer() && type.element->bits == 8 && scalar_form &&
-        string_node->getKind() == cparser::NK_STRING_CONST) {
-        const auto errors = unit.diagnostics.error_count();
-        auto bytes = string_constant(string_node, unit.source, unit.diagnostics);
-        if (!bytes && errors == unit.diagnostics.error_count())
-            unit.error(string_node, "invalid incomplete character-array initializer",
-                       "cephyr.global.string");
-        if (!bytes)
-            return false;
-        type.count = static_cast<std::uint64_t>(bytes->size());
-        return true;
-    }
-
-    if (initializer->getKind() != cparser::NK_LIST) {
-        unit.error(initializer, "incomplete array requires a list or string initializer",
-                   "cephyr.global.incomplete-array");
-        return false;
-    }
-    const auto values = elements(initializer);
-    if (values.empty()) {
-        unit.error(initializer, "incomplete array initializer is empty",
-                   "cephyr.global.incomplete-array");
-        return false;
-    }
-    type.count = values.size();
-    return true;
-}
-
 } // namespace
 
 std::string Unit::add_string(std::string bytes) {
@@ -590,7 +486,19 @@ std::string Unit::add_string(std::string bytes) {
     return name;
 }
 
-bool define_global(Unit &unit, Symbol &symbol) {
+void Unit::require_function_name(const std::string &symbol, std::string_view spelling) {
+    if (std::any_of(globals.begin(), globals.end(),
+                    [&](const Global &global) { return global.name == symbol; }))
+        return;
+    Image image;
+    image.bytes.assign(spelling.begin(), spelling.end());
+    image.bytes.push_back(0);
+    image.size = image.bytes.size();
+    globals.push_back(Global{symbol, 0, {}});
+    data_assembly += object_assembly(symbol, true, true, 1, image);
+}
+
+bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
     Node *definition = symbol.definition;
     if (!present(definition) ||
         definition->getKind() != cparser::NK_VAR_DECL) {
@@ -609,11 +517,29 @@ bool define_global(Unit &unit, Symbol &symbol) {
     auto *declaration =
         static_cast<cparser::VarDeclASTNode *>(definition);
     auto *initializer = declaration->getInit();
-    if (!complete_array_type(unit, symbol, initializer))
-        return false;
+    // An inferred bound completes the visible type only at the end of its
+    // initializer list (C11 6.7.9p22), not during initializer evaluation.
+    CType type = symbol.type;
+    std::optional<ArrayInitialization> array_init;
+    if (type.kind == CType::Kind::array) {
+        if (present(initializer)) {
+            array_init = plan_array_initializer(unit, type, initializer);
+            if (!array_init)
+                return false;
+        } else if (!type.count) {
+            if (symbol.internal) {
+                unit.error(definition, scope ? "block-scope static array has incomplete type"
+                                             : "tentative definition with internal linkage has incomplete array type",
+                           "cephyr.global.incomplete-array");
+                return false;
+            }
+            // C11 6.9.2: complete external tentative definitions at TU end.
+            type.count = 1;
+        }
+    }
 
-    const auto size = size_of(symbol.type);
-    const auto alignment = align_of(symbol.type);
+    const auto size = size_of(type);
+    const auto alignment = align_of(type);
     if (!size || !*size || *size > max_object_bytes || !alignment ||
         (alignment & (alignment - 1)) != 0) {
         unit.error(definition, "global object has an unsupported size or alignment",
@@ -625,7 +551,7 @@ bool define_global(Unit &unit, Symbol &symbol) {
     image.size = *size;
 
     if (!present(initializer)) {
-        if (!zero_representable(symbol.type)) {
+        if (!zero_representable(type)) {
             unit.error(definition, "zero initialization of this object type is unsupported",
                        "cephyr.global.type");
             return false;
@@ -638,11 +564,11 @@ bool define_global(Unit &unit, Symbol &symbol) {
             return false;
         }
         image.bytes.assign(static_cast<std::size_t>(*size), 0);
-        if (symbol.type.scalar()) {
-            if (!initialize_scalar(unit, symbol.type, initializer, image, 0))
+        if (type.scalar()) {
+            if (!initialize_scalar(unit, type, initializer, image, 0, scope))
                 return false;
-        } else if (symbol.type.kind == CType::Kind::array) {
-            if (!initialize_array(unit, symbol.type, initializer, image))
+        } else if (array_init) {
+            if (!initialize_array(unit, *array_init, image, scope))
                 return false;
         } else {
             unit.error(initializer, "file-scope aggregate initializer is not supported",
@@ -656,7 +582,7 @@ bool define_global(Unit &unit, Symbol &symbol) {
     }
 
     const auto native_count = static_cast<std::size_t>(*size / 8);
-    const bool readonly = read_only(symbol.type);
+    const bool readonly = read_only(type);
     const bool native =
         !readonly && image.relocations.empty() && *size % 8 == 0 &&
         alignment == 8 && native_count <= max_native_words - native_words_in(unit);
@@ -669,6 +595,7 @@ bool define_global(Unit &unit, Symbol &symbol) {
         unit.data_assembly +=
             object_assembly(symbol.name, symbol.internal, readonly, alignment, image);
     }
+    symbol.type = std::move(type);
     return true;
 }
 

@@ -35,8 +35,11 @@ int main(void)
     cephyr_result *result = NULL;
     const int status = cephyr_compile(&request, &result);
     if (result) {
-        fputs(cephyr_result_diagnostics(result, NULL), stderr);
-        fputs(cephyr_result_output(result, NULL), stdout);
+        size_t size;
+        const char *text = cephyr_result_diagnostics(result, &size);
+        fwrite(text, 1, size, stderr);
+        text = cephyr_result_output(result, &size);
+        fwrite(text, 1, size, stdout);
         cephyr_result_destroy(result);
     }
     return status == CEPHYR_OK ? 0 : 1;

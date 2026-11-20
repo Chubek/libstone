@@ -6,18 +6,24 @@ import ctypes as _ct
 import json
 import os
 import sys
-import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 
-__all__ = ["ABI_VERSION", "Compiler", "Result", "Status", "compile"]
+from ._sdk import (
+    Diagnostic, Hook, HookInput, HookResult, Severity, Stage, _Descriptor, _Registration,
+)
+
+__all__ = [
+    "ABI_VERSION", "Compiler", "Diagnostic", "Hook", "HookInput", "HookResult",
+    "Result", "Severity", "Stage", "Status", "compile",
+]
 
 ABI_VERSION = 1
 _LIBRARY_NAMES = ("libcephyr.so.1", "libcephyr.so")
 _PathArg = str | bytes | os.PathLike[str] | os.PathLike[bytes]
-_compile_lock = threading.RLock()
+_PACKAGE_FILE = Path(__file__).absolute()
 
 
 class Status(IntEnum):
@@ -55,7 +61,7 @@ class _Request(_ct.Structure):
         ("stdin_size", _ct.c_size_t),
         ("resource_root", _ct.c_char_p),
         ("archon_root", _ct.c_char_p),
-        ("sdk", _ct.c_void_p),
+        ("sdk", _ct.POINTER(_Descriptor)),
     ]
 
 
@@ -77,37 +83,47 @@ def _require_main_interpreter() -> None:
 
 
 def _c_string(value: _PathArg, label: str) -> bytes:
-    encoded = os.fsencode(value)
+    path = os.fspath(value)
+    if isinstance(path, str):
+        encoded = str.encode(path, sys.getfilesystemencoding(), sys.getfilesystemencodeerrors())
+    else:
+        # ctypes reads the underlying bytes, so validate those bytes without
+        # calling methods overridden by a subclass.
+        encoded = path if type(path) is bytes else memoryview(path).tobytes()
     if b"\0" in encoded:
         raise ValueError(f"{label} must not contain a NUL byte")
     return encoded
 
 
-def _open_library(library: _PathArg | None) -> _ct.PyDLL:
+def _open_library(library: _PathArg | None) -> _ct.CDLL:
     if library is None:
         library = os.environ.get("CEPHYR_LIBRARY")
     if library is not None:
         path = _c_string(library, "library")
         if not path:
             raise ValueError("library must not be empty")
-        # PyDLL expects str on some CPython versions; fsdecode round-trips bytes.
-        return _ct.PyDLL(os.fsdecode(os.path.abspath(path)))
+        if not os.path.isabs(path):
+            path = os.path.join(os.getcwdb(), path)
+        return _ct.CDLL(os.fsdecode(path))
 
-    package = Path(__file__).resolve().parent
-    directories = [package]
-    python_dir = package.parent
-    if python_dir.name == "python" and python_dir.parent.name == "cephyr":
-        directories.append(python_dir.parent.parent)
-    for directory in directories:
-        for name in _LIBRARY_NAMES:
-            path = directory / name
-            if path.is_file():
-                return _ct.PyDLL(str(path))
+    module = _PACKAGE_FILE
+    # A symlink may be the installed wrapper itself (use the importing
+    # layout), or point to an installed package (use the resolved layout).
+    for package in dict.fromkeys((module.parent, module.resolve().parent)):
+        directories = [package]
+        python_dir = package.parent
+        if python_dir.name == "python" and python_dir.parent.name == "cephyr":
+            directories.append(python_dir.parent.parent)
+        for directory in directories:
+            for name in _LIBRARY_NAMES:
+                path = directory / name
+                if path.is_file():
+                    return _ct.CDLL(str(path))
 
     errors = []
     for name in _LIBRARY_NAMES:
         try:
-            return _ct.PyDLL(name)
+            return _ct.CDLL(name)
         except OSError as error:
             errors.append(str(error))
     raise OSError(
@@ -116,7 +132,7 @@ def _open_library(library: _PathArg | None) -> _ct.PyDLL:
     )
 
 
-def _function(library: _ct.PyDLL, name: str, restype, *argtypes):
+def _function(library: _ct.CDLL, name: str, restype, *argtypes):
     try:
         function = getattr(library, name)
     except AttributeError as error:
@@ -143,7 +159,8 @@ class Compiler:
 
     def __init__(self, library: _PathArg | None = None) -> None:
         _require_main_interpreter()
-        # PyDLL keeps the caller's GIL held on entry into native code.
+        # CDLL releases the GIL during native calls. The backend acquires it
+        # only around the portions of code generation that call CPython.
         self._library = native = _open_library(library)
         abi = _function(native, "cephyr_abi_version", _ct.c_uint)()
         if abi != ABI_VERSION:
@@ -191,45 +208,48 @@ class Compiler:
         *,
         resource_root: _PathArg | None = None,
         archon_root: _PathArg | None = None,
+        sdk: Iterable[Hook] | None = None,
     ) -> Result:
         """Compile with driver arguments (no program name).
 
         For an input named ``-``, pass ``source`` as UTF-8 text or verbatim
-        bytes. Paths and arguments use the filesystem encoding.
+        bytes. Paths and arguments use the filesystem encoding. ``sdk`` is
+        an optional iterable of trusted hooks for this request only.
         """
         if isinstance(argv, (str, bytes, os.PathLike)):
             raise TypeError("argv must be an iterable of arguments, not a string or path")
         args = [_c_string(arg, "argv entry") for arg in argv]
         native_argv = (_ct.c_char_p * len(args))(*args) if args else None
         if isinstance(source, str):
-            source = source.encode("utf-8")
+            source = str.encode(source, "utf-8")
         elif source is not None and not isinstance(source, bytes):
             raise TypeError("source must be str, bytes, or None")
+        registration = None if sdk is None else _Registration(sdk)
         request = _Request(
             _ct.sizeof(_Request),
             len(args),
             native_argv,
             source,
-            len(source) if source is not None else 0,
+            bytes.__len__(source) if source is not None else 0,
             None if resource_root is None else _c_string(resource_root, "resource_root"),
             None if archon_root is None else _c_string(archon_root, "archon_root"),
-            None,
+            None if registration is None else _ct.pointer(registration.descriptor),
         )
-        # Archon runs Python code, which may yield the GIL during compilation.
-        # Serialize Python callers; the native driver rejects recursive calls.
-        with _compile_lock:
-            result = _ct.c_void_p()
-            try:
-                status = Status(self._compile(_ct.byref(request), _ct.byref(result)))
-                if not result:
-                    return Result(status, b"", b"")
-                return Result(
-                    status, _copy_buffer(self._output, result),
-                    _copy_buffer(self._diagnostics, result),
-                )
-            finally:
-                if result:
-                    self._destroy(result)
+        result = _ct.c_void_p()
+        try:
+            native_status = self._compile(_ct.byref(request), _ct.byref(result))
+            if registration is not None:
+                registration.raise_if_failed()
+            status = Status(native_status)
+            if not result:
+                return Result(status, b"", b"")
+            return Result(
+                status, _copy_buffer(self._output, result),
+                _copy_buffer(self._diagnostics, result),
+            )
+        finally:
+            if result:
+                self._destroy(result)
 
 
 def compile(
@@ -239,8 +259,9 @@ def compile(
     library: _PathArg | None = None,
     resource_root: _PathArg | None = None,
     archon_root: _PathArg | None = None,
+    sdk: Iterable[Hook] | None = None,
 ) -> Result:
     """Compile with Cephyr, resolving and ABI-checking the library on each call."""
     return Compiler(library).compile(
-        argv, source, resource_root=resource_root, archon_root=archon_root
+        argv, source, resource_root=resource_root, archon_root=archon_root, sdk=sdk
     )

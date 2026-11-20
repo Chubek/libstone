@@ -32,18 +32,28 @@ int main(void)
     CHECK(cephyr_result_diagnostics(NULL, NULL) == NULL);
     cephyr_result_destroy(NULL);
 
-    cephyr_request request = {sizeof(request), sizeof(preprocess) / sizeof(*preprocess),
-                              preprocess, bytes, sizeof(bytes), NULL, NULL, NULL};
-    CHECK(cephyr_compile(&request, &first) == CEPHYR_OK && first);
+    struct {
+        cephyr_request request;
+        size_t future_field;
+    } extended = {
+        {sizeof(extended), sizeof(preprocess) / sizeof(*preprocess),
+         preprocess, bytes, sizeof(bytes), NULL, NULL, NULL},
+        42
+    };
+    CHECK(cephyr_compile(&extended.request, &first) == CEPHYR_OK && first);
     const char *output = cephyr_result_output(first, &size);
     CHECK(output && size == strlen(output));
     CHECK(strstr(output, "embedding_c") && strstr(output, "347"));
     CHECK(!strstr(output, "TEST_VALUE"));
     CHECK(cephyr_result_diagnostics(first, &size) && size == 0);
 
+    cephyr_request request = extended.request;
+    request.struct_size = sizeof(request);
     request.argc = sizeof(syntax) / sizeof(*syntax);
     request.argv = syntax;
+    result = first; /* cephyr_compile replaces this slot, not the prior result. */
     CHECK(cephyr_compile(&request, &result) == CEPHYR_OK && result);
+    CHECK(result != first);
     CHECK(cephyr_result_output(result, &size) && size == 0);
     cephyr_result_destroy(result);
 
@@ -96,5 +106,11 @@ int main(void)
     request.argc = 1;
     request.argv = broken_args;
     CHECK(cephyr_compile(&request, &result) == CEPHYR_INVALID_ARGUMENT && !result);
+
+    request.argv = syntax;
+    request.argc = sizeof(syntax) / sizeof(*syntax);
+    CHECK(cephyr_compile(&request, &result) == CEPHYR_OK && result);
+    CHECK(cephyr_result_output(result, &size) && size == 0);
+    cephyr_result_destroy(result);
     return 0;
 }

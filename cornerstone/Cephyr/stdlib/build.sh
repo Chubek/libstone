@@ -41,7 +41,7 @@ compile() {
 }
 
 set --
-for source in string ctype stdlib stdio assert allocator runtime; do
+for source in string ctype stdlib stdio stream assert allocator runtime; do
     object="$build/$source.o"
     compile -std=c11 -O2 \
         -c "$root/src/$source.c" -o "$object"

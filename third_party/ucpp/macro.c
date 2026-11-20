@@ -109,12 +109,63 @@ static inline int check_special_macro(char *name)
 	return MAC_NONE;
 }
 
+#ifdef UCPP_C11_MINIMAL_FEATURES
+static char *c11_unavailable[] = {
+	"__STDC_NO_ATOMICS__", "__STDC_NO_COMPLEX__", "__STDC_NO_THREADS__",
+	"__STDC_NO_VLA__"
+};
+
+static const char *const c11_reserved[] = {
+	"__STDC_ISO_10646__", "__STDC_MB_MIGHT_NEQ_WC__", "__STDC_UTF_16__",
+	"__STDC_UTF_32__", "__STDC_ANALYZABLE__", "__STDC_IEC_559__",
+	"__STDC_IEC_559_COMPLEX__", "__STDC_LIB_EXT1__"
+};
+#endif
+
+/* These predefined macros expand normally but are still reserved. */
+static int reserved_macro_name(char *name)
+{
+	if (check_special_macro(name)) return 1;
+	if (no_special_macros || strncmp(name, "__STDC_", 7)) return 0;
+	if (!strcmp(name, "__STDC_VERSION__") || !strcmp(name, "__STDC_HOSTED__"))
+		return 1;
+#ifdef UCPP_C11_MINIMAL_FEATURES
+	{
+		size_t i;
+		for (i = 0; i < sizeof c11_unavailable / sizeof *c11_unavailable; i++)
+			if (!strcmp(name, c11_unavailable[i])) return 1;
+		for (i = 0; i < sizeof c11_reserved / sizeof *c11_reserved; i++)
+			if (!strcmp(name, c11_reserved[i])) return 1;
+	}
+#endif
+	return 0;
+}
+
 int c99_compliant = 1;
 int c99_hosted = 1;
 
 #ifndef UCPP_STDC_VERSION
 #define UCPP_STDC_VERSION "199901L"
 #endif
+
+static void add_predefined_number(char *name, char *number)
+{
+	struct macro *m = new_macro();
+#ifdef LOW_MEM
+	size_t size = strlen(number) + 1;
+	m->cval.t = getmem(1 + size);
+	m->cval.t[0] = NUMBER;
+	mmv(m->cval.t + 1, number, size);
+	m->cval.length = 1 + size;
+#else
+	struct token t;
+	t.type = NUMBER;
+	t.line = 0;
+	t.name = sdup(number);
+	aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
+#endif
+	HTT_put(&macros, m, name);
+}
 
 /*
  * add the special macros to the macro table
@@ -131,47 +182,16 @@ static void add_special_macros(void)
 	m = new_macro(); m->narg = 1;
 	m->arg = getmem(sizeof(char *)); m->arg[0] = sdup("foo");
 	HTT_put(&macros, m, "_Pragma");
-	if (c99_compliant) {
-		char *stdc_version = UCPP_STDC_VERSION;
-		size_t stdc_version_size = strlen(stdc_version) + 1;
-#ifndef LOW_MEM
-		struct token t;
-#endif
-
-		m = new_macro();
-#ifdef LOW_MEM
-		m->cval.t = getmem(1 + stdc_version_size);
-		m->cval.t[0] = NUMBER;
-		mmv(m->cval.t + 1, stdc_version, stdc_version_size);
-		m->cval.length = 1 + stdc_version_size;
-#else
-		t.type = NUMBER;
-		t.line = 0;
-		t.name = sdup(stdc_version);
-		aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
-#endif
-		HTT_put(&macros, m, "__STDC_VERSION__");
+	if (c99_compliant) add_predefined_number("__STDC_VERSION__", UCPP_STDC_VERSION);
+	if (c99_hosted >= 0)
+		add_predefined_number("__STDC_HOSTED__", c99_hosted > 0 ? "1" : "0");
+#ifdef UCPP_C11_MINIMAL_FEATURES
+	{
+		size_t i;
+		for (i = 0; i < sizeof c11_unavailable / sizeof *c11_unavailable; i++)
+			add_predefined_number(c11_unavailable[i], "1");
 	}
-	if (c99_hosted >= 0) {
-		char *hosted = c99_hosted > 0 ? "1" : "0";
-#ifndef LOW_MEM
-		struct token t;
 #endif
-
-		m = new_macro();
-#ifdef LOW_MEM
-		m->cval.t = getmem(3);
-		m->cval.t[0] = NUMBER;
-		mmv(m->cval.t + 1, hosted, 2);
-		m->cval.length = 3;
-#else
-		t.type = NUMBER;
-		t.line = 0;
-		t.name = sdup(hosted);
-		aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
-#endif
-		HTT_put(&macros, m, "__STDC_HOSTED__");
-	}
 }
 
 #ifdef LOW_MEM
@@ -348,7 +368,7 @@ int handle_define(struct lexer_state *ls)
 		error(l, "missing macro name");
 		return 1;
 	}
-	if (check_special_macro(mname)) {
+	if (reserved_macro_name(mname)) {
 		error(l, "trying to redefine the special macro %s", mname);
 		goto warp_error;
 	}
@@ -801,7 +821,7 @@ static int collect_arguments(struct lexer_state *ls, struct token_fifo *tfi,
 		} else if (ltwws && ttWHI(ct->type)) continue;
 
 		t.type = ct->type;
-		if (!read_from_fifo) t.line = ls->line; else t.line = ct->line;
+		t.line = ct->line;
 		/*
 		 * Stringification applies only to macro arguments;
 		 * so we handle here OPT_NONE.
@@ -877,56 +897,65 @@ static inline int concat_token(struct token *t1, struct token *t2)
 	dsharp_lexer.pbuf = 0;
 	dsharp_lexer.ebuf = l1 + l2;
 	dsharp_lexer.discard = 1;
-	dsharp_lexer.flags = DEFAULT_LEXER_FLAGS;
+	dsharp_lexer.flags = (DEFAULT_LEXER_FLAGS & ~HANDLE_TRIGRAPHS)
+		| PHASE3_INPUT;
+	dsharp_lexer.line = t1->line > 0 ? t1->line : t2->line;
+	dsharp_lexer.nlka = 0;
 	dsharp_lexer.pending_token = 0;
 	r = next_token(&dsharp_lexer);
 	freemem(x);
-	return (r == 1 || dsharp_lexer.pbuf < (l1 + l2)
-		|| dsharp_lexer.pending_token
-		|| (dsharp_lexer.pbuf == (l1 + l2) && !dsharp_lexer.discard));
+	/* An identifier/number usually leaves EOF in last, whereas a
+	   closed string or punctuator can finish without looking past it. */
+	return r != 0 || dsharp_lexer.pbuf < l1 + l2 || dsharp_lexer.nlka
+		|| dsharp_lexer.pending_token || ttWHI(dsharp_lexer.ctok->type)
+		|| (!dsharp_lexer.discard && dsharp_lexer.last >= 0);
 }
 
 #ifdef PRAGMA_TOKENIZE
 /*
- * tokenize_string() takes a string as input, and split it into tokens,
- * reassembling the tokens into a single compressed string generated by
- * compress_token_list(); this function is used for _Pragma processing.
+ * Tokenize _Pragma's destringized spelling in phase 3 only (6.10.9).
  */
 struct lexer_state tokenize_lexer;
 
-static char *tokenize_string(struct lexer_state *ls, char *buf)
+static void free_pragma_tokens(struct token_fifo *tf)
 {
-	struct token_fifo tf;
-	size_t bl = strlen(buf);
-	int r;
+	size_t i;
 
+	for (i = 0; i < tf->nt; i ++)
+		if (S_TOKEN(tf->t[i].type)) freemem(tf->t[i].name);
+	if (tf->nt) freemem(tf->t);
+}
+
+static int tokenize_pragma(struct lexer_state *ls, char *buf, long line,
+	struct token_fifo *tf)
+{
+	int r;
+	size_t length = strlen(buf);
+
+	/* Treat the spelling as the contents of one complete directive. */
+	buf[length] = '\n';
 	tokenize_lexer.input = 0;
 	tokenize_lexer.input_string = (unsigned char *)buf;
 	tokenize_lexer.pbuf = 0;
-	tokenize_lexer.ebuf = bl;
+	tokenize_lexer.ebuf = length + 1;
 	tokenize_lexer.discard = 1;
-	tokenize_lexer.flags = ls->flags | LEXER;
+	tokenize_lexer.line = line;
+	tokenize_lexer.flags = (ls->flags & ~(HANDLE_TRIGRAPHS | READ_AGAIN))
+		| LEXER | PHASE3_INPUT;
+	tokenize_lexer.nlka = 0;
+	tokenize_lexer.macfile = 0;
 	tokenize_lexer.pending_token = 0;
-	tf.art = tf.nt = 0;
+	tf->art = tf->nt = 0;
 	while (!(r = next_token(&tokenize_lexer))) {
 		struct token t, *ct = tokenize_lexer.ctok;
 
 		if (ttWHI(ct->type)) continue;
 		t = *ct;
 		if (S_TOKEN(t.type)) t.name = sdup(t.name);
-		aol(tf.t, tf.nt, t, TOKEN_LIST_MEMG);
+		aol(tf->t, tf->nt, t, TOKEN_LIST_MEMG);
 	}
-	if (tokenize_lexer.pbuf < bl) goto tokenize_error;
-	return (char *)((compress_token_list(&tf)).t);
-
-tokenize_error:
-	if (tf.nt) {
-		for (tf.art = 0; tf.art < tf.nt; tf.art ++)
-			if (S_TOKEN(tf.t[tf.art].type))
-				freemem(tf.t[tf.art].name);
-		freemem(tf.t);
-	}
-	return 0;
+	buf[length] = 0;
+	return r == 1;
 }
 #endif
 
@@ -1108,7 +1137,7 @@ int substitute_macro(struct lexer_state *ls, struct macro *m,
 			if (reject_nested > 0) {
 				/* do not replace _Pragma() unless toplevel */
 				t.type = NAME;
-				t.line = ls->line;
+				t.line = l;
 				t.name = mname;
 				print_token(ls, &t, 0);
 				return 0;
@@ -1176,22 +1205,41 @@ collect_args:
 	 * emit a PRAGMA token.
 	 */
 	if (pragma_op) {
-		char *pn;
+		char *buf, *d;
+		const char *c;
 
 		if (atl[0].nt != 1 || atl[0].t[0].type != STRING) {
-			error(ls->line, "invalid argument to _Pragma");
+			error(l, "invalid argument to _Pragma");
 			if (atl[0].nt) freemem(atl[0].t);
 			freemem(atl);
 			goto exit_error;
 		}
 		/* Destringizing deletes any C11 encoding prefix. */
-		pn = strchr(atl[0].t[0].name, '"') + 1;
-		if (*pn == '"') {
+		c = strchr(atl[0].t[0].name, '"') + 1;
+		if (*c == '"') {
 			/* void pragma -- just ignore it */
 			freemem(atl[0].t);
 			freemem(atl);
 			return 0;
 		}
+		for (buf = d = getmem(strlen(c)); *c != '"'; c ++) {
+			if (*c == '\\' && (*(c + 1) == '\\' || *(c + 1) == '"'))
+				c ++;
+			*(d ++) = *c;
+		}
+		*d = 0;
+		freemem(atl[0].t);
+		freemem(atl);
+#ifdef PRAGMA_TOKENIZE
+		if (ls->flags & PROCESS_TEXT_PRAGMAS) {
+			struct token_fifo tf;
+			int failed = tokenize_pragma(ls, buf, l, &tf);
+			if (!failed) failed = check_pragma(&tf, l);
+			free_pragma_tokens(&tf);
+			freemem(buf);
+			return failed;
+		}
+#endif
 		if (ls->flags & TEXT_OUTPUT) {
 #ifdef PRAGMA_DUMP
 	/*
@@ -1200,16 +1248,8 @@ collect_args:
 	 * output, and exactly as many times as it appears. Therefore,
 	 * _Pragma() will get evaluated just like they should.
 	 */
-			char *d;
-
 			for (d = "\n#pragma "; *d; d ++) put_char(ls, *d);
-			for (d = pn; *d != '"'; d ++) {
-				if (*d == '\\' && (*(d + 1) == '\\'
-					|| *(d + 1) == '"')) {
-					d ++;
-				}
-				put_char(ls, *d);
-			}
+			for (d = buf; *d; d ++) put_char(ls, *d);
 			put_char(ls, '\n');
 			ls->oline = ls->line;
 			enter_file(ls, ls->flags);
@@ -1219,36 +1259,29 @@ collect_args:
 					"_Pragma() ignored and not dumped");
 #endif
 		} else if (ls->flags & HANDLE_PRAGMA) {
-			char *c = pn, *d, *buf;
 			struct token t;
 
-			for (buf = d = getmem(strlen(c)); *c != '"'; c ++) {
-				if (*c == '\\' && (*(c + 1) == '\\'
-					|| *(c + 1) == '"')) {
-					*(d ++) = *(++ c);
-				} else *(d ++) = *c;
-			}
-			*d = 0;
 			t.type = PRAGMA;
-			t.line = ls->line;
+			t.line = l;
 #ifdef PRAGMA_TOKENIZE
-			t.name = tokenize_string(ls, buf);
-			freemem(buf);
-			buf = t.name;
-			if (!buf) {
-				freemem(atl[0].t);
-				freemem(atl);
-				goto exit_error;
+			{
+				struct token_fifo tf;
+				int failed = tokenize_pragma(ls, buf, l, &tf);
+				freemem(buf);
+				if (failed) {
+					free_pragma_tokens(&tf);
+					goto exit_error;
+				}
+				buf = (char *)compress_token_list(&tf).t;
 			}
-#else
-			t.name = buf;
 #endif
+			t.name = buf;
 			aol(ls->toplevel_of->t, ls->toplevel_of->nt,
 				t, TOKEN_LIST_MEMG);
 			throw_away(ls->gf, buf);
+			return 0;
 		}
-		freemem(atl[0].t);
-		freemem(atl);
+		freemem(buf);
 		return 0;
 	}
 
@@ -1268,7 +1301,7 @@ collect_args:
 	 */
 
 #define ZAP_LINE(t)	do { \
-		if ((t).type == NAME) { \
+		if ((t).type == NAME && (t).line >= 0) { \
 			struct macro *zlm = HTT_get(&macros, (t).name); \
 			if (zlm && zlm->nest > reject_nested) \
 				(t).line = -1 - (t).line; \
@@ -1408,7 +1441,6 @@ collect_args:
 			if (ltwds || ntwds) {
 				while (atl[z].art < atl[z].nt) {
 					t = atl[z].t[atl[z].art ++];
-					t.line = ls->line;
 					ZAP_LINE(t);
 					aol(etl.t, etl.nt, t, TOKEN_LIST_MEMG);
 				}
@@ -1435,7 +1467,8 @@ collect_args:
 						    (reject_nested + 1)) {
 						ret |= substitute_macro(ls,
 							nm, atl + z, 0,
-							reject_nested + 1, l);
+							reject_nested + 1,
+							cct->line ? cct->line : l);
 						continue;
 					}
 					t = *cct;
@@ -1568,6 +1601,9 @@ collect_args:
 			 */
 		}
 		t = *ct;
+		/* Replacement-list tokens inherit the expansion location;
+		   tokens supplied by arguments keep their own line. */
+		t.line = l;
 		ZAP_LINE(t);
 		aol(etl.t, etl.nt, t, TOKEN_LIST_MEMG);
 	}
@@ -1602,7 +1638,7 @@ collect_args:
 		if (ct->type == NAME && ct->line >= 0
 			&& (nm = HTT_get(&macros, ct->name))) {
 			if (substitute_macro(ls, nm, &etl,
-				penury, reject_nested, l)) {
+				penury, reject_nested, ct->line ? ct->line : l)) {
 				m->nest = save_nest;
 				goto exit_error_2;
 			}
@@ -1617,7 +1653,6 @@ collect_args:
 			else if (ct->type == OPT_NONE) ltwws = 1;
 			else ltwws = 2;
 		} else ltwws = 0;
-		if (ct->line >= 0) ct->line = l;
 		print_token(ls, ct, reject_nested ? 0 : l);
 	}
 	if (etl.nt) freemem(etl.t);
@@ -1696,6 +1731,9 @@ int define_macro(struct lexer_state *ls, char *def)
 		if (!*c) {
 			error(-1, "void macro name");
 			ret = 1;
+		} else if (reserved_macro_name(c)) {
+			error(-1, "trying to redefine the special macro %s", c);
+			ret = 1;
 		} else if ((m = HTT_get(&macros, c))
 #ifdef LOW_MEM
 			&& (m->cval.length != 3
@@ -1747,12 +1785,11 @@ int undef_macro(struct lexer_state *ls, char *def)
 		error(-1, "void macro name");
 		return 1;
 	}
-	if (HTT_get(&macros, c)) {
-		if (check_special_macro(c)) {
-			error(-1, "trying to undef special macro %s", c);
-			return 1;
-		} else HTT_del(&macros, c);
+	if (reserved_macro_name(c)) {
+		error(-1, "trying to undef special macro %s", c);
+		return 1;
 	}
+	if (HTT_get(&macros, c)) HTT_del(&macros, c);
 	return 0;
 }
 
@@ -1806,13 +1843,12 @@ int handle_undef(struct lexer_state *ls)
 			struct macro *m = HTT_get(&macros, ls->ctok->name);
 			int tgd = 1;
 
+			if (reserved_macro_name(ls->ctok->name)) {
+				error(ls->ctok->line, "trying to undef special macro %s",
+					ls->ctok->name);
+				goto undef_error;
+			}
 			if (m != 0) {
-				if (check_special_macro(ls->ctok->name)) {
-					error(ls->line, "trying to undef "
-						"special macro %s",
-						ls->ctok->name);
-					goto undef_error;
-				}
 				if (emit_defines)
 					fprintf(emit_output, "#undef %s\n",
 						ls->ctok->name);

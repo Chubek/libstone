@@ -5,6 +5,13 @@
 
 #define EOF (-1)
 #define BUFSIZ 1024
+#define FOPEN_MAX 16
+#define FILENAME_MAX 4096
+#define L_tmpnam 45
+#define TMP_MAX 10000
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -20,10 +27,25 @@ extern FILE *stderr;
 #define stdout stdout
 #define stderr stderr
 
+int remove(const char *);
+int rename(const char *, const char *);
+FILE *tmpfile(void);
+char *tmpnam(char *);
+FILE *fopen(const char *, const char *);
+FILE *freopen(const char *, const char *, FILE *);
+int fclose(FILE *);
 int fflush(FILE *);
+void setbuf(FILE *, char *);
+int setvbuf(FILE *, char *, int, size_t);
+int fseek(FILE *, long, int);
+long ftell(FILE *);
+int fgetpos(FILE *, fpos_t *);
+int fsetpos(FILE *, const fpos_t *);
+void rewind(FILE *);
 void clearerr(FILE *);
 int feof(FILE *);
 int ferror(FILE *);
+int ungetc(int, FILE *);
 int fgetc(FILE *);
 int getc(FILE *);
 int getchar(void);

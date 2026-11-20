@@ -64,7 +64,7 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
     {
         const char ch = static_cast<char>(_ch);
         const bool digit = std::isalnum(static_cast<unsigned char>(ch)) != 0;
-        if (digit || ch == '.')
+        if (digit || ch == '_' || ch == '.')
         {
             spelling.push_back(ch);
             exponentSign = ch == 'e' || ch == 'E' || ch == 'p' || ch == 'P';
@@ -134,16 +134,28 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
         error(t->line, t->col, "invalid integer constant '%s'",
               spelling.c_str());
 
-    errno = 0;
-    end = nullptr;
-    const unsigned long long value = std::strtoull(digits.c_str(), &end, 0);
-    if (errno == ERANGE)
-        error(t->line, t->col, "integer constant is out of 64-bit range");
-    if (!end || *end != '\0')
-        error(t->line, t->col, "invalid integer constant '%s'",
-              spelling.c_str());
+    // strtoull(base=0) can accept 0b in newer host libraries, but binary
+    // constants are not part of C11. Decode exactly the three C11 bases.
+    const bool hex = digits.size() >= 2 && digits.front() == '0' &&
+                     (digits[1] == 'x' || digits[1] == 'X');
+    const unsigned base = hex ? 16 : digits.front() == '0' ? 8 : 10;
+    std::uint64_t value = 0;
+    if (hex && digits.size() == 2)
+        error(t->line, t->col, "invalid integer constant '%s'", spelling.c_str());
+    for (std::size_t i = hex ? 2 : 0; i < digits.size(); ++i)
+    {
+        const char ch = digits[i];
+        const unsigned digit = ch >= '0' && ch <= '9' ? ch - '0' :
+                               ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 :
+                               ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : 16;
+        if (digit >= base)
+            error(t->line, t->col, "invalid integer constant '%s'", spelling.c_str());
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / base)
+            error(t->line, t->col, "integer constant is out of 64-bit range");
+        value = value * base + digit;
+    }
     t->kind = TK_INT_LIT;
-    t->info.uval = static_cast<std::uint64_t>(value);
+    t->info.uval = value;
 }
 
 void CLexer::readStringLit(Token *t)
@@ -207,6 +219,8 @@ void CLexer::readStringLit(Token *t)
                         ++count;
                         nextCh();
                     }
+                    if (decoded > 255)
+                        error(t->line, t->col, "octal escape exceeds one byte");
                     value.push_back(static_cast<char>(decoded));
                     return;
                 }
@@ -251,6 +265,10 @@ void CLexer::readCharLit(Token *t)
     t->spelling.push_back('\'');
     nextCh();
     t->kind = TK_CHAR_LIT;
+    if (_ch == '\'')
+        error(t->line, t->col, "empty character constant");
+    if (_ch == EOF || _ch == '\n')
+        error(t->line, t->col, "unterminated character constant");
 
     if (_ch == '\\')
     {
@@ -345,6 +363,8 @@ void CLexer::readCharLit(Token *t)
                         ++digits;
                         nextCh();
                     }
+                    if (value > 255)
+                        error(t->line, t->col, "octal escape exceeds one byte");
                     consumed = true;
                     t->info.ival = value;
                     break;
@@ -549,6 +569,20 @@ nextToken:
                     nextCh();
                     t->kind = TK_MOD_ASSIGN;
                 }
+                else if (_ch == '>')
+                {
+                    nextCh();
+                    t->kind = TK_RBRACE;
+                }
+                else if (_ch == ':')
+                {
+                    nextCh();
+                    if (getDiagnosticHandler())
+                        error(t->line, t->col, "unsupported preprocessor directive in C parser input");
+                    while (_ch != '\n' && _ch != EOF)
+                        nextCh();
+                    goto nextToken;
+                }
                 else
                 {
                     t->kind = TK_MOD;
@@ -629,7 +663,13 @@ nextToken:
                 break;
             case ':':
                 nextCh();
-                t->kind = TK_COLON;
+                if (_ch == '>')
+                {
+                    nextCh();
+                    t->kind = TK_RBRACK;
+                }
+                else
+                    t->kind = TK_COLON;
                 break;
             case '<':
                 nextCh();
@@ -650,6 +690,11 @@ nextToken:
                     {
                         t->kind = TK_LSHIFT_OP;
                     }
+                }
+                else if (_ch == ':' || _ch == '%')
+                {
+                    t->kind = _ch == ':' ? TK_LBRACK : TK_LBRACE;
+                    nextCh();
                 }
                 else
                 {
@@ -764,7 +809,6 @@ void CLexer::initialize()
     INSERT_KEYWORD("volatile", TK_VOLATILE);
 
     INSERT_FIRST_OF_STMT_KEYWORD("_Generic", TK__GENERIC);
-    INSERT_FIRST_OF_STMT_KEYWORD("asm", TK_ASM);
     INSERT_FIRST_OF_STMT_KEYWORD("break", TK_BREAK);
     INSERT_FIRST_OF_STMT_KEYWORD("case", TK_CASE);
     INSERT_FIRST_OF_STMT_KEYWORD("continue", TK_CONTINUE);

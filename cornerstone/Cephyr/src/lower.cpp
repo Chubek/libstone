@@ -1,6 +1,8 @@
 #include <cephyr/lower.hpp>
 #include <cephyr/preprocess.hpp>
 
+#include "Backend.h"
+
 #include <AbstractSyntaxTree.h>
 #include <wetstone/utils/Graph.hpp>
 
@@ -8,6 +10,7 @@
 #include <charconv>
 #include <locale>
 #include <set>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -15,7 +18,7 @@ namespace cephyr::detail {
 namespace {
 
 constexpr std::size_t max_blocks = 256, max_values = 4096;
-constexpr std::size_t max_symbols = 256, max_params = 64;
+constexpr std::size_t max_symbols = 256;
 constexpr std::size_t max_function_instructions = 16384, max_module_instructions = 65536;
 constexpr std::size_t max_mir = 4u * 1024u * 1024u;
 constexpr std::string_view reserved_prefix = "__cephyr_tu_";
@@ -40,7 +43,7 @@ bool backend_signature(const CType &type)
 {
     if (type.kind != CType::Kind::function || !type.element ||
         !(type.element->kind == CType::Kind::void_ || type.element->scalar()) ||
-        type.variadic || type.params.size() > max_params)
+        type.variadic || type.params.size() > ARCHON_MIR_MAX_PARAMS)
         return false;
     return std::all_of(type.params.begin(), type.params.end(), [](const CType &t) { return t.scalar(); });
 }
@@ -49,9 +52,9 @@ CType declaration_type(cparser::FunctionDeclASTNode &node, Unit &unit)
 {
     auto *result = node.getType();
     if (present(result) && result->getKind() == cparser::NK_FUNCTION_TYPE)
-        return read_type(result, unit.source, unit.diagnostics, true);
+        return read_type(result, TypeContext(unit), true);
     cparser::FunctionTypeASTNode function(result, node.getPrms());
-    return read_type(&function, unit.source, unit.diagnostics, true);
+    return read_type(&function, TypeContext(unit), true);
 }
 
 bool valid_main(const CType &type, const Preprocessed &source)
@@ -274,7 +277,128 @@ void write_import(std::ostream &out, const std::string &name, const CType &type)
     out << '\n';
 }
 
+bool character_array(const CType &type)
+{
+    return type.kind == CType::Kind::array && type.element &&
+        type.element->integer() && type.element->bits == 8;
+}
+
+class ArrayInitPlanner {
+public:
+    Unit &unit;
+    ArrayInitialization plan;
+
+    explicit ArrayInitPlanner(Unit &u) : unit(u) {}
+
+    bool initialize(CType &type, Node *node, std::uint64_t offset)
+    {
+        if (type.kind != CType::Kind::array) {
+            plan.entries.push_back({offset, node, std::nullopt});
+            return true;
+        }
+
+        const bool braced = node->getKind() == cparser::NK_LIST;
+        const auto children = braced ? elements(node) : std::vector<Node *>{};
+        Node *first = braced && !children.empty() ? children.front() : node;
+        if (character_array(type) && first->getKind() == cparser::NK_STRING_CONST) {
+            if (children.size() > 1)
+                return error(children[1], "too many elements after character-array string initializer");
+            auto bytes = string_constant(first, unit.source, unit.diagnostics);
+            if (!bytes)
+                return false;
+            if (!type.count)
+                type.count = bytes->size();
+            if (bytes->size() - 1 > type.count)
+                return error(first, "string literal is too long for character array");
+            if (bytes->size() > type.count)
+                bytes->pop_back(); // C11 6.7.9p14: only omit the final terminator.
+            plan.entries.push_back({offset, first, std::move(bytes)});
+            return true;
+        }
+        if (!braced)
+            return error(node, "array initializer must be a brace-enclosed list");
+        if (children.empty())
+            return error(node, "array initializer list must not be empty");
+
+        std::size_t next = 0;
+        auto count = consume(type, children, next, offset);
+        if (!count)
+            return false;
+        if (next != children.size())
+            return error(children[next], "too many elements in array initializer");
+        if (!type.count)
+            type.count = *count;
+        return true;
+    }
+
+private:
+    // The explicit braces delimit a cursor. With elided braces a nested
+    // array consumes just enough entries from its parent's cursor (6.7.9p20).
+    std::optional<std::uint64_t> consume(const CType &type, std::span<Node *const> list,
+                                         std::size_t &next, std::uint64_t base)
+    {
+        const AnalysisDepth guard(depth);
+        const auto &element = *type.element;
+        const auto stride = size_of(element);
+        if (!stride || !*stride) {
+            error(list[next], "array initializer requires a complete element type");
+            return std::nullopt;
+        }
+        std::uint64_t index = 0;
+        for (; next != list.size() && (!type.count || index < type.count); ++index) {
+            Node *node = list[next];
+            // Check the entire subobject, not just the location of its first
+            // explicitly initialized leaf, before adding offsets.
+            if (index >= (std::numeric_limits<std::uint64_t>::max() - base) / *stride) {
+                error(node, "array initializer exceeds the object size limit");
+                return std::nullopt;
+            }
+            const std::uint64_t offset = base + index * *stride;
+            if (element.kind == CType::Kind::array && node->getKind() != cparser::NK_LIST &&
+                !(character_array(element) && node->getKind() == cparser::NK_STRING_CONST)) {
+                if (!consume(element, list, next, offset))
+                    return std::nullopt;
+            } else {
+                ++next;
+                CType subobject = element;
+                if (!initialize(subobject, node, offset))
+                    return std::nullopt;
+            }
+        }
+        return index;
+    }
+
+    bool error(Node *node, std::string_view message)
+    {
+        unit.error(node, message, "cephyr.array.initializer");
+        return false;
+    }
+
+    unsigned depth = 0;
+};
+
 } // namespace
+
+std::optional<ArrayInitialization> plan_array_initializer(Unit &unit, CType &type, Node *node)
+{
+    const CType *scalar = &type;
+    bool volatile_array = false;
+    while (scalar->kind == CType::Kind::array && scalar->element) {
+        volatile_array |= scalar->is_volatile;
+        scalar = scalar->element.get();
+    }
+    if (!scalar->scalar()) {
+        unit.error(node, "array initialization requires a supported scalar element type",
+                   "cephyr.array.initializer");
+        return std::nullopt;
+    }
+    ArrayInitPlanner planner(unit);
+    planner.plan.scalar = *scalar;
+    planner.plan.scalar.is_volatile |= volatile_array;
+    if (!planner.initialize(type, node, 0))
+        return std::nullopt;
+    return std::move(planner.plan);
+}
 
 void Unit::error(Node *at, std::string_view message, std::string_view code)
 {
@@ -284,6 +408,28 @@ void Unit::error(Node *at, std::string_view message, std::string_view code)
 void Unit::warn(Node *at, std::string_view message, std::string_view code)
 {
     diagnostics.warning(code, message, location(source, at));
+}
+
+TypeContext::TypeContext(Unit &u, const Function *f)
+    : unit(u), source(u.source), diagnostics(u.diagnostics), function(f)
+{}
+
+TypeContext TypeContext::with_probe(Diagnostics &probe) const
+{
+    return {unit, source, probe, function, prototype, true};
+}
+
+TypeBinding TypeContext::lookup(std::string_view name) const
+{
+    const std::string key(name);
+    for (auto scope = prototype; scope; scope = scope->parent)
+        if (const auto found = scope->parameters.find(key); found != scope->parameters.end())
+            return found->second;
+    if (function)
+        if (const auto local = function->find_local(key))
+            return {local->type, local->register_object};
+    const auto symbol = unit.symbols.find(key);
+    return symbol == unit.symbols.end() ? TypeBinding{} : TypeBinding{symbol->second.type};
 }
 
 std::string Unit::require_signature(const CType &type)
@@ -316,11 +462,12 @@ std::string Unit::require_variadic_call(const Symbol &symbol, const std::vector<
     return alias;
 }
 
-void check_static_assert(Unit &unit, Node *node)
+void check_static_assert(const TypeContext &context, Node *node)
 {
+    auto &unit = context.unit;
     auto &assertion = *static_cast<cparser::StaticAssertASTNode *>(node);
     const auto count = unit.diagnostics.error_count();
-    const auto condition = integer_constant(assertion.getExpr(), unit.source, unit.diagnostics);
+    const auto condition = integer_constant(assertion.getExpr(), context);
     const auto message = string_constant(assertion.getMessage(), unit.source, unit.diagnostics);
     if (!condition) {
         if (unit.diagnostics.error_count() == count)
@@ -455,6 +602,12 @@ bool Function::declare_local(std::string name, LValue storage, Node *at)
     return true;
 }
 
+void Function::require_static(const LValue &local) const
+{
+    if (!local.static_name.empty() && local.static_name == function_name_symbol)
+        unit.require_function_name(function_name_symbol, source_name);
+}
+
 void Function::error(Node *at, std::string_view message, std::string_view code)
 {
     unit.error(at, message, code);
@@ -520,7 +673,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
             if (!present(node))
                 continue;
             if (node->getKind() == NK_STATIC_ASSERT) {
-                check_static_assert(unit, node);
+                check_static_assert(TypeContext(unit), node);
                 continue;
             }
             if (node->getKind() == NK_TYPE_DECL) {
@@ -530,6 +683,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     unit.error(decl.getName(), "typedef conflicts with '" + name + "'");
                 if (!name.empty())
                     typedef_names.insert(name);
+                bind_typedef_bounds(decl.getBody(), TypeContext(unit));
                 continue;
             }
             if (node->getKind() == NK_FUNCTION_DECL) {
@@ -555,7 +709,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     continue;
                 }
                 const auto errors = diagnostics.error_count();
-                Function f(unit, *symbol);
+                Function f(unit, *symbol, identifier(decl.getName()));
                 lower_function_body(f, decl.getPrms(), decl.getBody());
                 if (errors == diagnostics.error_count()) {
                     functions.push_back(write_function(f, instruction_count));
@@ -570,7 +724,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     unit.error(decl.getName(), "object name conflicts with a typedef");
                     continue;
                 }
-                auto type = read_type(decl.getType(), source, diagnostics, true);
+                auto type = read_type(decl.getType(), TypeContext(unit), true);
                 const auto flags = decl.getFlags() |
                     (present(decl.getType()) ? decl.getType()->getFlags() : 0);
                 const bool initialized = present(decl.getInit());

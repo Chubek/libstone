@@ -338,6 +338,9 @@ static void reinit_lexer_state(struct lexer_state *ls, int wb)
 	ls->ebuf = ls->pbuf = 0;
 	ls->nlka = 0;
 	ls->macfile = 0;
+	ls->saw_source_char = 0;
+	ls->last_source_char = 0;
+	ls->final_splice = 0;
 	ls->discard = 1;
 	ls->last = 0;		/* we suppose '\n' is not 0 */
 	ls->line = 1;
@@ -360,6 +363,9 @@ void init_buf_lexer_state(struct lexer_state *ls, int wb)
 	ls->output_buf = wb ? getmem(OUTPUT_BUF_MEMG) : 0;
 #endif
 	ls->sbuf = 0;
+	ls->output_offset = 0;
+	ls->line_marker = 0;
+	ls->line_marker_context = 0;
 	ls->output_fifo = 0;
 
 	ls->ctok = getmem(sizeof(struct token));
@@ -408,6 +414,9 @@ static void restore_lexer_state(struct lexer_state *ls,
 	ls->lka[0] = lsbak->lka[0];
 	ls->lka[1] = lsbak->lka[1];
 	ls->macfile = lsbak->macfile;
+	ls->saw_source_char = lsbak->saw_source_char;
+	ls->last_source_char = lsbak->last_source_char;
+	ls->final_splice = lsbak->final_splice;
 	ls->last = lsbak->last;
 	ls->discard = lsbak->discard;
 	ls->line = lsbak->line;
@@ -577,6 +586,7 @@ static void print_line_info(struct lexer_state *ls, unsigned long flags)
 {
 	char *fn = quote_filename(current_filename);
 	char *b, *d;
+	size_t start = ls->output_offset;
 
 	b = getmem(50 + strlen(fn));
 	if (flags & GCC_LINE_NUM) {
@@ -585,6 +595,9 @@ static void print_line_info(struct lexer_state *ls, unsigned long flags)
 		sprintf(b, "#line %ld %s\n", ls->line, fn);
 	}
 	for (d = b; *d; d ++) put_char(ls, (unsigned char)(*d));
+	if (ls->line_marker && start != ls->output_offset)
+		ls->line_marker(ls->line_marker_context, start, ls->output_offset,
+			ls->line, current_filename);
 	freemem(b);
 	freemem(fn);
 }
@@ -1032,7 +1045,7 @@ static int handle_if(struct lexer_state *ls)
 		if (ltww && ttMWS(ls->ctok->type)) continue;
 		ltww = ttMWS(ls->ctok->type);
 		t.type = ls->ctok->type;
-		t.line = l;
+		t.line = ls->ctok->line;
 		if (S_TOKEN(ls->ctok->type)) {
 			t.name = sdup(ls->ctok->name);
 			throw_away(ls->gf, t.name);
@@ -1080,6 +1093,7 @@ static int handle_if(struct lexer_state *ls)
 	check_macro:
 		m = get_macro(tf.t[nidx].name);
 		rt.type = NUMBER;
+		rt.line = ct->line;
 		rt.name = m ? "1L" : "0L";
 		aol(tf1.t, tf1.nt, rt, TOKEN_LIST_MEMG);
 		tf.art = eidx + 1;
@@ -1222,190 +1236,175 @@ error1:
 	return -1;
 }
 
-/*
- * A #include was found; parse the end of line, replace macros if
- * necessary.
- *
- * If nex is set to non-zero, the directive is considered as a #include_next
- * (extension to C99, mimicked from GNU)
- */
+/* Collect a directive's tokens, retaining whitespace for macro stringizing. */
+static int collect_directive(struct lexer_state *ls, struct token_fifo *tf)
+{
+	int status, whitespace = 1;
+
+	tf->art = tf->nt = 0;
+	while (!(status = next_token(ls)) && ls->ctok->type != NEWLINE) {
+		struct token t = *ls->ctok;
+
+		if (ttMWS(t.type)) {
+			if (whitespace) continue;
+			whitespace = 1;
+			t.type = NONE;
+			t.name = " ";
+		} else {
+			whitespace = 0;
+			if (S_TOKEN(t.type)) {
+				t.name = sdup(t.name);
+				throw_away(ls->gf, t.name);
+			}
+		}
+		aol(tf->t, tf->nt, t, TOKEN_LIST_MEMG);
+	}
+	return status == 1;
+}
+
+/* Consume the original list and produce its rescan (6.10.2, 6.10.4). */
+static int expand_directive(struct lexer_state *ls, struct token_fifo *in,
+	struct token_fifo *out)
+{
+	struct token_fifo *save = ls->output_fifo;
+	int failed = 0;
+
+	out->art = out->nt = 0;
+	ls->output_fifo = out;
+	while (in->art < in->nt) {
+		struct token *t = in->t + in->art ++;
+		struct macro *m = t->type == NAME ? get_macro(t->name) : 0;
+
+		if (m) {
+			if (substitute_macro(ls, m, in, 0,
+#ifdef NO_PRAGMA_IN_DIRECTIVE
+				1,
+#else
+				0,
+#endif
+				t->line)) {
+				failed = 1;
+				break;
+			}
+		} else {
+			aol(out->t, out->nt, *t, TOKEN_LIST_MEMG);
+		}
+	}
+	ls->output_fifo = save;
+	if (in->nt) freemem(in->t);
+	return failed;
+}
+
+/* Parse #include, or the GNU #include_next extension when nex is nonzero. */
 static int handle_include(struct lexer_state *ls, unsigned long flags, int nex)
 {
-	int c, string_fname = 0;
-	char *fname;
-	unsigned char *fname2;
+	int c, status, string_fname = 0;
+	char *fname = 0;
 	size_t fname_ptr = 0;
 	long l = ls->line;
-	int x, y;
+	size_t x, end;
 	FILE *f;
-	struct token_fifo tf, tf2, *save_tf;
-	size_t nl;
-	int tgd;
-	struct lexer_state alt_ls;
+	struct token_fifo tf, tf2;
 
-#define left_angle(t)	((t) == LT || (t) == LEQ || (t) == LSH \
-			|| (t) == ASLSH || (t) == DIG_LBRK || (t) == LBRA)
-#define right_angle(t)	((t) == GT || (t) == RSH || (t) == ARROW \
-			|| (t) == DIG_RBRK || (t) == DIG_RBRA)
-
+	/* Only the original direct forms have a phase-3 header-name token. */
 	while ((c = grap_char(ls)) >= 0 && c != '\n') {
 		if (space_char(c)) {
 			discard_char(ls);
 			continue;
 		}
-		if (c == '<') {
+		if (c == '/') {
+			if (next_token(ls)) return 1;
+			if (ls->ctok->type == COMMENT) continue;
+			ls->flags |= READ_AGAIN;
+			break;
+		}
+		if (c == '<' || c == '"') {
+			int closing = c == '<' ? '>' : '"';
+
+			string_fname = c == '"';
 			discard_char(ls);
-			while ((c = grap_char(ls)) >= 0) {
-				discard_char(ls);
-				if (c == '\n') goto include_last_chance;
-				if (c == '>') break;
+			while ((c = grap_char(ls)) >= 0 && c != '\n'
+				&& c != closing) {
 				aol(fname, fname_ptr, (char)c, FNAME_MEMG);
+				discard_char(ls);
 			}
-			aol(fname, fname_ptr, (char)0, FNAME_MEMG);
-			string_fname = 0;
-			goto do_include;
-		} else if (c == '"') {
+			if (c != closing) {
+				if (closing == '>') {
+					/* Without a direct header-name token, '<' may be
+					   matched by a macro-expanded '>'. Retokenize the
+					   consumed bytes without repeating phases 1/2. */
+					struct lexer_state alt;
+					struct garbage_fifo *saved;
+					unsigned char *tokens = getmem(fname_ptr + 1);
+
+					tokens[0] = '<';
+					if (fname_ptr) mmv(tokens + 1, fname, fname_ptr);
+					if (fname) freemem(fname);
+					fname = 0;
+					init_buf_lexer_state(&alt, 0);
+					alt.input_string = tokens;
+					alt.ebuf = fname_ptr + 1;
+					fname_ptr = 0;
+					alt.line = l;
+					alt.flags = (ls->flags & ~HANDLE_TRIGRAPHS)
+						| PHASE3_INPUT;
+					saved = alt.gf;
+					alt.gf = ls->gf;
+					status = collect_directive(&alt, &tf);
+					alt.gf = saved;
+					free_lexer_state(&alt);
+					freemem(tokens);
+					if (c == '\n') discard_char(ls);
+					if (status) {
+						if (tf.nt) freemem(tf.t);
+						return 1;
+					}
+					goto expand;
+				}
+				if (fname) freemem(fname);
+				if (c == '\n') discard_char(ls);
+				error(l, "unterminated header name in #include");
+				return 1;
+			}
 			discard_char(ls);
-			while ((c = grap_char(ls)) >= 0) {
-				discard_char(ls);
-				if (c == '\n') {
-				/* macro replacements won't save that one */
-					if (fname_ptr) freemem(fname);
-					goto include_error;
-				}
-				if (c == '"') break;
-				aol(fname, fname_ptr, (char)c, FNAME_MEMG);
-			}
 			aol(fname, fname_ptr, (char)0, FNAME_MEMG);
-			string_fname = 1;
 			goto do_include;
 		}
-		goto include_macro;
+		break;
 	}
-
-include_last_chance:
-	/*
-	 * We found a '<' but not the trailing '>'; so we tokenize the
-	 * line, and try to act upon it. The standard lets us free in that
-	 * matter, and no sane programmer would use such a construct, but
-	 * it is no reason not to support it.
-	 */
-	if (fname_ptr == 0) goto include_error;
-	fname2 = getmem(fname_ptr + 1);
-	mmv(fname2 + 1, fname, fname_ptr);
-	fname2[0] = '<';
-	/*
-	 * We merely copy the lexer_state structure; this should be ok,
-	 * since we do want to share the memory structure (garbage_fifo),
-	 * and do not touch any other context-full thing.
-	 */
-	alt_ls = *ls;
-	alt_ls.input = 0;
-	alt_ls.input_string = fname2;
-	alt_ls.pbuf = 0;
-	alt_ls.ebuf = fname_ptr + 1;
-	tf.art = tf.nt = 0;
-	while (!next_token(&alt_ls)) {
-		if (!ttMWS(alt_ls.ctok->type)) {
-			struct token t;
-
-			t.type = alt_ls.ctok->type;
-			t.line = l;
-			if (S_TOKEN(alt_ls.ctok->type)) {
-				t.name = sdup(alt_ls.ctok->name);
-				throw_away(alt_ls.gf, t.name);
-			}
-			aol(tf.t, tf.nt, t, TOKEN_LIST_MEMG);
-		}
+	if (collect_directive(ls, &tf)) {
+		if (tf.nt) freemem(tf.t);
+		return 1;
 	}
-	freemem(fname2);
-	if (alt_ls.pbuf < alt_ls.ebuf) goto include_error;
-		/* tokenizing failed */
-	goto include_macro2;
-	
-include_error:
-	error(l, "invalid '#include'");
-	return 1;
-
-include_macro:
-	tf.art = tf.nt = 0;
-	while (!next_token(ls) && ls->ctok->type != NEWLINE) {
-		if (!ttMWS(ls->ctok->type)) {
-			struct token t;
-
-			t.type = ls->ctok->type;
-			t.line = l;
-			if (S_TOKEN(ls->ctok->type)) {
-				t.name = sdup(ls->ctok->name);
-				throw_away(ls->gf, t.name);
-			}
-			aol(tf.t, tf.nt, t, TOKEN_LIST_MEMG);
-		}
+expand:
+	if (expand_directive(ls, &tf, &tf2)) {
+		if (tf2.nt) freemem(tf2.t);
+		return 1;
 	}
-include_macro2:
-	tf2.art = tf2.nt = 0;
-	save_tf = ls->output_fifo;
-	ls->output_fifo = &tf2;
-	while (tf.art < tf.nt) {
-		struct token *ct;
-
-		ct = tf.t + (tf.art ++);
-		if (ct->type == NAME) {
-			struct macro *m = get_macro(ct->name);
-			if (m) {
-				if (substitute_macro(ls, m, &tf, 0,
-#ifdef NO_PRAGMA_IN_DIRECTIVE
-					1,
-#else
-					0,
-#endif
-					ct->line)) {
-					ls->output_fifo = save_tf;
-					return -1;
-				}
-				continue;
-			}
-		}
-		aol(tf2.t, tf2.nt, *ct, TOKEN_LIST_MEMG);
-	}
-	freemem(tf.t);
-	ls->output_fifo = save_tf;
-	for (x = 0; (size_t)x < tf2.nt && ttWHI(tf2.t[x].type); x ++);
-	for (y = tf2.nt - 1; y >= 0 && ttWHI(tf2.t[y].type); y --);
-	if ((size_t)x >= tf2.nt) goto include_macro_err;
-	if (tf2.t[x].type == STRING) {
-		if (y != x) goto include_macro_err;
-		if (tf2.t[x].name[0] != '"') {
-			size_t prefix = strchr(tf2.t[x].name, '"') - tf2.t[x].name;
-			if (ls->flags & WARN_STANDARD)
-				warning(l, "prefixed string for #include");
-			fname = sdup(tf2.t[x].name);
-			nl = strlen(fname);
-			*(fname + nl - 1) = 0;
-			mmvwo(fname, fname + prefix + 1, nl - prefix - 1);
-		} else {
-			fname = sdup(tf2.t[x].name);
-			nl = strlen(fname);
-			*(fname + nl - 1) = 0;
-			mmvwo(fname, fname + 1, nl - 1);
-		}
+	for (x = 0; x < tf2.nt && ttWHI(tf2.t[x].type); x ++);
+	for (end = tf2.nt; end > x && ttWHI(tf2.t[end - 1].type); end --);
+	if (x == end) goto include_macro_err;
+	if (tf2.t[x].type == STRING && tf2.t[x].name[0] == '"'
+		&& end == x + 1) {
+		fname = sdup(tf2.t[x].name + 1);
+		fname[strlen(fname) - 1] = 0;
 		string_fname = 1;
-	} else if (left_angle(tf2.t[x].type) && right_angle(tf2.t[y].type)) {
-		int i, j;
+	} else if (end > x + 1 && tf2.t[x].type == LT
+		&& tf2.t[end - 1].type == GT) {
+		size_t i;
 
-		if (ls->flags & WARN_ANNOYING) warning(l, "reconstruction "
-			"of <foo> in #include");
-		for (j = 0, i = x; i <= y; i ++) if (!ttWHI(tf2.t[i].type))
-			j += strlen(tname(tf2.t[i]));
-		fname = getmem(j + 1);
-		for (j = 0, i = x; i <= y; i ++) {
+		/* Keep ucpp's implementation-defined convention: concatenate
+		   expanded <...> token spellings, ignoring whitespace. */
+		for (i = x + 1; i < end - 1; i ++) {
+			const char *p;
 			if (ttWHI(tf2.t[i].type)) continue;
-			strcpy(fname + j, tname(tf2.t[i]));
-			j += strlen(tname(tf2.t[i]));
+			p = tname(tf2.t[i]);
+			for (; *p; ++p) {
+				if (*p == '>') goto include_macro_err;
+				aol(fname, fname_ptr, *p, FNAME_MEMG);
+			}
 		}
-		*(fname + j - 1) = 0;
-		mmvwo(fname, fname + 1, j);
-		string_fname = 0;
+		aol(fname, fname_ptr, (char)0, FNAME_MEMG);
 	} else goto include_macro_err;
 	freemem(tf2.t);
 	goto do_include_next;
@@ -1414,24 +1413,32 @@ include_macro_err:
 	error(l, "macro expansion did not produce a valid filename "
 		"for #include");
 	if (tf2.nt) freemem(tf2.t);
+	if (fname) freemem(fname);
 	return 1;
 
 do_include:
-	tgd = 1;
-	while (!next_token(ls)) {
-		if (tgd && !ttWHI(ls->ctok->type)
-			&& (ls->flags & WARN_STANDARD)) {
-			warning(l, "trailing garbage in #include");
-			tgd = 0;
-		}
-		if (ls->ctok->type == NEWLINE) break;
+	if (collect_directive(ls, &tf)) {
+		if (tf.nt) freemem(tf.t);
+		freemem(fname);
+		return 1;
 	}
-
-	/* the increment of ls->line is intended so that the line
-	   numbering is reported correctly in report_context() even if
-	   the #include is at the end of the file with no trailing newline */
-	if (ls->ctok->type != NEWLINE) ls->line ++;
+	if (tf.nt) {
+		status = expand_directive(ls, &tf, &tf2);
+		for (x = 0; x < tf2.nt && ttWHI(tf2.t[x].type); x ++);
+		if (tf2.nt) freemem(tf2.t);
+		if (status || x != tf2.nt) {
+			freemem(fname);
+			if (!status) error(l, "trailing tokens in #include");
+			return 1;
+		}
+	}
 do_include_next:
+	if (!*fname || ls_depth >= 256) {
+		error(l, !*fname ? "empty header name in #include"
+			: "too many levels of #include (max 256)");
+		freemem(fname);
+		return 1;
+	}
 	if (!(ls->flags & LEXER) && (ls->flags & KEEP_OUTPUT))
 		put_char(ls, '\n');
 	push_file_context(ls);
@@ -1524,132 +1531,127 @@ static void decode_line_filename(char *filename)
 /* for #line directives */
 static int handle_line(struct lexer_state *ls, unsigned long flags)
 {
-	char *fname;
+	const char *digits;
+	char *fname = 0;
 	long l = ls->line;
-	struct token_fifo tf, tf2, *save_tf;
-	size_t nl, j;
-	unsigned long z;
+	struct token_fifo tf, tf2;
+	size_t i;
+	unsigned long z = 0;
 
-	tf.art = tf.nt = 0;
-	while (!next_token(ls) && ls->ctok->type != NEWLINE) {
-		if (!ttMWS(ls->ctok->type)) {
-			struct token t;
-
-			t.type = ls->ctok->type;
-			t.line = l;
-			if (S_TOKEN(ls->ctok->type)) {
-				t.name = sdup(ls->ctok->name);
-				throw_away(ls->gf, t.name);
-			}
-			aol(tf.t, tf.nt, t, TOKEN_LIST_MEMG);
-		}
+	if (collect_directive(ls, &tf)) {
+		if (tf.nt) freemem(tf.t);
+		return 1;
 	}
-	tf2.art = tf2.nt = 0;
-	save_tf = ls->output_fifo;
-	ls->output_fifo = &tf2;
-	while (tf.art < tf.nt) {
-		struct token *ct;
-
-		ct = tf.t + (tf.art ++);
-		if (ct->type == NAME) {
-			struct macro *m = get_macro(ct->name);
-			if (m) {
-				if (substitute_macro(ls, m, &tf, 0,
-#ifdef NO_PRAGMA_IN_DIRECTIVE
-					1,
-#else
-					0,
-#endif
-					ct->line)) {
-					ls->output_fifo = save_tf;
-					return -1;
-				}
-				continue;
-			}
-		}
-		aol(tf2.t, tf2.nt, *ct, TOKEN_LIST_MEMG);
-	}
-	freemem(tf.t);
-	for (tf2.art = 0; tf2.art < tf2.nt && ttWHI(tf2.t[tf2.art].type);
-		tf2.art ++);
-	ls->output_fifo = save_tf;
-	if (tf2.art == tf2.nt || (tf2.t[tf2.art].type != NUMBER
-		&& tf2.t[tf2.art].type != CHAR)) {
-		error(l, "not a valid number for #line");
+	if (expand_directive(ls, &tf, &tf2)) goto line_macro_err;
+	for (i = 0; i < tf2.nt && ttWHI(tf2.t[i].type); i ++);
+	if (i == tf2.nt || tf2.t[i].type != NUMBER) {
+		error(l, "expected a decimal digit sequence in #line");
 		goto line_macro_err;
 	}
-	for (j = 0; tf2.t[tf2.art].name[j]; j ++)
-		if (tf2.t[tf2.art].name[j] < '0'
-			|| tf2.t[tf2.art].name[j] > '9')
-			if (ls->flags & WARN_STANDARD)
-				warning(l, "non-standard line number in #line");
-	if (catch(eval_exception)) goto line_macro_err;
-	z = strtoconst(tf2.t[tf2.art].name);
-	if (j > 10 || z > 2147483647U) {
-		error(l, "out-of-bound line number for #line");
-		goto line_macro_err;
-	}
-	ls->oline = ls->line = z;
-	if ((++ tf2.art) < tf2.nt) {
-		size_t i;
+	for (digits = tf2.t[i].name; *digits; digits ++) {
+		unsigned digit;
 
-		for (i = tf2.art; i < tf2.nt && ttMWS(tf2.t[i].type); i ++);
+		if (*digits < '0' || *digits > '9') {
+			error(l, "expected a decimal digit sequence in #line");
+			goto line_macro_err;
+		}
+		digit = *digits - '0';
+		if (z > (2147483647UL - digit) / 10) goto line_range_err;
+		z = z * 10 + digit;
+	}
+	if (!z) goto line_range_err;
+	for (i ++; i < tf2.nt && ttWHI(tf2.t[i].type); i ++);
+	if (i < tf2.nt) {
+		if (tf2.t[i].type != STRING || tf2.t[i].name[0] != '"') {
+			error(l, "expected an ordinary string literal for #line filename");
+			goto line_macro_err;
+		}
+		fname = sdup(tf2.t[i].name + 1);
+		fname[strlen(fname) - 1] = 0;
+		decode_line_filename(fname);
+		for (i ++; i < tf2.nt && ttWHI(tf2.t[i].type); i ++);
 		if (i < tf2.nt) {
-			if (tf2.t[i].type != STRING) {
-				error(l, "not a valid filename for #line");
-				goto line_macro_err;
-			}
-			if (tf2.t[i].name[0] != '"') {
-				size_t prefix = strchr(tf2.t[i].name, '"') - tf2.t[i].name;
-				if (ls->flags & WARN_STANDARD) {
-					warning(l, "prefixed string for #line");
-				}
-				fname = sdup(tf2.t[i].name);
-				nl = strlen(fname);
-				*(fname + nl - 1) = 0;
-				mmvwo(fname, fname + prefix + 1, nl - prefix - 1);
-			} else {
-				fname = sdup(tf2.t[i].name);
-				nl = strlen(fname);
-				*(fname + nl - 1) = 0;
-				mmvwo(fname, fname + 1, nl - 1);
-			}
-			decode_line_filename(fname);
-			if (current_filename) freemem(current_filename);
-			current_filename = fname;
+			error(l, "trailing tokens in #line");
+			goto line_macro_err;
 		}
-		for (i ++; i < tf2.nt && ttMWS(tf2.t[i].type); i ++);
-		if (i < tf2.nt && (ls->flags & WARN_STANDARD)) {
-			warning(l, "trailing garbage in #line");
-		}
+	}
+	if (fname) {
+		if (current_filename) freemem(current_filename);
+		current_filename = fname;
 	}
 	freemem(tf2.t);
+	ls->oline = ls->line = z;
 	enter_file(ls, flags);
 	return 0;
 
+line_range_err:
+	error(l, "line number in #line must be between 1 and 2147483647");
 line_macro_err:
+	if (fname) freemem(fname);
 	if (tf2.nt) freemem(tf2.t);
 	return 1;
 }
 
-/*
- * a #error directive: we emit the message without any modification
- * (except the usual backslash+newline and trigraphs)
- */
+/* Emit the phase-3 token sequence from #error without macro expansion. */
 static void handle_error(struct lexer_state *ls)
 {
-	int c;
+	int whitespace = 1;
 	size_t p = 0, lp = 128;
 	long l = ls->line;
 	unsigned char *buf = getmem(lp);
 
-	while ((c = grap_char(ls)) >= 0 && c != '\n') {
-		discard_char(ls);
-		wan(buf, p, (unsigned char)c, lp);
+	while (!next_token(ls) && ls->ctok->type != NEWLINE) {
+		const char *text;
+
+		if (ttMWS(ls->ctok->type)) {
+			whitespace = 1;
+			continue;
+		}
+		if (whitespace) wan(buf, p, ' ', lp);
+		whitespace = 0;
+		for (text = token_name(ls->ctok); *text; text ++)
+			wan(buf, p, (unsigned char)*text, lp);
 	}
 	wan(buf, p, 0, lp);
 	error(l, "#error%s", buf);
 	freemem(buf);
+}
+
+/* 6.10.6: STDC pragmas are not macro-expanded. Other pragmas are ignored
+   in Cephyr's text mode. Cephyr never contracts floating-point expressions
+   or applies the limited-range complex shortcuts, and cannot honor
+   dynamic access to the floating-point environment. */
+int check_pragma(struct token_fifo *tf, long line)
+{
+	struct token *words[3];
+	size_t i, n = 0;
+
+	for (i = 0; i < tf->nt; i ++) {
+		struct token *t = tf->t + i;
+		if (ttWHI(t->type)) continue;
+		if (n == 3) goto invalid;
+		if (n == 0 && (t->type != NAME || strcmp(t->name, "STDC")))
+			return 0;
+		if (t->type != NAME) goto invalid;
+		words[n ++] = t;
+	}
+	if (n == 0) return 0;
+	if (n == 3) {
+		const char *kind = words[1]->name, *value = words[2]->name;
+		if ((!strcmp(kind, "FP_CONTRACT") || !strcmp(kind, "FENV_ACCESS")
+			|| !strcmp(kind, "CX_LIMITED_RANGE"))
+			&& (!strcmp(value, "ON") || !strcmp(value, "OFF")
+			|| !strcmp(value, "DEFAULT"))) {
+			if (!strcmp(kind, "FENV_ACCESS") && !strcmp(value, "ON")) {
+				error(line, "STDC FENV_ACCESS ON is not supported");
+				return 1;
+			}
+			return 0;
+		}
+	}
+invalid:
+	error(line, "invalid STDC pragma");
+	return 1;
 }
 
 /*
@@ -1872,7 +1874,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				ret = handle_undef(ls);
 				goto handle_exit;
 			} else if (!strcmp(ls->ctok->name, "if")) {
-				if ((++ ls->ifnest) > 63) goto too_many_if;
+				if (ls->ifnest == 63) goto too_many_if;
+				ls->ifnest ++;
 				condfclr(ls->ifnest - 1);
 				ret = handle_if(ls);
 				if (ret > 0) ret = 0;
@@ -1884,7 +1887,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				else ret = 1;
 				goto handle_exit;
 			} else if (!strcmp(ls->ctok->name, "ifdef")) {
-				if ((++ ls->ifnest) > 63) goto too_many_if;
+				if (ls->ifnest == 63) goto too_many_if;
+				ls->ifnest ++;
 				condfclr(ls->ifnest - 1);
 				ret = handle_ifdef(ls);
 				if (ret > 0) ret = 0;
@@ -1896,7 +1900,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				else ret = 1;
 				goto handle_exit;
 			} else if (!strcmp(ls->ctok->name, "ifndef")) {
-				if ((++ ls->ifnest) > 63) goto too_many_if;
+				if (ls->ifnest == 63) goto too_many_if;
+				ls->ifnest ++;
 				condfclr(ls->ifnest - 1);
 				ret = handle_ifndef(ls);
 				if (ret > 0) ret = 0;
@@ -1951,6 +1956,13 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				goto handle_exit3;
 			} else if (!strcmp(ls->ctok->name, "pragma")) {
 				if (!(save_flags & LEXER)) {
+					if (save_flags & PROCESS_TEXT_PRAGMAS) {
+						struct token_fifo tf;
+						ret = collect_directive(ls, &tf);
+						if (!ret) ret = check_pragma(&tf, l);
+						if (tf.nt) freemem(tf.t);
+						goto handle_exit;
+					}
 #ifdef PRAGMA_DUMP
 					/* dump #pragma in output */
 					struct token u;
@@ -2004,10 +2016,10 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				goto assembly_comment;
 		} else {
 			if (!strcmp(ls->ctok->name, "else")) {
-				if (condfval(ls->ifnest - 1)
-					&& (ls->flags & WARN_STANDARD)) {
-					warning(l, "rogue #else in code "
-						"compiled out");
+				if (condfval(ls->ifnest - 1)) {
+					error(l, "#else after #else");
+					ret = 1;
+					goto handle_warp_ign;
 				}
 				if (ls->condnest == ls->ifnest - 1) {
 					if (!ls->condmet) ls->condcomp = 1;
@@ -2016,10 +2028,10 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				if (ls->ifnest == 1) protect_detect.state = 0;
 				goto handle_warp;
 			} else if (!strcmp(ls->ctok->name, "elif")) {
-				if (condfval(ls->ifnest - 1)
-					&& (ls->flags & WARN_STANDARD)) {
-					warning(l, "rogue #elif in code "
-						"compiled out");
+				if (condfval(ls->ifnest - 1)) {
+					error(l, "#elif after #else");
+					ret = 1;
+					goto handle_warp_ign;
 				}
 				if (ls->condnest != ls->ifnest - 1
 					|| ls->condmet)
@@ -2043,7 +2055,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 			} else if (!strcmp(ls->ctok->name, "if")
 				|| !strcmp(ls->ctok->name, "ifdef")
 				|| !strcmp(ls->ctok->name, "ifndef")) {
-				if ((++ ls->ifnest) > 63) goto too_many_if;
+				if (ls->ifnest == 63) goto too_many_if;
+				ls->ifnest ++;
 				condfclr(ls->ifnest - 1);
 			}
 			goto handle_warp_ign;
@@ -2125,9 +2138,16 @@ too_many_if:
  */
 int cpp(struct lexer_state *ls)
 {
-	int r = 0;
+	int r = 0, status;
 
-	while (next_token(ls)) {
+	while ((status = next_token(ls))) {
+		if (status == 1) return 1;
+		if ((ls->flags & CHECK_SOURCE_EOF) && ls->saw_source_char) {
+			if (ls->last_source_char != '\n')
+				warning(ls->line, "source file does not end in a newline");
+			else if (ls->final_splice)
+				warning(ls->line - 1, "backslash-newline at end of source file");
+		}
 		if (protect_detect.state == 3) {
 			/*
 			 * At that point, protect_detect.ff->protect might
@@ -2188,6 +2208,9 @@ int cpp(struct lexer_state *ls)
 			if ((m = get_macro(ls->ctok->name)) != 0) {
 				int x;
 
+				/* A subsequent '#' on this line was not the first
+				   preprocessing token, even if this macro vanishes. */
+				ls->ltwnl = 0;
 				x = substitute_macro(ls, m, 0, 1, 0,
 					ls->ctok->line);
 				if (!(ls->flags & LEXER))
@@ -2318,33 +2341,28 @@ void init_tables(int with_assertions)
 {
 	time_t t;
 	struct tm *ct;
+	static const char *const months[] = {
+		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+	};
 
 	init_buf_lexer_state(&dsharp_lexer, 0);
 #ifdef PRAGMA_TOKENIZE
 	init_buf_lexer_state(&tokenize_lexer, 0);
 #endif
-	time(&t);
-	ct = localtime(&t);
-#ifdef NOSTRFTIME
-	/* we have a quite old compiler, that does not know the
-	   (standard since 1990) strftime() function. */
-	{
-		char *c = asctime(ct);
-
-		compile_time[0] = '"';
-		mmv(compile_time + 1, c + 11, 8);
-		compile_time[9] = '"';
-		compile_time[10] = 0;
-		compile_date[0] = '"';
-		mmv(compile_date + 1, c + 4, 7);
-		mmv(compile_date + 8, c + 20, 4);
-		compile_date[12] = '"';
-		compile_date[13] = 0;
+	/* C11 requires asctime-style month names and a space-padded day
+	   regardless of the embedding application's locale. */
+	strcpy(compile_date, "\"Jan  1 1970\"");
+	strcpy(compile_time, "\"00:00:00\"");
+	ct = time(&t) == (time_t)-1 ? 0 : localtime(&t);
+	if (ct && ct->tm_mon >= 0 && ct->tm_mon < 12
+		&& ct->tm_mday >= 1 && ct->tm_mday <= 31
+		&& ct->tm_year >= -1900 && ct->tm_year <= 8099) {
+		sprintf(compile_date, "\"%s %2d %04d\"", months[ct->tm_mon],
+			ct->tm_mday, 1900 + ct->tm_year);
+		sprintf(compile_time, "\"%02d:%02d:%02d\"",
+			ct->tm_hour, ct->tm_min, ct->tm_sec);
 	}
-#else
-	strftime(compile_time, 12, "\"%H:%M:%S\"", ct);
-	strftime(compile_date, 24, "\"%b %d %Y\"", ct);
-#endif
 	init_macros();
 	if (with_assertions) init_assertions();
 	init_found_files();

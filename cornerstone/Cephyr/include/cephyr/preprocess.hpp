@@ -15,6 +15,7 @@ struct PreprocessOptions {
     std::vector<std::filesystem::path> system_include_dirs;
     std::vector<std::filesystem::path> forced_includes;
     std::vector<std::pair<bool, std::string>> macros;
+    // C11 phase 1 replaces trigraphs before phase 2 splices source lines.
     bool trigraphs = true;
     bool keep_comments = false;
     bool line_markers = true;
@@ -25,8 +26,8 @@ struct PreprocessOptions {
 };
 
 struct Preprocessed {
-    // Parser input. Preprocessor line markers are removed while `lines`
-    // retains the corresponding source location for every line in `text`.
+    // Parser input, with generated line markers removed (not lookalike text
+    // produced by a macro). `lines` maps each output line to presumed source.
     std::string text;
 
     // The ordinary preprocessor output. Unlike `text`, this retains line

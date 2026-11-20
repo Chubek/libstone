@@ -158,6 +158,8 @@ unsigned long eval_expr(struct token_fifo *, int *, int);
 extern long eval_line;
 
 #define eval_exception	ucpp_eval_exception
+#define check_pragma	ucpp_check_pragma
+int check_pragma(struct token_fifo *, long);
 
 #ifdef POSIX_JMP
 #define JMP_BUF	sigjmp_buf

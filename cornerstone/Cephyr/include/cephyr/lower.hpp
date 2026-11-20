@@ -75,6 +75,35 @@ struct Constant {
     std::uint64_t value = 0;
 };
 
+struct Unit;
+struct Function;
+struct TypeBinding {
+    CType type;
+    bool register_object = false;
+};
+struct PrototypeScope {
+    const PrototypeScope *parent;
+    std::map<std::string, TypeBinding> parameters;
+};
+
+struct TypeContext {
+    Unit &unit;
+    const Preprocessed &source;
+    Diagnostics &diagnostics;
+    const Function *function;
+    const PrototypeScope *prototype = nullptr;
+    bool speculative = false;
+
+    TypeContext(Unit &, const Function * = nullptr);
+    TypeContext with_probe(Diagnostics &) const;
+    TypeBinding lookup(std::string_view) const;
+
+private:
+    TypeContext(Unit &u, const Preprocessed &s, Diagnostics &d, const Function *f,
+                const PrototypeScope *p, bool probe)
+        : unit(u), source(s), diagnostics(d), function(f), prototype(p), speculative(probe) {}
+};
+
 bool present(Node *);
 std::vector<Node *> elements(Node *); // a list, a singleton, or an absent node
 std::string identifier(Node *);
@@ -82,7 +111,9 @@ Location location(const Preprocessed &, Node *);
 CType integer_type(unsigned bits = 32, bool is_signed = true, unsigned rank = 0);
 CType plain_char_type(const Preprocessed &);
 CType pointer_type(const CType &);
-CType read_type(Node *, const Preprocessed &, Diagnostics &, bool allow_incomplete = false);
+CType read_type(Node *, const TypeContext &, bool allow_incomplete = false);
+void bind_typedef_bounds(Node *, const TypeContext &);
+CType expression_type(Node *, const TypeContext &);
 CType promote(const CType &);
 CType common_integer(const CType &, const CType &);
 bool compatible(const CType &, const CType &);
@@ -90,7 +121,8 @@ std::optional<std::uint64_t> size_of(const CType &);
 unsigned align_of(const CType &);
 std::string_view mir_type(const CType &);
 std::uint64_t normalize(std::uint64_t, const CType &);
-std::optional<Constant> integer_constant(Node *, const Preprocessed &, Diagnostics &);
+std::optional<Constant> integer_constant(Node *, const TypeContext &);
+std::optional<Constant> size_or_alignment(Node *, const TypeContext &);
 std::optional<std::string> string_constant(Node *, const Preprocessed &, Diagnostics &);
 
 struct Expr {
@@ -103,6 +135,8 @@ struct Expr {
 struct LValue {
     CType type;
     Id address = no_value;
+    std::string static_name = {}; // assembly name for a block-scope static object
+    bool register_object = false;
 };
 
 struct Edge {
@@ -155,31 +189,62 @@ struct Unit {
     std::vector<std::string> locals;
     std::string data_assembly;
     std::map<std::string, std::string> strings; // literal bytes -> assembler name
+    // The parser shares bound expression nodes when it clones typedef types.
+    // Resolve each bound where the declarator first appears, not at a later use.
+    std::map<const Node *, std::optional<std::uint64_t>> array_bounds;
+    std::size_t block_statics = 0;
+    std::size_t function_names = 0;
 
     Unit(const Preprocessed &s, Diagnostics &d, bool h) : source(s), diagnostics(d), hosted(h) {}
     void error(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     void warn(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     std::string add_string(std::string bytes);
+    void require_function_name(const std::string &symbol, std::string_view spelling);
     std::string require_signature(const CType &);
     std::string require_variadic_call(const Symbol &, const std::vector<CType> &);
 };
 
-bool define_global(Unit &, Symbol &);
-void check_static_assert(Unit &, Node *);
+bool define_global(Unit &, Symbol &, const Function *scope = nullptr);
+void check_static_assert(const TypeContext &, Node *);
+
+// Explicit subobject initializers in storage order. Gaps are implicitly
+// zero-initialized; string entries contain the exact bytes to copy.
+struct ArrayInitEntry {
+    std::uint64_t offset;
+    Node *source;
+    std::optional<std::string> bytes;
+};
+
+struct ArrayInitialization {
+    CType scalar;
+    std::vector<ArrayInitEntry> entries;
+};
+
+std::optional<ArrayInitialization> plan_array_initializer(Unit &, CType &, Node *);
 
 struct Function {
+    struct Label {
+        Id target = no_value;
+        Node *definition = nullptr;
+        Node *first_reference = nullptr;
+    };
+
     Unit &unit;
     Symbol &symbol;
+    std::string source_name;
+    std::string function_name_symbol;
     std::vector<CType> values;
     std::vector<std::pair<unsigned, unsigned>> locals; // size, alignment
     std::vector<Block> blocks{Block{}};
     std::vector<Instruction> entry_addresses;
     std::vector<std::map<std::string, LValue>> scopes{{}};
     std::vector<std::pair<Id, Id>> loops; // break, continue (no_value if unavailable)
+    // Labels have their own function-wide namespace (C11 6.2.1, 6.2.3).
+    std::map<std::string, Label> labels;
     Id current = 0;
-    unsigned expression_depth = 0;
+    unsigned expression_depth = 0, statement_depth = 0;
 
-    Function(Unit &u, Symbol &s) : unit(u), symbol(s) {}
+    Function(Unit &u, Symbol &s, std::string name) : unit(u), symbol(s), source_name(std::move(name)) {}
     bool open() const;
     Id block();
     void select(Id);
@@ -196,13 +261,13 @@ struct Function {
     LValue local(const CType &, Node *at);
     std::optional<LValue> find_local(std::string_view) const;
     bool declare_local(std::string name, LValue, Node *);
+    void require_static(const LValue &) const;
     void error(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     void warn(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
 };
 
 // Function lowering and semantic conversions implemented across the frontend.
 void lower_function_body(Function &, Node *parameters, Node *body);
-void lower_stmt(Function &, Node *);
 Expr lower_expr(Function &, Node *);
 LValue lower_lvalue(Function &, Node *);
 Expr load(Function &, LValue, Node *);

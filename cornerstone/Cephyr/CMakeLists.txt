@@ -37,7 +37,7 @@ foreach(source IN ITEMS mem nhash cpp lexer assert macro eval)
 endforeach()
 set_target_properties(cephyr_ucpp PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
 target_compile_definitions(cephyr_ucpp PUBLIC UCPP_CONFIG NO_UCPP_ERROR_FUNCTIONS)
-target_compile_definitions(cephyr_ucpp PRIVATE UCPP_STDC_VERSION="201112L")
+target_compile_definitions(cephyr_ucpp PRIVATE UCPP_STDC_VERSION="201112L" UCPP_C11_MINIMAL_FEATURES)
 target_include_directories(cephyr_ucpp SYSTEM PUBLIC "${cephyr_vendor}/ucpp")
 
 add_library(cephyr_tomlc99 STATIC "${cephyr_vendor}/tomlc99/toml.c")
@@ -65,7 +65,7 @@ add_library(cephyr_compiler SHARED
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
   "${cephyr_native}/Legalizer.c")
 add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
-target_compile_features(cephyr_compiler PRIVATE cxx_std_20)
+target_compile_features(cephyr_compiler PRIVATE cxx_std_20 INTERFACE cxx_std_17)
 set_target_properties(cephyr_compiler PROPERTIES
   C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF CXX_EXTENSIONS OFF
   OUTPUT_NAME cephyr EXPORT_NAME Cephyr
@@ -128,7 +128,7 @@ if(CEPHYR_INSTALL_PYTHON)
     FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
 endif()
 install(DIRECTORY stdlib triples DESTINATION "${cephyr_data_dir}" USE_SOURCE_PERMISSIONS)
-install(FILES Cephyr.toml README.md EMBEDDING.md SDK.md DESTINATION "${cephyr_data_dir}")
+install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md DESTINATION "${cephyr_data_dir}")
 install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
 
 if(CEPHYR_BUILD_TESTS)
@@ -184,6 +184,22 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_cli_regression.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.driver PROPERTIES TIMEOUT 300)
+  add_test(NAME cephyr.c11-sample COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_sample.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_test_args})
+  set_tests_properties(cephyr.c11-sample PROPERTIES TIMEOUT 120)
+  set(cephyr_libc_test_environment "CC=clang" "AR=llvm-ar" "LD_LLD=ld.lld")
+  if(CEPHYR_QEMU_EXECUTABLE)
+    list(APPEND cephyr_libc_test_environment "CEPHYR_TEST_QEMU=${CEPHYR_QEMU_EXECUTABLE}")
+  endif()
+  if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
+    list(APPEND cephyr_libc_test_environment "CEPHYR_TEST_QEMU_AARCH64=${CEPHYR_QEMU_AARCH64_EXECUTABLE}")
+  endif()
+  add_test(NAME cephyr.libc COMMAND "${CMAKE_COMMAND}" -E env
+    --unset=CEPHYR_LIBC_TARGET_OPTION --unset=CEPHYR_LIBC_CFLAGS
+    sh "${CMAKE_CURRENT_SOURCE_DIR}/stdlib/tests/run.sh" "${CMAKE_CURRENT_BINARY_DIR}/libc-test")
+  set_tests_properties(cephyr.libc PROPERTIES
+    TIMEOUT 120 ENVIRONMENT "${cephyr_libc_test_environment}")
   add_test(NAME cephyr.python-api COMMAND "${CMAKE_COMMAND}" -E env
     "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
     "CEPHYR_LIBRARY=$<TARGET_FILE:cephyr_compiler>"

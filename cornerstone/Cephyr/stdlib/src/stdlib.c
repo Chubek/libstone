@@ -2,9 +2,11 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <locale.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int digit_value(unsigned char ch)
 {
@@ -322,4 +324,116 @@ int rand(void)
 void srand(unsigned seed)
 {
     random_state = seed;
+}
+
+char *setlocale(int category, const char *locale)
+{
+    static char c_locale[] = "C";
+    /* The native environment and the startup locale both use ASCII C. */
+    if (category < LC_ALL || category > LC_TIME)
+        return NULL;
+    if (locale == NULL || *locale == '\0' || strcmp(locale, "C") == 0 ||
+        strcmp(locale, "POSIX") == 0)
+        return c_locale;
+    return NULL;
+}
+
+struct lconv *localeconv(void)
+{
+    static char dot[] = ".";
+    static char empty[] = "";
+    static struct lconv conventions = {
+        .decimal_point = dot,
+        .thousands_sep = empty,
+        .grouping = empty,
+        .mon_decimal_point = empty,
+        .mon_thousands_sep = empty,
+        .mon_grouping = empty,
+        .positive_sign = empty,
+        .negative_sign = empty,
+        .currency_symbol = empty,
+        .frac_digits = CHAR_MAX,
+        .p_cs_precedes = CHAR_MAX,
+        .n_cs_precedes = CHAR_MAX,
+        .p_sep_by_space = CHAR_MAX,
+        .n_sep_by_space = CHAR_MAX,
+        .p_sign_posn = CHAR_MAX,
+        .n_sign_posn = CHAR_MAX,
+        .int_curr_symbol = empty,
+        .int_frac_digits = CHAR_MAX,
+        .int_p_cs_precedes = CHAR_MAX,
+        .int_n_cs_precedes = CHAR_MAX,
+        .int_p_sep_by_space = CHAR_MAX,
+        .int_n_sep_by_space = CHAR_MAX,
+        .int_p_sign_posn = CHAR_MAX,
+        .int_n_sign_posn = CHAR_MAX,
+    };
+    return &conventions;
+}
+
+static int decode_character(wchar_t *wide, const char *str, size_t size)
+{
+    unsigned char byte;
+    if (str == NULL)
+        return 0;
+    if (size == 0 || (byte = (unsigned char)*str) > 0x7f) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if (wide != NULL)
+        *wide = (wchar_t)byte;
+    return byte == '\0' ? 0 : 1;
+}
+
+static int encode_character(char *str, wchar_t wide)
+{
+    if ((unsigned int)wide > 0x7f) {
+        errno = EILSEQ;
+        return -1;
+    }
+    *str = (char)wide;
+    return 1;
+}
+
+int mblen(const char *str, size_t size)
+{
+    return decode_character(NULL, str, size);
+}
+
+int mbtowc(wchar_t *wide, const char *str, size_t size)
+{
+    return decode_character(wide, str, size);
+}
+
+int wctomb(char *str, wchar_t wide)
+{
+    return str == NULL ? 0 : encode_character(str, wide);
+}
+
+size_t mbstowcs(wchar_t *wide, const char *str, size_t size)
+{
+    size_t i;
+    for (i = 0; wide == NULL || i < size; ++i) {
+        int result = decode_character(wide == NULL ? NULL : wide + i, str + i, 1);
+        if (result < 0)
+            return (size_t)-1;
+        if (result == 0)
+            break;
+    }
+    return i;
+}
+
+size_t wcstombs(char *str, const wchar_t *wide, size_t size)
+{
+    size_t i;
+    for (i = 0; str == NULL || i < size; ++i) {
+        char byte;
+        if (encode_character(&byte, wide[i]) < 0)
+            return (size_t)-1;
+        if (str != NULL)
+            str[i] = byte;
+        if (byte == '\0')
+            break;
+    }
+    return i;
 }

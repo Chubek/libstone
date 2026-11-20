@@ -55,14 +55,20 @@ std::string format_message(const char *format, va_list arguments) {
     return message;
 }
 
+unsigned line_number(long line) {
+    if (line <= 0)
+        return 0;
+    return static_cast<unsigned>(std::min<unsigned long>(
+        static_cast<unsigned long>(line), std::numeric_limits<unsigned>::max()));
+}
+
 Location ucpp_location(long line) {
     std::string filename;
     if (current_filename)
         filename = current_filename;
     else if (active_diagnostics)
         filename = active_diagnostics->root_file;
-    return {std::move(filename),
-            line > 0 ? static_cast<unsigned>(line) : 0U, 0U};
+    return {std::move(filename), line_number(line), 0U};
 }
 
 void report_ucpp(bool warning, const char *code, long line,
@@ -334,7 +340,7 @@ struct LexicalContext {
         return std::nullopt;
     }
 
-    void advance(std::string_view line, bool assembler) {
+    void advance(std::string_view line) {
         if (!line.empty() && line.back() == '\n')
             line.remove_suffix(1);
         if (!line.empty() && line.back() == '\r')
@@ -360,8 +366,6 @@ struct LexicalContext {
                 ++i;
             } else if (c == '/' && next == '/') {
                 line_comment = true;
-            } else if (assembler && c == '#') {
-                break;
             } else if (c == '\'' || c == '"') {
                 quote = c;
             }
@@ -373,8 +377,7 @@ struct LexicalContext {
     }
 };
 
-Preprocessed strip_line_markers(std::string source, const std::string &file,
-                                bool assembler = false) {
+Preprocessed strip_line_markers(std::string source, const std::string &file) {
     Preprocessed result;
     result.file = file;
 
@@ -407,7 +410,7 @@ Preprocessed strip_line_markers(std::string source, const std::string &file,
             if (marker->file)
                 mapped_file = *marker->file;
         } else {
-            context.advance(physical, assembler);
+            context.advance(physical);
             result.text.append(physical);
             result.lines.push_back({mapped_file, mapped_line, 0});
             if (mapped_line != std::numeric_limits<unsigned>::max())
@@ -415,6 +418,59 @@ Preprocessed strip_line_markers(std::string source, const std::string &file,
         }
         offset = end;
     }
+    result.output = std::move(source);
+    return result;
+}
+
+struct GeneratedLineMarker {
+    std::size_t begin;
+    std::size_t end;
+    Location location;
+};
+
+void record_line_marker(void *context, std::size_t begin, std::size_t end,
+                        long line, const char *file) {
+    auto &markers = *static_cast<std::vector<GeneratedLineMarker> *>(context);
+    markers.push_back({begin, end, {file, line_number(line), 0}});
+}
+
+Preprocessed strip_generated_markers(
+    std::string source, const std::string &file,
+    const std::vector<GeneratedLineMarker> &markers) {
+    Preprocessed result;
+    result.file = file;
+    Location current{file, 1, 0};
+    std::size_t offset = 0;
+
+    auto append_until = [&](std::size_t stop) {
+        while (offset < stop) {
+            const std::string_view chunk(source.data() + offset, stop - offset);
+            const auto newline = chunk.find('\n');
+            if (newline == std::string_view::npos) {
+                // A marker can follow a preserved comment. Its terminating
+                // newline keeps that prefix on a separate output line.
+                if (chunk.find_first_not_of(" \t\v\f\r") != std::string_view::npos) {
+                    result.text.append(chunk);
+                    result.text.push_back('\n');
+                    result.lines.push_back(current);
+                }
+                break;
+            }
+            result.text.append(chunk.substr(0, newline + 1));
+            result.lines.push_back(current);
+            if (current.line != std::numeric_limits<unsigned>::max())
+                ++current.line;
+            offset += newline + 1;
+        }
+        offset = stop;
+    };
+
+    for (const auto &marker : markers) {
+        append_until(marker.begin);
+        current = marker.location;
+        offset = marker.end;
+    }
+    append_until(source.size());
     result.output = std::move(source);
     return result;
 }
@@ -529,7 +585,11 @@ std::optional<Preprocessed> preprocess(const std::string &source,
 
     struct lexer_state lexer {};
     init_lexer_state(&lexer);
-    lexer.flags = DEFAULT_CPP_FLAGS | LINE_NUM | GCC_LINE_NUM | COPY_LINE;
+    std::vector<GeneratedLineMarker> markers;
+    lexer.line_marker = record_line_marker;
+    lexer.line_marker_context = &markers;
+    lexer.flags = DEFAULT_CPP_FLAGS | LINE_NUM | GCC_LINE_NUM | COPY_LINE |
+                  CHECK_SOURCE_EOF | PROCESS_TEXT_PRAGMAS;
     if (!options.trigraphs)
         lexer.flags &= ~HANDLE_TRIGRAPHS;
     if (options.keep_comments)
@@ -603,8 +663,7 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     if (failed || diagnostic_context.errors != 0 || !captured)
         return std::nullopt;
 
-    Preprocessed result =
-        strip_line_markers(std::move(*captured), file, options.assembler);
+    auto result = strip_generated_markers(std::move(*captured), file, markers);
     if (!options.line_markers)
         result.output = result.text;
     return result;

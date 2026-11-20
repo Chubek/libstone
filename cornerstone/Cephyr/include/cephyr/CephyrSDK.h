@@ -73,8 +73,9 @@ typedef struct cephyr_sdk_input {
 /* These sinks may be called synchronously on the callback's thread only,
  * using the supplied context. They copy their inputs before returning.
  * Return value: 1 accepted, 0 invalid or out of budget. A failed submission
- * fails compilation even if ignored. The sinks and context expire when the
- * callback returns.
+ * on the active callback thread fails compilation even if ignored. The sinks
+ * and context expire when the callback returns and cannot be used from a
+ * different thread.
  *
  * set_text may be used once by a DESUGAR, REWRITE, or ASSEMBLY callback,
  * never by ANALYZE. No submission leaves a transformation unchanged.
@@ -117,7 +118,8 @@ typedef struct cephyr_sdk_hook {
 
 /* Explicit registration via `cephyr_request.sdk`. A null request field
  * disables all hooks. The descriptor, hook array, their strings, and user
- * state must remain valid for the duration of the compile call. Invocation
+ * state must remain valid for the duration of the compile call. Do not modify
+ * registration data during that call. Invocation
  * is synchronous and in array order within each stage. Do not reenter
  * cephyr_compile on the callback's thread. Different concurrent compile
  * calls may invoke the same hooks concurrently; synchronize mutable client

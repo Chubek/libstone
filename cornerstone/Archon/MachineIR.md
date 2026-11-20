@@ -69,6 +69,8 @@ the backend cannot inspect separately compiled function implementations.
   If a `func_addr` is statically visible through copies, the backend rejects a
   mismatching signature. The producer must establish that all dynamic targets
   satisfy the signature; the backend cannot verify the actual run-time address.
+  Functions, imports, and calls accept up to `ARCHON_MIR_MAX_PARAMS` (128)
+  scalar ABI parameters or arguments.
   `ret -` returns void.
   `trap` raises the target breakpoint exception.
 

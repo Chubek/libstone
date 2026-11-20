@@ -67,6 +67,8 @@ struct STType
     struct STObject *fields;    // Struct fields
     unsigned size;
     bool isSigned;
+    bool complete = false;      // Whether a tagged type's content has been defined
+    bool defining = false;      // Its content is currently being parsed
     std::string tagName;
 
     STType(STTypeKind Kind)
@@ -155,6 +157,7 @@ public:
     int getLevel() { return level; }
 
     void openScope(void);
+    void reopenScope(STScope *);
     void closeScope(void);
     void setTopScope(STScope *s);
     STScope *getTopScope();

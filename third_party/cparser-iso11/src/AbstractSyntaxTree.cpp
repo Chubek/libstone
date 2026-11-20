@@ -138,7 +138,7 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
         case NK_COMPLEX_TYPE:
             return _stb->noType;
         case NK_ENUMERAL_TYPE:
-            return _stb->noType;
+            return _stb->intType;
         case NK_BOOLEAN_TYPE:
             return _stb->boolType;
         case NK_POINTER_TYPE:
@@ -182,6 +182,8 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
             // symbol table.
             StructTypeASTNode *recTypeASTNode =
                 static_cast<StructTypeASTNode *>(typeASTNode);
+            if (recTypeASTNode->getIdentity())
+                return const_cast<STType *>(recTypeASTNode->getIdentity());
 
             if (AST_MATCH_IDENT(recTypeASTNode->getName()))
             {
@@ -189,7 +191,7 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
                     AST_IDENT_VALUE(recTypeASTNode->getName());
                 unsigned recordLineNum =
                     AST_IDENT_LINE_NUM(recTypeASTNode->getName());
-                const std::string key = std::string("struct:") + recordName;
+                const std::string key = std::string("tag:") + recordName;
                 STObject *obj = _stb->find(key.c_str());
 
                 if (obj == _stb->noObj)
@@ -209,6 +211,8 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
             // symbol table.
             UnionTypeASTNode *unionTypeASTNode =
                 static_cast<UnionTypeASTNode *>(typeASTNode);
+            if (unionTypeASTNode->getIdentity())
+                return const_cast<STType *>(unionTypeASTNode->getIdentity());
 
             if (AST_MATCH_IDENT(unionTypeASTNode->getName()))
             {
@@ -216,7 +220,7 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
                     AST_IDENT_VALUE(unionTypeASTNode->getName());
                 unsigned unionLineNum =
                     AST_IDENT_LINE_NUM(unionTypeASTNode->getName());
-                const std::string key = std::string("union:") + unionName;
+                const std::string key = std::string("tag:") + unionName;
                 STObject *obj = _stb->find(key.c_str());
 
                 if (obj == _stb->noObj)
@@ -247,6 +251,124 @@ void AbstractSyntaxTree::declare()
         _stb->setTopScope(nullptr);
 }
 
+namespace
+{
+
+// Repeated typedefs may denote the same non-variably modified type (6.7p3).
+// The vendor parser recognizes fixed array bounds here when they are literals;
+// complex bounds are not assumed constant or equivalent.
+bool sameTypedefType(ASTNode *left, ASTNode *right, bool ignoreQualifiers = false);
+
+bool sameBound(ASTNode *left, ASTNode *right)
+{
+    if (left == NULL_AST_NODE || right == NULL_AST_NODE)
+        return left == right;
+    return AST_MATCH_INTEGER_CONST(left) && AST_MATCH_INTEGER_CONST(right) &&
+           AST_INTEGER_CONST_VALUE(left) == AST_INTEGER_CONST_VALUE(right);
+}
+
+ASTNode *adjustedPointee(ASTNode *node)
+{
+    switch (node->getKind())
+    {
+        case NK_ARRAY_TYPE:
+            return static_cast<ArrayTypeASTNode *>(node)->getElementType();
+        case NK_FUNCTION_TYPE:
+            return node;
+        case NK_POINTER_TYPE:
+            return static_cast<PointerTypeASTNode *>(node)->getBaseType();
+        default:
+            return nullptr;
+    }
+}
+
+bool sameParameters(FunctionTypeASTNode *left, FunctionTypeASTNode *right)
+{
+    if (left->hasPrototype() != right->hasPrototype() ||
+        left->isVariadic() != right->isVariadic())
+        return false;
+    if (!left->hasPrototype())
+        return true;
+    const auto &lhs = static_cast<SequenceASTNode *>(left->getPrms())->getElements();
+    const auto &rhs = static_cast<SequenceASTNode *>(right->getPrms())->getElements();
+    if (lhs.size() != rhs.size())
+        return false;
+    for (std::size_t i = 0; i < lhs.size(); ++i)
+    {
+        auto *a = static_cast<ParmDeclASTNode *>(lhs[i])->getType();
+        auto *b = static_cast<ParmDeclASTNode *>(rhs[i])->getType();
+        auto *ap = adjustedPointee(a);
+        auto *bp = adjustedPointee(b);
+        if (ap || bp)
+        {
+            if (!ap || !bp || !sameTypedefType(ap, bp))
+                return false;
+        }
+        else if (!sameTypedefType(a, b, true))
+            return false;
+    }
+    return true;
+}
+
+bool sameTypedefType(ASTNode *left, ASTNode *right, bool ignoreQualifiers)
+{
+    if (left->getKind() != right->getKind() ||
+        (!ignoreQualifiers && ((left->getFlags() ^ right->getFlags()) & DS_QUALIFIER_MASK)))
+        return false;
+    switch (left->getKind())
+    {
+        case NK_VOID_TYPE:
+        case NK_BOOLEAN_TYPE:
+            return true;
+        case NK_INTEGRAL_TYPE:
+        {
+            auto *lhs = static_cast<IntegralTypeASTNode *>(left);
+            auto *rhs = static_cast<IntegralTypeASTNode *>(right);
+            return lhs->getRank() == rhs->getRank() &&
+                   lhs->getAlignment() == rhs->getAlignment() &&
+                   lhs->getIsSigned() == rhs->getIsSigned() &&
+                   lhs->isPlainChar() == rhs->isPlainChar();
+        }
+        case NK_REAL_TYPE:
+        {
+            auto *lhs = static_cast<RealTypeASTNode *>(left);
+            auto *rhs = static_cast<RealTypeASTNode *>(right);
+            return lhs->getAlignment() == rhs->getAlignment() &&
+                   lhs->getIsDouble() == rhs->getIsDouble();
+        }
+        case NK_POINTER_TYPE:
+            return sameTypedefType(static_cast<PointerTypeASTNode *>(left)->getBaseType(),
+                                   static_cast<PointerTypeASTNode *>(right)->getBaseType());
+        case NK_ARRAY_TYPE:
+        {
+            auto *lhs = static_cast<ArrayTypeASTNode *>(left);
+            auto *rhs = static_cast<ArrayTypeASTNode *>(right);
+            return sameBound(lhs->getExpr(), rhs->getExpr()) &&
+                   sameTypedefType(lhs->getElementType(), rhs->getElementType());
+        }
+        case NK_FUNCTION_TYPE:
+        {
+            auto *lhs = static_cast<FunctionTypeASTNode *>(left);
+            auto *rhs = static_cast<FunctionTypeASTNode *>(right);
+            return sameTypedefType(lhs->getType(), rhs->getType()) &&
+                   sameParameters(lhs, rhs);
+        }
+        case NK_STRUCT_TYPE:
+            return static_cast<StructTypeASTNode *>(left)->getIdentity() ==
+                   static_cast<StructTypeASTNode *>(right)->getIdentity();
+        case NK_UNION_TYPE:
+            return static_cast<UnionTypeASTNode *>(left)->getIdentity() ==
+                   static_cast<UnionTypeASTNode *>(right)->getIdentity();
+        case NK_ENUMERAL_TYPE:
+            return static_cast<EnumeralTypeASTNode *>(left)->getIdentity() ==
+                   static_cast<EnumeralTypeASTNode *>(right)->getIdentity();
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
 void TypeDeclASTNode::declare(AbstractSyntaxTree *ast)
 {
     assert(_name != NULL_AST_NODE && "invalid type declaration");
@@ -255,15 +377,20 @@ void TypeDeclASTNode::declare(AbstractSyntaxTree *ast)
     const char *typeName = AST_IDENT_VALUE(_name);
     unsigned typeNameLineNum = AST_IDENT_LINE_NUM(_name);
 
+    const auto *existing = stb->findLocal(typeName);
+    if (existing != stb->noObj)
+    {
+        if (existing->kind == STOK_TYPE && existing->astType &&
+            sameTypedefType(existing->astType, _body))
+            return;
+        ast->error(typeNameLineNum, "type name '%s' already exists with a different declaration",
+                   typeName);
+    }
     STType *type = ast->getStbType(_body);
     if (!type)
         type = stb->noType;
     STObject *obj = stb->insert(typeName, STOK_TYPE, type);
 
-    if (obj == stb->noObj)
-        ast->error(typeNameLineNum,
-                   "type name '%s' already exists",
-                   typeName);
     obj->astType = _body;
 }
 

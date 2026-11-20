@@ -3,7 +3,6 @@
 #include <AbstractSyntaxTree.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -85,187 +84,95 @@ Id pointer_offset(Function &function, Id base, std::uint64_t offset,
                          std::to_string(base) + " " + std::to_string(amount));
 }
 
-std::optional<LValue> array_element(Function &function, LValue array,
-                                    std::uint64_t index, Node *at) {
-    if (array.type.kind != CType::Kind::array || !array.type.element)
-        return std::nullopt;
-    auto stride = object_size(function, *array.type.element, at);
-    if (!stride)
-        return std::nullopt;
-    if (index && *stride > std::numeric_limits<std::uint64_t>::max() / index) {
-        function.error(at, "array element offset overflows", "cephyr.local.size");
-        return std::nullopt;
-    }
-    return LValue{*array.type.element,
-                  pointer_offset(function, array.address, index * *stride,
-                                 *array.type.element)};
-}
-
-bool initialize_object(Function &, LValue, Node *, Node *);
-
-Node *character_string_initializer(Node *initializer) {
-    if (!present(initializer))
-        return nullptr;
-    if (initializer->getKind() == cparser::NK_STRING_CONST)
-        return initializer;
-    if (initializer->getKind() != cparser::NK_LIST)
-        return nullptr;
-    const auto values = elements(initializer);
-    return values.size() == 1 &&
-                   values.front()->getKind() == cparser::NK_STRING_CONST
-               ? values.front()
-               : nullptr;
-}
-
-bool character_array(const CType &type) {
-    return type.kind == CType::Kind::array && type.element &&
-           type.element->integer() && type.element->bits == 8;
-}
-
-bool zero_initialize(Function &function, LValue object, Node *at) {
-    if (object.type.kind == CType::Kind::array) {
-        if (!object.type.element || !object.type.count) {
-            function.error(at, "cannot initialize an incomplete array",
-                           "cephyr.local.initializer");
-            return false;
-        }
-        bool ok = true;
-        for (std::uint64_t i = 0; i != object.type.count; ++i) {
-            auto element = array_element(function, object, i, at);
-            if (!element)
-                return false;
-            ok = zero_initialize(function, *element, at) && ok;
-        }
-        return ok;
-    }
-    if (!object.type.scalar()) {
-        function.error(at, "initializer for this local type is not supported",
-                       "cephyr.local.initializer");
-        return false;
-    }
-    const Id zero = function.constant(0);
-    object.type.is_const = false;
-    store(function, object, Expr{integer_type(), zero, 0}, at);
-    return true;
-}
-
-bool initialize_array_from_list(Function &function, LValue object, Node *initializer,
-                                Node *at) {
-    const auto initializers = elements(initializer);
-    if (initializers.size() > object.type.count) {
-        function.error(initializer, "too many elements in array initializer",
-                       "cephyr.local.initializer");
-    }
-
-    bool ok = initializers.size() <= object.type.count;
-    for (std::uint64_t i = 0; i != object.type.count; ++i) {
-        auto element = array_element(function, object, i, at);
-        if (!element)
-            return false;
-        if (i < initializers.size())
-            ok = initialize_object(function, *element, initializers[i], at) && ok;
-        else
-            ok = zero_initialize(function, *element, at) && ok;
-    }
-    return ok;
-}
-
-bool initialize_array_from_string(Function &function, LValue object,
-                                  Node *initializer, Node *at) {
-    auto bytes = string_constant(initializer, function.unit.source,
-                                 function.unit.diagnostics);
-    if (!bytes)
-        return false;
-
-    // string_constant includes the terminator. C permits omitting exactly
-    // that final byte when the character array is otherwise a perfect fit.
-    if (bytes->size() - 1 > object.type.count) {
-        function.error(initializer, "string literal is too long for local array",
-                       "cephyr.local.initializer");
-        return false;
-    }
-    const auto initialized = std::min<std::uint64_t>(bytes->size(), object.type.count);
-    for (std::uint64_t i = 0; i != initialized; ++i) {
-        auto element = array_element(function, object, i, at);
-        if (!element)
-            return false;
-        const auto byte = static_cast<unsigned char>((*bytes)[i]);
-        const Id value = function.constant(byte);
-        element->type.is_const = false;
-        store(function, *element, Expr{integer_type(), value, byte}, at);
-    }
-    for (std::uint64_t i = initialized; i != object.type.count; ++i) {
-        auto element = array_element(function, object, i, at);
-        if (!element || !zero_initialize(function, *element, at))
-            return false;
-    }
-    return true;
-}
-
-bool initialize_object(Function &function, LValue object, Node *initializer,
-                       Node *at) {
-    if (object.type.kind == CType::Kind::array) {
-        if (!object.type.count) {
-            function.error(at, "cannot initialize an incomplete local array",
-                           "cephyr.local.initializer");
-            return false;
-        }
-        if (character_array(object.type)) {
-            if (Node *string = character_string_initializer(initializer))
-                return initialize_array_from_string(function, object, string, at);
-        }
-        if (initializer->getKind() != cparser::NK_LIST) {
-            function.error(initializer, "array initializer must be a brace-enclosed list",
-                           "cephyr.local.initializer");
-            return false;
-        }
-        return initialize_array_from_list(function, object, initializer, at);
-    }
-
+void initialize_scalar(Function &function, LValue object, Node *initializer) {
     while (initializer->getKind() == cparser::NK_LIST) {
         const auto values = elements(initializer);
         if (values.size() != 1) {
             function.error(initializer,
                            "scalar initializer must contain exactly one expression",
                            "cephyr.local.initializer");
-            return false;
+            return;
         }
         initializer = values.front();
     }
     if (!object.type.scalar()) {
         function.error(initializer, "local aggregate initialization is not supported",
                        "cephyr.local.initializer");
-        return false;
+        return;
     }
     object.type.is_const = false;
     store(function, object, lower_expr(function, initializer), initializer);
-    return true;
 }
 
-std::optional<std::uint64_t> inferred_array_count(Function &function,
-                                                  const CType &type,
-                                                  Node *initializer) {
-    if (type.kind != CType::Kind::array || type.count)
-        return type.count;
-    if (!present(initializer))
-        return std::nullopt;
-    if (Node *string = character_string_initializer(initializer);
-        string && character_array(type)) {
-        auto bytes = string_constant(string, function.unit.source,
-                                     function.unit.diagnostics);
-        if (bytes)
-            return bytes->size();
+void initialize_array(Function &function, LValue object, const ArrayInitialization &plan,
+                      std::uint64_t size, Node *at) {
+    auto scalar = plan.scalar;
+    scalar.is_const = false;
+    // Do not attempt repeated invalid stores while processing zero-filled
+    // ranges: the diagnostic would otherwise grow with the object size.
+    if (scalar.is_volatile) {
+        function.error(at, "volatile object access is not supported");
+        return;
     }
-    if (initializer->getKind() == cparser::NK_LIST)
-        return elements(initializer).size();
-    return std::nullopt;
+    const auto stride = *size_of(scalar);
+    std::uint64_t offset = 0;
+    const auto element = [&](std::uint64_t position) {
+        return LValue{scalar, pointer_offset(function, object.address, position, scalar)};
+    };
+    const auto store_constant = [&](unsigned char byte, Node *source) {
+        store(function, element(offset), Expr{integer_type(), function.constant(byte), byte},
+              source);
+    };
+    const auto fill = [&](std::uint64_t end) {
+        // Keep MIR size bounded for large zero-filled tails. Iterate in
+        // native MIR rather than introducing an implicit libc dependency.
+        if ((end - offset) / stride < 16) {
+            for (; offset < end; offset += stride)
+                store_constant(0, at);
+            return;
+        }
+        const CType index_type = integer_type(64, false);
+        const auto start = function.constant(offset, index_type);
+        const auto step = function.constant(stride, index_type);
+        const auto limit = function.constant(end, index_type);
+        const auto zero = function.constant(0);
+        const Id loop = function.block();
+        const Id exit = function.block();
+        const Id position = function.param(loop, index_type);
+        function.jump(loop, {start});
+        function.select(loop);
+        const auto operands = [](Id first, Id second) {
+            return std::to_string(first) + " " + std::to_string(second);
+        };
+        const auto address = function.emit(pointer_type(scalar), "ptr_add",
+                                           operands(object.address, position));
+        store(function, {scalar, address}, Expr{integer_type(), zero, 0}, at);
+        const auto next = function.emit(index_type, "add", operands(position, step));
+        const auto done = function.emit(integer_type(), "eq", operands(next, limit));
+        function.branch(done, exit, loop, {}, {next});
+        function.select(exit);
+        offset = end;
+    };
+
+    for (const auto &entry : plan.entries) {
+        fill(entry.offset);
+        if (entry.bytes) {
+            for (unsigned char byte : *entry.bytes) {
+                store_constant(byte, entry.source);
+                ++offset;
+            }
+        } else {
+            initialize_scalar(function, element(offset), entry.source);
+            offset += stride;
+        }
+    }
+    fill(size);
 }
 
 void lower_local_declaration(Function &function, Node *node) {
     if (node->getKind() == cparser::NK_TYPE_DECL) {
         auto *declaration = static_cast<cparser::TypeDeclASTNode *>(node);
-        (void)read_type(declaration->getBody(), function.unit.source,
-                        function.unit.diagnostics, true);
+        (void)read_type(declaration->getBody(), TypeContext(function.unit, &function), true);
         return;
     }
     if (node->getKind() != cparser::NK_VAR_DECL) {
@@ -285,48 +192,68 @@ void lower_local_declaration(Function &function, Node *node) {
                        "cephyr.local.storage");
         return;
     }
-    if (flags & SCS_STATIC) {
-        function.error(at, "static local objects are not supported",
-                       "cephyr.local.storage");
+    const std::string name = identifier(name_node);
+    CType type = read_type(type_node, TypeContext(function.unit, &function), true);
+    if (!type.valid()) {
+        if (!name.empty())
+            function.declare_local(name, {}, at);
         return;
     }
-
-    CType type =
-        read_type(type_node, function.unit.source, function.unit.diagnostics, true);
-    if (!type.valid())
-        return;
     if (type.kind == CType::Kind::void_ || type.kind == CType::Kind::function) {
         function.error(at, "local object must have a complete object type",
                        "cephyr.local.type");
         return;
     }
 
-    Node *initializer = declaration->getInit();
-    if (type.kind == CType::Kind::array && !type.count) {
-        auto count = inferred_array_count(function, type, initializer);
-        if (!count || !*count) {
-            function.error(at, "incomplete local array has no inferable bound",
-                           "cephyr.local.type");
-            return;
-        }
-        type.count = *count;
-    }
-    if (!object_size(function, type, at))
-        return;
-
-    const std::string name = identifier(name_node);
     if (name.empty()) {
         function.error(at, "local declaration has no identifier",
                        "cephyr.local.name");
         return;
     }
 
+    Node *initializer = declaration->getInit();
+    if (flags & SCS_STATIC) {
+        // The name has block scope and no C linkage, even though the object
+        // is emitted with a private assembly symbol and static duration.
+        const auto native_name = "__cephyr_tu_block_" + std::to_string(function.unit.block_statics++);
+        if (!function.declare_local(name, {type, no_value, native_name}, at))
+            return;
+        Symbol storage{std::move(type), native_name, node, node, true, false,
+                       present(initializer)};
+        if (define_global(function.unit, storage, &function))
+            function.scopes.back().at(name).type = std::move(storage.type);
+        return;
+    }
+
+    const CType declared_type = type;
+    std::optional<ArrayInitialization> array_init;
+    if (type.kind == CType::Kind::array && present(initializer)) {
+        array_init = plan_array_initializer(function.unit, type, initializer);
+        if (!array_init)
+            return;
+    }
+    if (type.kind == CType::Kind::array && !type.count) {
+        function.error(at, "incomplete local array has no inferable bound",
+                       "cephyr.local.type");
+        return;
+    }
+    const auto size = object_size(function, type, at);
+    if (!size)
+        return;
+
     LValue slot = function.local(type, at);
     if (slot.address == no_value)
         return;
-    function.declare_local(name, slot, at);
-    if (present(initializer))
-        (void)initialize_object(function, slot, initializer, at);
+    // The slot has its final size, but an inferred bound is not visible
+    // until after the end of the initializer list.
+    if (!function.declare_local(name, {declared_type, slot.address, {}, (flags & SCS_REGISTER) != 0}, at))
+        return;
+    if (array_init)
+        initialize_array(function, slot, *array_init, *size, initializer);
+    else if (present(initializer))
+        initialize_scalar(function, slot, initializer);
+    if (array_init && !declared_type.count)
+        function.scopes.back().at(name).type = std::move(type);
 }
 
 void lower_sequence(Function &function, Node *sequence, SwitchCases *cases) {
@@ -418,6 +345,13 @@ void lower_for_init(Function &function, Node *node) {
         return;
     }
     if (node->getKind() == cparser::NK_VAR_DECL) {
+        Node *type = static_cast<cparser::VarDeclASTNode *>(node)->getType();
+        const auto flags = node->getFlags() | (present(type) ? type->getFlags() : 0);
+        if (flags & (SCS_STATIC | SCS_EXTERN)) {
+            function.error(node, "for declaration must declare automatic or register objects",
+                           "cephyr.statement.for-declaration");
+            return;
+        }
         lower_local_declaration(function, node);
         return;
     }
@@ -472,11 +406,12 @@ void lower_case(Function &function, cparser::CaseLabelASTNode *label,
 
     const Id target = function.block();
     if (Node *expression = label->getExpr(); present(expression)) {
-        const auto constant = integer_constant(expression, function.unit.source,
-                                               function.unit.diagnostics);
+        const auto errors = function.unit.diagnostics.error_count();
+        const auto constant = integer_constant(expression, TypeContext(function.unit, &function));
         if (!constant || !constant->type.integer()) {
-            function.error(expression, "case label requires an integer constant expression",
-                           "cephyr.statement.case");
+            if (function.unit.diagnostics.error_count() == errors)
+                function.error(expression, "case label requires an integer constant expression",
+                               "cephyr.statement.case");
         } else {
             const auto source = normalize(constant->value, constant->type);
             const auto key = normalize(source, cases->type);
@@ -577,6 +512,36 @@ void lower_return(Function &function, cparser::ReturnStmtASTNode *statement) {
     function.ret(abi_value(function, value));
 }
 
+void lower_goto(Function &function, cparser::GotoStmtASTNode *statement) {
+    Node *name = statement->getLabel();
+    auto &label = function.labels[identifier(name)];
+    if (label.target == no_value)
+        label.target = function.block();
+    if (!label.first_reference)
+        label.first_reference = name;
+    function.jump(label.target);
+}
+
+void lower_label(Function &function, cparser::LabelStmtASTNode *statement,
+                 SwitchCases *cases) {
+    Node *name = statement->getLabel();
+    const auto key = identifier(name);
+    auto &label = function.labels[key];
+    if (label.definition) {
+        function.error(name, "duplicate label '" + key + "'", "cephyr.statement.label");
+    } else {
+        if (label.target == no_value)
+            label.target = function.block();
+        label.definition = name;
+        // An edge to a fixed-size automatic object's scope does not run any
+        // initializer preceding the label. Its frame address already dominates
+        // every block. Variably modified declarations are rejected by read_type.
+        function.jump(label.target);
+        function.select(label.target);
+    }
+    lower_statement(function, statement->getStmt(), cases);
+}
+
 void lower_parameter_slots(Function &function, Node *parameters) {
     struct Parameter {
         Node *node;
@@ -596,8 +561,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
             continue;
         }
         auto *parameter = static_cast<cparser::ParmDeclASTNode *>(node);
-        CType type = read_type(parameter->getType(), function.unit.source,
-                               function.unit.diagnostics, true);
+        CType type = read_type(parameter->getType(), TypeContext(function.unit, &function), true);
         if (type.kind == CType::Kind::void_ && declarations.size() == 1 &&
             abi_types.empty()) {
             if (!identifier(parameter->getName()).empty())
@@ -647,6 +611,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
         LValue slot = function.local(parameter.object_type, parameter.node);
         if (slot.address == no_value)
             continue;
+        slot.register_object = (parameter.node->getFlags() & SCS_REGISTER) != 0;
         function.declare_local(parameter.name, slot, parameter.node);
         slot.type.is_const = false; // Bind the incoming value, not a C assignment.
         store(function, slot, Expr{abi_types[index], incoming[index], std::nullopt},
@@ -655,11 +620,11 @@ void lower_parameter_slots(Function &function, Node *parameters) {
 }
 
 void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
+    const AnalysisDepth depth(function.statement_depth);
     if (!present(statement))
         return;
     if (statement->isType()) {
-        const CType type =
-            read_type(statement, function.unit.source, function.unit.diagnostics, true);
+        const CType type = read_type(statement, TypeContext(function.unit, &function), true);
         if (type.valid() && type.kind != CType::Kind::record)
             function.error(statement, "block-scope declaration declares no object",
                            "cephyr.local.declaration");
@@ -679,7 +644,7 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
         lower_local_declaration(function, statement);
         return;
     case cparser::NK_STATIC_ASSERT:
-        check_static_assert(function.unit, statement);
+        check_static_assert(TypeContext(function.unit, &function), statement);
         return;
     case cparser::NK_IF_STMT:
         lower_if(function, static_cast<cparser::IfStmtASTNode *>(statement), cases);
@@ -727,10 +692,10 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
         lower_case(function, static_cast<cparser::CaseLabelASTNode *>(statement), cases);
         return;
     case cparser::NK_GOTO_STMT:
+        lower_goto(function, static_cast<cparser::GotoStmtASTNode *>(statement));
+        return;
     case cparser::NK_LABEL_STMT:
-        function.error(statement, "goto and labeled statements are not yet supported",
-                       "cephyr.statement.unsupported");
-        function.trap();
+        lower_label(function, static_cast<cparser::LabelStmtASTNode *>(statement), cases);
         return;
     case cparser::NK_ASM_STMT:
         function.error(statement, "inline assembly is not supported",
@@ -751,13 +716,21 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
 
 } // namespace
 
-void lower_stmt(Function &function, Node *statement) {
-    lower_statement(function, statement, nullptr);
-}
-
 void lower_function_body(Function &function, Node *parameters, Node *body) {
     const auto initial_errors = function.unit.diagnostics.error_count();
     lower_parameter_slots(function, parameters);
+
+    // C11 6.4.2.2: as if `static const char __func__[] = "name";`
+    // immediately followed the function body's opening brace.
+    auto character = plain_char_type(function.unit.source);
+    character.is_const = true;
+    CType function_name;
+    function_name.kind = CType::Kind::array;
+    function_name.element = std::make_shared<const CType>(std::move(character));
+    function_name.count = function.source_name.size() + 1;
+    function.function_name_symbol = "__cephyr_tu_func_" + std::to_string(function.unit.function_names++);
+    function.declare_local("__func__", {std::move(function_name), no_value,
+                                        function.function_name_symbol}, body);
 
     // Function parameters and declarations in the outermost compound statement
     // share one C scope.
@@ -765,7 +738,12 @@ void lower_function_body(Function &function, Node *parameters, Node *body) {
         lower_compound(function, static_cast<cparser::CompoundStmtASTNode *>(body),
                        false, nullptr);
     else
-        lower_stmt(function, body);
+        lower_statement(function, body, nullptr);
+
+    for (const auto &[name, label] : function.labels)
+        if (!label.definition)
+            function.error(label.first_reference, "goto references undefined label '" + name + "'",
+                           "cephyr.statement.goto");
 
     const auto reachable = reachable_blocks(function.blocks);
     if (function.open()) {

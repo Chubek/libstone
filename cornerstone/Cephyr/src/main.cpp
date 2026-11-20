@@ -443,9 +443,6 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
     std::vector<std::pair<bool, std::string>> builtins{
         {true, "__CEPHYR__=1"}, {true, "__CEPHYR_HAS_VARIADIC_CALLS=1"},
         {true, "__LP64__=1"}, {true, "_LP64=1"},
-        {true, "__STDC_NO_ATOMICS__=1"},
-        {true, "__STDC_NO_COMPLEX__=1"}, {true, "__STDC_NO_THREADS__=1"},
-        {true, "__STDC_NO_VLA__=1"},
     };
     if (provider && provider->architecture == "RISCV64IM")
         for (const auto *macro : {"__riscv=1", "__riscv_xlen=64", "__riscv_mul=1", "__riscv_div=1",
@@ -743,8 +740,8 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
         runtime.library = workspace / "libcephyr-c.a";
         extend(command, {"rcs", runtime.library.string()});
         for (const char *source : {amd64 ? "syscall-amd64.S" : aarch64 ? "syscall-aarch64.S" : "syscall.S",
-                                  "runtime.c", "allocator.c", "assert.c",
-                                  "ctype.c", "stdlib.c", "stdio.c", "string.c"}) {
+                                   "runtime.c", "allocator.c", "assert.c",
+                                   "ctype.c", "stdlib.c", "stdio.c", "stream.c", "string.c"}) {
             const auto object = workspace / ("libc-" + fs::path(source).stem().string() + ".o");
             if (!compile(source, object))
                 return std::nullopt;

@@ -48,14 +48,18 @@ std::optional<ParsedUnit> parse(const Preprocessed &source, Diagnostics &diag) {
     try {
         impl->parser.parse(nullptr);
     } catch (const cparser::ParseFailure &) {
+        if (diag.error_count() == initial_errors)
+            diag.error("cephyr.parse", "C parser stopped without a diagnostic", source.locate(1));
         return std::nullopt;
     }
 
     impl->parser.setDiagnosticHandler({});
-    if (impl->parser.getParsingErrors() != 0 ||
-        impl->parser.getAST()->getErrors() != 0 ||
-        diag.error_count() != initial_errors)
+    if (diag.error_count() != initial_errors)
         return std::nullopt;
+    if (impl->parser.getParsingErrors() != 0 || impl->parser.getAST()->getErrors() != 0) {
+        diag.error("cephyr.parse", "C parser reported an error without a diagnostic", source.locate(1));
+        return std::nullopt;
+    }
     if (!impl->parser.getAST()->getRoot()) {
         diag.error("cephyr.parse", "C parser did not return a translation unit",
                    source.locate(1));

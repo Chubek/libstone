@@ -42,10 +42,186 @@ unsigned line_containing(const std::string &text, const std::string &needle) {
     return line;
 }
 
+std::string rendered(const cephyr::Diagnostics &diagnostics) {
+    std::ostringstream stream;
+    diagnostics.render(stream);
+    return stream.str();
+}
+
+void check_translation_phases(const std::filesystem::path &directory) {
+    const auto source = (directory / "phases.c").string();
+    write(directory / "phases.h",
+          "#define HEADER_VAL 2?" "?/\r\n8\r"
+          "int header_physical_line;\r");
+    cephyr::Diagnostics diagnostics;
+    auto result = cephyr::preprocess(
+        "?" "?=include \"phases.h\"\r\n"
+        "#define JOIN(a, b) a %:%: b\r"
+        "#define STR(x) %:x\n"
+        "const char *tokens = STR(a/**/b);\n"
+        "// comment continued by phase 1 then phase 2: ?" "?/\r\n"
+        "#error this line is still in the comment\r\n"
+        "%:if ?" "?/\n"
+        "__LINE__ != 8 || HEADER_VAL != 28\n"
+        "#error phases were not applied in order\n"
+        "#endif\n"
+        "#define PASS(x) x\n"
+        "#if PASS(\\\n"
+        "__LINE__) != 13\n"
+        "#error macro argument lost its physical source line\n"
+        "#endif\n"
+        "int JOIN(mapped, _token);\n",
+        source, {}, diagnostics);
+    assert(result);
+    assert(diagnostics.error_count() == 0);
+    assert(result->text.find("\"a b\"") != std::string::npos);
+    const auto header = result->locate(
+        line_containing(result->text, "header_physical_line"));
+    assert(header.file == (directory / "phases.h").string());
+    assert(header.line == 3);
+    const auto mapped = result->locate(
+        line_containing(result->text, "mapped_token"));
+    assert(mapped.file == source);
+    assert(mapped.line == 16);
+
+    write(directory / "no-final-newline.h", "int no_final_newline;");
+    cephyr::Diagnostics eof;
+    result = cephyr::preprocess("#include \"no-final-newline.h\"\n"
+                                "int final_splice; ?" "?/\n", source, {}, eof);
+    assert(result);
+    const auto messages = rendered(eof);
+    assert(messages.find("no-final-newline.h:1: warning") != std::string::npos);
+    assert(messages.find("phases.c:2: warning") != std::string::npos);
+    assert(messages.find("backslash-newline at end of source file") !=
+           std::string::npos);
+
+    for (const auto *partial : {"/* unfinished\n", "int c = 'a\n",
+                                "const char *s = \"a\n"}) {
+        cephyr::Diagnostics malformed;
+        assert(!cephyr::preprocess(partial, source, {}, malformed));
+        assert(malformed.error_count() >= 1);
+    }
+}
+
+void check_directives(const std::filesystem::path &directory) {
+    const auto source = (directory / "directives.c").string();
+    write(directory / "direct.h", "int direct_header;\n");
+    write(directory / "two words.h", "int stringized_header;\n");
+    write(directory / "expanded.h", "int expanded_header;\n");
+    cephyr::PreprocessOptions options;
+    options.include_dirs.push_back(directory);
+
+    cephyr::Diagnostics diagnostics;
+    const auto result = cephyr::preprocess(
+        "#define STR(x) #x\n"
+        "#define direct nonexistent\n"
+        "#include /* directive whitespace */ <direct.h>\n"
+        "#include STR(two/**/words.h)\n"
+        "#define RIGHT >\n"
+        "#include <expanded.h RIGHT\n"
+        "#if 1\n"
+        "#elif 1 / 0\n"
+        "#error in a skipped branch\n"
+        "#endif\n"
+        "#define HASH #\n"
+        "HASH 63 \"not-a-real-marker.c\"\n"
+        "#define EMPTY\n"
+        "EMPTY %:line 42 \"not-a-directive.c\"\n"
+        "int before_remap;\n"
+        "#define NUMBER 0000000000000017\n"
+        "%:line NUMBER STR(two /* whitespace */ words.c)\n"
+        "#if __LINE__ != 17\n"
+        "#error incorrect decimal #line interpretation\n"
+        "#endif\n"
+        "const char *mapped_file = __FILE__;\n"
+        "#line 2147483647\n"
+        "int largest_line;\n",
+        source, options, diagnostics);
+    assert(result);
+    assert(diagnostics.error_count() == 0);
+    for (const auto *token : {"direct_header", "stringized_header",
+                              "expanded_header", "\"not-a-real-marker.c\"",
+                              "\"not-a-directive.c\"", "\"two words.c\""})
+        assert(result->text.find(token) != std::string::npos);
+    const auto before = result->locate(
+        line_containing(result->text, "before_remap"));
+    assert(before.file == source && before.line == 15);
+    const auto after = result->locate(
+        line_containing(result->text, "mapped_file"));
+    assert(after.file == "two words.c" && after.line == 20);
+    const auto largest = result->locate(
+        line_containing(result->text, "largest_line"));
+    assert(largest.file == "two words.c" && largest.line == 2147483647U);
+
+    for (const auto *invalid : {
+             "#line 0\n", "#line 2147483648\n",
+             "#line 99999999999999999999999999999999\n", "#line 0x20\n",
+             "#line 20u\n", "#line 'a'\n", "#line 20 u8\"bad\"\n",
+             "#line 20 \"bad\" extra\n", "#include \"direct.h\" extra\n",
+             "#define BAD \"direct\" \".h\"\n#include BAD\n",
+             "#define BAD u8\"direct.h\"\n#include BAD\n",
+             "#if 1\n#else\n#elif 1\n#endif\n",
+             "#if 1\n#else\n#else\n#endif\n",
+             "#undef defined\n", "#undef __STDC_VERSION__\n",
+             "#define __STDC_HOSTED__ 1\n", "#undef __STDC_NO_THREADS__\n",
+             "#define __STDC_IEC_559__ 1\n", "#define __STDC_UTF_32__ 1\n"}) {
+        cephyr::Diagnostics rejected;
+        assert(!cephyr::preprocess(invalid, source, options, rejected));
+        assert(rejected.error_count() == 1);
+        assert(rendered(rejected).find("directives.c:") != std::string::npos);
+    }
+
+    cephyr::Diagnostics message;
+    assert(!cephyr::preprocess("#define MESSAGE expanded\n"
+                               "#error MESSAGE /* omitted */ \"detail\"\n",
+                               source, {}, message));
+    assert(rendered(message).find("#error MESSAGE \"detail\"") !=
+           std::string::npos);
+}
+
+void check_pragmas() {
+    cephyr::Diagnostics diagnostics;
+    const auto result = cephyr::preprocess(
+        "#pragma unknown \"C11 ignores this\"\n"
+        "#pragma STDC FP_CONTRACT /* no contraction */ OFF\n"
+        "#define STDC not_expanded\n"
+        "#define OFF not_expanded\n"
+        "#pragma STDC FENV_ACCESS OFF\n"
+        "#define DO_PRAGMA(x) _Pragma(#x)\n"
+        "_Pragma(u8\"STDC CX_LIMITED_RANGE /* comment */ DEFAULT\")\n"
+        "_Pragma(\"unknown \\\"quoted\\\" \\\\path\")\n"
+        "_Pragma(\"unknown // trailing comment\")\n"
+        "int n = DO_PRAGMA(unknown) 42;\n",
+        "pragmas.c", {}, diagnostics);
+    assert(result);
+    assert(diagnostics.error_count() == 0);
+    assert(rendered(diagnostics).empty());
+    assert(result->output.find("#pragma") == std::string::npos);
+    assert(result->output.find("_Pragma") == std::string::npos);
+    assert(result->text.find("42") != std::string::npos);
+    assert(result->locate(line_containing(result->text, "int n")).line == 10);
+
+    for (const auto *invalid : {
+             "#pragma STDC FP_CONTRACT YES\n",
+             "#define MODE OFF\n#pragma STDC FP_CONTRACT MODE\n",
+             "_Pragma(\"STDC FENV_ACCESS ON\")\n",
+             "_Pragma(\"STDC FP_CONTRACT OFF extra\")\n",
+             "_Pragma(\"STDC FP_CONTRACT /* unterminated\")\n",
+             "_Pragma(1)\n"}) {
+        cephyr::Diagnostics rejected;
+        assert(!cephyr::preprocess(invalid, "pragmas.c", {}, rejected));
+        assert(rejected.error_count() == 1);
+        assert(rendered(rejected).find("pragmas.c:") != std::string::npos);
+    }
+}
+
 } // namespace
 
 int main() {
     TemporaryDirectory temporary;
+    check_translation_phases(temporary.path);
+    check_directives(temporary.path);
+    check_pragmas();
     write(temporary.path / "local.h", "int from_header = VALUE;\n");
     write(temporary.path / "forced.h", "#define FORCED 9\n");
 
@@ -70,6 +246,13 @@ int main() {
         "#endif\n"
         "#if __STDC_HOSTED__ != 1\n"
         "#error wrong hosted implementation indicator\n"
+        "#endif\n"
+        "#if __STDC_NO_ATOMICS__ != 1 || __STDC_NO_COMPLEX__ != 1 || "
+        "__STDC_NO_THREADS__ != 1 || __STDC_NO_VLA__ != 1\n"
+        "#error wrong C11 feature indicators\n"
+        "#endif\n"
+        "#if defined(__STDC_IEC_559__) || defined(__STDC_UTF_32__)\n"
+        "#error unsupported optional feature was advertised\n"
         "#endif\n",
         primary.string(), options, diagnostics);
     assert(result);

@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <charconv>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -119,8 +121,9 @@ Constant converted(Constant value, CType type) {
 
 std::optional<Constant> parse_integer_literal(Node *, const Preprocessed &,
                                               Diagnostics &);
-std::optional<CType> infer_integer_type(Node *, const Preprocessed &, Diagnostics &);
-std::optional<Constant> evaluate_ice(Node *, const Preprocessed &, Diagnostics &);
+using IceSizes = std::map<Node *, Constant>;
+std::optional<CType> infer_integer_type(Node *, const TypeContext &);
+std::optional<Constant> evaluate_ice(Node *, const TypeContext &, const IceSizes &);
 
 thread_local unsigned semantic_depth = 0;
 
@@ -589,71 +592,136 @@ std::optional<std::pair<Node *, Node *>> binary_operands(Node *node) {
 // Check the form separately from computing its value. A skipped operand may
 // contain an otherwise undefined arithmetic operation, but a variable or call
 // there still prevents the expression from being an integer constant expression.
-bool has_ice_form(Node *node) {
+bool has_ice_form(Node *node, const TypeContext &context, IceSizes &sizes) {
     const AnalysisDepth depth(semantic_depth);
     if (!present(node))
         return false;
     switch (node->getKind()) {
     case cparser::NK_INTEGER_CONST:
     case cparser::NK_CHAR_CONST:
-    case cparser::NK_SIZEOF_EXPR:
-    case cparser::NK_ALIGNOF_EXPR:
         return true;
+    case cparser::NK_SIZEOF_EXPR:
+    case cparser::NK_ALIGNOF_EXPR: {
+        // Validate the types even in an unselected conditional arm. Cache
+        // the result so the value evaluator need not inspect the operand again.
+        const auto size = size_or_alignment(node, context);
+        if (!size)
+            return false;
+        sizes.emplace(node, *size);
+        return true;
+    }
     case cparser::NK_CAST_EXPR: {
         auto *cast = static_cast<cparser::CastExprASTNode *>(node);
         auto *type = cast->getType();
-        if (!present(type))
+        if (!present(type) || !present(cast->getExpr()))
             return false;
         return (type->getKind() == cparser::NK_BOOLEAN_TYPE ||
                 type->getKind() == cparser::NK_INTEGRAL_TYPE ||
                 type->getKind() == cparser::NK_ENUMERAL_TYPE ||
                 type->getKind() == cparser::NK_LIST) &&
-               has_ice_form(cast->getExpr());
+               read_type(type, context).integer() &&
+               (cast->getExpr()->getKind() == cparser::NK_REAL_CONST ||
+                has_ice_form(cast->getExpr(), context, sizes));
     }
     case cparser::NK_UNARY_PLUS_EXPR:
-        return has_ice_form(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr());
+        return has_ice_form(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(), context, sizes);
     case cparser::NK_BIT_NOT_EXPR:
-        return has_ice_form(static_cast<cparser::BitNotExprASTNode *>(node)->getExpr());
+        return has_ice_form(static_cast<cparser::BitNotExprASTNode *>(node)->getExpr(), context, sizes);
     case cparser::NK_LOG_NOT_EXPR:
-        return has_ice_form(static_cast<cparser::LogNotExprASTNode *>(node)->getExpr());
+        return has_ice_form(static_cast<cparser::LogNotExprASTNode *>(node)->getExpr(), context, sizes);
     case cparser::NK_COND_EXPR: {
         auto *cond = static_cast<cparser::CondExprASTNode *>(node);
-        return has_ice_form(cond->getCondition()) &&
-               has_ice_form(cond->getThenClause()) &&
-               has_ice_form(cond->getElseClause());
+        return has_ice_form(cond->getCondition(), context, sizes) &&
+               has_ice_form(cond->getThenClause(), context, sizes) &&
+               has_ice_form(cond->getElseClause(), context, sizes);
     }
     default:
         const auto operands = binary_operands(node);
-        return operands && has_ice_form(operands->first) && has_ice_form(operands->second);
+        return operands && has_ice_form(operands->first, context, sizes) &&
+               has_ice_form(operands->second, context, sizes);
     }
 }
 
-std::optional<CType> infer_integer_type(Node *node, const Preprocessed &source,
-                                        Diagnostics &diagnostics) {
+template<class Real, int precision>
+std::optional<long double> parse_real(std::string_view text, std::chars_format format) {
+    if constexpr (!std::numeric_limits<Real>::is_iec559 ||
+                  std::numeric_limits<Real>::digits != precision) {
+        return std::nullopt;
+    } else {
+        Real value{};
+        auto end = text.data() + text.size();
+        const auto result = std::from_chars(text.data(), end, value, format);
+        if (result.ptr != end || result.ec != std::errc{} || !std::isfinite(value))
+            return std::nullopt;
+        return value;
+    }
+}
+
+// C11 6.6p6 permits a floating constant as the immediate operand of an
+// integer cast, even when floating-point arithmetic is not lowered natively.
+std::optional<Constant> cast_real_literal(Node *node, CType destination,
+                                         const Preprocessed &source,
+                                         Diagnostics &diagnostics) {
+    auto text = spelling(static_cast<cparser::RealConstASTNode *>(node));
+    const bool single = !text.empty() && (text.back() == 'f' || text.back() == 'F');
+    if (text.empty() || text.back() == 'l' || text.back() == 'L') {
+        constant_error(node, source, diagnostics, "long double constants in integer casts are unsupported");
+        return std::nullopt;
+    }
+    if (single)
+        text.remove_suffix(1);
+    const bool hex = text.starts_with("0x") || text.starts_with("0X");
+    if (hex)
+        text.remove_prefix(2); // from_chars hex syntax omits the prefix.
+    const auto format = hex ? std::chars_format::hex : std::chars_format::general;
+    const auto value = single ? parse_real<float, 24>(text, format)
+                              : parse_real<double, 53>(text, format);
+    if (!value) {
+        constant_error(node, source, diagnostics,
+                       "floating constant is out of supported range for an integer cast");
+        return std::nullopt;
+    }
+    if (destination.bits == 1)
+        return Constant{unqualified(destination), *value != 0};
+
+    const auto truncated = std::trunc(*value);
+    const auto limit = std::ldexp(1.0L, destination.bits - (destination.is_signed ? 1 : 0));
+    if (truncated >= limit || truncated < (destination.is_signed ? -limit : 0)) {
+        constant_error(node, source, diagnostics,
+                       "floating constant is not representable in the cast's integer type");
+        return std::nullopt;
+    }
+    const auto bits = destination.is_signed
+        ? static_cast<std::uint64_t>(static_cast<std::int64_t>(truncated))
+        : static_cast<std::uint64_t>(truncated);
+    return Constant{unqualified(destination), normalize(bits, destination)};
+}
+
+std::optional<CType> infer_integer_type(Node *node, const TypeContext &context) {
     const AnalysisDepth depth(semantic_depth);
     if (!present(node))
         return std::nullopt;
     switch (node->getKind()) {
     case cparser::NK_INTEGER_CONST: {
-        const auto literal = parse_integer_literal(node, source, diagnostics);
+        const auto literal = parse_integer_literal(node, context.source, context.diagnostics);
         return literal ? std::optional<CType>(literal->type) : std::nullopt;
     }
     case cparser::NK_CHAR_CONST:
         return integer_type();
     case cparser::NK_UNARY_PLUS_EXPR: {
         auto operand = infer_integer_type(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(),
-                                          source, diagnostics);
+                                          context);
         return operand ? std::optional<CType>(promote(*operand)) : std::nullopt;
     }
     case cparser::NK_CAST_EXPR: {
         auto *cast = static_cast<cparser::CastExprASTNode *>(node);
-        CType type = read_type(cast->getType(), source, diagnostics);
+        CType type = read_type(cast->getType(), context);
         return type.integer() ? std::optional<CType>(unqualified(type))
                               : std::nullopt;
     }
     case cparser::NK_BIT_NOT_EXPR: {
         auto *unary = static_cast<cparser::BitNotExprASTNode *>(node);
-        const auto operand = infer_integer_type(unary->getExpr(), source, diagnostics);
+        const auto operand = infer_integer_type(unary->getExpr(), context);
         return operand ? std::optional<CType>(promote(*operand)) : std::nullopt;
     }
     case cparser::NK_LOG_NOT_EXPR:
@@ -671,7 +739,7 @@ std::optional<CType> infer_integer_type(Node *node, const Preprocessed &source,
         const auto operands = binary_operands(node);
         const auto left =
             operands
-                ? infer_integer_type(operands->first, source, diagnostics)
+                ? infer_integer_type(operands->first, context)
                 : std::nullopt;
         return left ? std::optional<CType>(promote(*left)) : std::nullopt;
     }
@@ -687,9 +755,9 @@ std::optional<CType> infer_integer_type(Node *node, const Preprocessed &source,
         if (!operands)
             return std::nullopt;
         const auto left =
-            infer_integer_type(operands->first, source, diagnostics);
+            infer_integer_type(operands->first, context);
         const auto right =
-            infer_integer_type(operands->second, source, diagnostics);
+            infer_integer_type(operands->second, context);
         if (!left || !right)
             return std::nullopt;
         return common_integer(*left, *right);
@@ -697,9 +765,9 @@ std::optional<CType> infer_integer_type(Node *node, const Preprocessed &source,
     case cparser::NK_COND_EXPR: {
         auto *conditional = static_cast<cparser::CondExprASTNode *>(node);
         const auto yes =
-            infer_integer_type(conditional->getThenClause(), source, diagnostics);
+            infer_integer_type(conditional->getThenClause(), context);
         const auto no =
-            infer_integer_type(conditional->getElseClause(), source, diagnostics);
+            infer_integer_type(conditional->getElseClause(), context);
         if (!yes || !no)
             return std::nullopt;
         return common_integer(*yes, *no);
@@ -716,62 +784,15 @@ bool true_value(const Constant &constant) {
     return normalize(constant.value, constant.type) != 0;
 }
 
-std::optional<Constant> evaluate_size_or_align(Node *node,
-                                              const Preprocessed &source,
-                                              Diagnostics &diagnostics,
-                                              bool alignment) {
-    Node *operand = nullptr;
-    if (alignment) {
-        operand = static_cast<cparser::AlignOfExprASTNode *>(node)->getExpr();
-    } else {
-        operand = static_cast<cparser::SizeOfExprASTNode *>(node)->getExpr();
-    }
-
-    CType type;
-    if (present(operand) && operand->isType()) {
-        type = read_type(operand, source, diagnostics);
-    } else if (present(operand) && operand->getKind() == cparser::NK_STRING_CONST) {
-        const auto bytes = string_constant(operand, source, diagnostics);
-        if (!bytes)
-            return std::nullopt;
-        type.kind = CType::Kind::array;
-        type.element = std::make_shared<const CType>(plain_char_type(source));
-        type.count = bytes->size();
-    } else if (present(operand) && operand->getKind() == cparser::NK_CAST_EXPR) {
-        auto *cast = static_cast<cparser::CastExprASTNode *>(operand);
-        type = read_type(cast->getType(), source, diagnostics);
-    } else {
-        const auto inferred = infer_integer_type(operand, source, diagnostics);
-        if (!inferred)
-            return std::nullopt;
-        type = *inferred;
-    }
-
-    std::optional<std::uint64_t> value;
-    if (alignment) {
-        const unsigned result = align_of(type);
-        if (result != 0)
-            value = result;
-    } else {
-        value = size_of(type);
-    }
-    if (!value) {
-        constant_error(node, source, diagnostics,
-                       alignment ? "_Alignof operand has no supported alignment"
-                                 : "sizeof operand has incomplete or unsupported type");
-        return std::nullopt;
-    }
-    CType size_type = integer_type(64, false, long_rank);
-    return Constant{size_type, normalize(*value, size_type)};
-}
-
-std::optional<Constant> evaluate_binary(Node *node, const Preprocessed &source,
-                                       Diagnostics &diagnostics) {
+std::optional<Constant> evaluate_binary(Node *node, const TypeContext &context,
+                                        const IceSizes &sizes) {
+    const auto &source = context.source;
+    auto &diagnostics = context.diagnostics;
     const auto operands = binary_operands(node);
     if (!operands)
         return std::nullopt;
 
-    auto left = evaluate_ice(operands->first, source, diagnostics);
+    auto left = evaluate_ice(operands->first, context, sizes);
     if (!left)
         return std::nullopt;
 
@@ -780,7 +801,7 @@ std::optional<Constant> evaluate_binary(Node *node, const Preprocessed &source,
     if (node->getKind() == cparser::NK_LOG_OR_EXPR && true_value(*left))
         return Constant{integer_type(), 1};
 
-    auto right = evaluate_ice(operands->second, source, diagnostics);
+    auto right = evaluate_ice(operands->second, context, sizes);
     if (!right)
         return std::nullopt;
     if (!left->type.integer() || !right->type.integer())
@@ -975,9 +996,11 @@ std::optional<Constant> evaluate_binary(Node *node, const Preprocessed &source,
     return Constant{common, normalize(result, common)};
 }
 
-std::optional<Constant> evaluate_ice(Node *node, const Preprocessed &source,
-                                    Diagnostics &diagnostics) {
+std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
+                                     const IceSizes &sizes) {
     const AnalysisDepth depth(semantic_depth);
+    const auto &source = context.source;
+    auto &diagnostics = context.diagnostics;
     if (!present(node))
         return std::nullopt;
     switch (node->getKind()) {
@@ -987,23 +1010,25 @@ std::optional<Constant> evaluate_ice(Node *node, const Preprocessed &source,
         return parse_character_literal(node, source, diagnostics);
     case cparser::NK_UNARY_PLUS_EXPR: {
         auto operand = evaluate_ice(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(),
-                                    source, diagnostics);
+                                    context, sizes);
         return operand ? std::optional<Constant>(converted(*operand, promote(operand->type)))
                        : std::nullopt;
     }
     case cparser::NK_CAST_EXPR: {
         auto *cast = static_cast<cparser::CastExprASTNode *>(node);
-        CType destination = read_type(cast->getType(), source, diagnostics);
+        CType destination = read_type(cast->getType(), context);
         if (!destination.integer())
             return std::nullopt;
-        auto operand = evaluate_ice(cast->getExpr(), source, diagnostics);
+        if (cast->getExpr()->getKind() == cparser::NK_REAL_CONST)
+            return cast_real_literal(cast->getExpr(), std::move(destination), source, diagnostics);
+        auto operand = evaluate_ice(cast->getExpr(), context, sizes);
         return operand ? std::optional<Constant>(
                              converted(*operand, std::move(destination)))
                        : std::nullopt;
     }
     case cparser::NK_BIT_NOT_EXPR: {
         auto *unary = static_cast<cparser::BitNotExprASTNode *>(node);
-        auto operand = evaluate_ice(unary->getExpr(), source, diagnostics);
+        auto operand = evaluate_ice(unary->getExpr(), context, sizes);
         if (!operand || !operand->type.integer())
             return std::nullopt;
         const CType type = promote(operand->type);
@@ -1013,17 +1038,15 @@ std::optional<Constant> evaluate_ice(Node *node, const Preprocessed &source,
     }
     case cparser::NK_LOG_NOT_EXPR: {
         auto *unary = static_cast<cparser::LogNotExprASTNode *>(node);
-        auto operand = evaluate_ice(unary->getExpr(), source, diagnostics);
+        auto operand = evaluate_ice(unary->getExpr(), context, sizes);
         if (!operand || !operand->type.integer())
             return std::nullopt;
         return Constant{integer_type(),
                         static_cast<std::uint64_t>(!true_value(*operand))};
     }
-    case cparser::NK_SIZEOF_EXPR: {
-        return evaluate_size_or_align(node, source, diagnostics, false);
-    }
+    case cparser::NK_SIZEOF_EXPR:
     case cparser::NK_ALIGNOF_EXPR:
-        return evaluate_size_or_align(node, source, diagnostics, true);
+        return sizes.at(node);
     case cparser::NK_LSHIFT_EXPR:
     case cparser::NK_RSHIFT_EXPR:
     case cparser::NK_BIT_IOR_EXPR:
@@ -1042,21 +1065,21 @@ std::optional<Constant> evaluate_ice(Node *node, const Preprocessed &source,
     case cparser::NK_GE_EXPR:
     case cparser::NK_EQ_EXPR:
     case cparser::NK_NE_EXPR:
-        return evaluate_binary(node, source, diagnostics);
+        return evaluate_binary(node, context, sizes);
     case cparser::NK_COND_EXPR: {
         auto *conditional = static_cast<cparser::CondExprASTNode *>(node);
         auto condition =
-            evaluate_ice(conditional->getCondition(), source, diagnostics);
+            evaluate_ice(conditional->getCondition(), context, sizes);
         if (!condition)
             return std::nullopt;
         const auto result_type =
-            infer_integer_type(node, source, diagnostics);
+            infer_integer_type(node, context);
         if (!result_type)
             return std::nullopt;
         auto result =
             evaluate_ice(true_value(*condition) ? conditional->getThenClause()
                                                 : conditional->getElseClause(),
-                         source, diagnostics);
+                          context, sizes);
         return result ? std::optional<Constant>(
                             converted(*result, *result_type))
                       : std::nullopt;
@@ -1069,15 +1092,17 @@ std::optional<Constant> evaluate_ice(Node *node, const Preprocessed &source,
 }
 
 CType read_type_list(cparser::SequenceASTNode *sequence,
-                     const Preprocessed &source, Diagnostics &diagnostics,
-                     bool allow_incomplete) {
+                      const TypeContext &context,
+                      bool allow_incomplete) {
+    const auto &source = context.source;
+    auto &diagnostics = context.diagnostics;
     const auto nodes = elements(sequence);
     if (nodes.empty()) {
         type_error(sequence, source, diagnostics, "empty type specifier list");
         return {};
     }
     if (nodes.size() == 1)
-        return read_type(nodes.front(), source, diagnostics, allow_incomplete);
+        return read_type(nodes.front(), context, allow_incomplete);
 
     bool all_integer = true;
     bool signed_ = true;
@@ -1092,7 +1117,7 @@ CType read_type_list(cparser::SequenceASTNode *sequence,
             all_integer = false;
             break;
         }
-        CType part = read_type(node, source, diagnostics, allow_incomplete);
+        CType part = read_type(node, context, allow_incomplete);
         if (!part.integer())
             return {};
         signed_ = signed_ && part.is_signed;
@@ -1175,9 +1200,10 @@ CType pointer_type(const CType &pointee) {
     return result;
 }
 
-CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics,
-                bool allow_incomplete) {
+CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
     const AnalysisDepth depth(semantic_depth);
+    const auto &source = context.source;
+    auto &diagnostics = context.diagnostics;
     if (!present(node)) {
         type_error(node, source, diagnostics, "missing type");
         return {};
@@ -1192,8 +1218,8 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
 
     switch (node->getKind()) {
     case cparser::NK_LIST:
-        return read_type_list(static_cast<cparser::SequenceASTNode *>(node), source,
-                              diagnostics, allow_incomplete);
+        return read_type_list(static_cast<cparser::SequenceASTNode *>(node), context,
+                              allow_incomplete);
     case cparser::NK_VOID_TYPE: {
         CType type;
         type.kind = CType::Kind::void_;
@@ -1220,7 +1246,7 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
     case cparser::NK_POINTER_TYPE: {
         auto *pointer = static_cast<cparser::PointerTypeASTNode *>(node);
         CType pointee =
-            read_type(pointer->getBaseType(), source, diagnostics, true);
+            read_type(pointer->getBaseType(), context, true);
         CType result = pointer_type(pointee);
         if (!result.valid())
             return {};
@@ -1229,7 +1255,7 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
     case cparser::NK_ARRAY_TYPE: {
         auto *array = static_cast<cparser::ArrayTypeASTNode *>(node);
         CType element =
-            read_type(array->getElementType(), source, diagnostics, false);
+            read_type(array->getElementType(), context, false);
         if (!element.valid())
             return {};
         if (element.kind == CType::Kind::void_ ||
@@ -1240,31 +1266,28 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
         }
 
         std::uint64_t count = 0;
-        if (present(array->getExpr())) {
-            const auto constant =
-                integer_constant(array->getExpr(), source, diagnostics);
-            if (!constant) {
-                type_error(array->getExpr(), source, diagnostics,
-                           "variable-length arrays are not supported");
-                return {};
-            }
-            if (constant->type.is_signed) {
-                const auto signed_count =
-                    std::bit_cast<std::int64_t>(
-                        normalize(constant->value, constant->type));
-                if (signed_count <= 0) {
-                    type_error(array->getExpr(), source, diagnostics,
-                               "array bound must be positive");
+        if (Node *bound = array->getExpr(); present(bound)) {
+            const auto saved = context.unit.array_bounds.find(bound);
+            if (saved != context.unit.array_bounds.end()) {
+                if (!saved->second) {
+                    type_error(bound, source, diagnostics, "array bound has invalid type or value");
                     return {};
                 }
-                count = static_cast<std::uint64_t>(signed_count);
+                count = *saved->second;
             } else {
-                count = normalize(constant->value, constant->type);
-                if (count == 0) {
-                    type_error(array->getExpr(), source, diagnostics,
-                               "array bound must be positive");
+                const auto before = diagnostics.error_count();
+                const auto constant = integer_constant(bound, context);
+                const auto value = constant ? positive_count(*constant) : std::nullopt;
+                const bool valid = value && *value != 0;
+                if (!context.speculative)
+                    context.unit.array_bounds.emplace(bound, valid ? value : std::nullopt);
+                if (!valid) {
+                    if (diagnostics.error_count() == before)
+                        type_error(bound, source, diagnostics, constant ? "array bound must be positive"
+                                               : "variable-length arrays are not supported");
                     return {};
                 }
+                count = *value;
             }
         } else if (!allow_incomplete) {
             type_error(node, source, diagnostics,
@@ -1281,7 +1304,7 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
     case cparser::NK_FUNCTION_TYPE: {
         auto *function = static_cast<cparser::FunctionTypeASTNode *>(node);
         CType result_type =
-            read_type(function->getType(), source, diagnostics, true);
+            read_type(function->getType(), context, true);
         if (!result_type.valid())
             return {};
         if (result_type.kind == CType::Kind::array ||
@@ -1305,6 +1328,9 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
                        "variadic function must have a fixed parameter");
             return {};
         }
+        PrototypeScope prototype{context.prototype, {}};
+        auto parameter_context = context;
+        parameter_context.prototype = &prototype;
         for (Node *parameter : parameters) {
             Node *type_node = parameter;
             Node *name = nullptr;
@@ -1315,7 +1341,7 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
             }
             // An incomplete array parameter is valid because adjustment to a
             // pointer occurs before the completed function type is formed.
-            CType type = read_type(type_node, source, diagnostics, true);
+            CType type = read_type(type_node, parameter_context, true);
             if (!type.valid())
                 return {};
             if (type.kind == CType::Kind::void_) {
@@ -1333,6 +1359,9 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
                 return {};
             }
             result.params.push_back(adjust_parameter(std::move(type)));
+            if (present(name))
+                prototype.parameters.emplace(identifier(name),
+                    TypeBinding{result.params.back(), (parameter->getFlags() & SCS_REGISTER) != 0});
         }
         return result;
     }
@@ -1364,6 +1393,40 @@ CType read_type(Node *node, const Preprocessed &source, Diagnostics &diagnostics
         type_error(node, source, diagnostics, "AST node is not a supported C type");
         return {};
     }
+}
+
+void bind_typedef_bounds(Node *node, const TypeContext &context) {
+    // File-scope typedefs of otherwise unsupported types have historically
+    // been allowed if they go unused. Only force type resolution here when
+    // the parser's cloned typedef can otherwise rebind a size expression.
+    const auto has_bound = [](auto &&self, Node *type) -> bool {
+        const AnalysisDepth depth(semantic_depth);
+        if (!present(type))
+            return false;
+        switch (type->getKind()) {
+        case cparser::NK_ARRAY_TYPE: {
+            auto *array = static_cast<cparser::ArrayTypeASTNode *>(type);
+            return present(array->getExpr()) || self(self, array->getElementType());
+        }
+        case cparser::NK_POINTER_TYPE:
+            return self(self, static_cast<cparser::PointerTypeASTNode *>(type)->getBaseType());
+        case cparser::NK_FUNCTION_TYPE: {
+            auto *function = static_cast<cparser::FunctionTypeASTNode *>(type);
+            if (self(self, function->getType()))
+                return true;
+            for (Node *parameter : elements(function->getPrms()))
+                if (self(self, parameter))
+                    return true;
+            return false;
+        }
+        case cparser::NK_PARM_DECL:
+            return self(self, static_cast<cparser::ParmDeclASTNode *>(type)->getType());
+        default:
+            return false;
+        }
+    };
+    if (has_bound(has_bound, node))
+        (void)read_type(node, context, true);
 }
 
 CType promote(const CType &type) {
@@ -1525,11 +1588,38 @@ std::uint64_t normalize(std::uint64_t value, const CType &type) {
                                     : normalized;
 }
 
-std::optional<Constant> integer_constant(Node *node,
-                                         const Preprocessed &source,
-                                         Diagnostics &diagnostics) {
-    return has_ice_form(node) ? evaluate_ice(node, source, diagnostics)
-                              : std::nullopt;
+std::optional<Constant> size_or_alignment(Node *node, const TypeContext &context) {
+    const AnalysisDepth depth(semantic_depth);
+    const bool alignment = node->getKind() == cparser::NK_ALIGNOF_EXPR;
+    Node *operand = alignment ? static_cast<cparser::AlignOfExprASTNode *>(node)->getExpr()
+                              : static_cast<cparser::SizeOfExprASTNode *>(node)->getExpr();
+    const auto errors = context.diagnostics.error_count();
+    CType type;
+    if (present(operand) && operand->isType())
+        type = read_type(operand, context, true);
+    else if (!alignment)
+        type = expression_type(operand, context);
+
+    // Use completeness for both operators; an incomplete array still reports
+    // its element alignment through align_of(), but is not a valid operand.
+    const auto size = size_of(type);
+    if (size) {
+        if (!alignment)
+            return Constant{integer_type(64, false, long_rank), *size};
+        if (const unsigned align = align_of(type))
+            return Constant{integer_type(64, false, long_rank), align};
+    }
+    if (context.diagnostics.error_count() == errors)
+        constant_error(node, context.source, context.diagnostics,
+                       alignment ? "_Alignof requires a complete object type"
+                                 : "sizeof requires a complete object type and a valid operand");
+    return std::nullopt;
+}
+
+std::optional<Constant> integer_constant(Node *node, const TypeContext &context) {
+    IceSizes sizes;
+    return has_ice_form(node, context, sizes) ? evaluate_ice(node, context, sizes)
+                                              : std::nullopt;
 }
 
 std::optional<std::string> string_constant(Node *node,

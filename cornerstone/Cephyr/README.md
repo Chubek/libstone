@@ -4,7 +4,8 @@ Cephyr is a Unix-style C compiler driver for Archon. It currently implements a
 subset of ISO C11 for **AMD64 / SysV LP64**, **AArch64 / AAPCS64 LP64**, and
 **RV64IM / LP64** on Linux. It is not a conforming hosted C11 implementation.
 See [the libc inventory](stdlib/README.md) and
-[the target bank](triples/README.md) for the runtime and target boundaries.
+[the target bank](triples/README.md) for the runtime and target boundaries, and
+[ISO C11 implementation status](C11.md) for language and environment details.
 
 ## Build and use
 
@@ -65,8 +66,9 @@ through `<cephyr/CephyrSDK.h>` without exposing parser internals as public ABI.
 
 The `cephyr` package uses `ctypes` and requires the CPython main interpreter,
 built with the GIL, and the same CPython major/minor version used to build the
-native library. Calls through the package are serialized. The native compiler
-can still run its configured build tools when needed.
+native library. Calls can overlap and the wrapper releases the GIL while the
+native compiler runs. The compiler can still run its configured build tools
+when needed.
 
 In a CMake install the package finds the shared library relative to itself.
 From the source tree, use `PYTHONPATH=cornerstone/Cephyr/python` and set
@@ -95,7 +97,8 @@ path-like objects. A `Result` contains a `Status` and two byte strings,
 `output` and `diagnostics`. `Result.sarif()` parses diagnostics requested
 with `--diagnostics-format=sarif`. Use `-o -` for in-memory text output where
 the driver supports it. The `cephyr.compile(...)` convenience function accepts
-the same compile arguments and an optional `library=...` path.
+the same compile arguments and an optional `library=...` path. Both accept
+`sdk=` for [trusted Python hooks](SDK.md#python).
 
 ## Configuration and compilation
 
@@ -155,9 +158,11 @@ MachineIR's word-only globals is emitted separately in `-S` output.
 
 - The native C subset covers integer and pointer operations, fixed-signature
   calls, direct external scalar variadic calls, scalar/array storage,
-  initializers, `_Static_assert`, loops, and `switch` including fallthrough.
+  multidimensional array initializers, fixed-size `sizeof` in integer constant
+  expressions, `_Static_assert`, `__func__`, loops, `goto`, and `switch` including
+  fallthrough.
   Floating point, by-value aggregates, atomics, volatile accesses, VLAs, native
-  variadic definitions, `goto`, and some other C11 syntax and constraints remain unsupported.
+  variadic definitions, and some other C11 syntax and constraints remain unsupported.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux
   executable with Cephyr's CRT and libc. Use `-nostdlib` or `stdlib = "none"`
