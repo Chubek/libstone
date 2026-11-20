@@ -7,6 +7,7 @@ use File::Basename qw(dirname);
 use File::Path qw(make_path);
 use File::Spec ();
 use MIME::Base64 qw(encode_base64);
+use Encode ();
 
 sub generate_python {
  my($s,$o,$json)=@_;
@@ -17,6 +18,7 @@ sub generate_python {
  my $file=outpath($o->{output} || lc($s->{language}).'.py');
  my $encoded=encode_base64($json->encode($s),'');
  my $runtime=template('python');
+ $runtime =~ s/\@\@INTEROP_PYTHON\@\@/python_interop()/ge;
  $runtime =~ s/\@\@SPEC_BASE64\@\@/$encoded/g;
  $runtime =~ s/\@\@MODE\@\@/$o->{mode}/g;
  $runtime =~ s/\@\@TARGET\@\@/$o->{program_target}/g;
@@ -239,6 +241,7 @@ sub generate_c {
  while(@byte){my @row=splice(@byte,0,32);$constant.='  '.join(', ',map {$_<128?$_:"(char)$_"} @row).",\n"}
  $constant.="  0\n};\n";
  my $code=template('c');
+ $code =~ s/\@\@INTEROP_C\@\@/c_interop($s)/ge;
  $code =~ s/\@\@MODE\@\@/$o->{mode}/g;
  $code =~ s/\@\@TARGET\@\@/$o->{program_target}/g;
  my($start_rule)=grep {$_->{name} eq $s->{start}} @{$s->{rules}};
@@ -298,12 +301,144 @@ sub generate_c {
  # Every non-static implementation symbol is private to this language prefix.
  my @names=('lls_spec_json',map {$_->[0]} @$functions);
  my %renames=map {$_=>"${base}_impl_$_"} grep {!/^\Q${base}_\E/} @names;
+ # Restore external symbols only after internal names have been prefixed.
+ my %native_symbols=map {("__lls_native_symbol_$_"=>$s->{functions}[$_]{symbol})}
+  grep {($s->{functions}[$_]{foreign}||'') eq 'c'} 0..$#{$s->{functions}};
  for my $path(keys %files){
   my $public=index($files{$path},$header)==0?substr($files{$path},0,length($header),''):'';
   $files{$path}=~s{(/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b[A-Za-z_]\w*\b)}{exists $renames{$1}?$renames{$1}:$1}gse;
   $files{$path}=$public.$files{$path};
+  $files{$path}=~s/\b(__lls_native_symbol_\d+)\b/exists $native_symbols{$1}?$native_symbols{$1}:$1/ge;
  }
  return write_outputs(\%files,$main);
+}
+
+# Interop stays opt-in: Python imports ctypes/subprocess only on first use;
+# C emits native references and the Sandstone SDK include only when declared.
+sub python_interop {
+ return <<'PY';
+_interop_libraries = {}
+_interop_functions = {}
+
+def interop_value(kind, value):
+    valid = ((kind == 'Int' and type(value) is int and -(1 << 63) <= value < (1 << 63)) or
+             (kind == 'Float64' and type(value) in (int, float)) or
+             (kind == 'Bool' and type(value) is bool) or
+             (kind == 'String' and type(value) is str and '\0' not in value))
+    if not valid: raise LanguageError('INTEROP', f'expected native {kind}, got {type(value).__name__}')
+    return value.encode('utf-8') if kind == 'String' else value
+
+def interop_call(f, args):
+    if f['foreign'] == 'sandstone':
+        if len(args) != 1: raise LanguageError('INTEROP', 'Sandstone expects one source String')
+        source = interop_value('String', args[0])
+        import subprocess
+        import tempfile
+        import os
+        try:
+            with tempfile.TemporaryDirectory(prefix='llsynth-asm-') as directory:
+                input_path, output_path = os.path.join(directory, 'input.s'), os.path.join(directory, 'output.bin')
+                with open(input_path, 'wb') as stream: stream.write(source)
+                command = [f['cli'], '--bank', f['bank'], '-f', 'bin', '-o', output_path]
+                if f['syntax']: command += ['--syntax', f['syntax']]
+                result = subprocess.run(command + [input_path], capture_output=True, timeout=30, check=False)
+                if result.returncode:
+                    raise LanguageError('SANDSTONE', result.stderr.decode('utf-8', errors='replace').strip() or
+                                        f'assembler exited with status {result.returncode}')
+                with open(output_path, 'rb') as stream: data = stream.read(64 * 1024 * 1024 + 1)
+                if len(data) > 64 * 1024 * 1024: raise LanguageError('SANDSTONE', 'flat image exceeds 64 MiB')
+                return list(data)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise LanguageError('SANDSTONE', f'cannot assemble using {f["cli"]}: {exc}') from None
+    params = f['native_params']
+    if len(params) != len(args): raise LanguageError('INTEROP', f'{f["name"]} expects {len(params)} arguments')
+    values = [interop_value(t, v) for t, v in zip(params, args)]
+    import ctypes
+    types = {'Int': ctypes.c_int64, 'Float64': ctypes.c_double, 'Bool': ctypes.c_int,
+             'String': ctypes.c_char_p, 'Void': None}
+    key = (f['library'], f['symbol'], tuple(params), f['native_return'])
+    try:
+        if key not in _interop_functions:
+            if f['library'] not in _interop_libraries:
+                _interop_libraries[f['library']] = ctypes.CDLL(f['library'])
+            # Attribute access caches ctypes objects; indexing gives each signature
+            # its own object without mutating another declaration's argtypes.
+            fn = _interop_libraries[f['library']][f['symbol']]
+            fn.argtypes, fn.restype = [types[t] for t in params], types[f['native_return']]
+            _interop_functions[key] = fn
+        value = _interop_functions[key](*values)
+        kind = f['native_return']
+        if kind == 'String':
+            if value is None: raise LanguageError('INTEROP', f'{f["name"]} returned a null String')
+            return value.decode('utf-8')
+        return bool(value) if kind == 'Bool' else value
+    except (OSError, AttributeError, TypeError, ValueError, OverflowError, UnicodeError, ctypes.ArgumentError) as exc:
+        raise LanguageError('INTEROP', f'{f["name"]}: {exc}') from None
+PY
+}
+
+sub c_interop {
+ my($s)=@_;my $code='';
+ my @foreign=grep {$_->{foreign}} @{$s->{functions}};
+ if(grep {$_->{foreign} eq 'sandstone'} @foreign){$code.=<<'C';
+#include <assembler.h>
+static Val interop_assemble(Context *c,const char *source,const char *bank,const char *syntax){
+ Val nil=LLS_ZERO;Vec *out=new_vec(c);sandstone_asm_t *as=NULL;char diagnostic[512]={0};
+ if(sandstone_asm_new(&as,bank,diagnostic,sizeof diagnostic)){
+  error(c,"SANDSTONE: %s",diagnostic[0]?diagnostic:"cannot create assembler");return nil;
+ }
+ if(sandstone_asm_set_syntax(as,syntax)||sandstone_asm_assemble_string(as,source,"<llsynth>")){
+  error(c,"SANDSTONE: %s",sandstone_asm_error(as));sandstone_asm_free(as);return nil;
+ }
+ uint32_t relocs=UINT32_MAX;sandstone_asm_relocs(as,&relocs);
+ if(relocs){error(c,"SANDSTONE: flat output has unresolved relocations; linking/object output is unsupported");sandstone_asm_free(as);return nil;}
+ size_t size=0;const uint8_t *bytes=sandstone_asm_image(as,&size);
+ if(!bytes){for(uint32_t i=0;i<sandstone_asm_section_count(as);i++){
+  size_t section_size=0;sandstone_asm_section_bytes(as,i,&section_size);
+  if(section_size){error(c,"SANDSTONE: cannot obtain flat image");sandstone_asm_free(as);return nil;}
+ }}
+ if((!bytes&&size)||size>64*1024*1024){error(c,"SANDSTONE: cannot obtain flat image");sandstone_asm_free(as);return nil;}
+ /* Keep the SDK context alive while copying its borrowed bytes, and release it
+    even if the generated allocator unwinds through its OOM recovery point. */
+ jmp_buf handler;jmp_buf *previous=c->oom;c->oom=&handler;
+ if(setjmp(handler)){sandstone_asm_free(as);c->oom=previous;if(previous)longjmp(*previous,1);abort();}
+ if(size){out->a=(Val*)ca(c,size*sizeof(Val));out->cap=(int)size;out->n=(int)size;
+  for(size_t i=0;i<size;i++)out->a[i]=vint(bytes[i]);}
+ sandstone_asm_free(as);c->oom=previous;return vvec(out);
+}
+C
+ }
+ my %ct=(Int=>'int64_t',Float64=>'double',Bool=>'int',String=>'const char *',Void=>'void');
+ for my $i(0..$#{$s->{functions}}){my $f=$s->{functions}[$i];next unless ($f->{foreign}||'') eq 'c';
+  $code.='extern '.$ct{$f->{native_return}}." __lls_native_symbol_$i(".join(', ',map {$ct{$_}} @{$f->{native_params}}).(@{$f->{native_params}}?'':'void').");\n";
+ }
+ $code.="static Val interop_call(Context *c,Json *f,Vec *args){Val nil=LLS_ZERO;const char *name=jg(f,\"name\");(void)args;(void)name;\n";
+ my %valid=(Int=>'v.tag==VINT',Float64=>'(v.tag==VINT||v.tag==VNUM)',Bool=>'v.tag==VBOOL',String=>'v.tag==VSTR');
+ my %get=(Int=>'args->a[INDEX].i',Float64=>'number(args->a[INDEX])',Bool=>'truth(args->a[INDEX])',String=>'args->a[INDEX].s');
+ for my $i(0..$#{$s->{functions}}){my $f=$s->{functions}[$i];next unless $f->{foreign};
+  my @params=$f->{foreign} eq 'c'?@{$f->{native_params}}:('String');
+  $code.=' if(!strcmp(name,"'.$f->{name}.'")){'."\n";
+  $code.='  if(args->n!='.scalar(@params).'){error(c,"INTEROP: '.$f->{name}.' argument count mismatch");return nil;}'."\n";
+  for my $j(0..$#params){my $test=$valid{$params[$j]};$test=~s/\bv\b/args->a[$j]/g;
+   $code.="  if(!($test)){error(c,\"INTEROP: $f->{name} expected native $params[$j]\");return nil;}\n";
+  }
+  if($f->{foreign} eq 'sandstone'){
+   my($bank,$syntax)=map {c_interop_string($_)} ($f->{bank},$f->{syntax});
+   $code.="  return interop_assemble(c,args->a[0].s,$bank,$syntax);\n";
+  }else{
+   my @args;for my $j(0..$#params){my $value=$get{$params[$j]};$value=~s/INDEX/$j/g;push @args,$value;}
+   my $call="__lls_native_symbol_$i(".join(',',@args).')';my $ret=$f->{native_return};
+   if($ret eq 'Void'){$code.="  $call;return nil;\n"}
+   elsif($ret eq 'String'){$code.="  const char *value=$call;if(!value){error(c,\"INTEROP: $f->{name} returned a null String\");return nil;}if(!valid_utf8((const unsigned char*)value)){error(c,\"INTEROP: invalid native UTF-8 String\");return nil;}return vstr(dup_n(c,value,strlen(value)));\n"}
+   else {my %wrap=(Int=>'vint',Float64=>'vnum',Bool=>'vbool');$code.="  return $wrap{$ret}($call);\n"}
+  }
+  $code.=" }\n";
+ }
+ $code.=" error(c,\"INTEROP: unknown foreign function %s\",name);return nil;\n}\n";
+ return $code;
+}
+sub c_interop_string {
+ my($s)=@_;return '"'.join('',map {sprintf('\\%03o',$_)} unpack('C*',Encode::encode('UTF-8',$s))).'"';
 }
 
 # The embedded C runtime uses top-level declarations and function definitions.

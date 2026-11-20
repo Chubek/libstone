@@ -42,10 +42,25 @@ default generator mode is `both`, which requires the start rule to define both
 `'semantics` and `'lower` facets. Use `--mode=interpret` for a specification
 with only a semantics facet, as above.
 
+## Language facilities
+
+* [C11 and Sandstone interoperability](docs/interop.md): typed C ABI
+  imports and assembly-to-bytes through Sandstone's CLI (Python) or SDK (C).
+* [Modules, loaders, and imports](docs/modules.md): private-by-default
+  specification modules, explicit exports, import-once loading, and
+  repeatable `--module-path` search roots.
+* [Closures, async functions, and concurrency](docs/execution.md): lexical
+  closures, lazy tasks, spawning, and joining with isolated task snapshots.
+  These execution features currently require the Python tool target.
+* [Templates and hygienic macros](docs/metaprogramming.md): expression
+  templates and statement macros expand action ASTs before type checking.
+  Macro arguments evaluate once; expression templates may duplicate evaluation.
+
 ## Generator layout
 
 `scripts/llsynth.pl` is the driver in this directory. Keep
-`scripts/LLSynthCompiler.pm` and `scripts/LLSynthEmit.pm` beside it when moving
+`scripts/LLSynthCompiler.pm`, `scripts/LLSynthEmit.pm`,
+`scripts/LLSynthMeta.pm`, and `scripts/LLSynthModules.pm` beside it when moving
 or installing the generator. It resolves those modules relative to the real
 driver path, not the working directory. The repository-root
 `scripts/llsynth.pl` is the compatibility entry point.
@@ -53,13 +68,26 @@ driver path, not the working directory. The repository-root
 The driver owns CLI handling, diagnostics, output writing, and the embedded
 Python and C runtime templates. The compiler module parses, compiles and
 validates the specification; the emitter module builds the target artifacts.
+The metaprogramming module expands templates and hygienic macros.
+The modules helper loads and links imported specification declarations.
 The modules are internal implementation files, not a public Perl API.
 
 The generator uses Perl and its core modules; it doesn't invoke a compiler or
 Python itself. Generated files do not need Perl or the generator's sibling
 modules. Split C/C++ output does need its generated companion files.
+Specifications opting into native imports or assembly also require their
+declared libraries or Sandstone installation at build/runtime, as documented
+above.
 
 ## Tests
+
+Run all regression suites:
+
+```sh
+python3 cornerstone/LLSynth/tests/run.py
+```
+
+Or run the original suites individually:
 
 ```sh
 python3 cornerstone/LLSynth/tests/cli.py

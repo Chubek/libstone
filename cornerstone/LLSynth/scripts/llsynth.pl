@@ -17,7 +17,8 @@ use Digest::SHA qw(sha256_hex);
 our $VERSION = '0.7.0';
 our %opt=(T=>'python3', mode=>'both', split=>'explicit', diagnostics=>'text', parser=>'', program_target=>'c99', out_dir=>'.', driver_mode=>'cli');
 our @include_paths;
-my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm);
+our @module_paths;
+my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm LLSynthMeta.pm LLSynthModules.pm);
 require $_ for @generator_modules;
 
 GetOptions('T|tool-target=s'=>\$opt{T},'o|output=s'=>\$opt{output},'h|header=s'=>\$opt{header},
@@ -28,7 +29,7 @@ GetOptions('T|tool-target=s'=>\$opt{T},'o|output=s'=>\$opt{output},'h|header=s'=
   'ast=s'=>\$opt{ast},'ir=s'=>\$opt{ir},'driver=s'=>\$opt{driver},'manifest=s'=>\$opt{manifest},
   'check'=>\$opt{check},'help'=>\$opt{help},'version'=>\$opt{version},'diagnostics=s'=>\$opt{diagnostics},
   'dump-grammar:s'=>\$opt{dump_grammar},'dump-tables:s'=>\$opt{dump_tables},
-  'warnings-as-errors'=>\$opt{warnings_as_errors}, 'include-path=s@'=>\@include_paths,
+  'warnings-as-errors'=>\$opt{warnings_as_errors}, 'include-path=s@'=>\@include_paths, 'module-path=s@'=>\@module_paths,
   'module-prefix=s'=>\$opt{module_prefix},'driver-mode=s'=>\$opt{driver_mode},'deterministic'=>\$opt{deterministic},
   'trace-parser'=>\$opt{trace_parser},'max-errors=i'=>\$opt{max_errors},
   'depfile=s'=>\$opt{depfile},'emit-table-format=s'=>\$opt{table_format}) or usage(2);
@@ -140,6 +141,7 @@ Usage: llsynth.pl [options] FILE.llsynth
   --module-prefix NAME       C/C++ symbol prefix
   --trace-parser             trace generated parser actions
   --include-path DIR         additional textual include root
+  --module-path DIR          additional specification module root (repeatable)
   --depfile FILE             Make/Ninja dependencies
   --manifest FILE            output SHA256 manifest
   --diagnostics text|json|sarif generator error format
@@ -219,6 +221,10 @@ import math
 import struct
 import re
 import sys
+import copy
+import threading
+import time
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -263,6 +269,117 @@ class Operation:
 @dataclass
 class FunctionRef:
     name: str
+
+@dataclass
+class Cell:
+    value: Any
+
+class Environment(MutableMapping):
+    """A lexical scope owns a name map; closures retain the referenced cells."""
+    def __init__(self, values=()):
+        self.cells = {k: Cell(v) for k, v in dict(values).items()}
+    def __getitem__(self, key): return self.cells[key].value
+    def __setitem__(self, key, value):
+        if key in self.cells: self.cells[key].value = value
+        else: self.define(key, value)
+    def __delitem__(self, key): del self.cells[key]
+    def __iter__(self): return iter(self.cells)
+    def __len__(self): return len(self.cells)
+    def define(self, key, value): self.cells[key] = Cell(value)
+    def capture(self, names=None):
+        result = Environment()
+        result.cells = {k: v for k, v in self.cells.items() if names is None or k in names}
+        return result
+
+@dataclass
+class Closure:
+    definition: dict
+    env: Environment
+    caps: dict
+    owner: Any
+    generation: Any
+    def __deepcopy__(self, memo):
+        if id(self) in memo: return memo[id(self)]
+        result = Closure(self.definition, Environment(), {}, memo.get(id(self.owner), self.owner), self.generation)
+        memo[id(self)] = result
+        result.env = copy.deepcopy(self.env, memo)
+        result.caps = copy.deepcopy(self.caps, memo)
+        return result
+
+class ExecutionBudget:
+    def __init__(self):
+        self.fuel = 1000000
+        self.tasks = []
+        self.lock = threading.Lock()
+        self.sleep_seconds = 0
+
+class Task:
+    """Single-shot lazy computation. No mutable DSL value crosses a thread boundary."""
+    def __init__(self, owner, callee, args):
+        self.owner, self.generation = owner, owner.budget
+        self.thread = None
+        self.observed = False
+        self.value, self.error = None, None
+        self.lock = threading.Lock()
+        self.context = object.__new__(Context)
+        child = self.context
+        child.budget, child.depth, child.node = owner.budget, 0, owner.node
+        memo = {id(owner): child}
+        try:
+            child.state, child.tables, self.callee, self.args = copy.deepcopy(
+                (owner.state, owner.tables, callee, args), memo)
+        except LanguageError: raise
+        except Exception as exc: raise LanguageError('TASK', f'value cannot be copied into task: {exc}') from None
+        with owner.budget.lock:
+            if len(owner.budget.tasks) >= 64:
+                raise LanguageError('RESOURCE', 'task creation limit (64 per execution) exceeded')
+            owner.budget.tasks.append(self)
+    def __deepcopy__(self, memo):
+        raise LanguageError('TASK', 'task handles cannot cross task boundaries')
+    def start(self):
+        with self.lock:
+            if self.thread is None:
+                self.thread = threading.Thread(target=self.run, name='llsynth-task')
+                try: self.thread.start()
+                except RuntimeError as exc:
+                    self.thread = None
+                    raise LanguageError('RESOURCE', f'cannot start task: {exc}') from None
+        return self
+    def run(self):
+        try: self.value = self.context.invoke(self.callee, self.args, run_async=True)
+        except Exception as exc:
+            self.error = exc if isinstance(exc, LanguageError) else LanguageError('SEM', str(exc))
+    def result(self, receiver):
+        if receiver.budget is not self.generation:
+            raise LanguageError('TASK', 'task belongs to another execution')
+        self.start()
+        self.thread.join()
+        self.observed = True
+        if self.error: raise self.error
+        try: return copy.deepcopy(self.value, {id(self.context): receiver})
+        except LanguageError: raise
+        except Exception as exc: raise LanguageError('TASK', f'task result cannot be copied: {exc}') from None
+
+def closure_names(node, bound=()):
+    """Free lexical names, respecting parameter/local shadowing and declaration order."""
+    bound = set(bound)
+    if isinstance(node, list):
+        names = set()
+        for item in node:
+            names.update(closure_names(item, bound))
+            if item.get('k') == 'let': bound.add(item['name'])
+            if item.get('k') == 'grab': bound.add(item['var'])
+        return names
+    if not isinstance(node, dict): return set()
+    kind = node.get('k')
+    if kind == 'closure':
+        return closure_names(node['body'], {p['name'] for p in node['params']}) - bound
+    if kind == 'for':
+        return closure_names(node['items'], bound) | closure_names(node['body'], bound | {node['var']})
+    names = {node['v']} - bound if kind == 'name' else set()
+    for value in node.values():
+        if isinstance(value, (list, dict)): names.update(closure_names(value, bound))
+    return names
 
 def lex(source: str) -> list[Token]:
     """Walk generated deterministic byte-transition tables (maximal munch)."""
@@ -363,22 +480,34 @@ def parse(source: str) -> Node:
         else:
             raise LanguageError('PARSE', 'invalid generated parse action')
 
+@@INTEROP_PYTHON@@
+
 class Context:
+    @property
+    def fuel(self): return self.budget.fuel
+    @fuel.setter
+    def fuel(self, value): self.budget.fuel = value
     def __init__(self):
         self.state = {}
         self.tables = {}
         self.node = None
         self.reset()
     def reset(self):
+        if hasattr(self, 'budget'): self.finish_tasks()
+        self.budget = ExecutionBudget()
         self.node = None
-        self.fuel = 1000000
         self.depth = 0
         self.state = {}
         for item in SPEC['states']:
             self.state[item['name']] = self.eval(item['initial_expr'], {}, {})
         self.tables = {item['name']: {} for item in SPEC['tables']}
         self.node = None
-        self.exec_block(SPEC['init_code'], {}, {})
+        try: self.exec_block(SPEC['init_code'], {}, {})
+        except BaseException:
+            try: self.finish_tasks()
+            except Exception: pass
+            raise
+        else: self.finish_tasks()
     def raise_error(self, name, args):
         key = name.lstrip('!')
         definition = next((x for x in SPEC['exceptions'] if x['name'] == key), None)
@@ -415,6 +544,11 @@ class Context:
         if k == 'num': return int(e.get('literal', e['v'])) if e.get('type') == 'Int' else float(e['v'])
         if k == 'str': return e['v']
         if k == 'list': return [self.eval(t, env, caps) for t in e['args']]
+        if k == 'closure':
+            scope = env if isinstance(env, Environment) else Environment(env)
+            return Closure(e, scope.capture(closure_names(e)), dict(caps), self, self.budget)
+        if k == 'await':
+            return self.task(self.eval(e['a'], env, caps)).result(self)
         if k == 'name':
             name = e['v']
             if name.startswith('@'): return self.state[name[1:]]
@@ -454,13 +588,20 @@ class Context:
             args = [self.eval(item, env, caps) for item in e['args']]
             if isinstance(callee, Operation): return Operation(callee.name, tuple(args))
             if isinstance(callee, FunctionRef):
-                f = next((f for f in SPEC['functions'] if f['name'] == callee.name), None)
-                if not f: raise LanguageError('SEM', f'undefined function {callee.name}')
-                keys = [x.split(':')[0].strip() for x in f['args'].split(',') if x.strip()]
-                if self.depth >= 128: raise LanguageError('RESOURCE', 'function recursion limit exceeded')
-                self.depth += 1
-                try: return self.exec_block(f['code'], dict(zip(keys, args)), {})[1]
-                finally: self.depth -= 1
+                return self.invoke(callee, args)
+            if isinstance(callee, Closure): return self.invoke(callee, args)
+            if callee == 'spawn': return self.task(args[0]).start()
+            if callee == 'join': return self.task(args[0]).result(self)
+            if callee == 'sleep':
+                seconds = args[0]
+                if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 <= seconds <= 1:
+                    raise LanguageError('TASK', 'sleep requires finite seconds in [0, 1]')
+                with self.budget.lock:
+                    self.budget.sleep_seconds += seconds
+                    if self.budget.sleep_seconds > 10:
+                        raise LanguageError('RESOURCE', 'aggregate sleep budget (10 seconds) exhausted')
+                time.sleep(seconds)
+                return None
             if callee == 'is_finite': return math.isfinite(args[0])
             if callee == 'abs': return checked_int(abs(args[0])) if type(args[0]) is int else abs(args[0])
             if callee == 'min': return min(args)
@@ -480,10 +621,48 @@ class Context:
             if callee == 'final_stack_height': return verify_ops(args[0])
             raise LanguageError('SEM', f'undefined callable {callee!r}')
         raise LanguageError('SEM', f'invalid expression node {k}')
+    def task(self, value):
+        if not isinstance(value, Task): raise LanguageError('TASK', 'expected a Task')
+        if value.generation is not self.budget: raise LanguageError('TASK', 'task belongs to another execution')
+        return value
+    def invoke(self, callee, args, run_async=False):
+        if isinstance(callee, Closure):
+            if callee.owner is not self or callee.generation is not self.budget:
+                raise LanguageError('SEM', 'closure belongs to another context or execution')
+            definition = callee.definition
+            keys = [p['name'] for p in definition['params']]
+            env, caps, code = callee.env.capture(), callee.caps, definition['body']
+        else:
+            definition = next((f for f in SPEC['functions'] if f['name'] == callee.name), None)
+            if not definition: raise LanguageError('SEM', f'undefined function {callee.name}')
+            keys = [p['name'] for p in definition['parameters']]
+            env, caps, code = Environment(), {}, definition.get('code', [])
+        if len(keys) != len(args):
+            raise LanguageError('SEM', f'function expects {len(keys)} arguments, got {len(args)}')
+        if definition.get('foreign'): return interop_call(definition, args)
+        if definition.get('async') and not run_async: return Task(self, callee, args)
+        for key, value in zip(keys, args): env.define(key, value)
+        if self.depth >= 128: raise LanguageError('RESOURCE', 'function recursion limit exceeded')
+        self.depth += 1
+        try: return self.exec_block(code, env, caps)[1]
+        finally: self.depth -= 1
+    def finish_tasks(self):
+        # Tasks may create children while being joined; the registry only grows.
+        first_error, index = None, 0
+        while index < len(self.budget.tasks):
+            task = self.budget.tasks[index]
+            index += 1
+            if task.thread is not None:
+                task.thread.join()
+                if task.error and not task.observed and first_error is None: first_error = task.error
+                task.observed = True
+        if first_error is not None: raise first_error
     def tick(self):
-        self.fuel -= 1
-        if self.fuel < 0: raise LanguageError('RESOURCE', 'action instruction budget exhausted')
+        with self.budget.lock:
+            self.budget.fuel -= 1
+            if self.budget.fuel < 0: raise LanguageError('RESOURCE', 'action instruction budget exhausted')
     def exec_block(self, code, env, caps):
+        if not isinstance(env, Environment): env = Environment(env)
         for stmt in code:
             self.tick()
             k = stmt['k']
@@ -496,7 +675,7 @@ class Context:
                     self.raise_error(stmt['name'], [self.eval(a, env, caps) for a in stmt['args']])
             elif k == 'throw':
                 self.raise_error(stmt['name'], [self.eval(a, env, caps) for a in stmt['args']])
-            elif k == 'let': env[stmt['name']] = self.eval(stmt['expr'], env, caps)
+            elif k == 'let': env.define(stmt['name'], self.eval(stmt['expr'], env, caps))
             elif k == 'grab':
                 key = self.eval(stmt['key'], env, caps)
                 table = self.tables[stmt['table'][1:]]
@@ -528,6 +707,13 @@ class Context:
             else: raise LanguageError('SEM', f'unknown semantic statement {k}')
         return False, None
     def walk(self, root, facet):
+        try: self._walk(root, facet)
+        except BaseException:
+            try: self.finish_tasks()
+            except Exception: pass
+            raise
+        else: self.finish_tasks()
+    def _walk(self, root, facet):
         pending = [(root, False)]
         while pending:
             node, ready = pending.pop()
@@ -1140,9 +1326,12 @@ static int eq_val(Val a,Val b){if((a.tag==VINT||a.tag==VBOOL)&&(b.tag==VINT||b.t
  if(a.tag==VOP){if(strcmp(a.op->name,b.op->name))return 0;return eq_val(vvec(a.op->args),vvec(b.op->args));}
  return a.tag==b.tag&&strcmp(a.s?a.s:"",b.s?b.s:"")==0;}
 static double number(Val v){return v.tag==VNUM?v.n:(v.tag==VINT||v.tag==VBOOL)?(double)v.i:0;}
+@@INTEROP_C@@
+
 static Val eval_call(Context *c,Val callee,Vec *args){Val nil=LLS_ZERO;const char *name=callee.s?callee.s:"";
  if(callee.tag==VOP){Op *p=(Op*)ca(c,sizeof(Op));p->name=callee.op->name;p->args=args;return vop(p);}
  if(callee.tag==VFN){Json *functions=jo(lls_spec(c),"functions");for(int i=0;i<jlen(functions);i++){Json *f=ji(functions,i);if(strcmp(jg(f,"name"),name))continue;
+   if(*jg(f,"foreign"))return interop_call(c,f,args);
    Map *env=new_map(c),*caps=new_map(c);char *ar=dup_n(c,jg(f,"args"),strlen(jg(f,"args")));char *cur=ar;int x=0;
    while(*cur && x<args->n){char *end=strchr(cur,',');if(end)*end=0;char *colon=strchr(cur,':');if(colon)*colon=0;while(*cur==' ')cur++;map_put(c,env,dup_n(c,cur,strlen(cur)),args->a[x++]);if(!end)break;cur=end+1;}
    Val result=LLS_ZERO;if(c->depth>=128){error(c,"RESOURCE: function recursion limit exceeded");return result;}c->depth++;exec_block(c,jo(f,"code"),env,caps,&result);c->depth--;return result;

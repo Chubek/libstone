@@ -33,7 +33,7 @@ sub read_spec_lines {
 }
 
 sub parse_spec {
- my($file)=@_;my %deps;my @lines=read_spec_lines($file,{},\%deps);
+ my($file)=@_;my %deps;my @lines=read_module_spec_lines($file,\%deps);
  my $s={dependencies=>[map {{path=>$_,sha256=>$deps{$_}}} sort keys %deps],file=>$file,language=>'',tokens=>[],skips=>[],rules=>[],functions=>[],states=>[],tables=>[],exceptions=>[],irs=>[],options=>{},init=>'',rewrites=>[],backends=>[],analyses=>[],pipelines=>[],precedence=>[],internal=>{}};
  my $block='';my $cur;my $facet='';my $body='';
  for(my $n=0;$n<@lines;$n++){
@@ -51,6 +51,7 @@ sub parse_spec {
   if($block) {
    if($l eq '.end') {
     if($block eq 'function'){$cur->{body}=$body;push @{$s->{functions}},$cur}
+    elsif($block eq 'macro'){$cur->{body}=$body;push @{$s->{metaprograms}},$cur}
     elsif($block eq 'init'){$s->{init}.=$body}
     elsif($block eq 'ir'){push @{$s->{irs}},$cur}
     elsif($block eq 'rewrite'){push @{$s->{rewrites}},$cur}
@@ -85,7 +86,19 @@ sub parse_spec {
   if($l =~ /^\.symtbl\s+\#(\w+)(?:\s*:\s*(.*))?$/){push @{$s->{tables}},{name=>$1,type=>$2||'Any'};next}
   if($l =~ /^\.exception\s+\!(\w+)(?:\((.*?)\))?\s+"(.*)"$/){push @{$s->{exceptions}},{name=>$1,params=>$2||'',message=>decode_string($3)};next}
   if($l =~ /^\.rule\s+(\w+)$/){$block='rule';$cur={name=>$1,facets=>{},line=>$ln};next}
-  if($l =~ /^\.function\s+(\w+)\s*\((.*?)\)\s*->\s*(.*)$/){$block='function';$cur={name=>$1,args=>$2,returns=>$3,line=>$ln};$body='';next}
+  if($l =~ /^\.template\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*=\s*(.+)$/){push @{$s->{metaprograms}},{kind=>'template',name=>$1,params=>$2,body=>$3,file=>$file,line=>$ln};next}
+  if($l =~ /^\.macro\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*$/){$block='macro';$cur={kind=>'macro',name=>$1,params=>$2,file=>$file,line=>$ln};$body='';next}
+  if($l =~ /^\.(async\s+)?function\s+(\w+)\s*(\(.*)$/){
+   my($async,$name,$signature)=($1,$2,$3);$signature=~s/\s+//g;
+   my @parts=function_type_parts('Fn'.$signature);@parts or fail('invalid function signature',$file,$ln);
+    $block='function';$cur={name=>$name,args=>$parts[0],returns=>$parts[1],line=>$ln,async=>$async?1:0};$body='';next;
+  }
+  if($l =~ /^\.extern\s+c\s+(\w+)\s*\((.*?)\)\s*->\s*(\S+)\s+from\s+"([^"]+)"(?:\s+symbol\s+"([A-Za-z_]\w*)")?\s*$/){
+   push @{$s->{functions}},{name=>$1,args=>$2,returns=>$3,library=>$4,symbol=>$5||$1,foreign=>'c',line=>$ln};next;
+  }
+  if($l =~ /^\.sandstone\s+(\w+)\s+bank\s+"([^"]+)"(?:\s+syntax\s+"([^"]*)")?(?:\s+cli\s+"([^"]+)")?\s*$/){
+   push @{$s->{functions}},{name=>$1,args=>'source: String',returns=>'Vec<Int>',bank=>$2,syntax=>$3||'',cli=>$4||'sandstone-as',foreign=>'sandstone',line=>$ln};next;
+  }
   if($l eq '.init'){$block='init';$body='';next}
   if($l =~ /^\.ir\s+(\w+)/){$block='ir';$cur={name=>$1,ops=>[]};next}
   if($l =~ /^\.(rewrite|analysis|backend|pipeline)\s+(.+)$/){$block=$1;$cur={name=>$2,body=>''};next}
@@ -107,6 +120,14 @@ sub validate_declarations {
  my %tokens=map {$_->{name}=>1} @{$s->{tokens}};
  for my $r(@{$s->{rules}}){$tokens{$r->{name}} and fail("rule/token name collision '$r->{name}'",$s->{file},$r->{line})}
  for my $ir(@{$s->{irs}}){my %seen;for my $op(@{$ir->{ops}}){$seen{$op->{name}}++ and fail("duplicate IR operation $ir->{name}.$op->{name}",$s->{file},1)}}
+ for my $f(grep {$_->{foreign}} @{$s->{functions}}){
+  $f->{name}=~/^(?:len|pop|top|push|emit|print|final_stack_height|reverse|min|max|abs|is_finite|true|false|nil|None)$/
+   and fail("reserved interop function name '$f->{name}'",$s->{file},$f->{line});
+  $opt{T}=~/^cpp/ and fail('native interop currently supports python3, c99 and c11 tools, not C++',$s->{file},$f->{line});
+  if($f->{foreign} eq 'c'){
+   $f->{symbol}=~/^[A-Za-z_]\w*$/ or fail('invalid C symbol',$s->{file},$f->{line});
+  }
+ }
  my($start)=grep {$_->{name} eq ($s->{start}||'')} @{$s->{rules}};
  if($start){
   for my $facet($opt{mode} eq 'both'?qw(semantics lower):$opt{mode} eq 'interpret'?'semantics':$opt{mode} =~ /^(compile|rewrite)$/?'lower':()){
@@ -293,11 +314,18 @@ sub compile_actions {
  my($s)=@_;my %funidx=map {$s->{functions}[$_]{name}=>$_} 0..$#{$s->{functions}};
  my %ops; for my $ir (@{$s->{irs}}){$ops{$ir->{name}.'.'.$_->{name}}={%$_,id=>scalar keys %ops} for @{$ir->{ops}}}
  $s->{op_by_name}=\%ops;
- for my $f(@{$s->{functions}}){$f->{code}=parse_action($f->{body},$s->{file},$f->{line});}
+ for my $f(@{$s->{functions}}){
+  $f->{parameters}=[map {my($name,$type)=split /\s*:\s*/,$_,2;
+   $name=~/^[A-Za-z_]\w*$/ && defined($type) or fail('function parameter requires a name and type',$s->{file},$f->{line});
+   {name=>$name,type=>$type}
+  } comma_parts($f->{args})];
+   $f->{code}=parse_action($f->{body},$s->{file},$f->{line}) unless $f->{foreign};
+ }
  $s->{init_code}=parse_action($s->{init},$s->{file},1);
  for my $r (@{$s->{rules}}){for my $key(qw(semantics lower analyze emit)){
     $r->{code}{$key}=parse_action($r->{facets}{$key},$s->{file},$r->{line}) if defined $r->{facets}{$key};
  }}
+ meta_compile_actions($s);
 }
 # Lex action-language into token classes with position-independent literal values.
 sub atoks {
@@ -319,12 +347,47 @@ sub apeek {return $_[0]{t}[$_[0]{i}]{v}}
 sub anext {return $_[0]{t}[$_[0]{i}++]{v}}
 sub aaccept {my($x,$v)=@_;if(apeek($x) eq $v){anext($x);return 1}return 0}
 sub expect {my($x,$v)=@_;aaccept($x,$v) or die "expected '$v', got '".apeek($x)."' in semantic action\n"}
+# Read a type without confusing commas inside Fn/Vec/Task with parameter separators.
+sub action_type {
+ my($x,@ends)=@_;my %end=map {$_=>1} @ends;my($type,$depth)=('',0);
+ while(apeek($x) ne '<end>'){
+  my $v=apeek($x);last if !$depth && $end{$v};
+  $depth++ if $v eq '(' || $v eq '<';
+  $depth-- if $v eq ')' || $v eq '>';
+  $depth>=0 or die "unbalanced action type\n";$type.=anext($x);
+ }
+  length($type) && !$depth or die "expected complete action type\n";return $type;
+}
+sub action_closure_prefix {
+ my($x,$name)=@_;my $i=$x->{i};
+ if($name eq 'async'){return 0 unless ($x->{t}[$i]{v}//'') eq 'fn';$i++}
+ elsif($name ne 'fn'){return 0}
+ return 0 unless ($x->{t}[$i]{v}//'') eq '(';
+ # Keep previously legal locals called fn callable; only a typed closure
+ # signature followed by an arrow introduces a closure expression.
+ my $depth=0;
+ for(;$i<@{$x->{t}};$i++){
+  my $v=$x->{t}[$i]{v};$depth++ if $v eq '(';
+  if($v eq ')' && !--$depth){return ($x->{t}[$i+1]{v}//'') eq '->'}
+ }
+ return 0;
+}
 our %prec; BEGIN { %prec=('||'=>1,'&&'=>2,'in'=>3,'=='=>3,'!='=>3,'>'=>3,'<'=>3,'>='=>3,'<='=>3,'+'=>4,'-'=>4,'*'=>5,'/'=>5); }
 sub expr {my($x,$min)=@_;$min//=0;my $t=$x->{t}[$x->{i}++];my $v=$t->{v};my $node;
  if($t->{k} eq 'num'){$node={k=>'num',v=>0+$v,literal=>"$v",type=>($v =~ /[.eE]/?'Float64':'Int')}}
  elsif($t->{k} eq 'str'){$node={k=>'str',v=>$v}}
  elsif($v eq '['){my @items;unless(aaccept($x,']')){do{push @items,expr($x,0)}while(aaccept($x,','));expect($x,']')}$node={k=>'list',args=>\@items}}
  elsif($v eq '('){$node=expr($x,0);expect($x,')')}
+ elsif(action_closure_prefix($x,$v)){
+  my $async=$v eq 'async';expect($x,'fn') if $async;expect($x,'(');my @params;my %names;
+  unless(aaccept($x,')')){do{my $name=anext($x);$name=~/^[A-Za-z_]\w*$/ or die "invalid closure parameter '$name'\n";
+   $names{$name}++ and die "duplicate closure parameter '$name'\n";expect($x,':');
+   push @params,{name=>$name,type=>action_type($x,',',')')};
+  }while(aaccept($x,','));expect($x,')')}
+  expect($x,'->');my $ret=action_type($x,'{');expect($x,'{');my $body=stmt_list($x,'}');expect($x,'}');
+  $node={k=>'closure',params=>\@params,returns=>$ret,body=>$body,async=>$async?1:0};
+ }
+ elsif($v eq 'await'){$node={k=>'await',a=>expr($x,6)}}
  elsif($v eq '-' || $v eq '!'){$node={k=>'un',v=>$v,a=>expr($x,6)};if($v eq '-' && $node->{a}{k} eq 'num'){$node={%{$node->{a}},v=>-$node->{a}{v},literal=>'-'.$node->{a}{literal}}}}
  elsif($t->{k} eq 'name'){$node={k=>'name',v=>$v}}
  else{die "unexpected '$v' in expression\n"}
@@ -502,6 +565,12 @@ sub comma_parts {
  push @out,strip_ws(substr($s,$last));return @out;
 }
 sub expr_snippet {my($s)=@_;my $x={t=>atoks($s),i=>0};my $e=expr($x,0);apeek($x) eq '<end>' or die "trailing tokens in expression '$s'\n";return $e}
+sub function_type_parts {
+ my($t)=@_;return unless $t=~/^Fn\(/;my $depth=1;
+ for(my $i=3;$i<length($t);$i++){my $c=substr($t,$i,1);$depth++ if $c eq '(';$depth-- if $c eq ')';
+  if(!$depth){return unless substr($t,$i+1,2) eq '->';return(substr($t,3,$i-3),substr($t,$i+3))}
+ }return;
+}
 sub unquote_template {my($s)=@_;$s=strip_ws($s);$s =~ /^"(.*)"$/s or die "expected double-quoted template, got '$s'\n";
  return decode_string($1);
 }
@@ -572,25 +641,40 @@ sub compile_passes {
   push @backends,{target=>$target,ir=>$ir,emits=>\%emits,prologue=>$prologue,epilogue=>$epilogue};
  }
  $s->{backends_compiled}=\@backends;
+ meta_compile_passes($s);
 }
 1;
 
 # Static name binding, exception-arity, capture binding and lexical checks.
 sub validate_actions {
  my($s,$mode)=@_;
+ # Capability validation also runs for --check, not only during emission.
+ if($opt{T} ne 'python3'){
+  my $scan;$scan=sub{my($n)=@_;return unless ref $n;
+   if(ref $n eq 'ARRAY'){$scan->($_) for @$n;return}return unless ref $n eq 'HASH';
+   my $k=$n->{k}||'';
+   if($k eq 'closure'||$k eq 'await'||$n->{async}){
+    fail('closures, async functions and tasks require the python3 tool target',$s->{file},1);
+   }
+   $scan->($_) for grep {ref} values %$n;
+  };$scan->($s);
+ }
  my %state=map {$_->{name}=>$_->{type}} @{$s->{states}};
  my %table=map {$_->{name}=>$_->{type}} @{$s->{tables}};
  my %func=map {$_->{name}=>$_} @{$s->{functions}};
  my %ex=map {$_->{name}=>$_} @{$s->{exceptions}};
  my %ops=%{$s->{op_by_name}};
- my %builtins=map {$_=>1} qw(len pop top push emit print final_stack_height reverse min max abs is_finite);
- my %arity=(len=>[1,1],pop=>[1,1],top=>[1,1],push=>[2,2],emit=>[2,2],print=>[1,1],final_stack_height=>[1,1],reverse=>[1,1], min=>[1,2],max=>[1,2],abs=>[1,1],is_finite=>[1,1]);
+ my %builtins=map {$_=>1} qw(len pop top push emit print final_stack_height reverse min max abs is_finite spawn join sleep);
+ my %arity=(len=>[1,1],pop=>[1,1],top=>[1,1],push=>[2,2],emit=>[2,2],print=>[1,1],final_stack_height=>[1,1],reverse=>[1,1], min=>[1,2],max=>[1,2],abs=>[1,1],is_finite=>[1,1],spawn=>[1,1],join=>[1,1],sleep=>[1,1]);
  my $diag=sub {my($msg,$line)=@_;fail($msg,$s->{file},$line||1)};
- my $checkexpr;
+ my ($checkexpr,$checkblock);
  $checkexpr=sub {my($e,$env,$captures,$line)=@_;return unless $e;
   my $kind=$e->{k};
   if($kind eq 'name'){
    my $name=$e->{v};
+   if($opt{T} ne 'python3' && $name=~/^(spawn|join|sleep)$/ && !$env->{$name} && !$func{$name}){
+    $diag->('closures, async functions and tasks require the python3 tool target',$line);
+   }
    if($name =~ /^\@(\w+)$/){$diag->("undeclared state '$name'",$line) unless $state{$1}}
    elsif($name =~ /^\#(\w+)$/){$diag->("undeclared symbol table '$name'",$line) unless $table{$1}}
    elsif($name =~ /^\$(\w+)$/){$diag->("unbound capture '$name'",$line) unless exists $captures->{$1}}
@@ -602,13 +686,17 @@ sub validate_actions {
    }
   }
   elsif($kind eq 'bin'||$kind eq 'index'){$checkexpr->($e->{a},$env,$captures,$line);$checkexpr->($e->{b},$env,$captures,$line)}
-  elsif($kind eq 'un'){$checkexpr->($e->{a},$env,$captures,$line)}
+  elsif($kind eq 'un'||$kind eq 'await'){$checkexpr->($e->{a},$env,$captures,$line)}
+  elsif($kind eq 'closure'){
+   my %inner=%$env;$inner{$_->{name}}=1 for @{$e->{params}};
+   $checkblock->($e->{body},\%inner,$captures,{},$line);
+  }
   elsif($kind eq 'list'){for my $a(@{$e->{args}}){$checkexpr->($a,$env,$captures,$line)}}
   elsif($kind eq 'call'){
    $checkexpr->($e->{a},$env,$captures,$line);
    $checkexpr->($_,$env,$captures,$line) for @{$e->{args}};
    my $callee=$e->{a};my $name=$callee->{k} eq 'name'?$callee->{v}:'';
-   if($arity{$name}){my($min,$max)=@{$arity{$name}};my $found=@{$e->{args}};
+   if($arity{$name} && !($name=~/^(spawn|join|sleep)$/ && ($func{$name}||$env->{$name}))){my($min,$max)=@{$arity{$name}};my $found=@{$e->{args}};
     $diag->("'$name' expects $min..$max operands, got $found",$line) if $found<$min||$found>$max;
    }
    if($ops{$name}){my $params=$ops{$name}{params}//'';my @params=grep {length strip_ws($_)} split /,/,$params;
@@ -623,7 +711,6 @@ sub validate_actions {
   $diag->("exception '!$name' expects ".scalar(@args)." operands",$line) unless @args==@{$stmt->{args}};
   for my $a(@{$stmt->{args}}){$checkexpr->($a,$env,$caps,$line)};
  };
- my $checkblock;
  $checkblock=sub {my($block,$env,$caps,$avail,$line)=@_;
   for my $st(@$block){my $k=$st->{k};
    if($k eq 'on'){
@@ -668,7 +755,7 @@ sub validate_actions {
   $dependencies->($state->{initial_expr});$initialized{$state->{name}}=1;
  }
  $checkblock->($s->{init_code},{},{},{},1);
- for my $f(@{$s->{functions}}){my %params=map {(split /:/,strip_ws($_))[0]=>1} grep {length strip_ws($_)} split /,/,$f->{args};$checkblock->($f->{code},\%params,{},{},$f->{line})}
+ for my $f(@{$s->{functions}}){my %params=map {(split /:/,strip_ws($_))[0]=>1} comma_parts($f->{args});$checkblock->($f->{code},\%params,{},{},$f->{line})}
  for my $r(@{$s->{rules}}){my (%available,%always);my $first=1;
   for my $p(@{$s->{productions}}){next unless $p->{lhs} eq $r->{name};
    my %here=map {$_=>1} grep {$_ ne ''} @{$p->{labels}};
@@ -737,17 +824,22 @@ sub validate_types {
  my $norm;$norm=sub{my($t,$seen)=@_;$t//= 'Any';$t=~s/\s+//g;
   $t='Int' if $t eq 'Int64';
   if(exists $alias{$t}){$seen||={};$seen->{$t}++ and fail("cyclic type alias $t",$s->{file},1);return $norm->($alias{$t},$seen)}
-  return 'Vec<'.$norm->($1,$seen).'>' if $t=~/^Vec<(.+)>$/;
+  return $1.'<'.$norm->($2,$seen).'>' if $t=~/^(Vec|Task)<(.+)>$/;
+  my @fn=function_type_parts($t);
+  return 'Fn('.join(',',map {$norm->($_,{%{$seen||{}}})} comma_parts($fn[0])).')->'.$norm->($fn[1],{%{$seen||{}}}) if @fn;
   return $t;
  };
  my $known;$known=sub{my($t)=@_;$t=$norm->($t);
   return 1 if $t =~ /^(Int|Float64|Bool|String|Void|Any)$/;
-  return $known->($1) if $t =~ /^Vec<(.+)>$/;
+  return $known->($1) if $t =~ /^(?:Vec|Task)<(.+)>$/;
   return 1 if $t =~ /^(\w+)\.Op$/ && grep {$_->{name} eq $1} @{$s->{irs}};
-  if($t =~ /^Fn\((.*)\)->(.+)$/){return 0 unless $known->($2);for my $arg(comma_parts($1)){return 0 unless $known->($arg)}return 1}
+  my @fn=function_type_parts($t);
+  if(@fn){return 0 unless $known->($fn[1]);for my $arg(comma_parts($fn[0])){return 0 unless $known->($arg)}return 1}
   return 0;
  };
- my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$s->{file},1);return $norm->($t)};
+ my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$s->{file},1);
+  $opt{T} eq 'python3' || $norm->($t)!~/\bTask</ or fail('tasks require the python3 tool target',$s->{file},1);
+  return $norm->($t)};
  my $compatible=sub{my($want,$got)=map {$norm->($_)} @_;return 1 if $want eq $got || $got eq 'Any' || $want eq 'Any';
   return 1 if $want eq 'Float64' && $got eq 'Int';
   return 1 if $want =~ /^Vec</ && $got eq 'Vec<Any>';
@@ -756,15 +848,30 @@ sub validate_types {
  my $must=sub{my($want,$got,$where)=@_;$compatible->($want,$got) or fail("type mismatch in $where: expected $want, got $got",$s->{file},1)};
  my %states=map {$_->{name}=>$type->($_->{type})} @{$s->{states}};
  my %tables;for my $t(@{$s->{tables}}){$t->{type}=~/^\s*(.*?)\s*->\s*(.+)$/ or fail("table $t->{name} requires key and value types",$s->{file},1);$tables{$t->{name}}=[$type->($1),$type->($2)];}
- my %functions;for my $f(@{$s->{functions}}){my @params;
+ my(%functions,%native_symbols);for my $f(@{$s->{functions}}){my @params;
   for my $arg(comma_parts($f->{args})){my($name,$t)=split /\s*:\s*/,$arg,2;defined $t or fail('function parameter requires a type',$s->{file},$f->{line});push @params,[$name,$type->($t)];}
-  $functions{$f->{name}}={params=>\@params,returns=>$type->($f->{returns})};
+  my %seen;for my $p(@params){$seen{$p->[0]}++ and fail("duplicate function parameter $p->[0]",$s->{file},$f->{line})}
+  $functions{$f->{name}}={params=>\@params,returns=>$type->($f->{returns}),async=>$f->{async}};
+  if(($f->{foreign}||'') eq 'c'){
+   my %param_names;
+   for my $p(@params){$p->[0]=~/^[A-Za-z_]\w*$/ && !$param_names{$p->[0]}++ or fail('invalid or duplicate native parameter',$s->{file},$f->{line});}
+   for my $t(map {$_->[1]} @params){$t=~/^(Int|Float64|Bool|String)$/ or fail("unsupported native parameter type '$t'",$s->{file},$f->{line});}
+   my $ret=$functions{$f->{name}}{returns};
+   $ret=~/^(Int|Float64|Bool|String|Void)$/ or fail("unsupported native result type '$ret'",$s->{file},$f->{line});
+   $f->{native_params}=[map {$_->[1]} @params];$f->{native_return}=$ret;
+   # C uses linker symbols, so one symbol cannot select different libraries
+   # or ABIs. Enforce the same portable contract for Python declarations.
+   my $signature=join(',',@{$f->{native_params}}).'->'.$ret."\0".$f->{library};
+   exists($native_symbols{$f->{symbol}}) && $native_symbols{$f->{symbol}} ne $signature
+    and fail("conflicting native bindings for '$f->{symbol}'",$s->{file},$f->{line});
+   $native_symbols{$f->{symbol}}=$signature;
+  }
  }
  my %ops=%{$s->{op_by_name}};
  my %tokens=map {$_->{name}=>$type->($_->{type})} @{$s->{tokens}};
  my %exceptions;for my $ex(@{$s->{exceptions}}){$exceptions{'!'.$ex->{name}}=[map {my($n,$t)=split /\s*:\s*/,$_,2;$type->($t)} comma_parts($ex->{params})];}
  for my $op(values %ops){$type->($_) for @{$op->{inputs}},@{$op->{outputs}};for my $arg(comma_parts($op->{params})){my($n,$t)=split /\s*:\s*/,$arg,2;$type->($t);}}
- my $infer;
+ my ($infer,$block,$observed_returns);
  $infer=sub{my($e,$env,$caps)=@_;return 'Void' unless $e;my $k=$e->{k};my $v=$e->{v}//'';
   if($k eq 'num'){if(($e->{type}||'') eq 'Int'){my $n=Math::BigInt->new($e->{literal});($n>=Math::BigInt->new('-9223372036854775808') && $n<=Math::BigInt->new('9223372036854775807')) or fail('Int literal out of signed 64-bit range',$s->{file},1)}if(($e->{type}||'') eq 'Float64' && !POSIX::isfinite($e->{v})){fail('Float64 literal is out of range',$s->{file},1)}return $e->{type}||'Float64';}return 'String' if $k eq 'str';
   if($k eq 'list'){my @ts=map {$infer->($_,$env,$caps)} @{$e->{args}};my $t=@ts?$ts[0]:'Any';$must->($t,$_,'list') for @ts;return "Vec<$t>";}
@@ -775,9 +882,20 @@ sub validate_types {
    return 'Bool' if $v =~ /^(true|false)$/;
    return 'Void' if $v =~ /^(None|nil)$/;
    if($ops{$v}){(my $ir=$v)=~s/\.[^.]+$/.Op/;return $ir}
-   $v=~s/^&//;
-   if(my $f=$functions{$v}){return 'Fn('.join(',',map {$_->[1]} @{$f->{params}}).')->'.$f->{returns}}
-   return $env->{$v}||'Any';
+   my $named_ref=$v=~s/^&//;
+   return $env->{$v} if !$named_ref && exists $env->{$v};
+   if(my $f=$functions{$v}){return 'Fn('.join(',',map {$_->[1]} @{$f->{params}}).')->'.($f->{async}?"Task<$f->{returns}>":$f->{returns})}
+   return 'Any';
+  }
+  if($k eq 'await'){my $t=$infer->($e->{a},$env,$caps);$t=~/^Task<(.+)>$/ or fail("await requires a Task, got $t",$s->{file},1);return $1}
+  if($k eq 'closure'){
+   my %inner=%$env;my @params;
+   for my $p(@{$e->{params}}){my $t=$type->($p->{type});$inner{$p->{name}}=$t;push @params,$t}
+   my $ret=$type->($e->{returns});my $outer_returns=$observed_returns;$observed_returns=undef;
+   my %locals=map {$_->{name}=>1} @{$e->{params}};
+   my $returns=$block->($e->{body},\%inner,$caps,$ret,\%locals);$observed_returns=$outer_returns;
+   $returns || $ret eq 'Void' or fail("closure may finish without returning $ret",$s->{file},1);
+   return 'Fn('.join(',',@params).')->'.($e->{async}?"Task<$ret>":$ret);
   }
   if($k eq 'index'){
    my $a=$infer->($e->{a},$env,$caps);my $b=$infer->($e->{b},$env,$caps);
@@ -805,18 +923,24 @@ sub validate_types {
     return 'Int' if $name eq 'len'||$name eq 'final_stack_height';return $vec if $name eq 'reverse';return $elem;
    }
    return 'Void' if $name eq 'print';
+   my $execution_builtin=!exists($env->{$name}) && !exists($functions{$name});
+   if($name eq 'sleep' && $execution_builtin){$must->('Float64',$args[0],'sleep');return 'Void'}
+   if(($name eq 'spawn'||$name eq 'join') && $execution_builtin){
+    $args[0]=~/^Task<(.+)>$/ or fail("$name requires a Task, got $args[0]",$s->{file},1);
+    return $name eq 'join'?$1:$args[0];
+   }
    if($name =~ /^(abs|min|max|is_finite)$/){$must->('Float64',$_,$name) for @args;return $name eq 'is_finite'?'Bool':(grep {$_ eq 'Float64'} @args)?'Float64':$args[0]}
    my $callee=$infer->($e->{a},$env,$caps);
-   $callee =~ /^Fn\((.*)\)->(.+)$/ or fail("expression is not callable ($callee)",$s->{file},1);
-   my($params,$ret)=($1,$2);my @params=comma_parts($params);
+   my @fn=function_type_parts($callee);@fn or fail("expression is not callable ($callee)",$s->{file},1);
+   my($params,$ret)=@fn;my @params=comma_parts($params);
    @params==@args or fail("function $name expects ".scalar(@params).' arguments, got '.scalar(@args),$s->{file},1);
    $must->($params[$_],$args[$_],"function $name") for 0..$#params;return $ret;
   }
   fail("unsupported expression $k",$s->{file},1);
  };
- my $observed_returns;my $block;$block=sub{my($code,$env,$caps,$ret)=@_;my $returns=0;
+ $block=sub{my($code,$env,$caps,$ret,$locals)=@_;my $returns=0;
   for my $st(@$code){my $k=$st->{k};
-   if($k eq 'let'){exists $env->{$st->{name}} and fail("duplicate local $st->{name}",$s->{file},1);my $got=$infer->($st->{expr},$env,$caps);my $t=$st->{type}?$type->($st->{type}):$got;$must->($t,$got,'local initializer');$env->{$st->{name}}=$t;}
+   if($k eq 'let'){exists(($locals||$env)->{$st->{name}}) and fail("duplicate local $st->{name}",$s->{file},1);my $got=$infer->($st->{expr},$env,$caps);my $t=$st->{type}?$type->($st->{type}):$got;$must->($t,$got,'local initializer');$env->{$st->{name}}=$t;$locals->{$st->{name}}=1 if $locals;}
    elsif($k eq 'return'){my $got=$infer->($st->{expr},$env,$caps);$must->($ret,$got,'return') if defined $ret;push @$observed_returns,$got if defined $observed_returns;$returns=1;}
    elsif($k eq 'exec'){$infer->($st->{expr},$env,$caps)}
    elsif($k eq 'assign'){my $lhs=$st->{lhs};if($lhs->{k} eq 'name' && $lhs->{v}!~/^@/ && !exists $env->{$lhs->{v}}){fail("assignment to undeclared local $lhs->{v}",$s->{file},1)}$must->($infer->($lhs,$env,$caps),$infer->($st->{rhs},$env,$caps),'assignment');}
@@ -825,16 +949,17 @@ sub validate_types {
     my $types=$exceptions{$st->{name}};for my $i(0..$#{$st->{args}}){$must->($types->[$i],$infer->($st->{args}[$i],$env,$caps),$st->{name})}$returns=1 if $k eq 'throw';
    }
    elsif($k eq 'grab'){my $table=$tables{substr($st->{table},1)};$must->($table->[0],$infer->($st->{key},$env,$caps),'grab key');my $t=$type->($st->{type});$must->($t,$table->[1],'grab type');$env->{$st->{var}}=$t;}
-   elsif($k eq 'while'){$must->('Bool',$infer->($st->{cond},$env,$caps),'while condition');$block->($st->{body},{%$env},$caps,$ret)}
-   elsif($k eq 'for'){my $t=$infer->($st->{items},$env,$caps);$t=~/^Vec<(.+)>$/ or fail('for requires a vector',$s->{file},1);$block->($st->{body},{%$env,$st->{var}=>$1},$caps,$ret)}
-   elsif($k eq 'if'){$must->('Bool',$infer->($st->{cond},$env,$caps),'if condition');my $a=$block->($st->{yes},{%$env},$caps,$ret);my $b=$block->($st->{no},{%$env},$caps,$ret);$returns=1 if $a && $b;}
-   elsif($k eq 'on'){$block->($st->{body},{%$env},$caps,$ret);}
+   elsif($k eq 'while'){$must->('Bool',$infer->($st->{cond},$env,$caps),'while condition');$block->($st->{body},{%$env},$caps,$ret,$locals?{%$locals}:undef)}
+   elsif($k eq 'for'){my $t=$infer->($st->{items},$env,$caps);$t=~/^Vec<(.+)>$/ or fail('for requires a vector',$s->{file},1);$block->($st->{body},{%$env,$st->{var}=>$1},$caps,$ret,$locals?{%$locals,$st->{var}=>1}:undef)}
+   elsif($k eq 'if'){$must->('Bool',$infer->($st->{cond},$env,$caps),'if condition');my $a=$block->($st->{yes},{%$env},$caps,$ret,$locals?{%$locals}:undef);my $b=$block->($st->{no},{%$env},$caps,$ret,$locals?{%$locals}:undef);$returns=1 if $a && $b;}
+   elsif($k eq 'on'){$block->($st->{body},{%$env},$caps,$ret,$locals?{%$locals}:undef);}
   }
   return $returns;
  };
  for my $state(@{$s->{states}}){$must->($states{$state->{name}},$infer->($state->{initial_expr},{},{}),'state initializer')}
  $block->($s->{init_code},{},{},'Void');
  for my $f(@{$s->{functions}}){my $sig=$functions{$f->{name}};my %env=map {$_->[0]=>$_->[1]} @{$sig->{params}};
+  next if $f->{foreign};
   my $returns=$block->($f->{code},\%env,{},$sig->{returns});
   $returns || $sig->{returns} eq 'Void' or fail("function $f->{name} may finish without returning $sig->{returns}",$s->{file},$f->{line});
  }
