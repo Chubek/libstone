@@ -1,0 +1,25 @@
+# Arithmetic tutorial: Add(Num(20),Num(22)) completes with 42.
+language Calculator {
+  start Expr;
+  syntax Expr = Num(value: integer)
+    | Add(left: Expr, right: Expr)
+    | Sub(left: Expr, right: Expr)
+    | Mul(left: Expr, right: Expr)
+    | Div(left: Expr, right: Expr)
+    | Equal(left: Expr, right: Expr)
+    | Less(left: Expr, right: Expr);
+
+  rule Num = give value;
+  rule Add = (evaluate(left) and then evaluate(right))
+             then give given(1) + given(2);
+  rule Sub = (evaluate(left) and then evaluate(right))
+             then give given(1) - given(2);
+  rule Mul = (evaluate(left) and then evaluate(right))
+             then give given(1) * given(2);
+  rule Div = (evaluate(left) and then evaluate(right))
+             then give given(1) / given(2);
+  rule Equal = (evaluate(left) and then evaluate(right))
+               then give given(1) == given(2);
+  rule Less = (evaluate(left) and then evaluate(right))
+              then give given(1) < given(2);
+}

@@ -1,18 +1,18 @@
-# Specification modules and loaders
+# Specification libraries, modules, and imports
 
-LLSynth modules reuse **language specifications**, not executable host source.
-The generator loads and links modules before compiling the grammar, actions,
+LLSynth libraries reuse grammar rules, typed functions, states, IR dialects,
+and other specification declarations. The generator links them before compiling the grammar, actions,
 types, and IR. Generated Python and C/C++ tools remain self-contained: they do
 not load `.llsynth` files, need the generator, or require a runtime module path.
-There is no dynamic Python/Perl/C import, native plugin loader, network loader,
-or program-language `import` statement implied by this facility.
+An `.import` belongs to the specification, not the language it defines.
 
 ## Example
 
 `words.llsynth`:
 
 ```text
-.module Words
+.library "Words"
+.summary "Number syntax and arithmetic"
 .export Number, increment
 
 .token NUMBER: Int = /[0-9]+/
@@ -24,7 +24,7 @@ return x + 1;
 .rule Number
 'syntax: n:NUMBER
 'semantics: return $n;
-..
+.end
 ```
 
 `main.llsynth`:
@@ -36,7 +36,7 @@ return x + 1;
 .rule Start
 'syntax: n:W__Number EOF
 'semantics: return &W__increment($n);
-..
+.end
 ```
 
 ```sh
@@ -46,27 +46,44 @@ printf '41' | python3 example.py
 # 42
 ```
 
-The alias separator is **two underscores**, not a dot. This spelling works in
-the existing grammar and action lexers without conflating module qualification
-with IR operation qualification.
+Both `W__Number` and `W.Number` refer to the same exported rule. The linker
+resolves qualification before the grammar and action lexers run.
+
+## Choosing an import form
+
+For a library declared `.library "Library.Words"`:
+
+| Import | How to call its exported function |
+| --- | --- |
+| `.import "Library.Words"` | `increment(x)` (also `Words__increment(x)`) |
+| `.import qualified "Library.Words"` | `Library__Words__increment(x)` or `Library.Words.increment(x)` |
+| `.import "Library.Words" as W` | `W__increment(x)` or `W.increment(x)` |
+
+`qualified` may also follow the name. The `as` form uses only the chosen
+alias. Ambiguous plain imports and collisions with local declarations are
+errors; qualify one import to distinguish the names. Importing a legacy
+`.module` without `as` retains the existing last-component alias binding only.
+For ready-to-use libraries see the [stdlib reference](stdlib.md).
 
 ## Identity, search paths, and import-once
 
-* An imported file must begin with `.module Name`; blank lines and `#` comments
-  may precede it. Names are identifier components optionally separated by dots,
+* An imported file must begin with `.library "Name"` or `.module Name`; blank
+  lines and comments may precede it. Names are identifier components optionally separated by dots,
   such as `Library.Words`. A module name identifies exactly one canonical file
   within a generator invocation. Loading different files declaring the same
   name is an error, even if their contents match.
 * `.import "relative/path.llsynth" [as Alias]` resolves a literal filesystem
-  path. Absolute paths are also accepted.
+  path. Absolute paths are also accepted. A quoted identifier such as `"Numbers"`
+  or `"Library.Words"` first tries the literal path, then named lookup. Unquoted
+  identifiers always use named lookup.
 * `.import Library.Words [as Alias]` searches for `Library/Words.llsynth`.
-  Its declaration must be `.module Library.Words`.
+  Its declared name must be `Library.Words`.
 * Search order is the directory of the file **containing the import**, followed
   by each repeatable `--module-path DIR`, in command-line order. The first
   existing regular file wins. Paths in included fragments are relative to the
   fragment. `--include-path` is deliberately separate from `--module-path`.
-  There are no implicit environment, home-directory, package-manager, network,
-  or installed-system search roots.
+  For `std.Foo` the final fallback is `stdlib/Foo.llsynth` beside the generator's
+  `scripts/` directory. Copy that directory when installing the generator.
 * The default alias is the final module-name component (`Words` above).
   An explicit alias is one identifier and cannot contain `__`. One alias may
   be repeated for the same module, but cannot denote different modules.
@@ -97,7 +114,9 @@ determines import order.
 
 ## Visibility and exports
 
-Declarations in an imported module are private by default. `.export` accepts a
+Libraries export all local named declarations when no `.export` is present.
+Adding an `.export` makes only the listed declarations public. Legacy
+`.module` declarations are private by default. `.export` accepts a
 comma-separated list of local declarations, and may precede their definitions:
 
 ```text
@@ -109,7 +128,7 @@ Sigils identify states (`@`), symbol tables (`#`), exceptions (`!`), and type
 aliases (`%`). Exporting an IR dialect exposes its operation constructors and
 `Op` type. If different ordinary declaration categories share a spelling, an
 ordinary export exposes each matching declaration. Unknown and duplicate exports
-are errors. There are no wildcard exports or implicit/transitive re-exports.
+are errors. Plain imports do not implicitly re-export a dependency's names.
 
 Access through alias `M` looks like:
 
@@ -141,8 +160,9 @@ inputs.
 
 ## Entry configuration, lexer behavior, and includes
 
-`.language`, `.version`, `.summary`, `.start`, `.option`, and `.pipeline` belong
-to the entry specification and are rejected in imported modules. An entry file
+An optional `.summary "text"` describes the library and does not replace the
+importer's summary. `.language`, `.version`, `.start`, `.option`, and `.pipeline` belong
+to the entry specification and are rejected in imported libraries and modules. An entry file
 may itself start with `.module Name` and contain exports when it is also intended
 to be reusable. Running a reusable specification as the entry file still requires
 the usual EOF-terminated entry rule and mode-appropriate facets.
@@ -162,7 +182,60 @@ libraries: modules do not create lexer modes or separate parsers.
 cycle diagnostics. Included declarations belong to the including module's scope.
 Including the same declaration twice is still a duplicate-declaration error;
 import-once does not change include behavior. Use `.import`, not `.include`, for
-files containing `.module`.
+files containing `.module` or `.library`.
+
+## Generator-time companions
+
+Use `.extern "exports.pm"` in a `.library` or `.language` specification to
+contribute declarations from a Perl file. The file runs once per importing
+unit, **including during `--check`**. It can return a scalar
+of LLSynth declaration text or an array reference of declaration lines. For
+example, `exports.pm` could end with:
+
+```perl
+[
+    '.function answer() -> Int',
+    'return 42;',
+    '.end',
+]
+```
+
+An importing specification can call `answer()` just like a handwritten
+function, subject to the library's `.export` and import form. Paths are
+relative to the file containing `.extern`. Imported declarations can use the
+scope's names; place `.import`, `.include`, and further companions in the
+specification itself. The dependency manifest, depfile and output-overwrite
+checks cover companion files. Only load trusted companions: Perl code or
+native code runs in the generator process.
+
+A Perl companion can alternatively return a hash mapping new block directive
+names (without the dot) to expansion callbacks. A callback receives the trimmed
+header, the body as `[text, file, line]` triples, the header file and line,
+and a callback that reads a file's bytes and records it as a build dependency.
+It returns LLSynth declaration text in the *using* scope. The reader consumes
+the closing `.end`, so the body excludes it. A direct import makes the library's
+blocks available from that import onward, even when qualified. See
+[std.ISel](isel.md) for a complete provider.
+
+For a C companion, use `.extern "exports.c"` and implement this ABI:
+
+```c
+const char *llsynth_declarations(void) {
+    return ".function answer() -> Int\nreturn 42;\n.end\n";
+}
+```
+
+The generator compiles `.c` files with Perl's `ExtUtils::CBuilder` in a
+temporary directory and loads the resulting shared library. This needs a
+host C compiler; no build outputs are placed beside the source.
+For a prebuilt provider, `cc -shared -fPIC exports.c -o exports.so` on Linux
+produces a companion usable with `.extern "exports.so"`. Both forms use the optional
+Perl `FFI::Platypus` module (API 2) to call the provider. Return a non-null
+NUL-terminated UTF-8 string in storage that remains valid after the call.
+`.pm` and `.pl` select Perl by default; use `.extern perl "path"` or
+`.extern c "path"` to select the provider format explicitly. Generated tools
+need neither the provider nor Perl FFI. For a function **called at runtime**,
+see [`.extern c Name(...) -> Type from "..."`](interop.md).
 
 ## Implementation and extension boundary
 
@@ -198,12 +271,12 @@ Grammar-producing macros and rewrite replacement expressions are not generic
 action-language blocks and are not blindly rewritten. Rewrite replacements
 should use their pattern-bound operands, not imported helper calls.
 
-Install the new helper beside `llsynth.pl`, `LLSynthCompiler.pm`, and
-`LLSynthEmit.pm`, and `LLSynthMeta.pm`. Like those helpers it is only a generator dependency, never a
-generated-tool dependency.
+Install `LLSynthModules.pm` and `LLSynthCompanions.pm` beside `llsynth.pl`
+and its other sibling helpers. Keep the bundled `stdlib/` beside `scripts/`.
 
 Run the module regression suite with:
 
 ```sh
 python3 cornerstone/LLSynth/tests/modules/test_modules.py
+python3 cornerstone/LLSynth/tests/modules/test_libraries.py
 ```

@@ -1,0 +1,25 @@
+.language "SelectLoad"
+.import "std.ISel"
+.skip /\s+/
+.token N: Int = /[0-9]+/
+
+.ir Machine
+.op Load(destination: Int, offset: Int, base: Int): () -> ()
+.end
+
+.isel rv for Machine from riscv64 features base
+.select Load(rd, imm, rs1) => load i64
+.end
+
+.isel a64 for Machine from arm64
+.select Load(rt, offset, base) => load i64
+.end
+
+.isel x64 for Machine from amd64
+.select Load(reg, disp, base) => load i64
+.end
+
+.rule Start
+'syntax: d:N offset:N base:N EOF
+'lower: return [Machine.Load($d, $offset, $base)];
+.end

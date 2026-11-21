@@ -12,6 +12,11 @@ use POSIX ();
 # The internal frontend shares CLI options and helpers with the driver.
 our (%opt, @include_paths);
 sub strip_ws {my($s)=@_;$s//= ''; $s =~ s/^\s+|\s+$//g;return $s}
+# Keep the parser and the module linker's block scans in sync.
+sub ends_spec_block {
+ my($block,$line)=@_;
+ return $line eq '.end' || ($block eq 'rule' && $line eq '..');
+}
 sub read_spec_lines {
  my($file,$active,$deps)=@_;my $path=canonical_path($file);
  $active->{$path} and fail("include cycle involving $file",$file,1);
@@ -41,7 +46,7 @@ sub parse_spec {
   next if $l eq '' && !$block;
   next if $l =~ /^#(?:\s|$)/;
   if($block eq 'rule') {
-   if($l eq '..') {push @{$s->{rules}},$cur; $block='';$facet='';next}
+    if(ends_spec_block($block,$l)) {push @{$s->{rules}},$cur; $block='';$facet='';next}
    if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/) {$facet=$1;$cur->{facets}{$facet} .= "$2\n";next}
    if($l eq "'end"){$facet='';next}
    $facet or fail("rule content without facet",$file,$ln);
@@ -49,7 +54,19 @@ sub parse_spec {
    next;
   }
   if($block) {
-   if($l eq '.end') {
+   if($block eq 'sumtype' || $block eq 'prodtype') {
+    $l =~ s{\s*//.*$}{};
+    next unless length $l;
+    if($l eq '.end'){
+     @{$cur->{members}} || $block eq 'prodtype' or fail('a sum type needs at least one variant',$file,$ln);
+     push @{$s->{types}},$cur;$block='';$cur=undef;next;
+    }
+    $l =~ /^([A-Za-z_]\w*)\s*:\s*(.+)$/ or fail("expected Name: Type in .$block",$file,$ln);
+    my ($name,$type)=($1,$2);
+    (grep {$_->{name} eq $name} @{$cur->{members}}) and fail("duplicate member '$name' in %$cur->{name}",$file,$ln);
+    push @{$cur->{members}},{name=>$name,type=>$type,file=>$file,line=>$ln};next;
+   }
+    if(ends_spec_block($block,$l)) {
     if($block eq 'function'){$cur->{body}=$body;push @{$s->{functions}},$cur}
     elsif($block eq 'macro'){$cur->{body}=$body;push @{$s->{metaprograms}},$cur}
     elsif($block eq 'init'){$s->{init}.=$body}
@@ -79,9 +96,13 @@ sub parse_spec {
   if($l =~ /^\.precedence\s+(left|right|nonassoc)\s+(.+)$/){my($assoc,$rest)=($1,$2);my @terms=($rest =~ /\"[^\"]+\"|\S+/g);push @{$s->{precedence}},{assoc=>$assoc,terms=>\@terms};next}
   if($l =~ /^\.option\s+(\w+)\s*=\s*(.*)$/){my($k,$v)=($1,strip_ws($2));$v=~s/^"|"$//g;$s->{options}{$k}=$v;next}
   if($l =~ /^\.skip\s+\/(.*)\/\s*$/){push @{$s->{skips}}, {regex=>$1,line=>$ln};next}
-  if($l =~ /^\.token\s+(\w+)(?:\s*:\s*([\w.]+))?\s*=\s*\/(.*)\/\s*$/){push @{$s->{tokens}}, {name=>$1,type=>$2||'String',regex=>$3,line=>$ln};next}
+  if($l =~ /^\.token\s+(\w+)(?:\s*:\s*(%?[\w.]+))?\s*=\s*\/(.*)\/\s*$/){push @{$s->{tokens}}, {name=>$1,type=>$2||'String',regex=>$3,line=>$ln};next}
   if($l =~ /^\.literal\s+(\w+)\s*=\s*"(.*)"$/){push @{$s->{tokens}},{name=>$1,type=>'String',literal=>decode_string($2),regex=>quotemeta(decode_string($2)),line=>$ln};next}
-  if($l =~ /^\.type\s+%(\w+)\s*(?:=\s*(.*))?$/){push @{$s->{types}}, {name=>$1,type=>$2||'Any'};next}
+  next if $l =~ m{^//};
+  if($l =~ /^\.(sumtype|prodtype)\s+%([A-Za-z_]\w*)\s*(?:\/\/.*)?$/){
+   $block=$1;$cur={kind=>$1,name=>$2,members=>[],file=>$file,line=>$ln};next;
+  }
+  if($l =~ /^\.type\s+%(\w+)\s*(?:=\s*(.*))?$/){push @{$s->{types}}, {name=>$1,type=>$2||'Any',line=>$ln,file=>$file};next}
   if($l =~ /^\.state\s+\@(\w+)\s*:\s*(.*?)\s*=\s*(.*)$/){push @{$s->{states}},{name=>$1,type=>$2,initial=>strip_ws($3)};next}
   if($l =~ /^\.symtbl\s+\#(\w+)(?:\s*:\s*(.*))?$/){push @{$s->{tables}},{name=>$1,type=>$2||'Any'};next}
   if($l =~ /^\.exception\s+\!(\w+)(?:\((.*?)\))?\s+"(.*)"$/){push @{$s->{exceptions}},{name=>$1,params=>$2||'',message=>decode_string($3)};next}
@@ -105,7 +126,8 @@ sub parse_spec {
   fail("unknown directive or unexpected text: '$l'",$file,$ln);
  }
  $block and fail("unterminated '$block' block",$file,scalar @lines);
- $s->{language} ||= 'Language'; $s->{start} ||= ($s->{rules}[0]||{})->{name};
+  $s->{language} ||= 'Language'; $s->{start} ||= ($s->{rules}[0]||{})->{name};
+  prepare_data_types($s);
  return $s;
 }
 sub validate_declarations {
@@ -337,7 +359,7 @@ sub atoks {
   if($s =~ /\G\/\/[^\n]*/gc){next}
   if($s =~ /\G(["'])( (?:\\.|[^\\])*? )\1/gcx){my $st=decode_string($2);push @out,{k=>'str',v=>$st};next}
   if($s =~ /\G(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)/gc){push @out,{k=>'num',v=>$1};next}
-  if($s =~ /\G([\@\#\$\!\%\&][A-Za-z_]\w*|t'[A-Za-z_]\w*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/gc){push @out,{k=>'name',v=>$1};next}
+   if($s =~ /\G(%[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?|[\@\#\$\!\&][A-Za-z_]\w*|t'[A-Za-z_]\w*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/gc){push @out,{k=>'name',v=>$1};next}
   if($s =~ /\G(->|==|!=|>=|<=|&&|\|\||=>|[-+*\/=<>!;,(){}\[\]:.])/gc){push @out,{k=>'op',v=>$1};next}
   my $bad=substr($s,pos($s)//0,25);die "invalid action syntax near '$bad'\n";
  }
@@ -352,8 +374,8 @@ sub action_type {
  my($x,@ends)=@_;my %end=map {$_=>1} @ends;my($type,$depth)=('',0);
  while(apeek($x) ne '<end>'){
   my $v=apeek($x);last if !$depth && $end{$v};
-  $depth++ if $v eq '(' || $v eq '<';
-  $depth-- if $v eq ')' || $v eq '>';
+  $depth++ if $v eq '(' || $v eq '<' || $v eq '[';
+  $depth-- if $v eq ')' || $v eq '>' || $v eq ']';
   $depth>=0 or die "unbalanced action type\n";$type.=anext($x);
  }
   length($type) && !$depth or die "expected complete action type\n";return $type;
@@ -616,14 +638,22 @@ sub compile_passes {
   push @rewrites,{name=>$name,ir=>$ir,phase=>$parts{phase}||'optimize',priority=>0+($parts{priority}||0),match=>\@match,replace=>\@replace,when=>$when};
  }
  $s->{rewrites_compiled}=[sort {$b->{priority}<=>$a->{priority} || $a->{name} cmp $b->{name}} @rewrites];
- my @backends;
+ my (@backends,%targets);
  for my $r(@{$s->{backends}}){$r->{name}=~/^(\w+)\s+for\s+(\w+)$/ or fail("invalid backend declaration '$r->{name}'",$s->{file},1);
-  my($target,$ir)=($1,$2);my %emits;my($prologue,$epilogue)=('','');
+   my($target,$ir)=($1,$2);my %emits;my($prologue,$epilogue)=('','');
+   $targets{$target}++ and fail("duplicate backend for program target '$target'",$s->{file},1);
   for my $line(split /\n/,$r->{body}){my $l=strip_ws($line);next if !$l || $l =~ /^#(?:\s|$)/;
    if($l =~ /^\.emit\s+(\w+)(?:\(([^)]*)\))?\s*=>\s*(".*")\s*$/){
     my($op,$args,$value)=($1,$2,$3);
     $s->{op_by_name}{$ir.'.'.$op} or fail("backend '$target' refers to undeclared opcode $ir.$op",$s->{file},1);
-    $emits{$op}={params=>[grep {length} map {strip_ws($_)} split /,/,$args||''],template=>unquote_template($value)};next;
+     my @names;
+     for my $binding(comma_parts($args//'')){
+      $binding =~ /^([A-Za-z_]\w*)(?:\s*:\s*(Int|Bool|Float64|String))?$/
+       or fail("invalid backend operand '$binding'",$s->{file},1);
+      push @{$s->{backend_type_checks}},["$ir.$op",scalar @names,$2] if defined $2;
+      push @names,$1;
+     }
+     $emits{$op}={params=>\@names,template=>unquote_template($value)};next;
    }
    if($l =~ /^\.prologue\s+(".*")$/){$prologue=unquote_template($1);next}
    if($l =~ /^\.epilogue\s+(".*")$/){$epilogue=unquote_template($1);next}
@@ -675,7 +705,8 @@ sub validate_actions {
    if($opt{T} ne 'python3' && $name=~/^(spawn|join|sleep)$/ && !$env->{$name} && !$func{$name}){
     $diag->('closures, async functions and tasks require the python3 tool target',$line);
    }
-   if($name =~ /^\@(\w+)$/){$diag->("undeclared state '$name'",$line) unless $state{$1}}
+    if($name =~ /^%/){$diag->("unknown type operation '$name'",$line) unless $s->{type_ops}{$name}}
+    elsif($name =~ /^\@(\w+)$/){$diag->("undeclared state '$name'",$line) unless $state{$1}}
    elsif($name =~ /^\#(\w+)$/){$diag->("undeclared symbol table '$name'",$line) unless $table{$1}}
    elsif($name =~ /^\$(\w+)$/){$diag->("unbound capture '$name'",$line) unless exists $captures->{$1}}
    elsif($name =~ /^&(\w+)$/){$diag->("undeclared function '$name'",$line) unless $func{$1}}
@@ -773,7 +804,15 @@ sub validate_actions {
 1;
 
 sub validate_program_backend {
- my($s)=@_;return unless $opt{mode} =~ /^(both|compile|rewrite)$/;
+ my($s)=@_;
+ # validate_types has normalized each IR parameter, including aliases.
+ for my $check(@{delete($s->{backend_type_checks})||[]}){
+  my($op,$i,$want)=@$check;
+  my @params=comma_parts($s->{op_by_name}{$op}{params});
+  my($name,$type)=split /\s*:\s*/,$params[$i],2;
+  $type eq $want or fail("backend operand $op.$name requires $want, got $type",$s->{file},1);
+ }
+ return unless $opt{mode} =~ /^(both|compile|rewrite)$/;
  my $target=$opt{program_target};return if grep {$_->{target} eq $target} @{$s->{backends_compiled}};
  $target =~ /^(c99|c11|cpp17|cpp20|python3|bytecode)$/ or fail("no backend defined for program target '$target'",$s->{file},1);
  return if $target eq 'bytecode';
@@ -818,12 +857,91 @@ sub validate_rewrites {
 }
 
 # Types are checked on the same action IR consumed by every runtime.
+sub builtin_sigil_type {
+ my($name)=@_;
+ return $name =~ /^(?:Int|Int64|Float64|String|Bool|Any|Void|Unit|Callable|Vec|Task)$/;
+}
+
+# These signatures are shared by the static checker and both runtimes. A tag is
+# the linked constructor name, so equal layouts in different modules stay distinct.
+sub prepare_data_types {
+ my($s)=@_;
+ my %ops=('%Unit'=>{action=>'unit',params=>[],returns=>'Void'});
+ for my $d(@{$s->{types}||[]}){
+  builtin_sigil_type($d->{name}) and fail("reserved builtin type '%$d->{name}'",$d->{file},$d->{line});
+  next unless $d->{kind};
+  my $owner='%'.$d->{name};
+  my $add=sub {
+   my($name,$action,$tag,$index,$params,$ret)=@_;
+   exists $ops{$name} and fail("conflicting type operation '$name'",$d->{file},$d->{line});
+   $ops{$name}={action=>$action,owner=>$owner,tag=>$tag,index=>$index,params=>$params,returns=>$ret};
+  };
+  my @members=@{$d->{members}};
+  $add->($owner,'make',$owner,0,[map {$_->{type}} @members],$owner) if $d->{kind} eq 'prodtype';
+  for my $i(0..$#members){
+   my ($field,$t)=@{$members[$i]}{qw(name type)};
+   if($d->{kind} eq 'prodtype'){
+    $add->("$owner.$field",'get',$owner,$i,[$owner],$t);
+   }else{
+    my $tag="$owner.$field";
+    $add->($tag,'make',$tag,0,[$t],$owner);
+    $add->("$owner.is_$field",'is',$tag,0,[$owner],'Bool');
+    $add->("$owner.get_$field",'get',$tag,0,[$owner],$t);
+   }
+  }
+ }
+ # Legacy `.type %New = %Old` is transparent, including in expression
+ # position. Keep each operation's original owner/tag for nominal identity.
+ my %by_owner;
+ for my $name(keys %ops){
+  $name =~ /^(%\w+)(.*)$/;$by_owner{$1}{$2}=$ops{$name};
+ }
+ my %aliases=map {('%'.$_->{name})=>strip_ws($_->{type})} grep {!$_->{kind}} @{$s->{types}||[]};
+ for my $new(sort keys %aliases){
+  my $target=$new;my %seen;
+  $target=$aliases{$target} while exists($aliases{$target}) && !$seen{$target}++;
+  $target='%Unit' if $target =~ /^(?:%?Void|Unit)$/;
+  $ops{$new.$_}=$by_owner{$target}{$_} for keys %{$by_owner{$target}||{}};
+ }
+ $s->{type_ops}=\%ops;
+}
+
+# Split only arrows belonging to this Callable, never arrows inside its
+# bracketed argument/result types. Right folding gives one argument per call.
+sub callable_parts {
+ my($text)=@_;my (@parts,@stack);my $start=0;
+ my %closing=('['=>']','('=>')','<'=>'>');
+ for(my $i=0;$i<length $text;$i++){
+  my $c=substr($text,$i,1);
+  if(substr($text,$i,2) eq '->'){
+   if(!@stack){push @parts,substr($text,$start,$i-$start);$start=$i+2}
+   $i++;next;
+  }
+  if(exists $closing{$c}){push @stack,$closing{$c}}
+  elsif($c =~ /[\])>]/){return () if !@stack || pop(@stack) ne $c}
+ }
+ push @parts,substr($text,$start);
+ return () if @stack || @parts<2 || grep {!length} @parts;
+ return @parts;
+}
+
 sub validate_types {
  my($s)=@_;
- my %alias=map {('%'.$_->{name})=>$_->{type}} @{$s->{types}||[]};
+ my %alias=map {('%'.$_->{name})=>$_->{type}} grep {!$_->{kind}} @{$s->{types}||[]};
+ my %data=map {('%'.$_->{name})=>1} grep {$_->{kind}} @{$s->{types}||[]};
+ my($type_file,$type_line)=($s->{file},1);
  my $norm;$norm=sub{my($t,$seen)=@_;$t//= 'Any';$t=~s/\s+//g;
+  $t=~s/^%(Int|Int64|Float64|String|Bool|Any|Void)$/$1/;
+  $t=~s/^%(Vec|Task)</$1</;
+  $t='Void' if $t eq '%Unit' || $t eq 'Unit';
   $t='Int' if $t eq 'Int64';
-  if(exists $alias{$t}){$seen||={};$seen->{$t}++ and fail("cyclic type alias $t",$s->{file},1);return $norm->($alias{$t},$seen)}
+  if(exists $alias{$t}){$seen||={};$seen->{$t}++ and fail("cyclic type alias $t",$type_file,$type_line);return $norm->($alias{$t},$seen)}
+  if($t =~ /^%Callable\[(.*)\]$/){
+   my @parts=callable_parts($1);@parts or fail("invalid callable type '$t' (expected A -> B)",$type_file,$type_line);
+   my $ret=$norm->(pop @parts,{%{$seen||{}}});
+   $ret='Fn('.$norm->($_,{%{$seen||{}}}).')->'.$ret for reverse @parts;
+   return $ret;
+  }
   return $1.'<'.$norm->($2,$seen).'>' if $t=~/^(Vec|Task)<(.+)>$/;
   my @fn=function_type_parts($t);
   return 'Fn('.join(',',map {$norm->($_,{%{$seen||{}}})} comma_parts($fn[0])).')->'.$norm->($fn[1],{%{$seen||{}}}) if @fn;
@@ -831,15 +949,25 @@ sub validate_types {
  };
  my $known;$known=sub{my($t)=@_;$t=$norm->($t);
   return 1 if $t =~ /^(Int|Float64|Bool|String|Void|Any)$/;
+  return 1 if $data{$t};
   return $known->($1) if $t =~ /^(?:Vec|Task)<(.+)>$/;
   return 1 if $t =~ /^(\w+)\.Op$/ && grep {$_->{name} eq $1} @{$s->{irs}};
   my @fn=function_type_parts($t);
   if(@fn){return 0 unless $known->($fn[1]);for my $arg(comma_parts($fn[0])){return 0 unless $known->($arg)}return 1}
   return 0;
  };
- my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$s->{file},1);
-  $opt{T} eq 'python3' || $norm->($t)!~/\bTask</ or fail('tasks require the python3 tool target',$s->{file},1);
+ my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$type_file,$type_line);
+  $opt{T} eq 'python3' || $norm->($t)!~/\bTask</ or fail('tasks require the python3 tool target',$type_file,$type_line);
   return $norm->($t)};
+ for my $d(@{$s->{types}||[]}){
+  ($type_file,$type_line)=@$d{qw(file line)};
+  $type->('%'.$d->{name});
+  for my $m(@{$d->{members}||[]}){
+   ($type_file,$type_line)=@$m{qw(file line)};
+   $type->($m->{type});
+  }
+ }
+ ($type_file,$type_line)=($s->{file},1);
  my $compatible=sub{my($want,$got)=map {$norm->($_)} @_;return 1 if $want eq $got || $got eq 'Any' || $want eq 'Any';
   return 1 if $want eq 'Float64' && $got eq 'Int';
   return 1 if $want =~ /^Vec</ && $got eq 'Vec<Any>';
@@ -869,13 +997,24 @@ sub validate_types {
  }
  my %ops=%{$s->{op_by_name}};
  my %tokens=map {$_->{name}=>$type->($_->{type})} @{$s->{tokens}};
+ for my $rule(@{$s->{lexdfa}{rules}}){
+  next if $rule->{skip};
+  $rule->{type}=$tokens{$rule->{name}};
+  $rule->{type}=~/^(?:Int|Float64|Bool|String|Any)$/ or fail("unsupported token value type '$rule->{type}'",$s->{file},1);
+ }
  my %exceptions;for my $ex(@{$s->{exceptions}}){$exceptions{'!'.$ex->{name}}=[map {my($n,$t)=split /\s*:\s*/,$_,2;$type->($t)} comma_parts($ex->{params})];}
- for my $op(values %ops){$type->($_) for @{$op->{inputs}},@{$op->{outputs}};for my $arg(comma_parts($op->{params})){my($n,$t)=split /\s*:\s*/,$arg,2;$type->($t);}}
+ for my $op(values %ops){
+  $_=$type->($_) for @{$op->{inputs}},@{$op->{outputs}};
+  $op->{params}=join(', ',map {my($n,$t)=split /\s*:\s*/,$_,2;$n.': '.$type->($t)} comma_parts($op->{params}));
+ }
  my ($infer,$block,$observed_returns);
  $infer=sub{my($e,$env,$caps)=@_;return 'Void' unless $e;my $k=$e->{k};my $v=$e->{v}//'';
   if($k eq 'num'){if(($e->{type}||'') eq 'Int'){my $n=Math::BigInt->new($e->{literal});($n>=Math::BigInt->new('-9223372036854775808') && $n<=Math::BigInt->new('9223372036854775807')) or fail('Int literal out of signed 64-bit range',$s->{file},1)}if(($e->{type}||'') eq 'Float64' && !POSIX::isfinite($e->{v})){fail('Float64 literal is out of range',$s->{file},1)}return $e->{type}||'Float64';}return 'String' if $k eq 'str';
   if($k eq 'list'){my @ts=map {$infer->($_,$env,$caps)} @{$e->{args}};my $t=@ts?$ts[0]:'Any';$must->($t,$_,'list') for @ts;return "Vec<$t>";}
-  if($k eq 'name'){
+   if($k eq 'name'){
+    if(my $op=$s->{type_ops}{$v}){
+     return $norm->('Fn('.join(',',@{$op->{params}}).')->'.$op->{returns});
+    }
    return $states{$1} if $v =~ /^@(\w+)/;
    return 'Map<'.join(',',@{$tables{$1}}).'>' if $v =~ /^#(\w+)/;
    return $caps->{$1}||'Any' if $v =~ /^\$(\w+)/;

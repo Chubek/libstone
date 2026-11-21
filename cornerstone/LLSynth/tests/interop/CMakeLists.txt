@@ -20,7 +20,7 @@ target_include_directories(sandstone PUBLIC "${SAND}/include" PRIVATE "${SAND}/d
 find_package(ZLIB REQUIRED)
 target_link_libraries(sandstone PUBLIC ZLIB::ZLIB)
 add_library(sandstone_assembler STATIC
-  "${SAND}/assembler/assembler.c" "${SAND}/assembler/parser.c"
+  "${SAND}/assembler/assembler.c" "${SAND}/assembler/asm_opt.cpp" "${SAND}/assembler/parser.c"
   "${SAND}/assembler/preprocess.cpp" "${SAND}/assembler/directives.c"
   "${SAND}/assembler/binarizer.c" "${SAND}/assembler/lua.cpp"
   "${SAND}/assembler/sdk.cpp")

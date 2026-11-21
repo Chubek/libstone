@@ -1,0 +1,42 @@
+# Lexical scope, storage, transients, failure and escape.
+language Expressions {
+  start Expr;
+  syntax Expr = Num(value: integer)
+    | Token(name: identifier)
+    | Add(left: Expr, right: Expr)
+    | Sub(left: Expr, right: Expr)
+    | Mul(left: Expr, right: Expr)
+    | Div(left: Expr, right: Expr)
+    | Var(name: identifier)
+    | Let(name: identifier, value: Expr, body: Expr)
+    | Seq(first: Expr, second: Expr)
+    | Pair(left: Expr, right: Expr)
+    | Raise(value: Expr)
+    | Catch(body: Expr, handler: Expr)
+    | Given()
+    | Require(value: Expr)
+    | Fallback(first: Expr, second: Expr)
+    | New()
+    | Get(cell: Expr)
+    | Set(cell: Expr, value: Expr)
+    | Skip();
+  rule Num = give value;
+  rule Token = give name;
+  rule Add = (evaluate(left) and then evaluate(right)) then give given(1) + given(2);
+  rule Sub = (evaluate(left) and then evaluate(right)) then give given(1) - given(2);
+  rule Mul = (evaluate(left) and then evaluate(right)) then give given(1) * given(2);
+  rule Div = (evaluate(left) and then evaluate(right)) then give given(1) / given(2);
+  rule Var = give bound(name);
+  rule Let = furthermore (evaluate(value) then bind name to given(1)) hence evaluate(body);
+  rule Seq = evaluate(first) then evaluate(second);
+  rule Pair = evaluate(left) and then evaluate(right);
+  rule Raise = evaluate(value) then escape given(1);
+  rule Catch = evaluate(body) trapping evaluate(handler);
+  rule Given = give given(1);
+  rule Require = evaluate(value) then check given(1);
+  rule Fallback = evaluate(first) otherwise evaluate(second);
+  rule New = allocate cell;
+  rule Get = evaluate(cell) then give contents(given(1));
+  rule Set = (evaluate(cell) and then evaluate(value)) then store given(2) in given(1);
+  rule Skip = complete;
+}

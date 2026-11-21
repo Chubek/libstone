@@ -1,0 +1,23 @@
+.library "std.Polynomial"
+.summary "Horner evaluation and formal differentiation of integer polynomials"
+.export evaluate, derivative
+
+.function evaluate(coefficients: Vec<Int>, x: Int) -> Int
+let result = 0;
+let i = len(coefficients);
+while i > 0 {
+    i = i - 1;
+    result = result * x + coefficients[i];
+}
+return result;
+.end
+
+.function derivative(coefficients: Vec<Int>) -> Vec<Int>
+let result: Vec<Int> = [];
+let i = 1;
+while i < len(coefficients) {
+    push(result, i * coefficients[i]);
+    i = i + 1;
+}
+return result;
+.end

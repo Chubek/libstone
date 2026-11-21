@@ -14,7 +14,7 @@ no macro runtime or new runtime instructions are required.
 .rule Start
 'syntax: value:NUMBER EOF
 'semantics: return Offset($value, 1);
-..
+.end
 ```
 
 A `.template Name(parameters) = expression` declaration occupies one line.
@@ -52,7 +52,7 @@ let tmp = value;
     let tmp = $value;
     Accumulate(tmp + 1);
     return tmp;
-..
+.end
 ```
 
 `.macro Name(parameters)` introduces an ordinary action statement list,

@@ -29,7 +29,9 @@ def run(*args, cwd, data=None):
     return result.stdout
 
 
-def spec(definitions="", action="return 0;", extra=""):
+def spec(definitions="", action="return 0;", extra="", lower=None):
+    if lower is not None:
+        action += "\n'lower: " + lower
     return f""".language "Metaprogramming"
 .skip /[ \\t\\n]+/
 .token NUMBER: Int = /[0-9]+/
@@ -37,7 +39,7 @@ def spec(definitions="", action="return 0;", extra=""):
 .rule Start
 'syntax: value:NUMBER EOF
 'semantics: {action}
-..
+.end
 {extra}
 """
 
@@ -198,8 +200,7 @@ emit(@code, Stack.PUSH_F64(Immediate(x)));
 .emit PUSH_F64(value) => "stack.append(${value})\\n"
 .epilogue "print(stack[-1])\\n"
 .end
-""", "return Immediate($value);")
-        source = source.replace("..\n", "'lower: Lower($value); return @code;\n..\n")
+""", "return Immediate($value);", lower="Lower($value); return @code;")
         for target in ("python3", "c11"):
             if target == "c11" and not shutil.which(CC[0]):
                 continue
@@ -263,10 +264,8 @@ return @count;
 .emit ADD => "stack.append(stack.pop() + stack.pop())\\n"
 .epilogue "print(stack[-1])\\n"
 .end
-""", "return Fold($value, 1);")
-        source = source.replace(
-            "..\n",
-            "'lower: return [Stack.PUSH_F64($value), Stack.PUSH_F64(1), Stack.ADD()];\n..\n")
+""", "return Fold($value, 1);",
+            lower="return [Stack.PUSH_F64($value), Stack.PUSH_F64(1), Stack.ADD()];")
         for target in ("python3", "c11"):
             if target == "c11" and not shutil.which(CC[0]):
                 continue

@@ -29,7 +29,7 @@ class FeatureIntegrationTests(unittest.TestCase):
             '.language "Features"\n.token NUMBER: Int = /[0-9]+/\n'
             + declarations
             + "\n.rule Start\n'syntax: value:NUMBER EOF\n'semantics:\n"
-            + action + "\n..\n",
+            + action + "\n.end\n",
             encoding="utf-8",
         )
         output = self.work / ("features.py" if target == "python3" else "features.c")
@@ -60,6 +60,21 @@ class FeatureIntegrationTests(unittest.TestCase):
             "let value = $value; let add = Adder(value); return add(2);",
         )
         self.assertEqual(module.interpret("40"), 42)
+
+    def test_typed_library_example(self):
+        source = DRIVER.parents[1] / "examples" / "typed" / "double.llsynth"
+        output = self.work / "double.py"
+        build = subprocess.run(
+            [DRIVER, "--mode=interpret", "-o", output, source],
+            cwd=self.work, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(build.returncode, 0, build.stderr)
+        for program, expected in [("21\n", "42\n"), ("", "0\n")]:
+            with self.subTest(program=program):
+                run = subprocess.run([sys.executable, output], input=program,
+                                     capture_output=True, text=True, timeout=30)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertEqual(run.stdout, expected)
 
     def test_macro_closure_retains_mutable_cells(self):
         module = self.generate(

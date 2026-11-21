@@ -1,0 +1,25 @@
+.library "std.Functional"
+.summary "Higher-order map, filter and left fold over integer vectors"
+.export map, filter, fold
+
+.function map(items: Vec<Int>, transform: Fn(Int)->Int) -> Vec<Int>
+let result: Vec<Int> = [];
+for value in items { push(result, transform(value)); }
+return result;
+.end
+
+.function filter(items: Vec<Int>, keep: Fn(Int)->Bool) -> Vec<Int>
+let result: Vec<Int> = [];
+for value in items {
+    if keep(value) { push(result, value); }
+}
+return result;
+.end
+
+.type %Reducer = Fn(Int,Int)->Int
+
+.function fold(items: Vec<Int>, seed: Int, combine: %Reducer) -> Int
+let acc = seed;
+for value in items { acc = combine(acc, value); }
+return acc;
+.end

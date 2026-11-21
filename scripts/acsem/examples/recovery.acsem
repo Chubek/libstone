@@ -1,0 +1,9 @@
+# Both recovery paths observe storage effects from the interrupted action.
+language Recovery {
+  start Example;
+  syntax Example = Failure() | Escape();
+  rule Failure = (allocate cell then bind "c" to given(1)) hence
+    ((store 7 in bound("c") then fail) otherwise give contents(bound("c")));
+  rule Escape = (allocate cell then bind "c" to given(1)) hence
+    ((store 9 in bound("c") then escape 5) trapping give contents(bound("c")));
+}

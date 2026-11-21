@@ -1,0 +1,28 @@
+.library "std.Sequences"
+.summary "Integer ranges, prefix sums and adjacent differences"
+.export range, prefixSums, differences
+
+.function range(start: Int, stop: Int) -> Vec<Int>
+let result: Vec<Int> = [];
+while start < stop {
+    push(result, start);
+    start = start + 1;
+}
+return result;
+.end
+
+.function prefixSums(items: Vec<Int>) -> Vec<Int>
+let result = [0];
+for item in items { push(result, top(result) + item); }
+return result;
+.end
+
+.function differences(items: Vec<Int>) -> Vec<Int>
+let result: Vec<Int> = [];
+let i = 1;
+while i < len(items) {
+    push(result, items[i] - items[i - 1]);
+    i = i + 1;
+}
+return result;
+.end

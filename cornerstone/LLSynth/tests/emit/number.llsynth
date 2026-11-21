@@ -13,4 +13,4 @@
 'syntax: left:NUMBER "+" right:NUMBER EOF
 'semantics: return $left + $right;
 'lower: return [Calc.PUSH_F64($left), Calc.PUSH_F64($right), Calc.ADD()];
-..
+.end

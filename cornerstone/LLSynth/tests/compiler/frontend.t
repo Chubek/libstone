@@ -46,13 +46,14 @@ my $source = <<'SPEC';
 'syntax: Pair Pair EOF
 'semantics: return 0;
 'lower: return nil;
-..
+.end
 SPEC
 my $root = write_spec($tmp, 'main.llsynth', $source);
 write_spec($tmp, 'pair.llsynth', <<'SPEC');
 .include "tokens.llsynth"
 .rule Pair
 'syntax: prefix:"c"* value:END
+'end
 ..
 SPEC
 write_spec($include, 'pair.llsynth', ".should_not_be_read\n");
@@ -122,7 +123,7 @@ subtest 'grammar and action validation' => sub {
     my $unreachable = write_spec($tmp, 'unreachable.llsynth', $source . <<'SPEC');
 .rule Unused
 'syntax: END
-..
+.end
 SPEC
     my ($ok, undef, $warning) = check_spec($unreachable, @includes);
     is($ok, 0, 'unreachable production normally only warns');

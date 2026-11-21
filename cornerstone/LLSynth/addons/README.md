@@ -71,8 +71,9 @@ into quickfix using the generator's text diagnostics.
 
 The indentation engine is intentionally conservative and recognizes `.rule`,
 `.ir`, `.function`, `.macro`, `.init`, `.rewrite`, `.backend`, `.analysis`,
-`.pipeline`, `'syntax:`, `'semantics:`, `'lower:`, `'analyze:`, `'emit:` and
-`..`/`.end` boundaries. It also handles simple `{...}` action blocks. It is a
+`.pipeline`, `.sumtype`, `.prodtype`, `'syntax:`, `'semantics:`, `'lower:`,
+`'analyze:`, `'emit:` and `.end` boundaries (including legacy `..` rule
+terminators). It also handles simple `{...}` action blocks. It is a
 heuristic formatter, not an LR parser: unusual nested or multiline expressions
 may require manual adjustment.
 
@@ -96,7 +97,7 @@ installations), replace `bat` with `batcat` in those commands.
 
 The highlighters recognize the actual LLSynth spec notation: directives
 (`.token`, `.literal`, `.skip`, `.rule`, `.function`, `.ir`, `.rewrite`,
-`.backend`, `.module`, `.import`, `.macro`, `.extern`, `.sandstone`, etc.),
+`.backend`, `.module`, `.library`, `.import`, `.alias`, `.prodtype`, `.sumtype`, etc.),
 facets (`'syntax:`, `'semantics:`, `'lower:`, `'analyze:`, `'emit:`), block
 terminators (`.end`, `..`, `'end`), action sigils (`$capture`, `@state`,
 `#table`, `!exception`, `%type`, `&function`), string literals and numeric

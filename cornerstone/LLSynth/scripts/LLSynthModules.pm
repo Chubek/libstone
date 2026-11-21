@@ -5,9 +5,10 @@ use File::Basename qw(dirname);
 use File::Spec ();
 use Digest::SHA qw(sha256_hex);
 
-# Specification modules are linked before the ordinary frontend runs. Neither
-# loading nor linking evaluates Perl, Python, C, or other host-language source.
+# Specification modules are linked before the ordinary frontend runs.
 our @module_paths;
+my $module_name=qr/[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*/;
+my $stdlib_dir=File::Spec->catdir(dirname(__FILE__),'..','stdlib');
 
 sub module_prefix {
  my($unit)=@_;
@@ -23,6 +24,11 @@ sub module_find {
   push @tried,$path;
   return canonical_path($path) if -f $path;
  }
+ if($named && $name =~ /^std\.(.+)$/){
+  my $path=File::Spec->catfile($stdlib_dir,split(/\./,$1));
+  $path.='.llsynth';push @tried,$path;
+  return canonical_path($path) if -f $path;
+ }
  fail("module '$name' not found (searched: ".join(', ',@tried).")",$file,$line);
 }
 
@@ -34,7 +40,7 @@ sub module_header {
  return ('@',$1) if $line =~ /^\.state\s+\@(\w+)/;
  return ('#',$1) if $line =~ /^\.symtbl\s+\#(\w+)/;
  return ('!',$1) if $line =~ /^\.exception\s+\!(\w+)/;
- return ('%',$1) if $line =~ /^\.type\s+%(\w+)/;
+ return ('%',$1) if $line =~ /^\.(?:type|sumtype|prodtype)\s+%(\w+)/;
  return ('ir',$1) if $line =~ /^\.ir\s+(\w+)/;
  return ('meta',$1) if $line =~ /^\.(?:macro|template)\s+(\w+)/;
  return ();
@@ -44,7 +50,7 @@ sub module_block {
  my($line)=@_;
  return 'rule' if $line =~ /^\.rule\b/;
  return 'function' if $line =~ /^\.(?:function|async\s+function)\b/;
- return $1 if $line =~ /^\.(init|ir|rewrite|backend|analysis|pipeline|macro)\b/;
+ return $1 if $line =~ /^\.(init|ir|rewrite|backend|analysis|pipeline|macro|sumtype|prodtype)\b/;
  return '';
 }
 
@@ -68,30 +74,65 @@ sub read_module_spec_lines {
   my $unit={file=>$path,root=>!defined($import_file),active=>1,imports=>{},decls=>{},exports=>{},lines=>[]};
   $units{$id}=$unit;push @stack,$unit;
   my @lines=read_spec_lines($path,{},$deps);
-  my($block,$seen)=('','');
-  for my $entry(@lines){
+   my($block,$seen,$member_owner)=('','',undef);
+  for(my $i=0;$i<@lines;$i++){
+   my $entry=$lines[$i];
    my($raw,$origin,$ln)=@$entry;my $l=strip_ws($raw);
-   if(!$block && $l =~ /^\.module\b/){
-    $l =~ /^\.module\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*$/
-      or fail('expected .module Name',$origin,$ln);
-    my $name=$1;
-    !$seen && !$unit->{name} or fail('.module must be the first directive',$origin,$ln);
-    canonical_path($origin) eq $id or fail('use .import, not .include, for a .module file',$origin,$ln);
+   if($block eq 'sumtype' || $block eq 'prodtype'){
+    $raw =~ s{\s*//.*$}{};$l=strip_ws($raw);
+   }
+   if(!$block && $l =~ /^\.(module|library)\b/){
+    my $kind=$1;
+    $l =~ /^\.\Q$kind\E\s+(?:"($module_name)"|($module_name))$/
+      or fail("expected .$kind Name",$origin,$ln);
+    my $name=$1//$2;
+    !$seen && !$unit->{name} or fail(".$kind must be the first directive",$origin,$ln);
+    canonical_path($origin) eq $id or fail("use .import, not .include, for a .$kind file",$origin,$ln);
     exists($names{$name}) && $names{$name} ne $id
       and fail("module '$name' is declared by both $names{$name} and $id",$origin,$ln);
-    $unit->{name}=$name;$names{$name}=$id;
+    $unit->{kind}=$kind;$unit->{name}=$name;$names{$name}=$id;
     next;
    }
-   next if !$block && ($l eq '' || $l =~ /^#(?:\s|$)/);
+   next if !$block && ($l eq '' || $l =~ /^#(?:\s|$)/ || $l =~ m{^//});
    $seen=1;
+   if(!$block && $l =~ /^\.extern\s+(?:(perl|c)\s+)?"([^"\n]+)"$/){
+    my($flavor,$name)=($1,$2);
+    my @generated=LLSynthCompanions::declarations($flavor,$name,$origin,$ln,$deps,$unit->{companions}//={},$unit->{own_blocks}//={});
+    LLSynthCompanions::bind_blocks($unit->{blocks}//={},$unit->{own_blocks},$origin,$ln);
+    splice @lines,$i+1,0,@generated;
+    next;
+   }
+   if(!$block && $l =~ /^\.alias\b/){
+    module_read_alias($unit,$l,$origin,$ln);next;
+   }
    if(!$block && $l =~ /^\.import\b/){
-    $l =~ /^\.import\s+(?:"([^"\n]+)"|([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*))(?:\s+as\s+([A-Za-z_]\w*))?\s*$/
-      or fail('expected .import "file.llsynth" [as Alias] or .import Name [as Alias]',$origin,$ln);
-    my($quoted,$named,$alias)=($1,$2,$3);
+    $l =~ /^\.import\s+(?:(qualified)\s+)?(?:"([^"\n]+)"|($module_name))(?:(?:\s+as\s+([A-Za-z_]\w*))|(?:\s+(qualified)))?$/
+      or fail('expected .import [qualified] Name or "file.llsynth" [as Alias]',$origin,$ln);
+    my($qualified,$quoted,$named,$alias,$post)=($1,$2,$3,$4,$5);
+    $qualified && $post and fail("duplicate 'qualified'",$origin,$ln);
+    $qualified ||= $post;
+    # Quoted dotted names are the normal library spelling. Keep explicit
+    # filesystem paths (including .llsynth filenames) literal.
+    if(defined($quoted) && $quoted =~ /^$module_name$/ && $quoted !~ /\.llsynth$/ &&
+       !grep {-f File::Spec->catfile($_,$quoted)} (dirname($origin),@module_paths)){
+     ($named,$quoted)=($quoted,undef);
+    }
     my $found=module_find(defined($quoted)?$quoted:$named,defined($named),$origin,$ln);
     my $child=$load->($found,$origin,$ln,$named);
-    $alias//=($child->{name}=~/([^.]+)$/)[0];
-    $alias !~ /__/ or fail('module aliases cannot contain __',$origin,$ln);
+    LLSynthCompanions::bind_blocks($unit->{blocks}//={},$child->{own_blocks},$origin,$ln) if $child->{own_blocks};
+    if(!$alias && !$qualified && $child->{kind} eq 'library'){
+     # One binding per exported declaration in this scope; a second
+     # import of the same file is idempotent.
+     for my $key(sort keys %{$child->{decls}}){
+      my $d=$child->{decls}{$key};next unless $d->{public};
+      my $old=$unit->{opened}{$key};
+      $old && $old != $d and fail("ambiguous import '$d->{name}'; use qualified or as",$origin,$ln);
+      $unit->{opened}{$key}=$d;
+     }
+    }
+    defined($alias) && $alias =~ /__/ and fail('module aliases cannot contain __',$origin,$ln);
+    $alias//= $qualified ? $child->{name} : ($child->{name}=~/([^.]+)$/)[0];
+    $alias =~ s/\./__/g;
     if(my $old=$unit->{imports}{$alias}){
      $old == $child or fail("module alias '$alias' is already bound to $old->{name}",$origin,$ln);
     }
@@ -108,27 +149,48 @@ sub read_module_spec_lines {
     }
     next;
    }
+   if(!$block && ($unit->{kind}//'') eq 'library' && $l =~ /^\.summary\b/){
+    $l =~ /^\.summary\s+"((?:\\.|[^"\\])*)"$/
+      or fail('expected .summary "text"',$origin,$ln);
+    defined $unit->{summary} and fail('duplicate .summary',$origin,$ln);
+    $unit->{summary}=$1;
+    next;
+   }
    if(!$unit->{root} && !$block && $l =~ /^\.(language|version|summary|start|option|pipeline)\b/){
     fail(".$1 is entry-specification configuration, not a module declaration",$origin,$ln);
    }
    if(!$block){
+    if($l =~ /^\.(\w+)\b/ && (my $provider=$unit->{blocks}{$1})){
+     my @generated=LLSynthCompanions::expand_block($provider,\@lines,\$i,$deps);
+     splice @lines,$i+1,0,@generated;
+     next;
+    }
     my($kind,$name)=module_header($l);
     if(defined $kind){
      my $key="$kind:$name";
      exists($unit->{decls}{$key}) && !$unit->{root}
        and fail("duplicate module declaration '$name'",$origin,$ln);
-     $name =~ /^LLSMod_/ and fail("reserved module linker name '$name'",$origin,$ln);
-     $unit->{decls}{$key}={name=>$name,kind=>$kind,file=>$origin,line=>$ln};
+      $name =~ /^LLSMod_/ and fail("reserved module linker name '$name'",$origin,$ln);
+      $kind eq '%' && builtin_sigil_type($name) and fail("reserved builtin type '%$name'",$origin,$ln);
+      $unit->{decls}{$key}={name=>$name,kind=>$kind,file=>$origin,line=>$ln};
+      $member_owner=$unit->{decls}{$key};
+      $member_owner->{constructor}=1 if $l =~ /^\.prodtype\b/;
+      $member_owner->{type_base}=$1 if $l =~ /^\.type\s+%\w+\s*=\s*%($module_name)$/;
     }
     $block=module_block($l);
-   }elsif(($block eq 'rule' && $l eq '..') || ($block ne 'rule' && $l eq '.end')){
-    $block='';
+    }elsif(ends_spec_block($block,$l)){
+     $block='';$member_owner=undef;
+    }elsif($block eq 'ir' && $l =~ /^\.op\s+(\w+)/){
+     $member_owner->{members}{$1}=1;
+    }elsif(($block eq 'sumtype' || $block eq 'prodtype') && $l =~ /^(\w+)\s*:/){
+     my $member=$1;$member_owner->{members}{$member}=1;
+     if($block eq 'sumtype'){$member_owner->{members}{'is_'.$member}=$member_owner->{members}{'get_'.$member}=1}
    }
    my $tagged=[$raw,$origin,$ln,$unit];
    push @{$unit->{lines}},$tagged;push @out,$tagged;
   }
   if(!$unit->{root} && !$unit->{name}){
-   fail("imported specification '$path' requires .module Name",$import_file,$import_line);
+   fail("imported specification '$path' requires .module Name or .library Name",$import_file,$import_line);
   }
   if(defined $expected && ($unit->{name}||'') ne $expected){
    fail("module name mismatch: expected '$expected', found '".($unit->{name}||'')."'",$import_file,$import_line);
@@ -138,14 +200,18 @@ sub read_module_spec_lines {
    fail('.export requires .module Name',@$where);
   }
   for my $d(values %{$unit->{decls}}){
+   exists($unit->{opened}{"$d->{kind}:$d->{name}"})
+     and fail("declaration '$d->{name}' conflicts with a plain import; use qualified or as",$d->{file},$d->{line});
    # Hide entry-file functions and type namespaces too: an unbound bare name
    # or type in a module must not accidentally bind to an entry-file symbol.
    my $isolate=!$unit->{root} || ($d->{kind}=~/^(?:function|meta|%|ir)$/ && keys %{$unit->{imports}});
    $d->{linked}=$isolate?module_prefix($unit).$d->{name}:$d->{name};
    my $export=($d->{kind}=~/^[\@#!%]$/?$d->{kind}:'').$d->{name};
-   $d->{public}=exists $unit->{exports}{$export};
+   $d->{public}=exists($unit->{exports}{$export}) ||
+                (($unit->{kind}//'') eq 'library' && !keys %{$unit->{exports}});
   }
-  for my $export(sort keys %{$unit->{exports}}){
+   module_bind_aliases($unit);
+   for my $export(sort keys %{$unit->{exports}}){
    my $found=grep {my $key=($_->{kind}=~/^[\@#!%]$/?$_->{kind}:'').$_->{name};$key eq $export} values %{$unit->{decls}};
    $found or fail("export '$export' does not name a local declaration",@{$unit->{exports}{$export}});
   }
@@ -154,7 +220,7 @@ sub read_module_spec_lines {
  };
   my $root=$load->($file);
  # Preserve the old frontend byte-for-byte when there are no module directives.
- if(keys(%units)==1 && !$root->{name} && !keys %{$root->{imports}}){
+ if(keys(%units)==1 && !$root->{name} && !keys %{$root->{imports}} && !keys %{$root->{aliases}||{}}){
   return map {[@$_[0..2]]} @out;
  }
  # A default entry rule must belong to the entry specification, not whichever
@@ -197,7 +263,7 @@ sub module_lex {
   if($text =~ s/^(\/\/[^\n]*|\#\s+[^\n]*)//s){
    push @tokens,{raw=>$1};next;
   }
-  if($text =~ s/^(t'[A-Za-z_]\w*|[\@#\$!%&]?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)//){
+  if($text =~ s/^(t'[A-Za-z_]\w*|[\@#\$!%&]?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)//){
    push @tokens,{raw=>$1,name=>$1};next;
   }
   $text =~ s/^(.)//s;push @tokens,{raw=>$1};
@@ -208,11 +274,11 @@ sub module_lex {
 sub module_resolve {
  my($unit,$kind,$name,$file,$line)=@_;
  $name =~ /^LLSMod_/ and fail("reserved module linker name '$name'",$file,$line);
- my @kinds=$kind eq 'callable'?('function','meta'):($kind);
+ my @kinds=$kind eq 'callable'?('function','meta','action_op'):($kind);
  for my $category(@kinds){
-  if(my $d=$unit->{decls}{"$category:$name"}){return $d->{linked}}
+  if(my $d=$unit->{decls}{"$category:$name"} // $unit->{opened}{"$category:$name"}){return $d->{linked}}
  }
- for my $alias(sort keys %{$unit->{imports}}){
+ for my $alias(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
   next unless index($name,$alias.'__')==0;
   my $short=substr($name,length($alias)+2);my $target=$unit->{imports}{$alias};
   for my $category(@kinds){
@@ -222,6 +288,114 @@ sub module_resolve {
   fail("module '$target->{name}' does not export ".($kind=~/^[\@#!%]$/?$kind:'').$short,$file,$line);
  }
  return undef;
+}
+
+sub module_normalize_name {
+ my($unit,$name)=@_;
+ for my $alias(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
+  (my $dotted=$alias)=~s/__/./g;
+  return $alias.'__'.$1 if $name =~ /^\Q$dotted\E\.(.+)$/;
+ }
+ return $name;
+}
+
+# Resolve aliases at the same boundary as exports, after every local header
+# and every import is known. A binding stores its target's linked identity;
+# no duplicate function, token, state slot, or nominal type is emitted.
+sub module_read_alias {
+ my($unit,$text,$file,$line)=@_;
+ $text =~ s{\s*//.*$}{};
+ $text =~ /^\.alias\s+([\@#!%&]?)($module_name)\s+([\@#!%&]?)([A-Za-z_]\w*)$/
+    or fail('expected .alias SOURCE NEW',$file,$line);
+ my($fromsig,$from,$sig,$new)=($1,$2,$3,$4);
+ ($sig eq $fromsig || $fromsig eq '%' && !$sig)
+   or fail('an alias must preserve its symbol category (sigil)',$file,$line);
+ my $key=$sig.$new;
+ $new =~ /^(?:LLSMod_|__lls_|__LLS_|EOF$|LIT_)/ and fail("reserved alias name '$new'",$file,$line);
+ $sig eq '%' && builtin_sigil_type($new) and fail("reserved builtin type '%$new'",$file,$line);
+ exists $unit->{aliases}{$key} and fail("duplicate alias '$key'",$file,$line);
+ $unit->{aliases}{$key}={from=>$from,sigil=>$fromsig,new_sigil=>$sig,name=>$new,file=>$file,line=>$line};
+}
+
+sub alias_scope {
+ my($unit,$name)=@_;$name=module_normalize_name($unit,$name);
+ for my $prefix(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
+  return ($unit->{imports}{$prefix},substr($name,length($prefix)+2)) if index($name,$prefix.'__')==0;
+ }
+ return ($unit,$name);
+}
+
+sub module_bind_aliases {
+ my($unit)=@_;my $aliases=$unit->{aliases}||{};my($bind,$inherit);
+ # A legacy `.type %A = %B` has B's constructors too. Record their names
+ # for module visibility checks, leaving actual type validation to the compiler.
+ $inherit=sub {
+  my($d,$seen)=@_;return unless $d->{type_base} && !$seen->{$d->{name}}++;
+  my($scope,$short)=alias_scope($unit,$d->{type_base});
+  $bind->($aliases->{'%'.$short}) if $scope==$unit && $aliases->{'%'.$short};
+  my $base=$scope->{decls}{"%:$short"} || ($scope==$unit && $scope->{opened}{"%:$short"});
+  if($base && ($scope==$unit || $base->{public})){
+   $inherit->($base,$seen) if $scope==$unit && !$scope->{opened}{"%:$short"};
+   $d->{members}=$base->{members};$d->{constructor}=$base->{constructor};
+  }
+  $d->{constructor}=1 if $scope==$unit && $short =~ /^(?:Unit|Void)$/;
+ };
+ $bind=sub {
+  my($alias)=@_;return if $alias->{bound};
+  my($sig,$src,$new,$file,$line)=@$alias{qw(sigil from name file line)};
+  $alias->{active}++ and fail("cyclic alias '$sig$new'",$file,$line);
+  my $name=module_normalize_name($unit,$src);
+  $name =~ /^LLSMod_/ and fail("reserved module linker name '$name'",$file,$line);
+  my $local=$aliases->{$sig.$name};
+  $local||=$aliases->{($sig eq '&'?'':'&').$name} if !$sig || $sig eq '&';
+  $bind->($local) if $local;
+  my @kinds=$sig ? ($sig eq '&'?'function':$sig) : qw(function meta grammar ir action_op);
+  my($scope,$short)=alias_scope($unit,$src);
+  my @matches;
+  for my $k(@kinds){
+   my $key="$k:$short";my $d=$scope->{decls}{$key};
+   $d||=$scope->{opened}{$key} if $scope==$unit;
+   push @matches,$d if $d && ($scope==$unit || $d->{public});
+  }
+  if(!@matches && ($sig eq '%' || !$sig) && $short =~ /^(\w+)\.(\w+)$/){
+   my($owner,$member)=($1,$2);
+   my $key=($sig eq '%'?'%':'ir').":$owner";
+   $bind->($aliases->{$sig.$owner}) if $scope==$unit && $aliases->{$sig.$owner};
+   my $d=$scope->{decls}{$key} || ($scope==$unit && $scope->{opened}{$key});
+   $inherit->($d,{}) if $d && $scope==$unit && !$scope->{opened}{$key};
+   if($d && ($scope==$unit || $d->{public}) && $d->{members}{$member}){
+    push @matches,{kind=>($sig eq '%'?'%':'action_op'),linked=>$d->{linked}.'.'.$member,constructor=>1};
+   }
+  }
+  if(!@matches && $scope==$unit){
+   push @matches,{kind=>'%',linked=>$name,constructor=>($name eq 'Unit')} if $sig eq '%' && builtin_sigil_type($name);
+   push @matches,{kind=>'grammar',linked=>'EOF'} if !$sig && $name eq 'EOF';
+   push @matches,{kind=>'function',linked=>$name} if !$sig && $name =~ /^(?:len|pop|top|push|emit|print|final_stack_height|reverse|min|max|abs|is_finite|spawn|join|sleep)$/;
+  }
+  @matches or fail("unknown or private alias source '$sig$src'",$file,$line);
+  @matches==1 or fail("ambiguous alias source '$sig$src'",$file,$line);
+  my $d=$matches[0];
+  $inherit->($d,{}) if $scope==$unit && !$scope->{opened}{"%:$short"} && $d->{kind} eq '%';
+  if($sig eq '%' && !$alias->{new_sigil}){
+   $d->{constructor} or fail("alias source '%$src' is not a callable constructor or accessor",$file,$line);
+   $d={%$d,kind=>'action_op',linked=>'%'.$d->{linked}};
+  }
+  my $key="$d->{kind}:$new";
+  if($d->{kind} eq 'function' || $d->{kind} eq 'meta' || $d->{kind} eq 'action_op'){
+   (grep {$unit->{decls}{"$_:$new"} || $unit->{opened}{"$_:$new"}} qw(function meta action_op))
+     and fail("alias '$new' conflicts with a callable declaration",$file,$line);
+   $new =~ /^(?:let|return|if|else|while|for|in|on|require|Throw|grab|from|into|call|discard|end|async|fn|await|true|false|nil|None|len|pop|top|push|emit|print|final_stack_height|reverse|min|max|abs|is_finite|spawn|join|sleep)$/
+     and fail("reserved callable alias '$new'",$file,$line);
+  }
+  ($unit->{decls}{$key} || $unit->{opened}{$key}) and fail("alias '$sig$new' conflicts with a declaration",$file,$line);
+  my $public=exists($unit->{exports}{($alias->{new_sigil} eq '&'?'':$alias->{new_sigil}).$new})
+          || (($unit->{kind}//'') eq 'library' && !keys %{$unit->{exports}});
+  $unit->{decls}{$key}={%$d,name=>$new,public=>$public,file=>$file,line=>$line,alias=>1};
+  delete $unit->{decls}{$key}{type_base};
+  $alias->{bound}=1;
+ };
+ $bind->($aliases->{$_}) for sort keys %$aliases;
+ $inherit->($_,{}) for grep {$_->{type_base}} values %{$unit->{decls}};
 }
 
 sub module_rewrite_text {
@@ -236,19 +410,29 @@ sub module_rewrite_text {
    my $previous=$i-1;$previous-- while $previous>=0 && $tokens->[$previous]{raw}=~/^\s+$/;
    next if $previous>=0 && $tokens->[$previous]{raw} eq 'on'; # branch capture label
   }
-  my($sigil,$bare)=$name =~ /^([\@#!%&]?)(.*)$/;
+   my($sigil,$bare)=$name =~ /^([\@#!%&]?)(.*)$/;
+   $bare=module_normalize_name($unit,$bare);
   my($kind,$suffix)=('','');
   if($mode eq 'grammar'){
    my $next=join('',map {$_->{raw}} @$tokens[$i+1..$#$tokens]);
    next if $next =~ /^\s*:/; # capture labels are not declarations
    $kind='grammar';
-  }elsif($sigil ne ''){$kind=$sigil eq '&'?'function':$sigil}
+   }elsif($sigil eq '%' && $bare =~ /^(\w+)(\.\w+)$/){($bare,$suffix,$kind)=($1,$2,'%')}
+   elsif($sigil ne ''){$kind=$sigil eq '&'?'function':$sigil}
   elsif($bare =~ /^(\w+)(\.\w+)$/){($bare,$suffix)=($1,$2);$kind='ir'}
   elsif($mode eq 'meta'){$kind='meta'}
   else{$kind='callable'}
   my $resolved=module_resolve($unit,$kind,$bare,$file,$line);
-  if(defined $resolved){$t->{raw}=$sigil.$resolved.$suffix}
-  elsif(!$unit->{root} && ($kind eq 'grammar' && $bare ne 'EOF' || $sigil ne '' || $kind eq 'ir')){
+   if(defined $resolved){
+    # Without imports an entry function keeps its original spelling. A
+    # scalar local of that name must not capture a reference via its alias.
+    if($kind eq 'callable' && $unit->{decls}{"function:$bare"} && $unit->{decls}{"function:$bare"}{alias}
+        && $unit->{decls}{"function:$resolved"}){
+     $sigil='&';
+    }
+    $t->{raw}=$sigil.$resolved.$suffix;
+   }
+   elsif(!$unit->{root} && !($kind eq '%' && builtin_sigil_type($bare)) && ($kind eq 'grammar' && $bare ne 'EOF' || $sigil ne '' || $kind eq 'ir')){
    # An unresolved module reference must never bind to an entry-file symbol.
    fail("undeclared ".($kind eq 'grammar'?'grammar symbol':$kind eq 'ir'?'IR namespace':"symbol $sigil")." '$bare' in module '$unit->{name}'",$file,$line);
   }
@@ -282,10 +466,12 @@ sub module_rewrite_types {
  my $tokens=module_lex($text);
  for my $t(@$tokens){
   next unless defined $t->{name};
-  if($t->{name} =~ /^%(\w+)$/){
-   $t->{raw}='%'.(module_resolve($unit,'%',$1,$file,$line)//$1);
-  }elsif($t->{name} =~ /^(\w+)(\.Op)$/){
-   $t->{raw}=(module_resolve($unit,'ir',$1,$file,$line)//$1).$2;
+   if($t->{name} =~ /^%($module_name)$/){
+    my $name=module_normalize_name($unit,$1);
+    $t->{raw}='%'.(module_resolve($unit,'%',$name,$file,$line)//$name);
+   }elsif($t->{name} =~ /^($module_name)\.Op$/){
+    my $name=module_normalize_name($unit,$1);
+    $t->{raw}=(module_resolve($unit,'ir',$name,$file,$line)//$name).'.Op';
   }
  }
  return join('',map {$_->{raw}} @$tokens);
@@ -309,7 +495,7 @@ sub module_rewrite_unit {
  for my $entry(@{$unit->{lines}}){
   my $l=strip_ws($entry->[0]);
   if(!$block){$block=module_block($l);next}
-  if(($block eq 'rule' && $l eq '..') || ($block ne 'rule' && $l eq '.end')){$block='';$facet='';next}
+  if(ends_spec_block($block,$l)){$block='';$facet='';next}
   if($block eq 'rule' && $l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:/){$facet=$1}
   if($block eq 'function'||$block eq 'init'||$block eq 'macro'||($block eq 'rule' && $facet ne 'syntax')){
    (my $action=$entry->[0]) =~ s/^\s*'\w+\s*:\s*//;
@@ -317,13 +503,18 @@ sub module_rewrite_unit {
   }
  }
  %locals=(%locals,%action_locals);$unit->{locals}=\%locals;
- for my $name(sort keys %locals){
+  for my $name(sort keys %locals){
+   if($unit->{opened}{"function:$name"} || $unit->{opened}{"meta:$name"}){
+    fail("local '$name' shadows a plain import; use qualified or as",$unit->{file},1);
+   }
   if(exists($unit->{decls}{"function:$name"}) && $unit->{decls}{"function:$name"}{linked} ne $name){
    fail("module local '$name' shadows a function declaration; use a distinct local name",$unit->{file},1);
   }
   if(exists($unit->{decls}{"meta:$name"}) && $unit->{decls}{"meta:$name"}{linked} ne $name){
    fail("module local '$name' shadows a metaprogram declaration; use a distinct local name",$unit->{file},1);
   }
+  ($unit->{opened}{"action_op:$name"} || $unit->{decls}{"action_op:$name"})
+    and fail("module local '$name' shadows an action operation alias",$unit->{file},1);
   for my $alias(sort keys %{$unit->{imports}}){
    index($name,$alias.'__')==0 and fail("local '$name' conflicts with module alias '$alias'",$unit->{file},1);
   }
@@ -351,22 +542,27 @@ sub module_rewrite_unit {
      $raw=module_rewrite_types($header,$unit,$file,$line).$regex;
     }
     # Only the declared name, not argument names, regexes, or literal payloads.
-    # Types are processed first so source cannot refer to private linker names.
+     # Types are processed first so source cannot refer to private linker names.
+     # The default external C symbol is the original declaration's spelling.
+     if($l =~ /^\.extern\s+c\b/ && $d->{linked} ne $name && $raw !~ /\bsymbol\s+"[A-Za-z_]\w*"\s*$/){
+      $raw.=' symbol "'.$name.'"';
+     }
     $raw =~ s/^(\s*\.(?:async\s+function|extern\s+c|\w+)\s+[\@#!%]?)\Q$name\E\b/$1$d->{linked}/;
-   }elsif($l =~ /^\.start\s+(?:"(\w+)"|(\w+))\s*$/){
-    my $name=$1//$2;
+   }elsif($l =~ /^\.start\s+(?:"($module_name)"|($module_name))\s*$/){
+    my $name=module_normalize_name($unit,$1//$2);
     $raw='.start '.(module_resolve($unit,'grammar',$name,$file,$line)//$name);
    }elsif($l =~ /^\.precedence\s+(left|right|nonassoc)\s+(.+)$/){
     $raw=".precedence $1 ".module_rewrite_text($2,$unit,'grammar',$file,$line);
-   }elsif($l =~ /^\.rewrite\s+(\w+)\s*:\s*(\w+)\s*$/){
-    my($name,$ir)=($1,$2);
+   }elsif($l =~ /^\.rewrite\s+(\w+)\s*:\s*($module_name)\s*$/){
+    my($name,$ir)=($1,module_normalize_name($unit,$2));
     $name=module_prefix($unit).$name unless $unit->{root};
     $raw=".rewrite $name: ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
-   }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+(\w+)\s*$/){
-    $raw=".backend $1 for ".(module_resolve($unit,'ir',$2,$file,$line)//$2);
+   }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+($module_name)\s*$/){
+    my($target,$ir)=($1,module_normalize_name($unit,$2));
+    $raw=".backend $target for ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
    }
    $block=module_block($l);
-  }elsif(($block eq 'rule' && $l eq '..') || ($block ne 'rule' && $l eq '.end')){
+   }elsif(ends_spec_block($block,$l)){
    $block='';$facet='';
   }elsif($block eq 'rule'){
    if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/){
@@ -375,7 +571,7 @@ sub module_rewrite_unit {
    elsif($facet){$raw=module_rewrite_text($raw,$unit,$facet eq 'syntax'?'grammar':'action',$file,$line)}
    }elsif($block eq 'function' || $block eq 'init' || $block eq 'macro'){
    $raw=module_rewrite_text($raw,$unit,'action',$file,$line);
-  }elsif($block eq 'ir'){
+   }elsif($block eq 'ir' || $block eq 'sumtype' || $block eq 'prodtype'){
    $raw=module_rewrite_types($raw,$unit,$file,$line);
   }elsif($block eq 'rewrite' && $l =~ /^\.when\s+(.+)$/){
    $raw='.when '.module_rewrite_text($1,$unit,'action',$file,$line);

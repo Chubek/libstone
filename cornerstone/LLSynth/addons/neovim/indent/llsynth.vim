@@ -44,7 +44,7 @@ function! GetLLSynthIndent(lnum) abort
   endif
 
   " The first content line after any block or facet starts one level deeper.
-  if l:prev =~# '^\s*\.\%(rule\|ir\|rewrite\|backend\|analysis\|pipeline\|init\|macro\|function\|async\)\>'
+  if l:prev =~# '^\s*\.\%(rule\|sumtype\|prodtype\|ir\|isel\|rewrite\|backend\|analysis\|pipeline\|init\|macro\|function\|async\)\>'
     return l:sw
   endif
   if l:prev =~# "^\s*'\%(syntax\|semantics\|lower\|analyze\|emit\)\s*:"

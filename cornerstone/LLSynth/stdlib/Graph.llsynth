@@ -1,0 +1,31 @@
+.library "std.Graph"
+.summary "Breadth-first distances and reachability on adjacency lists"
+.export distances, reachable
+
+.exception !BadVertex(vertex: Int) "vertex {vertex} is outside the graph"
+
+.function distances(edges: Vec<Vec<Int>>, source: Int) -> Vec<Int>
+require source >= 0 && source < len(edges) else Throw(!BadVertex, source);
+let result: Vec<Int> = [];
+for row in edges { push(result, -1); }
+result[source] = 0;
+let queue = [source];
+let cursor = 0;
+while cursor < len(queue) {
+    let u = queue[cursor];
+    cursor = cursor + 1;
+    for v in edges[u] {
+        require v >= 0 && v < len(edges) else Throw(!BadVertex, v);
+        if result[v] < 0 {
+            result[v] = result[u] + 1;
+            push(queue, v);
+        }
+    }
+}
+return result;
+.end
+
+.function reachable(edges: Vec<Vec<Int>>, source: Int, target: Int) -> Bool
+require target >= 0 && target < len(edges) else Throw(!BadVertex, target);
+return distances(edges, source)[target] >= 0;
+.end

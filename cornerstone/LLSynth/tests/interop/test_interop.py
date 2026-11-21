@@ -32,7 +32,7 @@ def run(args, cwd, data=None, success=True):
 def specification(declarations, action, syntax="EOF"):
     return ('.language "Interop"\n' + declarations + '\n'
             '.exception !Bad "bad native result"\n'
-            '.rule Start\n\'syntax: ' + syntax + "\n'semantics: " + action + "\n..\n")
+            '.rule Start\n\'syntax: ' + syntax + "\n'semantics: " + action + "\n.end\n")
 
 
 class InteropTests(unittest.TestCase):

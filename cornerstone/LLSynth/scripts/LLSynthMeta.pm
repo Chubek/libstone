@@ -190,6 +190,7 @@ sub meta_prepare {
  $globals{'#'.$_->{name}}='table' for @{$s->{tables}};
  $globals{'!'.$_->{name}}='exception' for @{$s->{exceptions}};
  $globals{$_}='operation' for keys %{$s->{op_by_name}};
+ $globals{$_}='operation' for keys %{$s->{type_ops}};
  $s->{meta_globals}=\%globals;$s->{meta_defs}={};
  for my $d(@{$s->{metaprograms}}){
   my $c=meta_context($s,$d);

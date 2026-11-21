@@ -32,7 +32,7 @@ class DriverTests(unittest.TestCase):
 'syntax: value:NUMBER EOF
 'semantics: return $value;
 'lower: return [Stack.PUSH_F64($value)];
-..
+.end
 """,
             encoding="utf-8",
         )
@@ -86,7 +86,7 @@ class DriverTests(unittest.TestCase):
 
     def test_compiler_reads_cli_options(self):
         with self.syntax.open("a", encoding="utf-8") as source:
-            source.write(".rule Unused\n'syntax: NUMBER\n..\n")
+            source.write(".rule Unused\n'syntax: NUMBER\n.end\n")
         result = self.generate("--check")
         self.assertIn("warning W001: unreachable rule Unused", result.stderr)
         result = self.generate("--check", "--warnings-as-errors", code=1)

@@ -1,0 +1,40 @@
+.library "std.LinearAlgebra"
+.summary "Checked integer dot products, matrix-vector multiplication and transpose"
+.export dot, matvec, transpose
+
+.exception !Shape "incompatible dimensions"
+
+.function dot(a: Vec<Int>, b: Vec<Int>) -> Int
+require len(a) == len(b) else Throw(!Shape);
+let result = 0;
+let i = 0;
+while i < len(a) {
+    result = result + a[i] * b[i];
+    i = i + 1;
+}
+return result;
+.end
+
+.function matvec(rows: Vec<Vec<Int>>, vector: Vec<Int>) -> Vec<Int>
+let result: Vec<Int> = [];
+for row in rows { push(result, dot(row, vector)); }
+return result;
+.end
+
+.function transpose(rows: Vec<Vec<Int>>) -> Vec<Vec<Int>>
+let result: Vec<Vec<Int>> = [];
+if len(rows) == 0 { return result; }
+for value in rows[0] {
+    let column: Vec<Int> = [];
+    push(result, column);
+}
+for row in rows {
+    require len(row) == len(result) else Throw(!Shape);
+    let i = 0;
+    for value in row {
+        push(result[i], value);
+        i = i + 1;
+    }
+}
+return result;
+.end

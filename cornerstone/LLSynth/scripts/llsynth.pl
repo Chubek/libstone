@@ -15,11 +15,12 @@ use Encode ();
 use POSIX ();
 use Digest::SHA qw(sha256_hex);
 our $VERSION = '0.7.0';
-our %opt=(T=>'python3', mode=>'both', split=>'explicit', diagnostics=>'text', parser=>'', program_target=>'c99', out_dir=>'.', driver_mode=>'cli');
+our %opt=(T=>'python3', split=>'explicit', diagnostics=>'text', parser=>'', program_target=>'c99', out_dir=>'.', driver_mode=>'cli');
 our @include_paths;
 our @module_paths;
-my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm LLSynthMeta.pm LLSynthModules.pm);
+my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm LLSynthMeta.pm LLSynthModules.pm LLSynthCompanions.pm);
 require $_ for @generator_modules;
+my (@extensions, @extension_paths);
 
 GetOptions('T|tool-target=s'=>\$opt{T},'o|output=s'=>\$opt{output},'h|header=s'=>\$opt{header},
   'mode=s'=>\$opt{mode},'program-target=s'=>\$opt{program_target},'parser=s'=>\$opt{parser},
@@ -32,14 +33,25 @@ GetOptions('T|tool-target=s'=>\$opt{T},'o|output=s'=>\$opt{output},'h|header=s'=
   'warnings-as-errors'=>\$opt{warnings_as_errors}, 'include-path=s@'=>\@include_paths, 'module-path=s@'=>\@module_paths,
   'module-prefix=s'=>\$opt{module_prefix},'driver-mode=s'=>\$opt{driver_mode},'deterministic'=>\$opt{deterministic},
   'trace-parser'=>\$opt{trace_parser},'max-errors=i'=>\$opt{max_errors},
+  'list-extensions'=>\$opt{list_extensions},'extension=s@'=>\@extensions,'extension-path=s@'=>\@extension_paths,
   'depfile=s'=>\$opt{depfile},'emit-table-format=s'=>\$opt{table_format}) or usage(2);
 if($opt{help}){usage(0)}
 if($opt{version}){print "llsynth.pl $VERSION\n"; exit 0}
-@ARGV==1 or usage(2);
-my $input=$ARGV[0];
+($opt{list_extensions} ? !@ARGV && !@extensions : @ARGV==1) or usage(2);
+my $input=$ARGV[0] // '<command line>';
+$opt{mode} //= @extensions ? 'analyze' : 'both';
 my $json=JSON::PP->new->utf8->canonical->allow_nonref;
 my $spec;
 eval {
+my $modules;
+if($opt{list_extensions} || @extensions){
+  my $helper="$RealBin/LLSynthExtensions.pm";
+  require $helper;
+  $modules=LLSynthExtensions::discover("$RealBin/../extensions",@extension_paths);
+  if($opt{list_extensions}){print "$_\n" for sort keys %$modules;exit 0}
+  exists $modules->{$_} or die "unknown extension '$_' (see --list-extensions)\n" for @extensions;
+  push @generator_modules,$helper,values %$modules;
+}
 $opt{T}=lc $opt{T};
 $opt{T}= 'python3' if $opt{T} eq 'python';
 ($opt{T} =~ /^(?:python3|c99|c11|cpp17|cpp20)$/) or die "E001 unsupported tool target '$opt{T}'\n";
@@ -56,6 +68,14 @@ defined($opt{max_errors}) && $opt{max_errors} != 1 && die "E010 this release rep
 $opt{table_format} && $opt{table_format} ne 'source' && die "E011 custom table formats are not implemented\n";
 
   $spec=parse_spec($input);$spec->{trace_parser}=$opt{trace_parser}?1:0;
+  if(@extensions){
+    my %dependencies=map {$_->{path}=>$_} @{$spec->{dependencies}};
+    for my $name(@extensions){
+      my $path=canonical_path($modules->{$name});
+      $dependencies{$path}={path=>$path,sha256=>sha256_hex(slurp($path))};
+    }
+    $spec->{dependencies}=[map {$dependencies{$_}} sort keys %dependencies];
+  }
   validate_declarations($spec);
   my $p=$opt{parser}||$spec->{options}{parser}||'lalr1';
   $p =~ /^(?:lalr1|lr1)$/ or fail("unsupported parser '$p'", $input,0);
@@ -81,12 +101,14 @@ if(defined $opt{dump_tables}){
 }
 if($opt{check}){ print STDERR "OK: $spec->{language} (".scalar(@{$spec->{productions}})." productions, ".scalar(@{$spec->{actions}})." parser states)\n";exit 0 }
 my @outputs;
-if($opt{T} eq 'python3') { @outputs=generate_python($spec,\%opt,$json) }
+if(@extensions) { @outputs=LLSynthExtensions::generate($modules,\@extensions,$spec,\%opt) }
+elsif($opt{T} eq 'python3') { @outputs=generate_python($spec,\%opt,$json) }
 else { @outputs=generate_c($spec,\%opt,$json) }
 if($opt{manifest}) {
   my $manifest={generator=>'llsynth.pl',version=>$VERSION,language=>$spec->{language},
     dependencies=>$spec->{dependencies},source=>$input, source_sha256=>sha256_hex(slurp($input)), options=>{map { $_=>$opt{$_} } grep {defined $opt{$_} && !ref($opt{$_})} sort keys %opt},
     outputs=>[map { {path=>$_,sha256=>sha256_hex(slurp($_))} } @outputs]};
+  $manifest->{options}{extensions}=[@extensions] if @extensions;
   my $path=outpath($opt{manifest});write_file($path,$json->pretty->encode($manifest));push @outputs,$path;
 }
 if($opt{depfile}) {my $dst=outpath($opt{depfile});my $target=$outputs[0]||'llsynth';write_file($dst,make_escape($target).": ".join(" ",map {make_escape($_->{path})} @{$spec->{dependencies}})."\n");push @outputs,$dst}
@@ -133,6 +155,9 @@ Usage: llsynth.pl [options] FILE.llsynth
   --rewriter FILE            optional rewrite implementation
   --split none|explicit|facets|all layout of generated C/C++ outputs
   --check                    validate and exit
+  --list-extensions          list available Perl extensions (no input file)
+  --extension NAME           generate extension artifacts (repeatable)
+  --extension-path DIR       discover additional Perl extensions (repeatable)
   --dump-tables[=FILE]       show generated parser tables
   --dump-grammar[=FILE]      show expanded grammar
   --out-dir DIR              directory for emitted files
@@ -265,6 +290,12 @@ class Node:
 class Operation:
     name: str
     args: tuple[Any, ...] = ()
+
+@dataclass(frozen=True)
+class DataValue:
+    owner: str
+    tag: str
+    fields: tuple[Any, ...]
 
 @dataclass
 class FunctionRef:
@@ -555,6 +586,7 @@ class Context:
             if name.startswith('#'): return self.tables[name[1:]]
             if name.startswith('$'): return self.capture(name[1:], caps)
             if name.startswith('&'): return FunctionRef(name[1:])
+            if name in SPEC['type_ops']: return FunctionRef(name)
             if name.startswith('t\''): return env[name]
             if name == 'true': return True
             if name == 'false': return False
@@ -626,6 +658,18 @@ class Context:
         if value.generation is not self.budget: raise LanguageError('TASK', 'task belongs to another execution')
         return value
     def invoke(self, callee, args, run_async=False):
+        if isinstance(callee, FunctionRef) and callee.name in SPEC['type_ops']:
+            op = SPEC['type_ops'][callee.name]
+            if len(args) != len(op['params']):
+                raise LanguageError('SEM', f"{callee.name} expects {len(op['params'])} arguments")
+            if op['action'] == 'unit': return None
+            if op['action'] == 'make': return DataValue(op['owner'], op['tag'], tuple(args))
+            data = args[0]
+            if not isinstance(data, DataValue) or data.owner != op['owner']:
+                raise LanguageError('SEM', f"expected a value of {op['owner']}")
+            if op['action'] == 'is': return data.tag == op['tag']
+            if data.tag != op['tag']: raise LanguageError('SEM', f"expected {op['tag']}, got {data.tag}")
+            return data.fields[op['index']]
         if isinstance(callee, Closure):
             if callee.owner is not self or callee.generation is not self.budget:
                 raise LanguageError('SEM', 'closure belongs to another context or execution')
@@ -1148,7 +1192,7 @@ typedef struct Context Context;
 static void *ca(Context *c,size_t n);
 typedef struct Vec Vec; typedef struct Map Map;typedef struct Op Op;typedef struct Val Val;
 struct Val {int tag;int64_t i;double n;const char *s;Vec *vec;Map *map;Op *op;};
-enum {VNIL,VNUM,VINT,VBOOL,VSTR,VVEC,VMAP,VFN,VOP,VBUILTIN};
+enum {VNIL,VNUM,VINT,VBOOL,VSTR,VVEC,VMAP,VFN,VOP,VBUILTIN,VDATA};
 struct Vec {int n,cap;Val *a;};
 struct Map {int n,cap;const char **keys;Val *values;};
 struct Op {const char *name;Vec *args;};
@@ -1323,17 +1367,33 @@ static int eq_val(Val a,Val b){if((a.tag==VINT||a.tag==VBOOL)&&(b.tag==VINT||b.t
  if(a.tag!=b.tag)return 0;
  if(a.tag==VVEC){if(a.vec->n!=b.vec->n)return 0;for(int i=0;i<a.vec->n;i++)if(!eq_val(a.vec->a[i],b.vec->a[i]))return 0;return 1;}
  if(a.tag==VMAP){if(a.map->n!=b.map->n)return 0;for(int i=0;i<a.map->n;i++){if(!map_has(b.map,a.map->keys[i])||!eq_val(a.map->values[i],map_get(b.map,a.map->keys[i])))return 0;}return 1;}
- if(a.tag==VOP){if(strcmp(a.op->name,b.op->name))return 0;return eq_val(vvec(a.op->args),vvec(b.op->args));}
+ if(a.tag==VOP||a.tag==VDATA){if(strcmp(a.op->name,b.op->name))return 0;return eq_val(vvec(a.op->args),vvec(b.op->args));}
  return a.tag==b.tag&&strcmp(a.s?a.s:"",b.s?b.s:"")==0;}
 static double number(Val v){return v.tag==VNUM?v.n:(v.tag==VINT||v.tag==VBOOL)?(double)v.i:0;}
 @@INTEROP_C@@
 
 static Val eval_call(Context *c,Val callee,Vec *args){Val nil=LLS_ZERO;const char *name=callee.s?callee.s:"";
  if(callee.tag==VOP){Op *p=(Op*)ca(c,sizeof(Op));p->name=callee.op->name;p->args=args;return vop(p);}
+ if(callee.tag==VFN && name[0]=='%'){
+  Json *op=jo(jo(lls_spec(c),"type_ops"),name);
+  if(!op||args->n!=jlen(jo(op,"params"))){error(c,"SEM: wrong arity for %s",name);return nil;}
+  const char *action=jg(op,"action");if(!strcmp(action,"unit"))return nil;
+  const char *tag=jg(op,"tag"),*owner=jg(op,"owner");
+  if(!strcmp(action,"make")){
+   Op *p=(Op*)ca(c,sizeof(Op));p->name=tag;p->args=args;
+   Val result=vop(p);result.tag=VDATA;result.s=owner;return result;
+  }
+  Val data=args->a[0];if(data.tag!=VDATA||strcmp(data.s,owner)){error(c,"SEM: expected a value of %s",owner);return nil;}
+  int match=!strcmp(data.op->name,tag);
+  if(!strcmp(action,"is"))return vbool(match);
+  if(!match){error(c,"SEM: expected %s, got %s",tag,data.op->name);return nil;}
+  return data.op->args->a[(int)jnumber(jo(op,"index"))];
+ }
  if(callee.tag==VFN){Json *functions=jo(lls_spec(c),"functions");for(int i=0;i<jlen(functions);i++){Json *f=ji(functions,i);if(strcmp(jg(f,"name"),name))continue;
    if(*jg(f,"foreign"))return interop_call(c,f,args);
-   Map *env=new_map(c),*caps=new_map(c);char *ar=dup_n(c,jg(f,"args"),strlen(jg(f,"args")));char *cur=ar;int x=0;
-   while(*cur && x<args->n){char *end=strchr(cur,',');if(end)*end=0;char *colon=strchr(cur,':');if(colon)*colon=0;while(*cur==' ')cur++;map_put(c,env,dup_n(c,cur,strlen(cur)),args->a[x++]);if(!end)break;cur=end+1;}
+   Map *env=new_map(c),*caps=new_map(c);Json *params=jo(f,"parameters");
+   if(args->n!=jlen(params)){error(c,"SEM: wrong arity for %s",name);return nil;}
+   for(int x=0;x<args->n;x++)map_put(c,env,jg(ji(params,x),"name"),args->a[x]);
    Val result=LLS_ZERO;if(c->depth>=128){error(c,"RESOURCE: function recursion limit exceeded");return result;}c->depth++;exec_block(c,jo(f,"code"),env,caps,&result);c->depth--;return result;
   }error(c,"SEM: unknown function %s",name);return nil;
  }
@@ -1356,7 +1416,8 @@ static Val eval(Context *c,Json *e,Map *env,Map *caps){Val nil=LLS_ZERO;if(!e||c
  if(strcmp(kind,"name")==0){const char *name=jg(e,"v");if(name[0]=='@')return map_get(c->states,name+1);
   if(name[0]=='#')return map_get(c->tables,name+1);
   if(name[0]=='$'){if(!map_has(caps,name+1))error(c,"SEM: unbound capture %s",name);return map_get(caps,name+1);}
-  if(name[0]=='&')return vtag(VFN,name+1);
+   if(name[0]=='&')return vtag(VFN,name+1);
+   if(name[0]=='%')return vtag(VFN,name);
   if(strcmp(name,"true")==0)return vbool(1);
   if(strcmp(name,"false")==0)return vbool(0);
   if(strcmp(name,"nil")==0||strcmp(name,"None")==0)return nil;

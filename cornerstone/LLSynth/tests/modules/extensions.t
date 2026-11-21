@@ -51,7 +51,7 @@ return L__invoke(x);
 .rule Start
 'syntax: EOF
 'semantics: return L__double(&L__cfun(1));
-..
+.end
 SPEC
 my %deps;
 my @lines = read_module_spec_lines($main, \%deps);

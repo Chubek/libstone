@@ -26,7 +26,7 @@ class ExecutionTests(unittest.TestCase):
             '.language "Execution"\n.token N: Int = /[0-9]+/\n'
             + declarations
             + "\n.rule Start\n'syntax: n:N EOF\n'semantics:\n"
-            + action + "\n..\n", encoding="utf-8")
+            + action + "\n.end\n", encoding="utf-8")
         return path
 
     def generate(self, action, declarations="", *, error=None, target="python3", check=False):

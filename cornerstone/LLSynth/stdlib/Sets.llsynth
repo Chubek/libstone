@@ -1,0 +1,27 @@
+.library "std.Sets"
+.summary "Order-preserving set operations on integer vectors"
+.export unique, union, intersection
+
+.function unique(items: Vec<Int>) -> Vec<Int>
+let result: Vec<Int> = [];
+for item in items {
+    if !(item in result) { push(result, item); }
+}
+return result;
+.end
+
+.function union(left: Vec<Int>, right: Vec<Int>) -> Vec<Int>
+let result = unique(left);
+for item in right {
+    if !(item in result) { push(result, item); }
+}
+return result;
+.end
+
+.function intersection(left: Vec<Int>, right: Vec<Int>) -> Vec<Int>
+let result: Vec<Int> = [];
+for item in left {
+    if item in right && !(item in result) { push(result, item); }
+}
+return result;
+.end

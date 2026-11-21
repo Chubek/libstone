@@ -1,0 +1,27 @@
+.library "std.Search"
+.summary "Binary searches for insertion points and duplicate runs"
+.export lowerBound, upperBound, equalRange
+
+.function lowerBound(items: Vec<Int>, key: Int) -> Int
+let lo = 0;
+let hi = len(items);
+while lo < hi {
+    let mid = lo + (hi - lo) / 2;
+    if items[mid] < key { lo = mid + 1; } else { hi = mid; }
+}
+return lo;
+.end
+
+.function upperBound(items: Vec<Int>, key: Int) -> Int
+let lo = 0;
+let hi = len(items);
+while lo < hi {
+    let mid = lo + (hi - lo) / 2;
+    if items[mid] <= key { lo = mid + 1; } else { hi = mid; }
+}
+return lo;
+.end
+
+.function equalRange(items: Vec<Int>, key: Int) -> Vec<Int>
+return [lowerBound(items, key), upperBound(items, key)];
+.end

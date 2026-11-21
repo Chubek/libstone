@@ -10,4 +10,4 @@
 'semantics:
   let answer: Int = $value + 1;
   return answer;
-..
+.end

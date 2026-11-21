@@ -1,0 +1,21 @@
+.language "Double"
+.import "Numbers" as N
+.alias %N__Number %Box
+.skip /[ \t\n]+/
+.token INTEGER: Int = /[0-9]+/
+
+.rule Start
+'syntax: result:Present | result:Empty
+'semantics:
+    return N__foldNumber($result, 0, fn(x: %Int) -> %Int { return x + x; });
+.end
+
+.rule Present
+'syntax: n:INTEGER EOF
+'semantics: return %N__Parsed.Present(%Box($n));
+.end
+
+.rule Empty
+'syntax: EOF
+'semantics: return %N__Parsed.Empty(%Unit());
+.end

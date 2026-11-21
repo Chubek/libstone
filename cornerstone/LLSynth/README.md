@@ -25,7 +25,7 @@ For those examples, save this as `tiny.llsynth`:
 .rule Start
 'syntax: value:NUMBER EOF
 'semantics: return $value;
-..
+.end
 ```
 
 The last command prints `42`. To generate and build a C version instead:
@@ -44,11 +44,26 @@ with only a semantics facet, as above.
 
 ## Language facilities
 
+Close every specification declaration block with `.end` on its own line.
+Rule facets run up to the next facet or the end of the rule. Existing rules
+using `..` to close the rule or `'end` to finish a facet are still accepted.
+
 * [C11 and Sandstone interoperability](docs/interop.md): typed C ABI
   imports and assembly-to-bytes through Sandstone's CLI (Python) or SDK (C).
-* [Modules, loaders, and imports](docs/modules.md): private-by-default
-  specification modules, explicit exports, import-once loading, and
-  repeatable `--module-path` search roots.
+* [Libraries, companions, and imports](docs/modules.md): declare a `.library`
+  in LLSynth, use `.extern` to load Perl or C companions, and import exports
+  directly, qualified, or under an alias. Legacy `.module` files remain
+  private by default.
+* [Types and aliases](docs/types.md): product fields, sum variants, curried
+  callables, and symbol aliases. The [Double example](examples/typed/double.llsynth)
+  uses a [typed library](examples/typed/Numbers.llsynth) to distinguish a
+  parsed number from empty input.
+* [Generator extensions](docs/extensions.md): emit Vim support files and
+  typeset specifications with Perl extensions.
+* [Bundled standard libraries](docs/stdlib.md): import `std.Functional`,
+  `std.Collections`, `std.Parsec`, and other libraries from your specification.
+* [Instruction selection](docs/isel.md): import `std.ISel` to select Sandstone
+  ArchML instruction forms and emit `.insn` assembly for a legalized IR.
 * [Closures, async functions, and concurrency](docs/execution.md): lexical
   closures, lazy tasks, spawning, and joining with isolated task snapshots.
   These execution features currently require the Python tool target.
@@ -58,12 +73,10 @@ with only a semantics facet, as above.
 
 ## Generator layout
 
-`scripts/llsynth.pl` is the driver in this directory. Keep
-`scripts/LLSynthCompiler.pm`, `scripts/LLSynthEmit.pm`,
-`scripts/LLSynthMeta.pm`, and `scripts/LLSynthModules.pm` beside it when moving
-or installing the generator. It resolves those modules relative to the real
-driver path, not the working directory. The repository-root
-`scripts/llsynth.pl` is the compatibility entry point.
+`scripts/llsynth.pl` is the driver in this directory. When moving or installing
+it, copy the entire `scripts/` directory and its sibling `stdlib/` and
+`extensions/` directories. The driver resolves its modules relative to its real
+path. The repository-root `scripts/llsynth.pl` is the compatibility entry point.
 
 The driver owns CLI handling, diagnostics, output writing, and the embedded
 Python and C runtime templates. The compiler module parses, compiles and
@@ -72,8 +85,9 @@ The metaprogramming module expands templates and hygienic macros.
 The modules helper loads and links imported specification declarations.
 The modules are internal implementation files, not a public Perl API.
 
-The generator uses Perl and its core modules; it doesn't invoke a compiler or
-Python itself. Generated files do not need Perl or the generator's sibling
+Pure LLSynth specifications require only Perl and core modules for generation.
+See [library companions](docs/modules.md) for the additional dependencies when
+loading C through Perl FFI. Generated files do not need the generator's Perl
 modules. Split C/C++ output does need its generated companion files.
 Specifications opting into native imports or assembly also require their
 declared libraries or Sandstone installation at build/runtime, as documented

@@ -1,0 +1,31 @@
+.library "std.Bytes"
+.summary "Encode and read unsigned 32-bit little-endian fields"
+.export writeU32LE, readU32LE
+
+.exception !Range "integer is outside the unsigned 32-bit range"
+.exception !Truncated "expected four input bytes at the cursor"
+.exception !BadByte(value: Int) "invalid byte {value}"
+
+.function writeU32LE(value: Int) -> Vec<Int>
+require value >= 0 && value <= 4294967295 else Throw(!Range);
+let bytes: Vec<Int> = [];
+while len(bytes) < 4 {
+    let q = value / 256;
+    push(bytes, value - q * 256);
+    value = q;
+}
+return bytes;
+.end
+
+.function readU32LE(bytes: Vec<Int>, offset: Int) -> Int
+require offset >= 0 && offset <= len(bytes) - 4 else Throw(!Truncated);
+let result = 0;
+let i = offset + 4;
+while i > offset {
+    i = i - 1;
+    let byte = bytes[i];
+    require byte >= 0 && byte <= 255 else Throw(!BadByte, byte);
+    result = result * 256 + byte;
+}
+return result;
+.end

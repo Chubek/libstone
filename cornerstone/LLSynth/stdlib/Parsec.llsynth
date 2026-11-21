@@ -1,0 +1,52 @@
+.library "std.Parsec"
+.summary "Composable recognizers over a vector of string tokens"
+.export %Parser, token, satisfy, then, choice, many, complete
+
+# Success returns the next cursor; failure is -1. Parsers do not own a cursor.
+.type %Parser = Fn(Vec<String>,Int)->Int
+
+.function token(wanted: String) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at >= 0 && at < len(tokens) && tokens[at] == wanted { return at + 1; }
+    return -1;
+};
+.end
+
+.function satisfy(accept: Fn(String)->Bool) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at >= 0 && at < len(tokens) && accept(tokens[at]) { return at + 1; }
+    return -1;
+};
+.end
+
+.function then(first: %Parser, second: %Parser) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    let next = first(tokens, at);
+    if next < 0 { return -1; }
+    return second(tokens, next);
+};
+.end
+
+.function choice(first: %Parser, second: %Parser) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    let next = first(tokens, at);
+    if next >= 0 { return next; }
+    return second(tokens, at);
+};
+.end
+
+.function many(parser: %Parser) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at > len(tokens) { return -1; }
+    while at < len(tokens) {
+        let next = parser(tokens, at);
+        if next <= at { return at; }
+        at = next;
+    }
+    return at;
+};
+.end
+
+.function complete(parser: %Parser, tokens: Vec<String>) -> Bool
+return parser(tokens, 0) == len(tokens);
+.end

@@ -1,0 +1,19 @@
+.library "Numbers"
+.summary "A parsed integer or an empty input"
+.export %Number, %Parsed, foldNumber
+
+.prodtype %Number
+    value: %Int
+.end
+
+.sumtype %Parsed
+    Present: %Number
+    Empty: %Unit
+.end
+
+.function foldNumber(parsed: %Parsed, fallback: %Int, visit: %Callable[%Int -> %Int]) -> %Int
+    if %Parsed.is_Present(parsed) {
+        return visit(%Number.value(%Parsed.get_Present(parsed)));
+    }
+    return fallback;
+.end

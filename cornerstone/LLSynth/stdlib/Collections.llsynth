@@ -1,0 +1,25 @@
+.library "std.Collections"
+.summary "Slices, concatenation and flattening for integer vectors"
+.export slice, concat, flatten
+
+.function slice(items: Vec<Int>, start: Int, stop: Int) -> Vec<Int>
+let result: Vec<Int> = [];
+let i = max(0, start);
+while i < min(stop, len(items)) {
+    push(result, items[i]);
+    i = i + 1;
+}
+return result;
+.end
+
+.function flatten(rows: Vec<Vec<Int>>) -> Vec<Int>
+let result: Vec<Int> = [];
+for row in rows {
+    for item in row { push(result, item); }
+}
+return result;
+.end
+
+.function concat(left: Vec<Int>, right: Vec<Int>) -> Vec<Int>
+return flatten([left, right]);
+.end

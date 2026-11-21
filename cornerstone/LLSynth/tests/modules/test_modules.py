@@ -56,7 +56,7 @@ return helper(x);
 .rule Number
 'syntax: Number:NUMBER
 'semantics: return &value($Number);
-..
+.end
 """)
         self.write("tokens.inc", ".token NUMBER: Int = /[0-9]+/\n")
         self.write("main.llsynth", r""".language "Modules"
@@ -64,7 +64,7 @@ return helper(x);
 .rule Start
 'syntax: n:W__Number EOF
 'semantics: return &W__value($n) + @W__count;
-..
+.end
 """)
 
     def test_python_and_c_are_self_contained(self):
@@ -138,13 +138,13 @@ return x + 100;
         self.assertEqual(diag["location"]["line"], 6)
 
     def test_named_loading_local_precedence_and_ordered_paths(self):
-        self.write("first/Lib/Words.llsynth", ".module Lib.Words\n.export Word\n.rule Word\n'syntax: \"ok\"\n..\n")
+        self.write("first/Lib/Words.llsynth", ".module Lib.Words\n.export Word\n.rule Word\n'syntax: \"ok\"\n.end\n")
         self.write("second/Lib/Words.llsynth", ".wrong\n")
         self.write("main.llsynth", """.import Lib.Words
 .rule Start
 'syntax: Words__Word EOF
 'semantics: return 1;
-..
+.end
 """)
         self.generate("--check", "--module-path", self.work / "missing",
                       "--module-path", self.work / "first",
@@ -208,7 +208,7 @@ return x + 100;
 .rule Start
 'syntax: T EOF
 'semantics: return 1;
-..
+.end
 """)
         self.assertIn("duplicate tokens declaration", self.generate("--check", code=1).stderr)
 
@@ -235,7 +235,7 @@ return x + 100;
 'syntax: n:NUMBER EOF
 'semantics: return $n;
 'lower: return [S__Ops.PUSH_F64($n)];
-..
+.end
 """)
         self.run_command("perl", self.driver, "--mode=both", "-o", "tool.py", self.root)
         self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="42").stdout, "42\n")
@@ -250,13 +250,13 @@ return "helper @count W__missing"; // helper
 .rule Word
 'syntax: w:WORD
 'semantics: return &helper($w);
-..
+.end
 """)
         self.write("main.llsynth", """.import "words.llsynth" as W
 .rule Start
 'syntax: w:W__Word EOF
 'semantics: return $w;
-..
+.end
 """)
         self.generate("-o", "tool.py")
         self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="helper").stdout,
@@ -276,7 +276,7 @@ return "helper @count W__missing"; // helper
 .rule Word
 'syntax: RootToken
 'semantics: return &entry();
-..
+.end
 """)
         self.write("main.llsynth", """.import "words.llsynth" as W
 .token RootToken = /x/
@@ -286,7 +286,7 @@ return 1;
 .rule Start
 'syntax: w:W__Word EOF
 'semantics: return $w;
-..
+.end
 """)
         self.assertNotEqual(self.generate("--check", code=1).returncode, 0)
 
@@ -304,7 +304,7 @@ return 99;
 .rule Start
 'syntax: "x" EOF
 'semantics: return &W__value();
-..
+.end
 """)
         self.assertIn("undeclared variable 'entry'", self.generate("--check", code=1).stderr)
         # Root functions still resolve correctly when specifications import modules.
@@ -344,7 +344,7 @@ return &L__get();
 'semantics:
 require @L__count == 1 else Throw(!L__Bad, "count");
 return value() + #L__symbols["answer"];
-..
+.end
 """)
         for target, filename in (("python3", "tool.py"), ("c99", "tool.c")):
             self.generate("-T", target, "-o", filename)
@@ -376,7 +376,7 @@ return Ops.VALUE(x);
 'syntax: n:NUMBER EOF
 'semantics: return $n;
 'lower: return [&S__make($n)];
-..
+.end
 """)
         self.run_command("perl", self.driver, "--mode=both", "--program-target=python3",
                          "-o", "tool.py", self.root)
@@ -395,7 +395,7 @@ return Ops.VALUE(x);
 .rule Start
 'syntax: "ok" EOF
 'semantics: return 7;
-..
+.end
 """)
         self.write("main.llsynth", '.import "entry.llsynth"\n.start "Entry__Start"\n')
         self.generate("-o", "tool.py")
@@ -421,13 +421,13 @@ return Ops.VALUE(x);
 .type %Secret = Int
 .rule Number
 'syntax: "x"
-..
+.end
 """)
         prefix = "LLSMod_" + hashlib.sha256(b"module:Words").hexdigest()[:24] + "_"
         self.root.write_text(
             '.import "words.llsynth" as W\n'
             f".function leak(x: %{prefix}Secret) -> Int\nreturn x;\n.end\n"
-            '.rule Start\n\'syntax: W__Number EOF\n\'semantics: return 1;\n..\n'
+            '.rule Start\n\'syntax: W__Number EOF\n\'semantics: return 1;\n.end\n'
         )
         self.assertIn("reserved module linker name", self.generate("--check", code=1).stderr)
 
@@ -438,14 +438,14 @@ return Ops.VALUE(x);
 .literal PLUS = "+"
 .rule Value
 'syntax: NUMBER | Value PLUS Value
-..
+.end
 """)
         self.write("main.llsynth", """.import "expr.llsynth" as E
 .precedence left E__PLUS
 .rule Start
 'syntax: E__Value EOF
 'semantics: return 1;
-..
+.end
 """)
         self.generate("--check")
         self.write("expr.llsynth", """.module Expr
@@ -454,7 +454,7 @@ return Ops.VALUE(x);
 .literal COMMA = ","
 .rule Value
 'syntax: NUMBER%COMMA
-..
+.end
 """)
         self.root.write_text(self.root.read_text().replace(".precedence left E__PLUS\n", ""))
         self.generate("--check")

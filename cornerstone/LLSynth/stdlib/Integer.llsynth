@@ -1,0 +1,30 @@
+.library "std.Integer"
+.summary "Euclidean remainder, greatest common divisor and ceiling division"
+.export modulo, gcd, ceilDiv
+
+.exception !Divisor "expected a positive divisor"
+.exception !Negative "gcd expects nonnegative inputs"
+
+.function modulo(value: Int, divisor: Int) -> Int
+require divisor > 0 else Throw(!Divisor);
+let r = value - (value / divisor) * divisor;
+if r < 0 { return r + divisor; }
+return r;
+.end
+
+.function gcd(a: Int, b: Int) -> Int
+require a >= 0 && b >= 0 else Throw(!Negative);
+while b > 0 {
+    let r = modulo(a, b);
+    a = b;
+    b = r;
+}
+return a;
+.end
+
+.function ceilDiv(value: Int, divisor: Int) -> Int
+require divisor > 0 else Throw(!Divisor);
+let q = value / divisor;
+if value > q * divisor { return q + 1; }
+return q;
+.end

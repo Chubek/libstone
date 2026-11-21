@@ -14,8 +14,9 @@ syn match llsynthRegexEscape /\\./ contained
 syn region llsynthRegexClass start=/\[/ skip=/\\]/ end=/\]/ contained contains=llsynthRegexEscape
 
 " Directive declarations and special block terminators.
-syn match llsynthDirective /^\s*\.\%(language\|version\|summary\|start\|module\|include\|import\|export\|option\|precedence\|skip\|token\|literal\|type\|state\|symtbl\|exception\|rule\|function\|async\|extern\|sandstone\|init\|ir\|op\|rewrite\|analysis\|backend\|pipeline\|template\|macro\|match\|replace\|when\|priority\|emit\|prologue\|epilogue\)\>/
+syn match llsynthDirective /^\s*\.\%(language\|version\|summary\|start\|module\|library\|include\|import\|export\|option\|precedence\|skip\|token\|literal\|type\|sumtype\|prodtype\|alias\|state\|symtbl\|exception\|rule\|function\|async\|extern\|sandstone\|init\|ir\|op\|rewrite\|analysis\|backend\|pipeline\|template\|macro\|match\|replace\|when\|priority\|emit\|prologue\|epilogue\)\>/
 syn match llsynthBlockEnd /^\s*\.end\s*$/
+syn match llsynthDirective /^\s*\.isel\>/
 syn match llsynthRuleEnd /^\s*\.\.\s*$/
 syn match llsynthFacet /^\s*'\%(syntax\|semantics\|lower\|analyze\|emit\)\s*:/
 syn match llsynthFacetEnd /^\s*'end\s*$/
@@ -29,7 +30,7 @@ syn match llsynthInterpolation /${[A-Za-z_][A-Za-z0-9_]*}/ contained
 
 " Captures, state, symbol tables, exceptions, aliases and function references.
 syn match llsynthSigil /[@$#%!&][A-Za-z_][A-Za-z0-9_]*/
-syn match llsynthType /\<\%(Int\|Int64\|Float64\|Bool\|String\|Void\|Any\|Vec\|Task\|Fn\|Op\)\>/
+syn match llsynthType /\<\%(Int\|Int64\|Float64\|Bool\|String\|Void\|Unit\|Any\|Vec\|Task\|Fn\|Callable\|Op\)\>/
 syn match llsynthBoolean /\<\%(true\|false\|nil\|None\)\>/
 syn match llsynthKeyword /\<\%(let\|return\|if\|else\|while\|for\|in\|fn\|async\|await\|throw\|grab\|require\|on\|discard\|call\|spawn\|join\)\>/
 syn match llsynthBuiltin /\<\%(len\|push\|pop\|top\|emit\|print\|reverse\|min\|max\|abs\|is_finite\|final_stack_height\|sleep\|Throw\)\>\ze\s*(/

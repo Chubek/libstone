@@ -1,0 +1,31 @@
+.library "std.Statistics"
+.summary "Online mean and population variance for integer samples"
+.export mean, variance
+
+.exception !Empty "statistics require at least one sample"
+
+.function mean(samples: Vec<Int>) -> Float64
+require len(samples) > 0 else Throw(!Empty);
+let n = 0;
+let average = 0.0;
+for sample in samples {
+    n = n + 1;
+    average = average + (sample - average) / n;
+}
+return average;
+.end
+
+# Welford's recurrence avoids subtracting two large sums of squares.
+.function variance(samples: Vec<Int>) -> Float64
+require len(samples) > 0 else Throw(!Empty);
+let n = 0;
+let average = 0.0;
+let squares = 0.0;
+for sample in samples {
+    n = n + 1;
+    let delta = sample - average;
+    average = average + delta / n;
+    squares = squares + delta * (sample - average);
+}
+return squares / n;
+.end
