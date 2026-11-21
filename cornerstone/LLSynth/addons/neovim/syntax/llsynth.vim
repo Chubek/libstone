@@ -14,7 +14,7 @@ syn match llsynthRegexEscape /\\./ contained
 syn region llsynthRegexClass start=/\[/ skip=/\\]/ end=/\]/ contained contains=llsynthRegexEscape
 
 " Directive declarations and special block terminators.
-syn match llsynthDirective /^\s*\.\%(language\|version\|summary\|start\|module\|library\|include\|import\|export\|option\|precedence\|skip\|token\|literal\|type\|sumtype\|prodtype\|alias\|state\|symtbl\|exception\|rule\|function\|async\|extern\|sandstone\|init\|ir\|op\|rewrite\|analysis\|backend\|pipeline\|template\|macro\|match\|replace\|when\|priority\|emit\|prologue\|epilogue\)\>/
+syn match llsynthDirective /^\s*\.\%(language\|version\|summary\|start\|module\|library\|include\|import\|export\|option\|precedence\|skip\|token\|literal\|type\|sumtype\|prodtype\|alias\|state\|symtbl\|exception\|rule\|function\|async\|extern\|sandstone\|init\|ir\|op\|rewrite\|analysis\|backend\|pipeline\|template\|macro\|match\|replace\|when\|priority\|emit\|prologue\|epilogue\|isel\)\>/
 syn match llsynthBlockEnd /^\s*\.end\s*$/
 syn match llsynthDirective /^\s*\.isel\>/
 syn match llsynthRuleEnd /^\s*\.\.\s*$/

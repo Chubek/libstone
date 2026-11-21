@@ -22,7 +22,7 @@ contexts:
       scope: comment.line.double-slash.llsynth
 
   declaration:
-    - match: '^\s*(\.)(language|version|summary|start|module|library|include|import|export|option|precedence|literal|type|sumtype|prodtype|alias|state|symtbl|exception|rule|function|async|extern|sandstone|init|ir|isel|op|rewrite|analysis|backend|pipeline|template|macro|match|replace|when|priority|emit|prologue|epilogue)\b'
+    - match: '^\s*(\.)(language|version|summary|start|module|library|include|import|export|option|precedence|literal|type|sumtype|prodtype|alias|state|symtbl|exception|rule|function|async|extern|sandstone|init|ir|isel|op|rewrite|analysis|backend|pipeline|template|macro|match|replace|when|priority|emit|prologue|epilogue|isel)\b'
       captures:
         2: keyword.control.directive.llsynth
     - match: '^\s*\.(?:end|\.)\s*$'
