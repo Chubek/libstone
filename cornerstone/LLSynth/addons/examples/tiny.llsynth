@@ -1,0 +1,13 @@
+# Small, runnable example for testing both highlighters.
+.language "Tiny"
+.summary "Integer lexer and a semantic action"
+.start Start
+.skip /[ \t\n]+/
+.token NUMBER: Int = /[0-9]+/
+
+.rule Start
+'syntax: value:NUMBER EOF
+'semantics:
+  let answer: Int = $value + 1;
+  return answer;
+..

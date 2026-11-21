@@ -1,0 +1,82 @@
+%YAML 1.2
+---
+name: LLSynth
+file_extensions:
+  - llsynth
+scope: source.llsynth
+contexts:
+  main:
+    - include: comments
+    - include: regex-declaration
+    - include: declaration
+    - include: rule-facets
+    - include: strings
+    - include: atoms
+
+  comments:
+    # In a spec, # followed by a space at line start is a comment.
+    # #symbol (including #symbol tables) must not be treated as a comment.
+    - match: '^\s*#(?=\s|$).*$'
+      scope: comment.line.number-sign.llsynth
+    - match: '//.*$'
+      scope: comment.line.double-slash.llsynth
+
+  declaration:
+    - match: '^\s*(\.)(language|version|summary|start|module|include|import|export|option|precedence|literal|type|state|symtbl|exception|rule|function|async|extern|sandstone|init|ir|op|rewrite|analysis|backend|pipeline|template|macro|match|replace|when|priority|emit|prologue|epilogue)\b'
+      captures:
+        2: keyword.control.directive.llsynth
+    - match: '^\s*\.(?:end|\.)\s*$'
+      scope: keyword.control.end.llsynth
+    - match: '\b(?:left|right|nonassoc)\b'
+      scope: keyword.other.associativity.llsynth
+    - match: '^\s*\.\s*\w+'
+      scope: invalid.illegal.unknown-directive.llsynth
+
+  rule-facets:
+    - match: '^\s*''(syntax|semantics|lower|analyze|emit)\s*:'
+      captures:
+        1: entity.name.section.llsynth
+      scope: keyword.control.facet.llsynth
+    - match: '^\s*''end\s*$'
+      scope: keyword.control.end.llsynth
+
+  regex-declaration:
+    - match: '^\s*(\.)(token|skip)\b'
+      captures:
+        2: keyword.control.directive.llsynth
+      push:
+        - meta_scope: meta.declaration.regex.llsynth
+        - match: '/(?:\\.|[^/\\\n])*/'
+          scope: string.regexp.llsynth
+        - include: strings
+        - include: atoms
+        - match: '$'
+          pop: true
+
+  strings:
+    - match: '"(?:\\.|[^"\\\n])*"'
+      scope: string.quoted.double.llsynth
+    # Only closed single-quoted strings: facet headings are not strings.
+    - match: |-
+        '(?:\\.|[^'\\\n])*'
+      scope: string.quoted.single.llsynth
+    - match: '\$\{[A-Za-z_][A-Za-z_0-9]*\}'
+      scope: variable.other.interpolation.llsynth
+
+  atoms:
+    - match: '[@$#%!&][A-Za-z_][A-Za-z_0-9]*'
+      scope: variable.other.sigil.llsynth
+    - match: '\b(?:Int64|Int|Float64|Bool|String|Void|Any|Vec|Task|Fn|Op)\b'
+      scope: storage.type.llsynth
+    - match: '\b(?:true|false|nil|None)\b'
+      scope: constant.language.llsynth
+    - match: '\b(?:let|return|if|else|while|for|in|fn|async|await|throw|grab|require|on|discard|call|spawn|join)\b'
+      scope: keyword.control.llsynth
+    - match: '\b(?:len|push|pop|top|emit|print|reverse|min|max|abs|is_finite|final_stack_height|sleep|Throw)(?=\s*\()'
+      scope: support.function.llsynth
+    - match: '\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?\b|\B\.\d+(?:[eE][+-]?\d+)?\b'
+      scope: constant.numeric.llsynth
+    - match: '(?:->|=>|==|!=|<=|>=|&&|\|\|)'
+      scope: keyword.operator.llsynth
+    - match: '\b[A-Z][A-Z_0-9]*\b'
+      scope: constant.other.llsynth
