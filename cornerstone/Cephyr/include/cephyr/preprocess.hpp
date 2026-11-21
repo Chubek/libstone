@@ -39,6 +39,8 @@ struct Preprocessed {
     std::string file;
     // Target property for semantic analysis, independent of user CPP macros.
     bool plain_char_signed = false;
+    // Set by the driver only for reviewed hardware floating-point ABI routes.
+    bool native_scalar_fp = false;
 
     Location locate(unsigned line, unsigned column = 0) const;
 };

@@ -1,4 +1,8 @@
 #include <cephyr/lower.hpp>
+
+#ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
+#include "moonstone_analysis.hpp"
+#endif
 #include <cephyr/preprocess.hpp>
 
 #include "Backend.h"
@@ -7,10 +11,10 @@
 #include <wetstone/utils/Graph.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <locale>
 #include <set>
-#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -162,8 +166,11 @@ void write_instruction(std::ostream &out, const Instruction &inst, const std::ve
     const bool indirect = op == "call_indirect";
     const std::size_t void_dst = call && inst.result == no_value ? 1 : 0;
     const unsigned fixed =
-        op == "const" || op == "frame_addr" || op == "global_addr" || op == "func_addr" ? 0 :
+        op == "const" || op == "fconst" ||
+        op == "frame_addr" || op == "global_addr" || op == "func_addr" ? 0 :
         op == "copy" || op == "sext" || op == "zext" || op == "trunc" ||
+        op == "fload" || op == "fneg" || op == "fcast" || op == "sitofp" ||
+        op == "uitofp" || op == "fptosi" || op == "fptoui" ||
         op.ends_with("_to_int") || op.starts_with("int_to_") || op.starts_with("load") ? 1 : 2;
 
     std::string_view operands = inst.operands;
@@ -283,121 +290,373 @@ bool character_array(const CType &type)
         type.element->integer() && type.element->bits == 8;
 }
 
-class ArrayInitPlanner {
+class ObjectInitPlanner {
+    using Path = std::vector<std::uint64_t>;
+    struct Cursor {
+        CType type;
+        std::uint64_t offset;
+    };
+
 public:
-    Unit &unit;
-    ArrayInitialization plan;
+    const TypeContext &context;
+    std::vector<ObjectInitEntry> entries;
 
-    explicit ArrayInitPlanner(Unit &u) : unit(u) {}
+    explicit ObjectInitPlanner(const TypeContext &c) : context(c) {}
 
-    bool initialize(CType &type, Node *node, std::uint64_t offset)
+    bool initialize(CType &type, Node *node)
     {
-        if (type.kind != CType::Kind::array) {
-            plan.entries.push_back({offset, node, std::nullopt});
+        if (!initialize(Cursor{type, 0}, node, {}))
+            return false;
+        if (type.kind == CType::Kind::array && !type.count)
+            type.count = inferred;
+        return true;
+    }
+
+private:
+    bool initialize(const Cursor &object, Node *node, const Path &path)
+    {
+        const AnalysisDepth guard(depth);
+        const auto &[type, offset] = object;
+        const bool braced = node->getKind() == cparser::NK_LIST;
+        if (type.scalar() || (type.kind == CType::Kind::record && !braced)) {
+            entries.push_back({offset, type, node, {}});
+            clear_active(path);
             return true;
         }
 
-        const bool braced = node->getKind() == cparser::NK_LIST;
         const auto children = braced ? elements(node) : std::vector<Node *>{};
         Node *first = braced && !children.empty() ? children.front() : node;
         if (character_array(type) && first->getKind() == cparser::NK_STRING_CONST) {
             if (children.size() > 1)
                 return error(children[1], "too many elements after character-array string initializer");
-            auto bytes = string_constant(first, unit.source, unit.diagnostics);
+            auto bytes = string_constant(first, context.source, context.diagnostics);
             if (!bytes)
                 return false;
-            if (!type.count)
-                type.count = bytes->size();
-            if (bytes->size() - 1 > type.count)
+            const auto count = type.count ? type.count : bytes->size();
+            if (bytes->size() - 1 > count)
                 return error(first, "string literal is too long for character array");
-            if (bytes->size() > type.count)
+            if (bytes->size() > count)
                 bytes->pop_back(); // C11 6.7.9p14: only omit the final terminator.
-            plan.entries.push_back({offset, first, std::move(bytes)});
+            if (!type.count)
+                inferred = count;
+            reset(object, first, path);
+            entries.push_back({offset, type, first, std::move(bytes)});
             return true;
         }
         if (!braced)
-            return error(node, "array initializer must be a brace-enclosed list");
+            return error(node, "array initializer must be a brace-enclosed list or a character string");
         if (children.empty())
-            return error(node, "array initializer list must not be empty");
+            return error(node, "aggregate initializer list must not be empty");
 
-        std::size_t next = 0;
-        auto count = consume(type, children, next, offset);
-        if (!count)
-            return false;
-        if (next != children.size())
-            return error(children[next], "too many elements in array initializer");
-        if (!type.count)
-            type.count = *count;
+        reset(object, node, path);
+        // Each pair of braces defines a current object (6.7.9p17–20).
+        // Maintain the next relative path, descending into brace-elided
+        // aggregates and advancing through enclosing aggregates on exhaustion.
+        Path next{0};
+        for (auto *initializer : children) {
+            Cursor current = object;
+            Path selected = path;
+            Path relative;
+            if (initializer->getKind() == cparser::NK_DESIGNATED_INIT) {
+                overriding = true;
+                auto *designated = static_cast<cparser::DesignatedInitASTNode *>(initializer);
+                for (auto *designator : elements(designated->getDesignators())) {
+                    const auto index = designated_index(current.type, designator);
+                    if (!index || !step(current, selected, *index, designator))
+                        return false;
+                    relative.push_back(*index);
+                }
+                if (relative.empty())
+                    return error(initializer, "designation must select a subobject");
+                initializer = designated->getInit();
+            } else {
+                if (next.empty())
+                    return error(initializer, "too many elements in aggregate initializer");
+                relative = next;
+                for (auto index : relative)
+                    if (!step(current, selected, index, initializer))
+                        return false;
+            }
+            while (!whole_object(current.type, initializer)) {
+                if (!step(current, selected, 0, initializer))
+                    return false;
+                relative.push_back(0);
+            }
+            if (!initialize(current, initializer, selected))
+                return false;
+            if (path.empty() && type.kind == CType::Kind::array && !type.count)
+                inferred = std::max(inferred, relative.front() + 1);
+            next = advance(object, std::move(relative));
+        }
         return true;
     }
 
-private:
-    // The explicit braces delimit a cursor. With elided braces a nested
-    // array consumes just enough entries from its parent's cursor (6.7.9p20).
-    std::optional<std::uint64_t> consume(const CType &type, std::span<Node *const> list,
-                                         std::size_t &next, std::uint64_t base)
+    static CType child_type(const CType &parent, std::uint64_t index)
     {
-        const AnalysisDepth guard(depth);
-        const auto &element = *type.element;
-        const auto stride = size_of(element);
-        if (!stride || !*stride) {
-            error(list[next], "array initializer requires a complete element type");
-            return std::nullopt;
+        if (parent.kind == CType::Kind::record)
+            return qualified_member_type(parent, parent.record->members[index]);
+        auto type = *parent.element;
+        type.is_const |= parent.is_const;
+        type.is_volatile |= parent.is_volatile;
+        return type;
+    }
+
+    static Path advance(const Cursor &root, Path path)
+    {
+        std::vector<CType> parents;
+        auto current = root.type;
+        for (auto index : path) {
+            parents.push_back(current);
+            current = child_type(current, index);
         }
-        std::uint64_t index = 0;
-        for (; next != list.size() && (!type.count || index < type.count); ++index) {
-            Node *node = list[next];
-            // Check the entire subobject, not just the location of its first
-            // explicitly initialized leaf, before adding offsets.
-            if (index >= (std::numeric_limits<std::uint64_t>::max() - base) / *stride) {
-                error(node, "array initializer exceeds the object size limit");
-                return std::nullopt;
+        while (!path.empty()) {
+            auto &last = path.back();
+            const auto &parent = parents.back();
+            if (parent.kind == CType::Kind::array ? (!parent.count || last + 1 < parent.count) :
+                (!parent.record->is_union && last + 1 < parent.record->members.size())) {
+                ++last;
+                return path;
             }
-            const std::uint64_t offset = base + index * *stride;
-            if (element.kind == CType::Kind::array && node->getKind() != cparser::NK_LIST &&
-                !(character_array(element) && node->getKind() == cparser::NK_STRING_CONST)) {
-                if (!consume(element, list, next, offset))
-                    return std::nullopt;
-            } else {
-                ++next;
-                CType subobject = element;
-                if (!initialize(subobject, node, offset))
-                    return std::nullopt;
-            }
+            path.pop_back();
+            parents.pop_back();
         }
-        return index;
+        return {};
+    }
+
+    bool step(Cursor &object, Path &path, std::uint64_t index, Node *at)
+    {
+        if (path.size() >= 512)
+            throw std::length_error("C initializer nesting limit exceeded");
+        const auto &type = object.type;
+        if (type.kind == CType::Kind::array && type.element) {
+            const auto stride = size_of(*type.element);
+            if (!stride || !*stride)
+                return error(at, "array initializer requires a complete element type");
+            if (type.count && index >= type.count)
+                return error(at, "array designator index is outside the array bound");
+            if (index >= (std::numeric_limits<std::uint64_t>::max() - object.offset) / *stride)
+                return error(at, "array initializer exceeds the object size limit");
+            object.offset += index * *stride;
+        } else if (type.kind == CType::Kind::record && type.record && type.record->size) {
+            if (index >= type.record->members.size())
+                return error(at, "too many elements in aggregate initializer");
+            if (type.record->is_union) {
+                if (const auto active = active_unions.find(path);
+                    active != active_unions.end() && active->second != index)
+                    reset(object, at, path, true);
+                active_unions[path] = index;
+            }
+            object.offset += type.record->members[index].offset;
+        } else {
+            return error(at, "initializer requires a complete aggregate type");
+        }
+        object.type = child_type(type, index);
+        path.push_back(index);
+        return true;
+    }
+
+    std::optional<std::uint64_t> designated_index(const CType &type, Node *designator)
+    {
+        if (designator->getKind() == cparser::NK_ARRAY_DESIGNATOR) {
+            if (type.kind != CType::Kind::array) {
+                error(designator, "array designator requires an array");
+                return {};
+            }
+            auto *index = static_cast<cparser::ArrayDesignatorASTNode *>(designator)->getIndex();
+            const auto constant = integer_constant(index, context);
+            if (!constant || !constant->type.integer()) {
+                error(index, "array designator index must be an integer constant expression");
+                return {};
+            }
+            const auto value = normalize(constant->value, constant->type);
+            if (constant->type.is_signed && std::bit_cast<std::int64_t>(value) < 0) {
+                error(index, "array designator index must be nonnegative");
+                return {};
+            }
+            return value;
+        }
+        if (const auto *member = find_member(type, identifier(designator)))
+            return static_cast<std::uint64_t>(member - type.record->members.data());
+        error(designator, "member designator does not name a member of the current structure or union");
+        return {};
+    }
+
+    bool whole_object(const CType &type, Node *node) const
+    {
+        if (!type.aggregate() || node->getKind() == cparser::NK_LIST ||
+            (character_array(type) && node->getKind() == cparser::NK_STRING_CONST))
+            return true;
+        if (type.kind != CType::Kind::record)
+            return false;
+        Diagnostics probe;
+        auto source = expression_type(node, context.with_probe(probe));
+        auto destination = type;
+        source.is_const = destination.is_const = false;
+        source.is_volatile = destination.is_volatile = false;
+        return compatible(source, destination);
+    }
+
+    void clear_active(const Path &path)
+    {
+        for (auto it = active_unions.lower_bound(path);
+             it != active_unions.end() && it->first.size() >= path.size() &&
+             std::equal(path.begin(), path.end(), it->first.begin());)
+            it = active_unions.erase(it);
+    }
+
+    void reset(const Cursor &object, Node *node, const Path &path, bool switch_union = false)
+    {
+        // Re-initializing a complete subaggregate also zeroes its omitted
+        // subobjects; switching union members discards the previous member.
+        // Initially the root is zeroed by the caller, but it still needs a
+        // reset when a later initializer switches between union members.
+        if (overriding && (switch_union || !path.empty()))
+            entries.push_back({object.offset, object.type, node, {}, true});
+        clear_active(path);
     }
 
     bool error(Node *node, std::string_view message)
     {
-        unit.error(node, message, "cephyr.array.initializer");
+        context.diagnostics.error("cephyr.aggregate.initializer", message,
+                                  location(context.source, node));
         return false;
     }
 
     unsigned depth = 0;
+    std::uint64_t inferred = 0;
+    bool overriding = false;
+    std::map<Path, std::uint64_t> active_unions;
 };
 
 } // namespace
 
-std::optional<ArrayInitialization> plan_array_initializer(Unit &unit, CType &type, Node *node)
+std::optional<std::vector<ObjectInitEntry>> plan_object_initializer(
+    const TypeContext &context, CType &type, Node *node)
 {
-    const CType *scalar = &type;
-    bool volatile_array = false;
-    while (scalar->kind == CType::Kind::array && scalar->element) {
-        volatile_array |= scalar->is_volatile;
-        scalar = scalar->element.get();
-    }
-    if (!scalar->scalar()) {
-        unit.error(node, "array initialization requires a supported scalar element type",
-                   "cephyr.array.initializer");
+    ObjectInitPlanner planner(context);
+    if (!planner.initialize(type, node))
         return std::nullopt;
+    return std::move(planner.entries);
+}
+
+CType read_record_type(Node *node, const TypeContext &context)
+{
+    const bool structure = node->getKind() == cparser::NK_STRUCT_TYPE;
+    const auto [identity, body] = [&]() -> std::pair<const void *, Node *> {
+        if (structure) {
+            auto *record = static_cast<cparser::StructTypeASTNode *>(node);
+            return {record->getIdentity(), record->getBody()};
+        }
+        auto *record = static_cast<cparser::UnionTypeASTNode *>(node);
+        return {record->getIdentity(), record->getBody()};
+    }();
+    auto &layout = context.unit.record_layouts[identity ? identity : node];
+    CType type;
+    type.kind = CType::Kind::record;
+    type.record = &layout;
+    if (!present(body) || layout.size || layout.defining)
+        return type;
+
+    layout.is_union = !structure;
+    layout.defining = true;
+    struct FinishDefinition {
+        RecordLayout &layout;
+        ~FinishDefinition() { layout.defining = false; }
+    } finish{layout};
+    const auto error = [&](Node *where, std::string_view message) {
+        context.diagnostics.error("cephyr.record.layout", message, location(context.source, where));
+        return CType{};
+    };
+    const auto round_up = [](std::uint64_t size, unsigned alignment) -> std::optional<std::uint64_t> {
+        const auto mask = static_cast<std::uint64_t>(alignment - 1);
+        if (size > std::numeric_limits<std::uint64_t>::max() - mask)
+            return {};
+        return (size + mask) & ~mask;
+    };
+    std::uint64_t extent = 0;
+    unsigned max_alignment = 1;
+    std::vector<RecordMember> members;
+    std::set<std::string> names;
+    for (auto *item : elements(body)) {
+        if (item->getKind() == cparser::NK_STATIC_ASSERT) {
+            const auto errors = context.diagnostics.error_count();
+            check_static_assert(context, item);
+            if (context.diagnostics.error_count() != errors)
+                return {};
+            continue;
+        }
+        if (item->getKind() != cparser::NK_FIELD_DECL)
+            return error(item, "unsupported record member declaration");
+        auto *field = static_cast<cparser::FieldDeclASTNode *>(item);
+        auto name = identifier(field->getName());
+        if (name.empty())
+            return error(item, "unnamed and anonymous record members are not supported");
+        if (!names.emplace(name).second)
+            return error(field->getName(), "duplicate record member");
+        auto member_type = read_type(field->getType(), context, true);
+        if (!member_type.valid())
+            return {};
+        if (member_type.kind == CType::Kind::array && !member_type.count)
+            return error(field->getName(), "flexible array members are not supported");
+        const auto size = size_of(member_type);
+        const auto alignment = align_of(member_type);
+        if (!size || !*size || !alignment)
+            return error(field->getName(), "record member must have a complete object type");
+        // All supported constituents follow the bundled little-endian LP64
+        // targets' natural layout. Bit-fields and explicit alignment must not
+        // fall through to this algorithm.
+        if ((alignment & (alignment - 1)) != 0)
+            return error(field->getName(), "unsupported record member alignment");
+        const auto offset = structure ? round_up(extent, alignment) : std::optional<std::uint64_t>{0};
+        if (!offset || *size > std::numeric_limits<std::uint64_t>::max() - *offset)
+            return error(field->getName(), "record layout exceeds the object size limit");
+        extent = std::max(extent, *offset + *size);
+        max_alignment = std::max(max_alignment, alignment);
+        members.push_back({std::move(name), std::move(member_type), *offset});
     }
-    ArrayInitPlanner planner(unit);
-    planner.plan.scalar = *scalar;
-    planner.plan.scalar.is_volatile |= volatile_array;
-    if (!planner.initialize(type, node, 0))
-        return std::nullopt;
-    return std::move(planner.plan);
+    if (members.empty())
+        return error(node, "record must contain at least one named member");
+    const auto size = round_up(extent, max_alignment);
+    if (!size)
+        return error(node, "record layout exceeds the object size limit");
+    layout.members = std::move(members);
+    for (const auto &member : layout.members) {
+        layout.has_const_member |= object_has_qualifier(member.type, &CType::is_const);
+        layout.has_volatile_member |= object_has_qualifier(member.type, &CType::is_volatile);
+    }
+    layout.alignment = max_alignment;
+    layout.size = *size;
+    return type;
+}
+
+const RecordMember *find_member(const CType &type, std::string_view name)
+{
+    if (type.kind != CType::Kind::record || !type.record || !type.record->size)
+        return nullptr;
+    for (const auto &member : type.record->members)
+        if (member.name == name)
+            return &member;
+    return nullptr;
+}
+
+CType qualified_member_type(const CType &record, const RecordMember &member)
+{
+    auto type = member.type;
+    type.is_const |= record.is_const;
+    type.is_volatile |= record.is_volatile;
+    return type;
+}
+
+bool object_has_qualifier(const CType &type, bool CType::*qualifier)
+{
+    if (type.*qualifier)
+        return true;
+    if (type.kind == CType::Kind::array && type.element)
+        return object_has_qualifier(*type.element, qualifier);
+    if (type.kind != CType::Kind::record || !type.record)
+        return false;
+    return qualifier == &CType::is_const ? type.record->has_const_member :
+        type.record->has_volatile_member;
 }
 
 void Unit::error(Node *at, std::string_view message, std::string_view code)
@@ -464,14 +723,16 @@ std::string Unit::require_variadic_call(const Symbol &symbol, const std::vector<
 
 void check_static_assert(const TypeContext &context, Node *node)
 {
-    auto &unit = context.unit;
     auto &assertion = *static_cast<cparser::StaticAssertASTNode *>(node);
-    const auto count = unit.diagnostics.error_count();
+    const auto count = context.diagnostics.error_count();
     const auto condition = integer_constant(assertion.getExpr(), context);
-    const auto message = string_constant(assertion.getMessage(), unit.source, unit.diagnostics);
+    const auto message = string_constant(assertion.getMessage(), context.source, context.diagnostics);
+    const auto error = [&](std::string_view text) {
+        context.diagnostics.error("cephyr.static_assert", text, location(context.source, node));
+    };
     if (!condition) {
-        if (unit.diagnostics.error_count() == count)
-            unit.error(node, "_Static_assert requires an integer constant expression", "cephyr.static_assert");
+        if (context.diagnostics.error_count() == count)
+            error("_Static_assert requires an integer constant expression");
     } else if (message && normalize(condition->value, condition->type) == 0) {
         std::string description = "static assertion failed";
         std::string_view literal(*message);
@@ -479,7 +740,7 @@ void check_static_assert(const TypeContext &context, Node *node)
             literal.remove_suffix(1);
         if (!literal.empty())
             description += ": " + std::string(literal);
-        unit.error(node, description, "cephyr.static_assert");
+        error(description);
     }
 }
 
@@ -542,12 +803,12 @@ Id Function::value(const CType &type)
     return id;
 }
 
-Id Function::emit(const CType &type, std::string_view op, std::string operands)
+Id Function::emit(const CType &type, std::string_view op, std::string operands, Node *origin)
 {
     if (!open())
         throw std::logic_error("instruction emitted into a closed block");
     const auto id = value(type);
-    blocks[current].instructions.push_back({std::string(op), std::move(operands), id});
+    blocks[current].instructions.push_back({std::string(op), std::move(operands), id, origin});
     return id;
 }
 
@@ -576,8 +837,111 @@ LValue Function::local(const CType &type, Node *at)
     // The stack slot exists for the whole function regardless of when its
     // source declaration or initializer is reached.
     const auto address = value(pointer_type(type));
-    entry_addresses.push_back({"frame_addr", std::to_string(index), address});
+    entry_addresses.push_back({"frame_addr", std::to_string(index), address, at});
     return {type, address};
+}
+
+Id offset_address(Function &function, Id base, std::uint64_t offset, const CType &pointee)
+{
+    if (!offset)
+        return base;
+    const Id amount = function.constant(offset, integer_type(64, false));
+    return function.emit(pointer_type(pointee), "ptr_add",
+                         std::to_string(base) + " " + std::to_string(amount));
+}
+
+namespace {
+
+using MemoryStep = void (*)(Function &, Id dest, Id src, Id offset, unsigned width);
+
+void memory_range(Function &function, Id dest, Id src, std::uint64_t start,
+                  std::uint64_t end, unsigned width, MemoryStep step)
+{
+    const auto index_type = integer_type(64, false);
+    if ((end - start) / width < 12) {
+        for (auto position = start; position < end; position += width)
+            step(function, dest, src, position ? function.constant(position, index_type) : no_value, width);
+        return;
+    }
+    const auto begin = function.constant(start, index_type);
+    const auto increment = function.constant(width, index_type);
+    const auto limit = function.constant(end, index_type);
+    const auto loop = function.block();
+    const auto exit = function.block();
+    const auto position = function.param(loop, index_type);
+    function.jump(loop, {begin});
+    function.select(loop);
+    step(function, dest, src, position, width);
+    const auto next = function.emit(index_type, "add",
+                                    std::to_string(position) + " " + std::to_string(increment));
+    const auto done = function.emit(integer_type(), "eq",
+                                    std::to_string(next) + " " + std::to_string(limit));
+    function.branch(done, exit, loop, {}, {next});
+    function.select(exit);
+}
+
+Id byte_address(Function &function, Id base, Id offset)
+{
+    if (offset == no_value)
+        return base;
+    return function.emit(pointer_type(integer_type(8, false)), "ptr_add",
+                         std::to_string(base) + " " + std::to_string(offset));
+}
+
+void store_chunk(Function &function, Id dest, Id data, unsigned width)
+{
+    const char *op = width == 8 ? "store" : width == 4 ? "store32" :
+                     width == 2 ? "store16" : "store8";
+    function.emit_void(op, std::to_string(dest) + " " + std::to_string(data) + " 0");
+}
+
+} // namespace
+
+void zero_object(Function &function, Id dest, std::uint64_t size, unsigned alignment)
+{
+    alignment = std::min(alignment, 8u);
+    const auto zero = function.constant(0);
+    const auto fill = [](Function &f, Id out, Id data, Id offset, unsigned width) {
+        store_chunk(f, byte_address(f, out, offset), data, width);
+    };
+    // C object size is a multiple of its alignment, as required for arrays
+    // with adjacent elements of this type.
+    memory_range(function, dest, zero, 0, size, alignment, fill);
+}
+
+bool copy_record(Function &function, LValue target, Expr value, Node *at, bool initializing)
+{
+    if (!target.type.valid() || !value.type.valid())
+        return false;
+    auto target_type = target.type, source_type = value.type;
+    target_type.is_const = source_type.is_const = false;
+    target_type.is_volatile = source_type.is_volatile = false;
+    const auto size = size_of(target_type);
+    if (target_type.kind != CType::Kind::record || !size || !compatible(target_type, source_type)) {
+        function.error(at, "record copy requires compatible complete structure or union types");
+        return false;
+    }
+    if (!initializing && object_has_qualifier(target.type, &CType::is_const)) {
+        function.error(at, "record assignment cannot modify a const-qualified member or object");
+        return false;
+    }
+    if (object_has_qualifier(target.type, &CType::is_volatile) ||
+        object_has_qualifier(value.type, &CType::is_volatile)) {
+        function.error(at, "volatile object access is not supported");
+        return false;
+    }
+    // C11 6.5.16.1p3 only defines exact overlap between compatible
+    // operands. Copy the object representation without libc or misaligned
+    // word loads, preserving the active member's bytes in a union.
+    memory_range(function, target.address, value.id, 0, *size, std::min(align_of(target_type), 8u),
+                 [](Function &f, Id dest, Id src, Id offset, unsigned width) {
+        const char *op = width == 8 ? "load" : width == 4 ? "load_u32" :
+                         width == 2 ? "load_u16" : "load_u8";
+        const auto in = byte_address(f, src, offset);
+        const auto data = f.emit(integer_type(width * 8, false), op, std::to_string(in) + " 0");
+        store_chunk(f, byte_address(f, dest, offset), data, width);
+    });
+    return true;
 }
 
 std::optional<LValue> Function::find_local(std::string_view name) const
@@ -656,10 +1020,13 @@ std::vector<bool> reachable_blocks(const std::vector<Block> &blocks)
 namespace cephyr {
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
-                                 Diagnostics &diagnostics, bool hosted)
+                                 Diagnostics &diagnostics, bool hosted, detail::MoonstoneAnalysis *analysis)
 {
     using namespace detail;
     using namespace cparser;
+#ifndef CEPHYR_WITH_MOONSTONE_ANALYSIS
+    (void)analysis;
+#endif
 
     Unit unit(source, diagnostics, hosted);
     std::vector<std::string> functions;
@@ -712,6 +1079,10 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                 Function f(unit, *symbol, identifier(decl.getName()));
                 lower_function_body(f, decl.getPrms(), decl.getBody());
                 if (errors == diagnostics.error_count()) {
+#ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
+                    if (analysis)
+                        analysis->inspect(f);
+#endif
                     functions.push_back(write_function(f, instruction_count));
                     if (symbol->internal)
                         unit.locals.push_back(symbol->name);
@@ -735,6 +1106,11 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                 }
                 const bool definition = type.kind != CType::Kind::function &&
                     (initialized || !(flags & SCS_EXTERN));
+                if (type.kind == CType::Kind::record && definition && !initialized &&
+                    (flags & SCS_STATIC) && !size_of(type)) {
+                    unit.error(decl.getName(), "internal tentative definition has incomplete structure or union type");
+                    continue;
+                }
                 auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags, definition, initialized);
                 // Initializers see exactly the declarations visible here.
                 // This also completes `char s[] = "...";` before any later
@@ -743,9 +1119,12 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     define_global(unit, *symbol);
                 continue;
             }
-            if (node->getKind() == NK_STRUCT_TYPE || node->getKind() == NK_UNION_TYPE ||
-                node->getKind() == NK_ENUMERAL_TYPE)
-                continue; // tag-only declaration; read_type handles uses
+            if (node->getKind() == NK_STRUCT_TYPE || node->getKind() == NK_UNION_TYPE) {
+                (void)read_type(node, TypeContext(unit), true);
+                continue;
+            }
+            if (node->getKind() == NK_ENUMERAL_TYPE)
+                continue;
             unit.error(node, "unsupported file-scope C construct");
         }
 

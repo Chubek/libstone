@@ -152,7 +152,11 @@ enum ASTNodeKind
     NK_UNION_TYPE,
 
     NK_STATIC_ASSERT,
-    NK_UNARY_PLUS_EXPR
+    NK_UNARY_PLUS_EXPR,
+    NK_GENERIC_EXPR,
+    NK_GENERIC_ASSOC,
+    NK_DESIGNATED_INIT,
+    NK_ARRAY_DESIGNATOR
 };
 
 class AbstractSyntaxTree;
@@ -412,6 +416,86 @@ public:
     ASTNode *getExpr() { return _expr; }
 
     //STType *checkType(AbstractSyntaxTree *ast);
+    void accept(TreeVisitor *v);
+};
+
+class GenericExprASTNode : public ASTNode
+{
+    ASTNode *_control;
+    ASTNode *_associations;
+
+public:
+    GenericExprASTNode(ASTNode *control, ASTNode *associations)
+        : ASTNode(NK_GENERIC_EXPR)
+    {
+        ASSIGN_AST_NODE_REF(_control, control);
+        ASSIGN_AST_NODE_REF(_associations, associations);
+    }
+    ~GenericExprASTNode()
+    {
+        DELETE_AST_NODE_REF(_control);
+        DELETE_AST_NODE_REF(_associations);
+    }
+    ASTNode *getControl() const { return _control; }
+    ASTNode *getAssociations() const { return _associations; }
+    void accept(TreeVisitor *v);
+};
+
+class GenericAssocASTNode : public ASTNode
+{
+    ASTNode *_type;
+    ASTNode *_expr;
+
+public:
+    GenericAssocASTNode(ASTNode *type, ASTNode *expr) : ASTNode(NK_GENERIC_ASSOC)
+    {
+        ASSIGN_AST_NODE_REF(_type, type);
+        ASSIGN_AST_NODE_REF(_expr, expr);
+    }
+    ~GenericAssocASTNode()
+    {
+        DELETE_AST_NODE_REF(_type);
+        DELETE_AST_NODE_REF(_expr);
+    }
+    ASTNode *getType() const { return _type; } // NULL_AST_NODE for default
+    ASTNode *getExpr() const { return _expr; }
+    void accept(TreeVisitor *v);
+};
+
+class DesignatedInitASTNode : public ASTNode
+{
+    ASTNode *_designators;
+    ASTNode *_init;
+
+public:
+    DesignatedInitASTNode(ASTNode *designators, ASTNode *init)
+        : ASTNode(NK_DESIGNATED_INIT)
+    {
+        ASSIGN_AST_NODE_REF(_designators, designators);
+        ASSIGN_AST_NODE_REF(_init, init);
+    }
+    ~DesignatedInitASTNode()
+    {
+        DELETE_AST_NODE_REF(_designators);
+        DELETE_AST_NODE_REF(_init);
+    }
+    // Ordered list of member identifiers and ArrayDesignatorASTNode indices.
+    ASTNode *getDesignators() const { return _designators; }
+    ASTNode *getInit() const { return _init; }
+    void accept(TreeVisitor *v);
+};
+
+class ArrayDesignatorASTNode : public ASTNode
+{
+    ASTNode *_index;
+
+public:
+    explicit ArrayDesignatorASTNode(ASTNode *index) : ASTNode(NK_ARRAY_DESIGNATOR)
+    {
+        ASSIGN_AST_NODE_REF(_index, index);
+    }
+    ~ArrayDesignatorASTNode() { DELETE_AST_NODE_REF(_index); }
+    ASTNode *getIndex() const { return _index; }
     void accept(TreeVisitor *v);
 };
 
@@ -1428,9 +1512,11 @@ class MinusExprASTNode : public ASTNode
     ASTNode *_type;
     ASTNode *_lhs;
     ASTNode *_rhs;
+    bool _unary;
 
 public:
-    MinusExprASTNode(ASTNode *Type, ASTNode *Lhs, ASTNode *Rhs)
+    MinusExprASTNode(ASTNode *Type, ASTNode *Lhs, ASTNode *Rhs, bool unary = false)
+        : _unary(unary)
     {
         kind = NK_MINUS_EXPR;
         ASSIGN_AST_NODE_REF(_type, Type);
@@ -1447,6 +1533,7 @@ public:
 
     ASTNode *getLhs() { return _lhs; }
     ASTNode *getRhs() { return _rhs; }
+    bool isUnary() const { return _unary; }
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);

@@ -190,6 +190,7 @@ def _emit_rv64(facts, archdb_version):
             "physical instruction inspection text v1",
             f"raw {isa} machine code (one function, no imports or globals)",
         ],
+        "floating_point": {"formats": [], "abi": "LP64 soft-float; FP MIR is unsupported"},
         "address_width": 64,
         "endian": "little",
         "schedule": ["input order (default)", "verified pure-region ordering; no latency model"],
@@ -234,6 +235,7 @@ def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
         f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
         "#define AN_SCALAR_GAS 1\n"
         "#define AN_SCALAR_GAS_PIC 1\n"
+        "#define AN_SCALAR_GAS_FP 1\n"
         "#endif\n"
     )
     stack_reg = registers[stack["index"]] if stack["kind"] == "register" else "sp"
@@ -247,6 +249,7 @@ def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
         '};\n'
         'const ANGasABI an_gas_abi = {\n'
         f'    .argc = {len(abi["args"])}u,\n'
+        '    .fp_argc = 8u, /* Reviewed scalar FP bank; not modeled by ABI v2. */\n'
         '    .args = {' + ', '.join(f'"{registers[r]}"' for r in abi["args"]) + '},\n'
         + f'    .result = "{registers[abi["result"]]}", .sp = "{stack_reg}", .link = {link},\n'
         + "".join(f'    .{key} = {abi[key]}u,\n' for key in (
@@ -270,6 +273,10 @@ def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
         "instruction_evidence": "reviewed baseline GAS sequences; not derived encodings or ArchSem",
         "input": ["in-memory generic MachineIR v1", "canonical MachineIR text v1"],
         "artifact": ["ELF-oriented GAS assembly (default or PIC)"],
+        "floating_point": {
+            "formats": ["IEEE binary32", "IEEE binary64"],
+            "abi": "reviewed fixed-arity scalar FP bank (registers 0 through 7, result 0)",
+        },
         "address_width": 64,
         "endian": "little",
         "schedule": ["input order only"],

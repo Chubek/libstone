@@ -13,7 +13,8 @@ entry also initializes `gp`.
 Linux wrappers for `read`, `write`, `close`,
 `lseek`, `open`, `openat`, `mmap`, and `munmap`, plus process termination and
 `abort`. Internal wrappers support terminal detection, file removal/rename,
-and temporary-name entropy. Kernel errors become `-1` and update `errno`.
+temporary-name entropy, and LP64 `clock_gettime`. Kernel errors become `-1`
+and update `errno`.
 
 `src/runtime.c` provides `getenv`, `atexit`/`exit`, and
 `at_quick_exit`/`quick_exit`. Each exit-handler list supports 32 registrations,
@@ -33,6 +34,20 @@ slot. Append writes use `O_APPEND`; `a+` starts reading from the beginning.
 Temporary files use `O_TMPFILE` when available, or `O_CREAT|O_EXCL` followed by
 unlink. Temporary names use Linux `getrandom`; the fallback is for filesystems
 without `O_TMPFILE`, not for kernels without `getrandom`.
+
+`src/time.c` uses `CLOCK_REALTIME` for Unix time and `CLOCK_PROCESS_CPUTIME_ID`
+for user plus system CPU time. Calendar conversion and formatting are local
+to the runtime; neither timezone configuration nor locale data files are read.
+On RV64IM, `difftime` builds the IEEE 754 binary64 result with integer
+arithmetic rather than linking compiler support routines.
+
+`src/setjmp-amd64.S`, `src/setjmp-aarch64.S`, and `src/setjmp.S` save and
+restore each ABI's nonvolatile registers, stack pointer, and return address
+(including AArch64's nonvolatile FP registers). The RV64 implementation
+assumes the integer LP64 ABI, not LP64F/LP64D. The routines do not support
+hardware or compiler shadow stacks, authenticated jump buffers, or POSIX
+signal-mask management. Cephyr-generated code cannot call `setjmp` correctly
+until native MIR can represent calls that return twice.
 
 Current boundaries:
 

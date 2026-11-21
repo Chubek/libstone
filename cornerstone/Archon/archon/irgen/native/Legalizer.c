@@ -10,12 +10,20 @@ unsigned an_shape(ArchonMIROpcode op)
 {
     switch (op) {
     case ARCHON_MIR_CONST:
+    case ARCHON_MIR_FCONST:
     case ARCHON_MIR_FRAME_ADDR:
     case ARCHON_MIR_GLOBAL_ADDR:
     case ARCHON_MIR_FUNC_ADDR:
     case ARCHON_MIR_CALL: /* Optional destination, depending on the signature. */
         return HAS_DST;
     case ARCHON_MIR_COPY:
+    case ARCHON_MIR_FLOAD:
+    case ARCHON_MIR_FNEG:
+    case ARCHON_MIR_FCAST:
+    case ARCHON_MIR_SITOFP:
+    case ARCHON_MIR_UITOFP:
+    case ARCHON_MIR_FPTOSI:
+    case ARCHON_MIR_FPTOUI:
     case ARCHON_MIR_LOAD:
     case ARCHON_MIR_LOAD_S8:
     case ARCHON_MIR_LOAD_U8:
@@ -35,6 +43,7 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_CALL_INDIRECT: /* Optional destination, func_ptr callee in a. */
         return HAS_DST | HAS_A;
     case ARCHON_MIR_STORE:
+    case ARCHON_MIR_FSTORE:
     case ARCHON_MIR_STORE8:
     case ARCHON_MIR_STORE16:
     case ARCHON_MIR_STORE32:
@@ -62,6 +71,13 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_DIV_CHECKED_S:
     case ARCHON_MIR_MUL_CHECKED_S:
     case ARCHON_MIR_PTR_ADD:
+    case ARCHON_MIR_FADD:
+    case ARCHON_MIR_FSUB:
+    case ARCHON_MIR_FMUL:
+    case ARCHON_MIR_FDIV:
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
         return HAS_DST | HAS_A | HAS_B;
     default:
         return 0;
@@ -74,9 +90,17 @@ static ArchonMIRType value_type(const ArchonMIRFunction *fn, ArchonValue value)
         ? fn->types[value] : ARCHON_MIR_VOID;
 }
 
-static int is_value_type(ArchonMIRType type)
+int an_target_type(ANContext *ctx, ArchonMIRType type)
 {
-    return type == ARCHON_MIR_I64 || type == ARCHON_MIR_PTR || type == ARCHON_MIR_FUNC_PTR;
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SCALAR_GAS_FP)
+    (void)ctx;
+    (void)type;
+#else
+    if (an_is_float(type))
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED,
+            "floating-point MIR requires a hardware FP ABI (RV64 LP64 is soft-float)");
+#endif
+    return 1;
 }
 
 static int legal_displacement(ANContext *ctx, uint64_t imm, unsigned alignment)
@@ -99,6 +123,8 @@ static int is_conversion(ArchonMIROpcode op)
 static int is_memory(ArchonMIROpcode op)
 {
     switch (op) {
+    case ARCHON_MIR_FLOAD:
+    case ARCHON_MIR_FSTORE:
     case ARCHON_MIR_LOAD:
     case ARCHON_MIR_LOAD_S8:
     case ARCHON_MIR_LOAD_U8:
@@ -179,7 +205,7 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
         return an_error(ctx, ARCHON_BACKEND_INVALID, "unexpected call arguments");
     }
 
-    if (op != ARCHON_MIR_CONST && op != ARCHON_MIR_FRAME_ADDR &&
+    if (op != ARCHON_MIR_CONST && op != ARCHON_MIR_FCONST && op != ARCHON_MIR_FRAME_ADDR &&
             !is_memory(op) &&
             !is_conversion(op) && inst->imm != 0)
         return an_error(ctx, ARCHON_BACKEND_INVALID, "unexpected immediate operand");
@@ -194,8 +220,53 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
             return an_error(ctx, ARCHON_BACKEND_INVALID, "CONST requires an i64 destination");
         return 1;
     case ARCHON_MIR_COPY:
-        if (!is_value_type(dst) || dst != a)
+        if (!an_is_value_type(dst) || dst != a)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "COPY requires identical nonvoid types");
+        return 1;
+    case ARCHON_MIR_FCONST:
+        if (!an_is_float(dst))
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FCONST requires a floating-point destination");
+        if (dst == ARCHON_MIR_F32 && inst->imm > UINT32_MAX)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FCONST f32 bits exceed 32 bits");
+        return 1;
+    case ARCHON_MIR_FLOAD:
+        if (!an_is_float(dst) || a != ARCHON_MIR_PTR)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FLOAD requires (ptr) -> f32 or f64");
+        return legal_displacement(ctx, inst->imm, dst == ARCHON_MIR_F32 ? 4u : 8u);
+    case ARCHON_MIR_FSTORE:
+        if (a != ARCHON_MIR_PTR || !an_is_float(b))
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FSTORE requires (ptr, f32 or f64)");
+        return legal_displacement(ctx, inst->imm, b == ARCHON_MIR_F32 ? 4u : 8u);
+    case ARCHON_MIR_FNEG:
+        if (!an_is_float(dst) || dst != a)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FNEG requires matching FP types");
+        return 1;
+    case ARCHON_MIR_FADD:
+    case ARCHON_MIR_FSUB:
+    case ARCHON_MIR_FMUL:
+    case ARCHON_MIR_FDIV:
+        if (!an_is_float(dst) || dst != a || dst != b)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "floating arithmetic requires matching FP types");
+        return 1;
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
+        if (dst != ARCHON_MIR_I64 || !an_is_float(a) || a != b)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "floating comparison requires matching FP operands and i64 result");
+        return 1;
+    case ARCHON_MIR_FCAST:
+        if (!an_is_float(dst) || !an_is_float(a) || a == dst)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "FCAST requires different FP source and result types");
+        return 1;
+    case ARCHON_MIR_SITOFP:
+    case ARCHON_MIR_UITOFP:
+        if (!an_is_float(dst) || a != ARCHON_MIR_I64)
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "integer-to-float conversion requires (i64) -> f32 or f64");
+        return 1;
+    case ARCHON_MIR_FPTOSI:
+    case ARCHON_MIR_FPTOUI:
+        if (dst != ARCHON_MIR_I64 || !an_is_float(a))
+            return an_error(ctx, ARCHON_BACKEND_INVALID, "float-to-integer conversion requires (f32 or f64) -> i64");
         return 1;
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
@@ -309,9 +380,9 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     case ARCHON_MIR_CALL_INDIRECT:
         if (op == ARCHON_MIR_CALL_INDIRECT && a != ARCHON_MIR_FUNC_PTR)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "CALL_INDIRECT requires a func_ptr callee");
-        if (inst->dst != ARCHON_MIR_NONE && !is_value_type(dst))
+        if (inst->dst != ARCHON_MIR_NONE && !an_is_value_type(dst))
             return an_error(ctx, ARCHON_BACKEND_INVALID,
-                            "call destination must be i64, ptr, or func_ptr");
+                            "call destination must be a nonvoid scalar");
         return 1;
     case ARCHON_MIR_ADD:
     case ARCHON_MIR_SUB:

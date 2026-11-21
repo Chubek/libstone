@@ -8,7 +8,6 @@
 #include "../include/Lexer.h"
 #include "../include/CLexer.h"
 
-#include <cerrno>
 #include <cctype>
 #include <cstdlib>
 #include <cstdio>
@@ -48,7 +47,14 @@ void CLexer::readName(Token *t)
         nextCh();
     }
 
-    t->kind = keyword(t->sval.c_str());
+    if (t->sval == "u8" && _ch == '"')
+        readStringLit(t, true);
+    else if ((t->sval == "L" || t->sval == "u" || t->sval == "U") &&
+             (_ch == '"' || _ch == '\''))
+        error(t->line, t->col, _ch == '"' ? "wide string literals are not supported"
+                                         : "wide character constants are not supported");
+    else
+        t->kind = keyword(t->sval.c_str());
 }
 
 void CLexer::readNumberLit(Token *t, bool leadingDot)
@@ -92,24 +98,51 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
                     : spelling.find_first_of("eE") != std::string::npos ||
                       (!spelling.empty() &&
                        (spelling.back() == 'f' || spelling.back() == 'F')));
-    errno = 0;
-    char *end = nullptr;
     if (floating)
     {
-        if (hexadecimal ? spelling.find_first_of("pP") == std::string::npos :
-                          spelling.find_first_of(".eE") == std::string::npos)
+        const auto decimal = [](char c) { return c >= '0' && c <= '9'; };
+        const auto significand = [hexadecimal, decimal](char c) {
+            return decimal(c) || (hexadecimal &&
+                   ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')));
+        };
+        std::size_t i = hexadecimal ? 2 : 0, digits = 0;
+        bool point = false;
+        while (i < spelling.size()) {
+            const char ch = spelling[i];
+            if (significand(ch))
+                ++digits;
+            else if (ch == '.' && !point)
+                point = true;
+            else
+                break;
+            ++i;
+        }
+        const bool hasExponent = i < spelling.size() &&
+            (hexadecimal ? spelling[i] == 'p' || spelling[i] == 'P' :
+                           spelling[i] == 'e' || spelling[i] == 'E');
+        if (!digits || (hexadecimal ? !hasExponent : !point && !hasExponent))
             error(t->line, t->col, "invalid floating constant '%s'",
                   spelling.c_str());
-        const long double value = std::strtold(spelling.c_str(), &end);
-        if (errno == ERANGE || end == spelling.c_str())
-            error(t->line, t->col, "floating constant is out of range");
-        if (*end == 'f' || *end == 'F' || *end == 'l' || *end == 'L')
-            ++end;
-        if (*end != '\0')
+        if (hasExponent) {
+            ++i;
+            if (i < spelling.size() && (spelling[i] == '+' || spelling[i] == '-'))
+                ++i;
+            const auto start = i;
+            while (i < spelling.size() && decimal(spelling[i]))
+                ++i;
+            if (i == start)
+                error(t->line, t->col, "invalid floating constant '%s'", spelling.c_str());
+        }
+        if (i < spelling.size() &&
+            (spelling[i] == 'f' || spelling[i] == 'F' || spelling[i] == 'l' || spelling[i] == 'L'))
+            ++i;
+        if (i != spelling.size())
             error(t->line, t->col, "invalid floating constant '%s'",
                   spelling.c_str());
         t->kind = TK_FLOAT_LIT;
-        t->info.fval = value;
+        // Legacy AST consumers keep their host approximation. Its range and
+        // locale never determine the C token or Cephyr's target value.
+        t->info.fval = std::strtold(spelling.c_str(), nullptr);
         return;
     }
 
@@ -158,11 +191,57 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
     t->info.uval = value;
 }
 
-void CLexer::readStringLit(Token *t)
+unsigned CLexer::readUniversalCharacter(Token *t)
+{
+    const unsigned digits = _ch == 'u' ? 4 : 8;
+    nextCh();
+    unsigned codePoint = 0;
+    for (unsigned i = 0; i < digits; ++i)
+    {
+        const int ch = _ch;
+        const unsigned digit = ch >= '0' && ch <= '9' ? ch - '0' :
+                               ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 :
+                               ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : 16;
+        if (digit >= 16)
+            error(t->line, t->col, "malformed universal character name");
+        t->spelling.push_back(static_cast<char>(ch));
+        codePoint = codePoint * 16 + digit;
+        nextCh();
+    }
+    if ((codePoint < 0xa0 && codePoint != '$' && codePoint != '@' && codePoint != '`') ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff) || codePoint > 0x10ffff)
+        error(t->line, t->col, "invalid code point in universal character name");
+    return codePoint;
+}
+
+static void appendUTF8(std::string &value, unsigned codePoint)
+{
+    if (codePoint < 0x80)
+        value.push_back(static_cast<char>(codePoint));
+    else
+    {
+        if (codePoint < 0x800)
+            value.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
+        else if (codePoint < 0x10000)
+        {
+            value.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
+            value.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+        }
+        else
+        {
+            value.push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
+            value.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
+            value.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+        }
+        value.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+    }
+}
+
+void CLexer::readStringLit(Token *t, bool utf8)
 {
     t->kind = TK_STRING_LIT;
     t->sval.clear();
-    t->spelling.clear();
+    t->spelling = utf8 ? "u8" : "";
 
     const auto hexValue = [](int ch) {
         if (ch >= '0' && ch <= '9') return ch - '0';
@@ -189,6 +268,10 @@ void CLexer::readStringLit(Token *t)
             case 'r': value.push_back('\r'); nextCh(); return;
             case 't': value.push_back('\t'); nextCh(); return;
             case 'v': value.push_back('\v'); nextCh(); return;
+            case 'u':
+            case 'U':
+                appendUTF8(value, readUniversalCharacter(t));
+                return;
             case 'x':
             {
                 nextCh();
@@ -228,35 +311,23 @@ void CLexer::readStringLit(Token *t)
         }
     };
 
-    do
+    t->spelling.push_back('"');
+    nextCh();
+    while (_ch != '"' && _ch != EOF && _ch != '\n')
     {
-        t->spelling.push_back('"');
-        nextCh();
-        while (_ch != '"' && _ch != EOF && _ch != '\n')
+        if (_ch == '\\')
+            appendEscape(t->sval, t->spelling);
+        else
         {
-            if (_ch == '\\')
-                appendEscape(t->sval, t->spelling);
-            else
-            {
-                t->sval.push_back(static_cast<char>(_ch));
-                t->spelling.push_back(static_cast<char>(_ch));
-                nextCh();
-            }
-        }
-        if (_ch != '"')
-            error(t->line, t->col, "unterminated string literal");
-        t->spelling.push_back('"');
-        nextCh();
-
-        std::string separator;
-        while (_ch != EOF && std::isspace(static_cast<unsigned char>(_ch)))
-        {
-            separator.push_back(static_cast<char>(_ch));
+            t->sval.push_back(static_cast<char>(_ch));
+            t->spelling.push_back(static_cast<char>(_ch));
             nextCh();
         }
-        if (_ch == '"')
-            t->spelling += separator;
-    } while (_ch == '"');
+    }
+    if (_ch != '"')
+        error(t->line, t->col, "unterminated string literal");
+    t->spelling.push_back('"');
+    nextCh();
 }
 
 void CLexer::readCharLit(Token *t)
@@ -331,6 +402,11 @@ void CLexer::readCharLit(Token *t)
                 break; // Backslash
             case '"':
                 t->info.ival = 34;
+                break;
+            case 'u':
+            case 'U':
+                t->info.ival = static_cast<int>(readUniversalCharacter(t));
+                consumed = true;
                 break;
             case 'x':
             {

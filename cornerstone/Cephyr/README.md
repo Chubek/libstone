@@ -61,6 +61,8 @@ it does not need the `cephyr` executable. Set `PYTHONPATH` to
 See the [embedding guide](EMBEDDING.md) for C and C++ examples and lifecycle
 requirements. The [extension SDK](SDK.md) provides opt-in, trusted callbacks
 through `<cephyr/CephyrSDK.h>` without exposing parser internals as public ABI.
+See [the Moonstone integration](MOONSTONE.md) for optional compiler tooling
+and its trust and verification boundaries.
 
 ### Python bindings
 
@@ -157,12 +159,15 @@ MachineIR's word-only globals is emitted separately in `-S` output.
 ## Current limits
 
 - The native C subset covers integer and pointer operations, fixed-signature
-  calls, direct external scalar variadic calls, scalar/array storage,
-  multidimensional array initializers, fixed-size `sizeof` in integer constant
-  expressions, `_Static_assert`, `__func__`, loops, `goto`, and `switch` including
-  fallthrough.
-  Floating point, by-value aggregates, atomics, volatile accesses, VLAs, native
-  variadic definitions, and some other C11 syntax and constraints remain unsupported.
+  calls, direct external scalar variadic calls, scalar and aggregate storage,
+  structure and union member access and copy, designated initializers,
+  fixed-size `sizeof` in integer constant expressions, `_Static_assert`,
+  `__func__`, `_Generic`, loops, `goto`, and `switch` including fallthrough.
+  AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,
+  comparisons, and fixed-prototype calls. RV64IM runtime floating point,
+  floating arguments to variadic functions, `long double`, by-value aggregate
+  calls and returns, atomics, volatile accesses, VLAs, and native variadic
+  definitions remain unsupported.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux
   executable with Cephyr's CRT and libc. Use `-nostdlib` or `stdlib = "none"`

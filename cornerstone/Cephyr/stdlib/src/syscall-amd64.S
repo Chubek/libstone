@@ -31,6 +31,7 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL mmap, 9
     CEPHYR_SYSCALL munmap, 11
     CEPHYR_SYSCALL __cephyr_ioctl, 16
+    CEPHYR_SYSCALL __cephyr_clock_gettime, 228
     CEPHYR_SYSCALL openat, 257
     CEPHYR_SYSCALL __cephyr_unlinkat, 263
     CEPHYR_SYSCALL __cephyr_renameat, 264

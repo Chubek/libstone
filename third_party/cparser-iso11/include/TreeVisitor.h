@@ -25,6 +25,10 @@ public:
     virtual void visit(StringConstASTNode *n);
     virtual void visit(CharConstASTNode *n);
     virtual void visit(StaticAssertASTNode *n);
+    virtual void visit(GenericExprASTNode *n);
+    virtual void visit(GenericAssocASTNode *n);
+    virtual void visit(DesignatedInitASTNode *n);
+    virtual void visit(ArrayDesignatorASTNode *n);
     virtual void visit(SizeOfExprASTNode *n);
     virtual void visit(AlignOfExprASTNode *n);
     virtual void visit(TypeDeclASTNode *n);

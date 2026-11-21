@@ -25,9 +25,10 @@ static void stack_address(ANGas *gas, const char *dst, unsigned offset)
     }
 }
 
-static void stack_move(ANGas *gas, const char *op, const char *reg, unsigned offset)
+static void stack_move(ANGas *gas, const char *op, const char *reg, unsigned offset,
+    unsigned access_bytes)
 {
-    if (offset <= 32760u) {
+    if (offset <= 4095u * access_bytes) {
         an_gas_print(gas, "\t%s %s, [%s, #%u]\n", op, reg, an_gas_abi.sp, offset);
     } else {
         stack_address(gas, "x12", offset);
@@ -37,12 +38,26 @@ static void stack_move(ANGas *gas, const char *op, const char *reg, unsigned off
 
 void an_gas_stack_load(ANGas *gas, const char *dst, unsigned offset)
 {
-    stack_move(gas, "ldr", dst, offset);
+    stack_move(gas, "ldr", dst, offset, 8);
 }
 
 void an_gas_stack_store(ANGas *gas, const char *src, unsigned offset)
 {
-    stack_move(gas, "str", src, offset);
+    stack_move(gas, "str", src, offset, 8);
+}
+
+void an_gas_fp_load(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
+{
+    const int single = type == ARCHON_MIR_F32;
+    const char name[] = { single ? 's' : 'd', (char)('0' + reg), '\0' };
+    stack_move(gas, "ldr", name, offset, single ? 4 : 8);
+}
+
+void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
+{
+    int single = type == ARCHON_MIR_F32;
+    an_gas_print(gas, "\tfmov %c9, %c%u\n", single ? 'w' : 'x', single ? 's' : 'd', reg);
+    an_gas_stack_store(gas, an_gas_a, offset);
 }
 
 void an_gas_enter(ANGas *gas, unsigned size, int frame_record)
@@ -136,14 +151,16 @@ void an_gas_memory(ANGas *gas, ArchonMIROpcode op, int disp)
     an_gas_print(gas, "\t%s %s, [x9]\n", name, reg);
 }
 
-void an_gas_call(ANGas *gas, const char *symbol)
+void an_gas_call(ANGas *gas, const char *symbol, unsigned fp_args)
 {
+    (void)fp_args;
     /* An identifier such as x0 can also be an assembler register keyword. */
     an_gas_print(gas, "\tbl \"%s\"\n", symbol);
 }
 
-void an_gas_call_indirect(ANGas *gas)
+void an_gas_call_indirect(ANGas *gas, unsigned fp_args)
 {
+    (void)fp_args;
     an_gas_print(gas, "\tblr %s\n", an_gas_call_target);
 }
 
@@ -168,6 +185,62 @@ void an_gas_trap(ANGas *gas)
     an_gas_print(gas, "\tbrk #0\n");
     an_gas_label(gas, halt);
     an_gas_jump(gas, halt);
+}
+
+static void fp_operand(ANGas *gas, char fp, unsigned operand)
+{
+    an_gas_print(gas, "\tfmov %c%u, %c%u\n", fp, operand,
+        fp == 's' ? 'w' : 'x', operand ? 10u : 9u);
+}
+
+void an_gas_float(ANGas *gas, ArchonMIROpcode op, ArchonMIRType src, ArchonMIRType dst)
+{
+    const char fp = src == ARCHON_MIR_F32 ? 's' : 'd';
+    const char result = dst == ARCHON_MIR_F32 ? 's' : 'd';
+    const char *mnemonic;
+    switch (op) {
+    case ARCHON_MIR_FNEG:
+        an_gas_print(gas, "\teor x9, x9, #%s\n",
+            fp == 's' ? "0x80000000" : "0x8000000000000000");
+        return;
+    case ARCHON_MIR_SITOFP:
+    case ARCHON_MIR_UITOFP:
+        an_gas_print(gas, "\t%ccvtf %c0, x9\n", op == ARCHON_MIR_SITOFP ? 's' : 'u', result);
+        break;
+    case ARCHON_MIR_FCAST:
+        fp_operand(gas, fp, 0);
+        an_gas_print(gas, "\tfcvt %c0, %c0\n", result, fp);
+        break;
+    case ARCHON_MIR_FPTOSI:
+    case ARCHON_MIR_FPTOUI:
+        fp_operand(gas, fp, 0);
+        an_gas_print(gas, "\tfcvtz%c x9, %c0\n", op == ARCHON_MIR_FPTOSI ? 's' : 'u', fp);
+        return;
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
+        fp_operand(gas, fp, 0);
+        fp_operand(gas, fp, 1);
+        /* Unordered flags are NZCV=0011; none of eq/mi/ls accepts them. */
+        mnemonic = op == ARCHON_MIR_FEQ ? "eq" : op == ARCHON_MIR_FLT ? "mi" : "ls";
+        an_gas_print(gas, "\tfcmp%s %c0, %c1\n\tcset x9, %s\n",
+            op == ARCHON_MIR_FEQ ? "" : "e", fp, fp, mnemonic);
+        return;
+    case ARCHON_MIR_FADD:
+    case ARCHON_MIR_FSUB:
+    case ARCHON_MIR_FMUL:
+    case ARCHON_MIR_FDIV:
+        fp_operand(gas, fp, 0);
+        fp_operand(gas, fp, 1);
+        mnemonic = op == ARCHON_MIR_FADD ? "fadd" : op == ARCHON_MIR_FSUB ? "fsub" :
+            op == ARCHON_MIR_FMUL ? "fmul" : "fdiv";
+        an_gas_print(gas, "\t%s %c0, %c0, %c1\n", mnemonic, fp, fp, fp);
+        break;
+    default:
+        gas->out->status = ARCHON_BACKEND_INTERNAL;
+        return;
+    }
+    an_gas_print(gas, "\tfmov %c9, %c0\n", result == 's' ? 'w' : 'x', result);
 }
 
 static void trap_unless(ANGas *gas, const char *branch)

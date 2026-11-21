@@ -5,6 +5,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 option(CEPHYR_BUILD_TESTS "Build and register Cephyr tests" ON)
 option(CEPHYR_INSTALL_PYTHON "Install the in-process Python bindings" ON)
+option(CEPHYR_ENABLE_MOONSTONE "Enable optional Moonstone compiler integrations" OFF)
 if(CEPHYR_BUILD_TESTS)
   enable_testing()
 endif()
@@ -15,6 +16,27 @@ endif()
 get_filename_component(cephyr_repo "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(cephyr_vendor "${cephyr_repo}/third_party")
 set(cephyr_archon "${cephyr_repo}/cornerstone/Archon")
+if(CEPHYR_ENABLE_MOONSTONE AND NOT TARGET Moonstone::Core)
+  if(DEFINED LIBSTONE_BUILD_MOONSTONE AND NOT LIBSTONE_BUILD_MOONSTONE)
+    message(FATAL_ERROR "CEPHYR_ENABLE_MOONSTONE requires LIBSTONE_BUILD_MOONSTONE in a root build")
+  endif()
+  function(cephyr_add_moonstone)
+    # Only Cephyr's tests/tools are part of this standalone build by default.
+    # Root builds reuse their existing Moonstone configuration and targets.
+    if(NOT DEFINED MOONSTONE_BUILD_TESTS)
+      set(MOONSTONE_BUILD_TESTS OFF)
+    endif()
+    if(NOT DEFINED MOONSTONE_BUILD_TOOLS)
+      set(MOONSTONE_BUILD_TOOLS OFF)
+    endif()
+    if(NOT DEFINED EXOTRACT_BUILD_TESTS)
+      set(EXOTRACT_BUILD_TESTS OFF)
+    endif()
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    add_subdirectory("${cephyr_repo}/moonstone" moonstone)
+  endfunction()
+  cephyr_add_moonstone()
+endif()
 include("${cephyr_repo}/cmake/LibstoneLua.cmake")
 if(NOT TARGET Archon::Archon)
   add_subdirectory("${cephyr_archon}" archon)
@@ -62,6 +84,7 @@ add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
   src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
+  src/moonstone_tools.cpp
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
   "${cephyr_native}/Legalizer.c")
 add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
@@ -89,6 +112,46 @@ if(TARGET Wetstone::wetstone)
   target_link_libraries(cephyr_compiler PRIVATE Wetstone::wetstone)
 endif()
 
+set(cephyr_moonstone_test_args)
+function(cephyr_moonstone_tool key dependency)
+  string(TOUPPER "${key}" macro)
+  if(CEPHYR_ENABLE_MOONSTONE AND TARGET "${dependency}")
+    target_link_libraries(cephyr_compiler PRIVATE "${dependency}")
+    target_compile_definitions(cephyr_compiler PRIVATE "CEPHYR_HAVE_${macro}=1")
+    list(APPEND cephyr_moonstone_test_args --have "${key}")
+    set(cephyr_moonstone_test_args "${cephyr_moonstone_test_args}" PARENT_SCOPE)
+  else()
+    target_compile_definitions(cephyr_compiler PRIVATE "CEPHYR_HAVE_${macro}=0")
+  endif()
+endfunction()
+cephyr_moonstone_tool(prolific Moonstone::Prolific)
+cephyr_moonstone_tool(plaid Moonstone::Plaid)
+cephyr_moonstone_tool(exoml Moonstone::ExoML)
+cephyr_moonstone_tool(exotract Moonstone::Exotract)
+# These Moonstone libraries can also be built in the LibStone parent, where
+# the standalone Cephyr PIC default does not apply.
+if(CEPHYR_ENABLE_MOONSTONE)
+  foreach(dependency IN ITEMS moonstone_exoml_runtime moonstone_exoml_extract moonstone_exotract
+      moonstone_qmr_compiler moonstone_qmr)
+    if(TARGET "${dependency}")
+      set_property(TARGET "${dependency}" PROPERTY POSITION_INDEPENDENT_CODE ON)
+    endif()
+  endforeach()
+endif()
+cephyr_moonstone_tool(qmr Moonstone::QmrCompiler)
+if(CEPHYR_ENABLE_MOONSTONE AND TARGET Moonstone::Chisel AND TARGET Moonstone::Syren
+    AND TARGET Moonstone::Supersonic AND TARGET Nerotypical::Sequent)
+  target_sources(cephyr_compiler PRIVATE src/moonstone_analysis.cpp)
+  target_link_libraries(cephyr_compiler PRIVATE Moonstone::Chisel Moonstone::Syren
+    Moonstone::Supersonic Nerotypical::Sequent)
+  target_compile_definitions(cephyr_compiler PRIVATE CEPHYR_WITH_MOONSTONE_ANALYSIS=1)
+  set(cephyr_has_moonstone_analysis ON)
+endif()
+set(cephyr_test_prolific_artifact)
+if(CEPHYR_ENABLE_MOONSTONE AND TARGET Moonstone::Prolific)
+  set(cephyr_test_prolific_artifact "$<TARGET_SONAME_FILE:Moonstone::Prolific>")
+endif()
+
 add_executable(cephyr src/cli.cpp)
 target_link_libraries(cephyr PRIVATE Cephyr::Cephyr)
 target_compile_features(cephyr PRIVATE cxx_std_20)
@@ -102,6 +165,10 @@ file(RELATIVE_PATH cephyr_lib_relative_archon
 file(RELATIVE_PATH cephyr_bin_relative_lib
   "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
 set_target_properties(cephyr PROPERTIES INSTALL_RPATH "$ORIGIN/${cephyr_bin_relative_lib}")
+if(CEPHYR_ENABLE_MOONSTONE)
+  # Cephyr and its Moonstone shared dependencies install beside one another.
+  set_property(TARGET cephyr_compiler PROPERTY INSTALL_RPATH "$ORIGIN")
+endif()
 target_compile_definitions(cephyr_compiler PRIVATE
   AN_GENERIC_MIR_VERIFY=1
   CEPHYR_VERSION="${PROJECT_VERSION}"
@@ -128,7 +195,10 @@ if(CEPHYR_INSTALL_PYTHON)
     FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
 endif()
 install(DIRECTORY stdlib triples DESTINATION "${cephyr_data_dir}" USE_SOURCE_PERMISSIONS)
-install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md DESTINATION "${cephyr_data_dir}")
+install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md MOONSTONE.md MOONSTONE_ANALYSIS.md
+  DESTINATION "${cephyr_data_dir}")
+install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md
+  DESTINATION "${cephyr_data_dir}/docs")
 install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
 
 if(CEPHYR_BUILD_TESTS)
@@ -141,6 +211,9 @@ if(CEPHYR_BUILD_TESTS)
   add_executable(cephyr-parser-test tests/parser.cpp src/parser.cpp src/preprocess.cpp)
   target_link_libraries(cephyr-parser-test PRIVATE cephyr_diagnostics cephyr_ucpp cephyr_cparser)
   add_test(NAME cephyr.parser COMMAND cephyr-parser-test)
+  add_executable(cephyr-floating-literal-test tests/floating_literal.cpp)
+  target_compile_features(cephyr-floating-literal-test PRIVATE cxx_std_20)
+  add_test(NAME cephyr.floating-literal COMMAND cephyr-floating-literal-test)
   add_executable(cephyr-cache-test tests/cache.cpp src/cache.cpp)
   target_include_directories(cephyr-cache-test SYSTEM PRIVATE
     "${cephyr_vendor}/lmdbxx" "${CEPHYR_LMDB_INCLUDE_DIR}")
@@ -188,6 +261,30 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_sample.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.c11-sample PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.c11-records COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_records.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_test_args})
+  set_tests_properties(cephyr.c11-records PROPERTIES TIMEOUT 120)
+  set(cephyr_fp_test_args)
+  if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
+    list(APPEND cephyr_fp_test_args --qemu-aarch64 "${CEPHYR_QEMU_AARCH64_EXECUTABLE}")
+  endif()
+  add_test(NAME cephyr.c11-floating COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_floating.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_fp_test_args})
+  set_tests_properties(cephyr.c11-floating PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.moonstone-tools COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_moonstone_tools.py" "$<TARGET_FILE:cephyr>"
+    --cc "${CMAKE_C_COMPILER}" --cxx "${CMAKE_CXX_COMPILER}" ${cephyr_moonstone_test_args})
+  set_tests_properties(cephyr.moonstone-tools PROPERTIES TIMEOUT 120)
+  set(cephyr_analysis_test_args)
+  if(NOT cephyr_has_moonstone_analysis)
+    list(APPEND cephyr_analysis_test_args --disabled)
+  endif()
+  add_test(NAME cephyr.moonstone-analysis COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_moonstone_analysis.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_analysis_test_args})
+  set_tests_properties(cephyr.moonstone-analysis PROPERTIES TIMEOUT 120)
   set(cephyr_libc_test_environment "CC=clang" "AR=llvm-ar" "LD_LLD=ld.lld")
   if(CEPHYR_QEMU_EXECUTABLE)
     list(APPEND cephyr_libc_test_environment "CEPHYR_TEST_QEMU=${CEPHYR_QEMU_EXECUTABLE}")
@@ -215,6 +312,7 @@ if(CEPHYR_BUILD_TESTS)
     "-DINSTALL_DATADIR=${CMAKE_INSTALL_DATADIR}"
     "-DINSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
     "-DTEST_PYTHON=${Python3_EXECUTABLE}"
+    "-DTEST_MOONSTONE_PROLIFIC=${cephyr_test_prolific_artifact}"
     "-DTEST_PYTHON_BINDINGS=${CEPHYR_INSTALL_PYTHON}"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_api.cmake")
   set_tests_properties(cephyr.installed-api PROPERTIES TIMEOUT 180)

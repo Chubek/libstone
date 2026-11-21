@@ -34,6 +34,20 @@ void an_gas_stack_store(ANGas *gas, const char *src, unsigned offset)
     an_gas_print(gas, "\tmovq %s, %u(%s)\n", src, offset, an_gas_abi.sp);
 }
 
+void an_gas_fp_load(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
+{
+    an_gas_print(gas, "\tmovs%c %u(%%rsp), %%xmm%u\n",
+        type == ARCHON_MIR_F32 ? 's' : 'd', offset, reg);
+}
+
+void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
+{
+    int single = type == ARCHON_MIR_F32;
+    an_gas_print(gas, "\tmov%c %%xmm%u, %s\n", single ? 'd' : 'q', reg,
+        single ? "%eax" : "%rax");
+    an_gas_stack_store(gas, an_gas_a, offset);
+}
+
 void an_gas_local_addr(ANGas *gas, unsigned offset)
 {
     an_gas_print(gas, "\tleaq %u(%s), %%rax\n", offset, an_gas_abi.sp);
@@ -93,17 +107,26 @@ void an_gas_memory(ANGas *gas, ArchonMIROpcode op, int disp)
         an_gas_print(gas, "\t%s %d(%%rax), %s\n", name, disp, reg);
 }
 
-void an_gas_call(ANGas *gas, const char *symbol)
+static void call_fp_count(ANGas *gas, unsigned count)
 {
-    /* The supported scalar signatures never have vector arguments. Set %al
-     * to zero even when the external target is not declared variadic in MIR. */
-    an_gas_print(gas, "\txorl %%eax, %%eax\n\tcall %s%s\n",
-        symbol, gas->out->pic ? "@PLT" : "");
+    /* Set the SysV variadic upper bound for every call. A producer using a
+     * fixed signature alias remains responsible for default promotions. */
+    if (count)
+        an_gas_print(gas, "\tmovl $%u, %%eax\n", count);
+    else
+        an_gas_print(gas, "\txorl %%eax, %%eax\n");
 }
 
-void an_gas_call_indirect(ANGas *gas)
+void an_gas_call(ANGas *gas, const char *symbol, unsigned fp_args)
 {
-    an_gas_print(gas, "\txorl %%eax, %%eax\n\tcall *%s\n", an_gas_call_target);
+    call_fp_count(gas, fp_args);
+    an_gas_print(gas, "\tcall %s%s\n", symbol, gas->out->pic ? "@PLT" : "");
+}
+
+void an_gas_call_indirect(ANGas *gas, unsigned fp_args)
+{
+    call_fp_count(gas, fp_args);
+    an_gas_print(gas, "\tcall *%s\n", an_gas_call_target);
 }
 
 static void jump(ANGas *gas, const char *mnemonic, unsigned label)
@@ -128,6 +151,110 @@ void an_gas_trap(ANGas *gas)
     an_gas_print(gas, "\tint3\n");
     an_gas_label(gas, halt);
     an_gas_jump(gas, halt);
+}
+
+static void fp_operand(ANGas *gas, int single, unsigned operand)
+{
+    const char *gp = operand ? (single ? "%ecx" : "%rcx") : (single ? "%eax" : "%rax");
+    an_gas_print(gas, "\tmov%c %s, %%xmm%u\n", single ? 'd' : 'q', gp, operand);
+}
+
+static void fp_result(ANGas *gas, int single)
+{
+    an_gas_print(gas, "\tmov%c %%xmm0, %s\n", single ? 'd' : 'q', single ? "%eax" : "%rax");
+}
+
+void an_gas_float(ANGas *gas, ArchonMIROpcode op, ArchonMIRType src, ArchonMIRType dst)
+{
+    const int single = src == ARCHON_MIR_F32;
+    const int dst_single = dst == ARCHON_MIR_F32;
+    const char suffix = single ? 's' : 'd', dst_suffix = dst_single ? 's' : 'd';
+    const char *mnemonic;
+    unsigned ordinary, done;
+    switch (op) {
+    case ARCHON_MIR_FNEG:
+        /* A sign-bit operation preserves zeros and NaN payloads. */
+        if (single)
+            an_gas_print(gas, "\txorl $0x80000000, %%eax\n");
+        else
+            an_gas_print(gas, "\tbtcq $63, %%rax\n");
+        return;
+    case ARCHON_MIR_SITOFP:
+        an_gas_print(gas, "\tcvtsi2s%cq %%rax, %%xmm0\n", dst_suffix);
+        break;
+    case ARCHON_MIR_UITOFP:
+        ordinary = gas->next_label++;
+        done = gas->next_label++;
+        an_gas_print(gas, "\ttestq %%rax, %%rax\n");
+        jump(gas, "jns", ordinary);
+        /* SSE2 has no u64 conversion. For the high half, halve with a
+         * sticky low bit, perform the only rounding in signed conversion,
+         * and double exactly (the halved value is far below overflow). */
+        an_gas_print(gas, "\tmovq %%rax, %%rcx\n\tshrq $1, %%rax\n"
+            "\tandl $1, %%ecx\n\torq %%rcx, %%rax\n"
+            "\tcvtsi2s%cq %%rax, %%xmm0\n\tadds%c %%xmm0, %%xmm0\n",
+            dst_suffix, dst_suffix);
+        an_gas_jump(gas, done);
+        an_gas_label(gas, ordinary);
+        an_gas_print(gas, "\tcvtsi2s%cq %%rax, %%xmm0\n", dst_suffix);
+        an_gas_label(gas, done);
+        break;
+    case ARCHON_MIR_FCAST:
+        fp_operand(gas, single, 0);
+        an_gas_print(gas, "\tcvts%c2s%c %%xmm0, %%xmm0\n", suffix, dst_suffix);
+        break;
+    case ARCHON_MIR_FPTOSI:
+        fp_operand(gas, single, 0);
+        an_gas_print(gas, "\tcvtts%c2siq %%xmm0, %%rax\n", suffix);
+        return;
+    case ARCHON_MIR_FPTOUI:
+        ordinary = gas->next_label++;
+        done = gas->next_label++;
+        fp_operand(gas, single, 0);
+        /* Compare with exact 2^63. On the upper half of the defined
+         * domain, subtraction is exact and the remainder fits in i64. */
+        if (single)
+            an_gas_print(gas, "\tmovl $0x5f000000, %%ecx\n");
+        else
+            an_gas_print(gas, "\tmovabsq $0x43e0000000000000, %%rcx\n");
+        fp_operand(gas, single, 1);
+        an_gas_print(gas, "\tucomis%c %%xmm1, %%xmm0\n", suffix);
+        jump(gas, "jb", ordinary);
+        an_gas_print(gas, "\tsubs%c %%xmm1, %%xmm0\n"
+            "\tcvtts%c2siq %%xmm0, %%rax\n\tbtsq $63, %%rax\n", suffix, suffix);
+        an_gas_jump(gas, done);
+        an_gas_label(gas, ordinary);
+        an_gas_print(gas, "\tcvtts%c2siq %%xmm0, %%rax\n", suffix);
+        an_gas_label(gas, done);
+        return;
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
+        fp_operand(gas, single, 0);
+        fp_operand(gas, single, 1);
+        mnemonic = op == ARCHON_MIR_FEQ ? "sete" : op == ARCHON_MIR_FLT ? "setb" : "setbe";
+        /* Ordered predicates exclude the unordered (PF=1) case; unlike
+         * signed zeros, NaNs never compare equal to themselves. */
+        an_gas_print(gas, "\t%scomis%c %%xmm1, %%xmm0\n",
+            op == ARCHON_MIR_FEQ ? "u" : "", suffix);
+        an_gas_print(gas, "\t%s %%al\n\tsetnp %%dl\n\tandb %%dl, %%al\n"
+            "\tmovzbl %%al, %%eax\n", mnemonic);
+        return;
+    case ARCHON_MIR_FADD:
+    case ARCHON_MIR_FSUB:
+    case ARCHON_MIR_FMUL:
+    case ARCHON_MIR_FDIV:
+        fp_operand(gas, single, 0);
+        fp_operand(gas, single, 1);
+        mnemonic = op == ARCHON_MIR_FADD ? "add" : op == ARCHON_MIR_FSUB ? "sub" :
+            op == ARCHON_MIR_FMUL ? "mul" : "div";
+        an_gas_print(gas, "\t%ss%c %%xmm1, %%xmm0\n", mnemonic, suffix);
+        break;
+    default:
+        gas->out->status = ARCHON_BACKEND_INTERNAL;
+        return;
+    }
+    fp_result(gas, dst_single);
 }
 
 static void divide(ANGas *gas, ArchonMIROpcode op)

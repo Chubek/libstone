@@ -25,12 +25,17 @@ for arch in x86_64 aarch64 riscv64; do
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    for source in smoke io files general; do
+    for source in smoke io files general time multibyte nonlocal; do
         "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
+        extra=
+        if [ "$source" = nonlocal ]; then
+            extra="$output/nonlocal-registers.o"
+            "$CC" --target="$target" "$@" -c "$root/tests/nonlocal-registers.S" -o "$extra"
+        fi
         "$LD_LLD" -static --fatal-warnings -o "$output/test-$source" \
-            "$output/crt0.o" "$output/test-$source.o" "$output/libc.a"
+            "$output/crt0.o" "$output/test-$source.o" ${extra:+"$extra"} "$output/libc.a"
     done
     # A custom CRT need not define environ. Link but do not run with no startup.
     "$LD_LLD" -static --fatal-warnings -e main -o "$output/test-no-crt" \
@@ -54,6 +59,9 @@ for arch in x86_64 aarch64 riscv64; do
     fi
 
     run "$output/test-smoke"
+    run "$output/test-time"
+    run "$output/test-multibyte"
+    run "$output/test-nonlocal"
     text=$(printf 'c!' | run "$output/test-io" pipe)
     test "$text" = C
     mkdir -p "$output/remove-dir"

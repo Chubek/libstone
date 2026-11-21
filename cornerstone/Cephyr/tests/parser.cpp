@@ -280,6 +280,22 @@ void check_tokens() {
     fails(source("int c = '';"), "empty character constant");
     fails(source("int c = '\\400';"), "octal escape exceeds one byte");
     fails(source("char *s = \"\\400\";"), "octal escape exceeds one byte");
+    auto unit = parses(R"(char *s = "\u00a3" u8"\U0001f642"; int c = '\u0040';)");
+    const auto &tokens = items(unit.root());
+    auto *str = as<VarDeclASTNode>(tokens[0], NK_VAR_DECL);
+    auto *literal = as<StringConstASTNode>(str->getInit(), NK_STRING_CONST);
+    expect(literal->getBytes() == "\xc2\xa3\xf0\x9f\x99\x82" &&
+               std::string_view(literal->getSpelling()) == R"("\u00a3" u8"\U0001f642")",
+           "universal character names did not preserve spelling and UTF-8 bytes");
+    auto *chr = as<VarDeclASTNode>(tokens[1], NK_VAR_DECL);
+    expect(as<CharConstASTNode>(chr->getInit(), NK_CHAR_CONST)->getValue() == '@',
+           "allowed basic-range universal character name did not decode");
+    fails(source(R"(char *s = "\u00x0";)"), "malformed universal character name");
+    fails(source(R"(char *s = "\u0041";)"), "invalid code point");
+    fails(source(R"(char *s = "\ud800";)"), "invalid code point");
+    fails(source(R"(int c = '\U00110000';)"), "invalid code point");
+    fails(source(R"(void *s = u"text";)"), "wide string literals are not supported");
+    fails(source(R"(int c = L'a';)"), "wide character constants are not supported");
 }
 
 void check_predefined_function_name() {
@@ -300,6 +316,61 @@ void check_predefined_function_name() {
     fails(source("void f(void) { int __func__; }"), "cannot declare the predefined identifier __func__");
 }
 
+void check_generic_ast() {
+    auto unit = parses(R"(
+        typedef long LT;
+        int f(void) {
+            _Generic(1, int: 0);
+            return _Generic((1, 2), const LT *: 3, default: _Generic(1, int: 4));
+        }
+    )");
+    auto *fn = as<FunctionDeclASTNode>(items(unit.root())[1], NK_FUNCTION_DECL);
+    auto *body = as<CompoundStmtASTNode>(fn->getBody(), NK_COMPOUND_STMT);
+    as<GenericExprASTNode>(items(body->getItems())[0], NK_GENERIC_EXPR);
+    auto *ret = as<ReturnStmtASTNode>(items(body->getItems())[1], NK_RETURN_STMT);
+    auto *selection = as<GenericExprASTNode>(ret->getExpr(), NK_GENERIC_EXPR);
+    auto *comma = as<CompoundExprASTNode>(selection->getControl(), NK_COMPOUND_EXPR);
+    expect(items(comma->getElements()).size() == 2, "lost comma expression in controller");
+    const auto &arms = items(selection->getAssociations());
+    expect(arms.size() == 2, "lost generic association");
+    auto *typed = as<GenericAssocASTNode>(arms[0], NK_GENERIC_ASSOC);
+    auto *pointee = as<PointerTypeASTNode>(typed->getType(), NK_POINTER_TYPE)->getBaseType();
+    expect((pointee->getFlags() & TQ_CONST) && pointee->getKind() == NK_INTEGRAL_TYPE,
+           "lost qualified typedef in generic association");
+    auto *fallback = as<GenericAssocASTNode>(arms[1], NK_GENERIC_ASSOC);
+    expect(fallback->getType() == NULL_AST_NODE, "default association gained a type");
+    as<GenericExprASTNode>(fallback->getExpr(), NK_GENERIC_EXPR);
+    fails(source("int n = _Generic(0, 1: 2);"), "expected type name or default");
+    fails(source("int n = _Generic(0, int: 2,);"), "expected type name or default");
+}
+
+void check_designation_ast() {
+    auto unit = parses(R"(
+        struct S { int member[3]; };
+        struct S records[2] = { [1].member = { [2 - 1] = 4, 5 }, [0].member[2] = 7 };
+    )");
+    auto *records = as<VarDeclASTNode>(items(unit.root())[1], NK_VAR_DECL);
+    const auto &initializers = items(records->getInit());
+    expect(initializers.size() == 2, "lost designated initializer");
+    auto *designated = as<DesignatedInitASTNode>(initializers[0], NK_DESIGNATED_INIT);
+    const auto &path = items(designated->getDesignators());
+    expect(path.size() == 2, "incorrect designation path length");
+    auto *index = as<ArrayDesignatorASTNode>(path[0], NK_ARRAY_DESIGNATOR);
+    expect(as<IntegerConstASTNode>(index->getIndex(), NK_INTEGER_CONST)->getValue() == 1,
+           "lost array index");
+    expect(std::string_view(as<IdentASTNode>(path[1], NK_IDENT_NODE)->getValue()) == "member",
+           "lost member designator");
+    const auto &nested = items(designated->getInit());
+    expect(nested.size() == 2, "lost nested initializer boundaries");
+    auto *nested_init = as<DesignatedInitASTNode>(nested[0], NK_DESIGNATED_INIT);
+    auto *offset = as<ArrayDesignatorASTNode>(items(nested_init->getDesignators())[0],
+                                              NK_ARRAY_DESIGNATOR);
+    as<MinusExprASTNode>(offset->getIndex(), NK_MINUS_EXPR);
+    as<IntegerConstASTNode>(nested[1], NK_INTEGER_CONST);
+    fails(source("int a[2] = { [1] 4 };"), "expected '='");
+    fails(source("int a[2] = { [] = 4 };"), "expected expression");
+}
+
 } // namespace
 
 int main() {
@@ -309,12 +380,13 @@ int main() {
     check_namespaces();
     check_tokens();
     check_predefined_function_name();
+    check_generic_ast();
+    check_designation_ast();
     auto bad = source("\nint f(void) { return @; }");
     bad.lines = {{"test.c", 1, 0}, {"included.h", 21, 0}};
     fails(std::move(bad), "included.h:21:22: error[cephyr.lex]");
     fails(source("int f(void) { int uninitialized = ; }"), "expected expression");
     fails(source("typedef int T; typedef char T;"), "cephyr.parse.semantic");
-    fails(source("int a[2] = { [1] = 4 };"), "designated initializers");
     fails(source("_Thread_local int x;"), "_Thread_local");
     fails(source("int f(void) { return \"unterminated"), "unterminated string");
     fails(source("int x; /* unterminated"), "unterminated block comment");

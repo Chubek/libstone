@@ -536,7 +536,7 @@ class CephyrCLIRegressionTests(unittest.TestCase):
 
     def test_22_unsupported_constructs_do_not_publish_artifacts(self) -> None:
         cases = (
-            ("float", "int f(void) { return 1.5; }\n", rb"floating.point"),
+            ("long-double", "long double f(void) { return 1.5L; }\n", rb"long double"),
         )
         destination = self.work / "protected.mir"
         destination.write_bytes(b"previous output")
@@ -1286,6 +1286,51 @@ class CephyrCLIRegressionTests(unittest.TestCase):
                     "-fsyntax-only", "-x", "c", "-", input_bytes=source + b"\n", ok=False,
                 )
                 self.assertRegex(failure.stderr, message)
+
+
+    def test_104_native_generic_selection(self) -> None:
+        self._check_native_c11_fixture("generic")
+        mir = self.work / "generic.mir"
+        self.invoke("--emit-mir", FIXTURES / "cephyr_cli_native_generic.c", "-o", mir)
+        text = mir.read_text(encoding="ascii")
+        self.assertNotIn("controller", text)
+        self.assertNotIn("unselected", text)
+        nested = "&value"
+        for _ in range(24):
+            nested = f"&_Generic(0, int: *({nested}))"
+        self.invoke(
+            "-fsyntax-only", "-x", "c", "-",
+            input_bytes=f"int value; int *p(void) {{ return {nested}; }}\n".encode(),
+        )
+
+    def test_105_generic_selection_constraints(self) -> None:
+        for source, message in (
+            (b"int n = _Generic(0, default: 1, default: 2);",
+             b"duplicate default _Generic association"),
+            (b"typedef signed int I; int n = _Generic(0, int: 1, I: 2);",
+             b"compatible types in multiple _Generic associations"),
+            (b"int n = _Generic(0, int: 1, void: 2);", b"complete object type"),
+            (b"int n = _Generic(0, int: 1, int (void): 2);", b"complete object type"),
+            (b"int n = _Generic(0, int: 1, int []: 2);", b"complete object type"),
+            (b"struct S; int n = _Generic(0, int: 1, struct S: 2);", b"complete object type"),
+            (b"int f(int n) { return _Generic(0, int: 1, int (*)[n]: 2); }",
+             b"variable-length arrays are not supported"),
+            (b"int n = _Generic(0, unsigned int: 1);", b"matches no association"),
+            (b"extern int (*p)[]; int n = _Generic(p, int (*)[2]: 1, int (*)[3]: 2);",
+             b"matches multiple associations"),
+            (b"int n = _Generic(0, int: 1, default: future); int future;",
+             b"no valid declaration"),
+            (b"int n = _Generic(0, int: 1, default: 1 = 2);",
+             b"invalid expression in _Generic association"),
+        ):
+            with self.subTest(source=source):
+                failure = self.invoke(
+                    "-fsyntax-only", "-x", "c", "-", input_bytes=source + b"\n", ok=False,
+                )
+                self.assertIn(message, failure.stderr)
+
+    def test_106_native_utf8_string_literals(self) -> None:
+        self._check_native_c11_fixture("utf8_literals")
 
 
 def parse_arguments() -> tuple[argparse.Namespace, list[str]]:

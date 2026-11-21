@@ -1,6 +1,11 @@
 #include "driver.hpp"
 #include "mir_verify.h"
+#include "moonstone_tools.hpp"
 #include "sdk_internal.hpp"
+
+#ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
+#include "moonstone_analysis.hpp"
+#endif
 
 #include <cephyr/Cephyr.h>
 #include <cephyr/backend.hpp>
@@ -53,12 +58,14 @@ struct Options {
     Stage stage = Stage::link;
     std::vector<Input> inputs;
     fs::path output, config_file, sysroot;
+    fs::path profile_output;
     std::string target, stdlib;
     Command assembler_options;
     PreprocessOptions preprocess;
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
     bool no_headers = false, no_start = false, no_libraries = false, shared = false;
     bool verbose = false, sarif = false, werror = false, help = false, version = false;
+    bool moonstone_analysis = false;
 };
 
 struct Invocation {
@@ -95,8 +102,16 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --config FILE             Read FILE instead of ./Cephyr.toml
   --no-cache                Regenerate the Archon backend without using LMDB
   --diagnostics-format=FMT  text or sarif
+  --moonstone-analyze       Inspect supported typed MIR (optional build)
+  --moonstone-profile=FILE  Write a compiler phase profile (optional build)
   -Werror, -v               Promote warnings, or report compiler stages
   --help, --version         Show this help or the Cephyr version
+
+Moonstone tools (optional build; select as the first argument):
+  --moonstone-exoml FILE SYMBOL
+  --moonstone-exotract HEADER IMPLEMENTATION_MACRO...
+  --moonstone-qmr-compile FILE
+  --moonstone-qmr-check [--jobs=N] FILE...
 )";
 
 bool c_input(Language kind)
@@ -254,6 +269,17 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
                 opts.sarif = value == "sarif";
             else
                 diag.error("cephyr.option", "diagnostics format must be text or sarif");
+        } else if (token == "--moonstone-analyze") {
+            opts.moonstone_analysis = true;
+#ifndef CEPHYR_WITH_MOONSTONE_ANALYSIS
+            diag.error("cephyr.moonstone.analysis", "Cephyr was built without Moonstone analysis support");
+#endif
+        } else if (option("--moonstone-profile")) {
+            opts.profile_output = argument("--moonstone-profile");
+            if (!moonstone_tools::profile_available())
+                diag.error("cephyr.moonstone.profile", "Cephyr was built without Prolific profiling support");
+            if (opts.profile_output == "-")
+                diag.error("cephyr.moonstone.profile", "profiling requires a file, not standard output");
         } else if (token == "--no-cache" || token == "--cache") {
             opts.use_cache = token == "--cache";
         } else if (token == "-static" || token == "-dynamic") {
@@ -338,6 +364,13 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
         diag.error("cephyr.option", "-shared and -static cannot be combined");
     if (opts.shared && opts.stage != Stage::link)
         diag.error("cephyr.option", "-shared requires the link stage; use -fPIC to compile an object");
+    if (opts.moonstone_analysis && opts.stage == Stage::preprocess)
+        diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires C lowering, not -E");
+    else if (opts.moonstone_analysis && !opts.inputs.empty() &&
+             std::none_of(opts.inputs.begin(), opts.inputs.end(), [](const auto &input) {
+                 return c_input(input.language);
+             }))
+        diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires at least one C input");
     return diag.error_count() == 0;
 }
 
@@ -383,17 +416,20 @@ std::pair<fs::path, fs::path> resources()
     return {std::move(cephyr), std::move(archon)};
 }
 
+fs::path config_path(const Options &opts)
+{
+    if (!opts.config_file.empty())
+        return opts.config_file;
+    if (const char *env = std::getenv("CEPHYR_CONFIG"); env && *env)
+        return env;
+    return path_exists("Cephyr.toml") ? fs::path("Cephyr.toml") : fs::path{};
+}
+
 std::optional<Config> configure(const Options &opts, const cephyr_request &request, Diagnostics &diag)
 {
     const auto [cephyr, archon] = resources();
     Config config = default_config(cephyr, archon);
-    auto config_file = opts.config_file;
-    if (config_file.empty()) {
-        if (const char *env = std::getenv("CEPHYR_CONFIG"); env && *env)
-            config_file = env;
-        else if (path_exists("Cephyr.toml"))
-            config_file = "Cephyr.toml";
-    }
+    const auto config_file = config_path(opts);
     if (!config_file.empty() && !load_config(config, config_file, diag))
         return std::nullopt;
     if (request.resource_root) {
@@ -436,7 +472,7 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
 
 PreprocessOptions preprocessor_options(const Options &opts, const Config &config,
                                           const Target &target, const NativeLoweringProvider *provider,
-                                          bool custom_model, bool assembler)
+                                          bool custom_model, bool native_scalar_fp, bool assembler)
 {
     auto result = config.preprocess;
     result.assembler = assembler;
@@ -444,6 +480,8 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
         {true, "__CEPHYR__=1"}, {true, "__CEPHYR_HAS_VARIADIC_CALLS=1"},
         {true, "__LP64__=1"}, {true, "_LP64=1"},
     };
+    if (native_scalar_fp && !assembler)
+        builtins.emplace_back(true, "__CEPHYR_HAS_SCALAR_FP=1");
     if (provider && provider->architecture == "RISCV64IM")
         for (const auto *macro : {"__riscv=1", "__riscv_xlen=64", "__riscv_mul=1", "__riscv_div=1",
                                   "__riscv_float_abi_soft=1", "__CHAR_UNSIGNED__=1"})
@@ -624,6 +662,49 @@ fs::path output_name(const Input &input, const Options &opts)
     return name;
 }
 
+bool can_publish_profile(const Options &opts, Diagnostics &diag)
+{
+    const auto &profile = opts.profile_output;
+    if (!can_publish(profile, opts, diag))
+        return false;
+    const auto config = config_path(opts);
+    if (!config.empty() && same_file(profile, config)) {
+        diag.error("cephyr.moonstone.profile", "profile would overwrite the configuration file",
+                   Location{profile.string()});
+        return false;
+    }
+    const auto conflicts = [&](const fs::path &output) {
+        return !output.empty() && output != "-" && same_file(profile, output);
+    };
+    bool same_output = conflicts(opts.output);
+    if (opts.stage == Stage::link && opts.output.empty())
+        same_output = conflicts("a.out");
+    if (opts.output.empty() && (opts.stage == Stage::object ||
+        opts.stage == Stage::assembly || opts.stage == Stage::mir)) {
+        for (const auto &input : opts.inputs) {
+            if (for_stage(input.language, opts.stage) &&
+                !(opts.stage == Stage::assembly && input.language == Language::assembly) &&
+                conflicts(output_name(input, opts)))
+                same_output = true;
+        }
+    }
+    if (same_output)
+        diag.error("cephyr.moonstone.profile", "profile and compiler output must be different files",
+                   Location{profile.string()});
+    return !same_output;
+}
+
+template <class Action>
+decltype(auto) measured(MoonstoneProfile *profile, std::string_view stage,
+                        std::string_view input, Action &&action)
+{
+    if (profile) {
+        const auto span = profile->measure(stage, input);
+        return std::forward<Action>(action)();
+    }
+    return std::forward<Action>(action)();
+}
+
 void sysroot(Command &args, const Config &config)
 {
     if (!config.sysroot.empty())
@@ -740,8 +821,10 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
         runtime.library = workspace / "libcephyr-c.a";
         extend(command, {"rcs", runtime.library.string()});
         for (const char *source : {amd64 ? "syscall-amd64.S" : aarch64 ? "syscall-aarch64.S" : "syscall.S",
+                                   amd64 ? "setjmp-amd64.S" : aarch64 ? "setjmp-aarch64.S" : "setjmp.S",
                                    "runtime.c", "allocator.c", "assert.c",
-                                   "ctype.c", "stdlib.c", "stdio.c", "stream.c", "string.c"}) {
+                                   "ctype.c", "stdlib.c", "stdio.c", "stream.c", "string.c",
+                                   "time.c", "multibyte.c"}) {
             const auto object = workspace / ("libc-" + fs::path(source).stem().string() + ".o");
             if (!compile(source, object))
                 return std::nullopt;
@@ -825,9 +908,18 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
             check("a target archiver", config.archiver.empty() ? target.archiver : config.archiver));
 }
 
-bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag)
+bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag,
+             MoonstoneProfile *profile)
 {
-    auto loaded = configure(opts, invocation.request, diag);
+    detail::MoonstoneAnalysis *analysis = nullptr;
+#ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
+    std::optional<detail::MoonstoneAnalysis> analysis_storage;
+    if (opts.moonstone_analysis)
+        analysis = &analysis_storage.emplace(diag);
+#endif
+    auto loaded = measured(profile, "configure", {}, [&] {
+        return configure(opts, invocation.request, diag);
+    });
     if (!loaded)
         return false;
     auto &config = *loaded;
@@ -852,6 +944,8 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
             provider = nullptr;
     }
     const bool sdk_backend = sdk.has_backend(*target);
+    const bool native_scalar_fp = provider && !sdk_backend &&
+        (provider->architecture == "AMD64" || provider->architecture == "AArch64");
     // An exact SDK backend for an explicitly selected target may opt into
     // Cephyr's generic little-endian LP64 frontend, not a built-in ISA/ABI.
     const bool custom_model = !provider && !automatic && sdk_backend && target->abi == "LP64";
@@ -896,8 +990,10 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
         return workspace->path;
     };
     std::optional<Backend> backend;
-    const auto preprocessor = preprocessor_options(opts, config, *target, provider, custom_model, false);
-    const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider, custom_model, true);
+    const auto preprocessor = preprocessor_options(opts, config, *target, provider,
+                                                  custom_model, native_scalar_fp, false);
+    const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider,
+                                                            custom_model, native_scalar_fp, true);
     Command link_inputs;
     std::string preprocessed_output;
     std::size_t ordinal = 0;
@@ -942,17 +1038,26 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
             }
             continue;
         }
-        auto source = read_input(input, invocation, diag);
+        const auto name = input.argument == "-" ? "<stdin>" : input.argument;
+        auto source = measured(profile, "read_source", name, [&] {
+            return read_input(input, invocation, diag);
+        });
         if (!source)
             return false;
-        const auto name = input.argument == "-" ? "<stdin>" : input.argument;
-        if (input.language == Language::c && !sdk.desugar(*source, *target, name, diag))
+        if (input.language == Language::c && !measured(profile, "sdk_desugar", name, [&] {
+            return sdk.desugar(*source, *target, name, diag);
+        }))
             return false;
         std::optional<Preprocessed> prep;
         if (input.language == Language::preprocessed) {
-            prep = read_preprocessed(*source, name, diag);
+            prep = measured(profile, "read_preprocessed", name, [&] {
+                return read_preprocessed(*source, name, diag);
+            });
         } else if (input.language == Language::c || input.language == Language::assembly_cpp) {
-            prep = preprocess(*source, name, input.language == Language::c ? preprocessor : assembler_preprocessor, diag);
+            prep = measured(profile, "preprocess", name, [&] {
+                return preprocess(*source, name,
+                                  input.language == Language::c ? preprocessor : assembler_preprocessor, diag);
+            });
         }
         const bool expects_preprocessor = input.language != Language::assembly;
         if ((expects_preprocessor && !prep) || diag.error_count())
@@ -980,18 +1085,25 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
                 return false;
             }
             prep->plain_char_signed = provider && provider->plain_char_signed;
-            auto parsed = parse(*prep, diag);
+            prep->native_scalar_fp = native_scalar_fp;
+            auto parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
             if (!parsed || diag.error_count())
                 return false;
-            auto lowered = lower(parsed->root(), *prep, diag, preprocessor.hosted);
+            auto lowered = measured(profile, "lower", name, [&] {
+                return lower(parsed->root(), *prep, diag, preprocessor.hosted, analysis);
+            });
             if (!lowered || diag.error_count())
                 return false;
-            if (!sdk.analyze(lowered->mir, *target, name, diag))
+            if (!measured(profile, "sdk_analyze", name, [&] {
+                return sdk.analyze(lowered->mir, *target, name, diag);
+            }))
                 return false;
             if (opts.stage == Stage::syntax)
                 continue;
             bool rewritten = false;
-            if (!sdk.rewrite(lowered->mir, *target, name, diag, &rewritten))
+            if (!measured(profile, "sdk_rewrite", name, [&] {
+                return sdk.rewrite(lowered->mir, *target, name, diag, &rewritten);
+            }))
                 return false;
             const bool custom_backend = opts.stage != Stage::mir && sdk_backend;
             if (rewritten || custom_backend) {
@@ -1011,11 +1123,15 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
             const bool pic = opts.pic.value_or(opts.shared || (opts.stage == Stage::link && !config.static_link));
             std::optional<std::string> result;
             if (custom_backend) {
-                result = sdk.emit_assembly(lowered->mir, *target, name, pic, diag);
+                result = measured(profile, "sdk_backend", name, [&] {
+                    return sdk.emit_assembly(lowered->mir, *target, name, pic, diag);
+                });
             } else {
-                if (!backend)
-                    backend.emplace(config, *target, temporary() / "backend", diag);
-                result = backend->compile(lowered->mir, name, pic);
+                result = measured(profile, "native_backend", name, [&] {
+                    if (!backend)
+                        backend.emplace(config, *target, temporary() / "backend", diag);
+                    return backend->compile(lowered->mir, name, pic);
+                });
             }
             if (!result || diag.error_count())
                 return false;
@@ -1049,7 +1165,9 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
         const auto assembly_file = temporary() / (stem + ".s");
         const auto object = temporary() / (stem + ".o");
         save(assembly_file, assembly);
-        if (!assemble(config, *target, opts, assembly_file, object, diag))
+        if (!measured(profile, "assemble", name, [&] {
+            return assemble(config, *target, opts, assembly_file, object, diag);
+        }))
             return false;
         if (opts.stage == Stage::object) {
             const auto output = output_name(input, opts);
@@ -1065,7 +1183,9 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
         return publish_text(opts.output.empty() ? fs::path("-") : opts.output,
                             preprocessed_output, opts, invocation, diag);
     if (opts.stage == Stage::link)
-        return link(config, *target, opts, std::move(link_inputs), temporary(), diag);
+        return measured(profile, "link", {}, [&] {
+            return link(config, *target, opts, std::move(link_inputs), temporary(), diag);
+        });
     return true;
 }
 
@@ -1076,16 +1196,41 @@ int drive(Invocation &invocation)
     int status = CEPHYR_COMPILE_ERROR;
     try {
         const auto &request = invocation.request;
-        const bool parsed = parse_options(request.argc, request.argv, opts, diag);
         SdkPipeline sdk(request.sdk);
-        if (!sdk.validate(diag)) {
+        if (request.argc && moonstone_tools::is_tool(request.argv[0])) {
+            if (request.sdk) {
+                diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks");
+                status = CEPHYR_INVALID_ARGUMENT;
+            } else {
+                auto output = moonstone_tools::run_tool(request.argv[0],
+                    {request.argv + 1, request.argc - 1}, diag);
+                if (output && !diag.error_count() && publish_stdout(*output, invocation, diag))
+                    status = CEPHYR_OK;
+            }
+        } else if (const bool parsed = parse_options(request.argc, request.argv, opts, diag);
+                   !sdk.validate(diag)) {
             status = CEPHYR_INVALID_ARGUMENT;
         } else if (parsed) {
             if (opts.help)
                 publish_stdout(help_text, invocation, diag);
             if (opts.version || (opts.verbose && opts.inputs.empty()))
                 publish_stdout("Cephyr " CEPHYR_VERSION "\n", invocation, diag);
-            if (opts.help || opts.version || opts.inputs.empty() || compile(opts, invocation, sdk, diag))
+            const auto compile_inputs = [&] {
+                if (!opts.profile_output.empty()) {
+                    if (!can_publish_profile(opts, diag))
+                        return false;
+                    MoonstoneProfile profile;
+                    const bool ok = measured(&profile, "compile", {}, [&] {
+                        return compile(opts, invocation, sdk, diag, &profile);
+                    });
+                    if (!publish_text(opts.profile_output, profile.report(ok && !diag.error_count()),
+                                      opts, invocation, diag))
+                        return false;
+                    return ok;
+                }
+                return compile(opts, invocation, sdk, diag, nullptr);
+            };
+            if (opts.help || opts.version || opts.inputs.empty() || compile_inputs())
                 status = diag.error_count() ? CEPHYR_COMPILE_ERROR : CEPHYR_OK;
         }
     } catch (const fs::filesystem_error &err) {

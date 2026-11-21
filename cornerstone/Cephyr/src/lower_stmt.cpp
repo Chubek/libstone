@@ -57,6 +57,7 @@ void branch_on(Function &function, Node *expression, Id yes, Id no) {
 bool expression_kind(ASTNodeKind kind) {
     return kind == cparser::NK_IDENT_NODE || kind == cparser::NK_SIZEOF_EXPR ||
            kind == cparser::NK_ALIGNOF_EXPR || kind == cparser::NK_UNARY_PLUS_EXPR ||
+           kind == cparser::NK_GENERIC_EXPR ||
            (kind >= cparser::NK_INTEGER_CONST && kind <= cparser::NK_PUTI_EXPR);
 }
 
@@ -73,15 +74,6 @@ std::optional<std::uint64_t> object_size(Function &function, const CType &type,
         return std::nullopt;
     }
     return size;
-}
-
-Id pointer_offset(Function &function, Id base, std::uint64_t offset,
-                  const CType &pointee) {
-    if (!offset)
-        return base;
-    const Id amount = function.constant(offset);
-    return function.emit(pointer_type(pointee), "ptr_add",
-                         std::to_string(base) + " " + std::to_string(amount));
 }
 
 void initialize_scalar(Function &function, LValue object, Node *initializer) {
@@ -104,69 +96,39 @@ void initialize_scalar(Function &function, LValue object, Node *initializer) {
     store(function, object, lower_expr(function, initializer), initializer);
 }
 
-void initialize_array(Function &function, LValue object, const ArrayInitialization &plan,
-                      std::uint64_t size, Node *at) {
-    auto scalar = plan.scalar;
-    scalar.is_const = false;
-    // Do not attempt repeated invalid stores while processing zero-filled
-    // ranges: the diagnostic would otherwise grow with the object size.
-    if (scalar.is_volatile) {
+void initialize_object(Function &function, LValue object, const std::vector<ObjectInitEntry> &plan,
+                       std::uint64_t size, Node *at) {
+    if (object_has_qualifier(object.type, &CType::is_volatile)) {
         function.error(at, "volatile object access is not supported");
         return;
     }
-    const auto stride = *size_of(scalar);
-    std::uint64_t offset = 0;
-    const auto element = [&](std::uint64_t position) {
-        return LValue{scalar, pointer_offset(function, object.address, position, scalar)};
-    };
-    const auto store_constant = [&](unsigned char byte, Node *source) {
-        store(function, element(offset), Expr{integer_type(), function.constant(byte), byte},
-              source);
-    };
-    const auto fill = [&](std::uint64_t end) {
-        // Keep MIR size bounded for large zero-filled tails. Iterate in
-        // native MIR rather than introducing an implicit libc dependency.
-        if ((end - offset) / stride < 16) {
-            for (; offset < end; offset += stride)
-                store_constant(0, at);
-            return;
-        }
-        const CType index_type = integer_type(64, false);
-        const auto start = function.constant(offset, index_type);
-        const auto step = function.constant(stride, index_type);
-        const auto limit = function.constant(end, index_type);
-        const auto zero = function.constant(0);
-        const Id loop = function.block();
-        const Id exit = function.block();
-        const Id position = function.param(loop, index_type);
-        function.jump(loop, {start});
-        function.select(loop);
-        const auto operands = [](Id first, Id second) {
-            return std::to_string(first) + " " + std::to_string(second);
-        };
-        const auto address = function.emit(pointer_type(scalar), "ptr_add",
-                                           operands(object.address, position));
-        store(function, {scalar, address}, Expr{integer_type(), zero, 0}, at);
-        const auto next = function.emit(index_type, "add", operands(position, step));
-        const auto done = function.emit(integer_type(), "eq", operands(next, limit));
-        function.branch(done, exit, loop, {}, {next});
-        function.select(exit);
-        offset = end;
-    };
 
-    for (const auto &entry : plan.entries) {
-        fill(entry.offset);
-        if (entry.bytes) {
+    // A whole-record expression initializes the object directly. Otherwise
+    // clear the representation first, covering omitted members and padding.
+    if (object.type.kind != CType::Kind::record || at->getKind() == cparser::NK_LIST)
+        zero_object(function, object.address, size, align_of(object.type));
+    for (const auto &entry : plan) {
+        if (entry.clear) {
+            const auto address = offset_address(function, object.address, entry.offset, entry.type);
+            zero_object(function, address, *size_of(entry.type), align_of(entry.type));
+        } else if (entry.bytes) {
+            auto offset = entry.offset;
+            const auto byte_type = integer_type(8, false);
             for (unsigned char byte : *entry.bytes) {
-                store_constant(byte, entry.source);
+                if (byte)
+                    store(function, {byte_type, offset_address(function, object.address, offset, byte_type)},
+                          {integer_type(), function.constant(byte), byte}, entry.source);
                 ++offset;
             }
+        } else if (entry.type.kind == CType::Kind::record) {
+            const auto address = offset_address(function, object.address, entry.offset, entry.type);
+            (void)copy_record(function, {entry.type, address}, lower_expr(function, entry.source),
+                              entry.source, true);
         } else {
-            initialize_scalar(function, element(offset), entry.source);
-            offset += stride;
+            const auto address = offset_address(function, object.address, entry.offset, entry.type);
+            initialize_scalar(function, {entry.type, address}, entry.source);
         }
     }
-    fill(size);
 }
 
 void lower_local_declaration(Function &function, Node *node) {
@@ -226,10 +188,13 @@ void lower_local_declaration(Function &function, Node *node) {
     }
 
     const CType declared_type = type;
-    std::optional<ArrayInitialization> array_init;
-    if (type.kind == CType::Kind::array && present(initializer)) {
-        array_init = plan_array_initializer(function.unit, type, initializer);
-        if (!array_init)
+    const bool register_object = (flags & SCS_REGISTER) != 0;
+    if (!function.declare_local(name, {declared_type, no_value, {}, register_object}, at))
+        return;
+    std::optional<std::vector<ObjectInitEntry>> aggregate_init;
+    if (type.aggregate() && present(initializer)) {
+        aggregate_init = plan_object_initializer(TypeContext(function.unit, &function), type, initializer);
+        if (!aggregate_init)
             return;
     }
     if (type.kind == CType::Kind::array && !type.count) {
@@ -246,13 +211,12 @@ void lower_local_declaration(Function &function, Node *node) {
         return;
     // The slot has its final size, but an inferred bound is not visible
     // until after the end of the initializer list.
-    if (!function.declare_local(name, {declared_type, slot.address, {}, (flags & SCS_REGISTER) != 0}, at))
-        return;
-    if (array_init)
-        initialize_array(function, slot, *array_init, *size, initializer);
+    function.scopes.back().at(name).address = slot.address;
+    if (aggregate_init)
+        initialize_object(function, slot, *aggregate_init, *size, initializer);
     else if (present(initializer))
         initialize_scalar(function, slot, initializer);
-    if (array_init && !declared_type.count)
+    if (type.kind == CType::Kind::array && !declared_type.count)
         function.scopes.back().at(name).type = std::move(type);
 }
 

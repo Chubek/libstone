@@ -40,12 +40,17 @@ declaration storage flags, typedef scopes, parameter names and function
 prototype/variadic information. `CompoundStmtASTNode::getItems()` is the
 source-ordered view used for lowering. Named array declarators retain bounds
 outermost-first; the AST represents `_Static_assert` without evaluating it.
+Generic selections retain the controller and each ordered type/default
+association, and designated initializers retain their ordered member/index
+paths and nested initializer lists. C11 `u8` string tokens concatenate with
+ordinary string tokens, and universal character names in strings decode as
+UTF-8.
 
 This is not a complete C11 front end or ABI checker. Unsupported productions
-include complex parenthesized declarators (such as pointers to arrays),
-general enum initializer expressions, designators, `_Generic`, atomic and
-thread-local declarations, GNU attributes, and inline assembly. The native
-lowerer has additional restrictions independent of the syntax accepted here.
+include general enum initializer expressions, wide literals, Unicode
+identifiers, atomic and thread-local declarations, GNU attributes, and inline
+assembly. The native lowerer has additional restrictions independent of the
+syntax accepted here.
 See `cornerstone/Cephyr/tests/parser.cpp` for AST and diagnostic regressions.
 
 ## References

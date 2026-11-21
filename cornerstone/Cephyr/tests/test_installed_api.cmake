@@ -17,6 +17,15 @@ endif()
 # Install from Cephyr's binary directory so a parent build need not install
 # unrelated components.
 run("${CMAKE_COMMAND}" --install "${BUILD_DIR}" --prefix "${staging}" ${config_args})
+# A root build installs Moonstone from a sibling directory. Borrow the exact
+# build dependency in that case so the isolated installation can still run.
+if(TEST_MOONSTONE_PROLIFIC)
+  get_filename_component(prolific_soname "${TEST_MOONSTONE_PROLIFIC}" NAME)
+  if(NOT EXISTS "${staging}/${INSTALL_LIBDIR}/${prolific_soname}")
+    file(COPY "${TEST_MOONSTONE_PROLIFIC}" DESTINATION "${staging}/${INSTALL_LIBDIR}"
+      FOLLOW_SYMLINK_CHAIN)
+  endif()
+endif()
 # Use a moved prefix, so resource/library discovery cannot rely on the install path.
 file(REMOVE_RECURSE "${prefix}")
 file(RENAME "${staging}" "${prefix}")
@@ -29,6 +38,10 @@ run("${CMAKE_COMMAND}" --build "${consumer}" ${config_args})
 run("${CMAKE_COMMAND}" -E env --unset=CEPHYR_CONFIG
   "${TEST_CTEST}" --test-dir "${consumer}" --output-on-failure)
 run("${prefix}/${INSTALL_BINDIR}/cephyr" --version)
+if(TEST_MOONSTONE_PROLIFIC)
+  run("${TEST_PYTHON}" "${SOURCE_DIR}/tests/test_moonstone_tools.py"
+    "${prefix}/${INSTALL_BINDIR}/cephyr" --have prolific --only-profile)
+endif()
 
 if(TEST_PYTHON_BINDINGS)
   run("${CMAKE_COMMAND}" -E env --unset=CEPHYR_LIBRARY --unset=CEPHYR_CONFIG

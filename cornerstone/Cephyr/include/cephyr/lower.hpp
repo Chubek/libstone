@@ -19,6 +19,7 @@ namespace cparser { class ASTNode; }
 namespace cephyr {
 
 struct Preprocessed;
+namespace detail { class MoonstoneAnalysis; }
 
 // Native MachineIR v1 plus the assembler names for definitions whose linkage
 // is internal to the C translation unit.
@@ -29,7 +30,8 @@ struct LoweredUnit {
 };
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
-                                 Diagnostics &diagnostics, bool hosted = true);
+                                 Diagnostics &diagnostics, bool hosted = true,
+                                 detail::MoonstoneAnalysis *analysis = nullptr);
 
 namespace detail {
 
@@ -52,8 +54,10 @@ private:
     unsigned &depth_;
 };
 
+struct RecordLayout;
+
 struct CType {
-    enum class Kind { invalid, void_, integer, pointer, function, array, record };
+    enum class Kind { invalid, void_, integer, real, pointer, function, array, record };
     Kind kind = Kind::invalid;
     unsigned bits = 0, rank = 0;
     bool is_signed = false, is_plain_char = false, is_const = false, is_volatile = false;
@@ -61,13 +65,32 @@ struct CType {
     std::uint64_t count = 0;             // 0 for incomplete arrays
     std::vector<CType> params;           // adjusted function parameter types
     bool prototype = true, variadic = false;
-    const void *record = nullptr;       // parser identity of an opaque record type
+    const RecordLayout *record = nullptr; // stable within the translation unit
 
     bool valid() const { return kind != Kind::invalid; }
     bool integer() const { return kind == Kind::integer; }
+    bool real() const { return kind == Kind::real; }
+    bool arithmetic() const { return integer() || real(); }
     bool pointer() const { return kind == Kind::pointer; }
+    bool aggregate() const { return kind == Kind::record || kind == Kind::array; }
     bool function_pointer() const { return pointer() && element && element->kind == Kind::function; }
-    bool scalar() const { return integer() || pointer(); }
+    bool scalar() const { return arithmetic() || pointer(); }
+};
+
+struct RecordMember {
+    std::string name;
+    CType type;
+    std::uint64_t offset;
+};
+
+struct RecordLayout {
+    bool is_union = false;
+    bool defining = false;
+    bool has_const_member = false;
+    bool has_volatile_member = false;
+    std::uint64_t size = 0; // zero while the type is incomplete
+    unsigned alignment = 0;
+    std::vector<RecordMember> members;
 };
 
 struct Constant {
@@ -109,25 +132,35 @@ std::vector<Node *> elements(Node *); // a list, a singleton, or an absent node
 std::string identifier(Node *);
 Location location(const Preprocessed &, Node *);
 CType integer_type(unsigned bits = 32, bool is_signed = true, unsigned rank = 0);
+CType real_type(unsigned bits);
 CType plain_char_type(const Preprocessed &);
 CType pointer_type(const CType &);
 CType read_type(Node *, const TypeContext &, bool allow_incomplete = false);
+CType read_record_type(Node *, const TypeContext &);
+const RecordMember *find_member(const CType &, std::string_view);
+CType qualified_member_type(const CType &, const RecordMember &);
+bool object_has_qualifier(const CType &, bool CType::*qualifier);
 void bind_typedef_bounds(Node *, const TypeContext &);
 CType expression_type(Node *, const TypeContext &);
+// Check a generic selection and return only its result expression, or nullptr
+// on error. Optionally return the result's type before any value conversions.
+Node *select_generic(Node *, const TypeContext &, CType *result_type = nullptr);
 CType promote(const CType &);
 CType common_integer(const CType &, const CType &);
+CType common_arithmetic(const CType &, const CType &);
 bool compatible(const CType &, const CType &);
 std::optional<std::uint64_t> size_of(const CType &);
 unsigned align_of(const CType &);
 std::string_view mir_type(const CType &);
 std::uint64_t normalize(std::uint64_t, const CType &);
 std::optional<Constant> integer_constant(Node *, const TypeContext &);
+std::optional<Constant> real_constant(Node *, const TypeContext &, bool require_native = true);
 std::optional<Constant> size_or_alignment(Node *, const TypeContext &);
 std::optional<std::string> string_constant(Node *, const Preprocessed &, Diagnostics &);
 
 struct Expr {
     CType type;
-    Id id = no_value;
+    Id id = no_value; // native pointer to the representation for a record value
     // Only when evaluated as an ICE (or a single literal) for null conversions.
     std::optional<std::uint64_t> constant;
 };
@@ -154,6 +187,7 @@ struct Term {
 struct Instruction {
     std::string opcode, operands;
     Id result = no_value;
+    Node *origin = nullptr;
 };
 
 struct Block {
@@ -192,6 +226,7 @@ struct Unit {
     // The parser shares bound expression nodes when it clones typedef types.
     // Resolve each bound where the declarator first appears, not at a later use.
     std::map<const Node *, std::optional<std::uint64_t>> array_bounds;
+    std::map<const void *, RecordLayout> record_layouts; // keyed by parser tag identity
     std::size_t block_statics = 0;
     std::size_t function_names = 0;
 
@@ -207,20 +242,18 @@ struct Unit {
 bool define_global(Unit &, Symbol &, const Function *scope = nullptr);
 void check_static_assert(const TypeContext &, Node *);
 
-// Explicit subobject initializers in storage order. Gaps are implicitly
-// zero-initialized; string entries contain the exact bytes to copy.
-struct ArrayInitEntry {
+// Explicit subobject initializers; the object starts zero-filled. String
+// entries contain the exact bytes to copy, including any required terminator.
+struct ObjectInitEntry {
     std::uint64_t offset;
+    CType type;
     Node *source;
     std::optional<std::string> bytes;
+    bool clear = false;
 };
 
-struct ArrayInitialization {
-    CType scalar;
-    std::vector<ArrayInitEntry> entries;
-};
-
-std::optional<ArrayInitialization> plan_array_initializer(Unit &, CType &, Node *);
+std::optional<std::vector<ObjectInitEntry>> plan_object_initializer(
+    const TypeContext &, CType &, Node *);
 
 struct Function {
     struct Label {
@@ -255,7 +288,7 @@ struct Function {
     void ret(Id = no_value);
     void trap();
     Id value(const CType &);
-    Id emit(const CType &, std::string_view op, std::string operands = {});
+    Id emit(const CType &, std::string_view op, std::string operands = {}, Node *origin = nullptr);
     void emit_void(std::string_view op, std::string operands = {});
     Id constant(std::uint64_t, const CType & = integer_type());
     LValue local(const CType &, Node *at);
@@ -272,6 +305,9 @@ Expr lower_expr(Function &, Node *);
 LValue lower_lvalue(Function &, Node *);
 Expr load(Function &, LValue, Node *);
 void store(Function &, LValue, Expr, Node *);
+bool copy_record(Function &, LValue, Expr, Node *, bool initializing = false);
+Id offset_address(Function &, Id, std::uint64_t, const CType &);
+void zero_object(Function &, Id, std::uint64_t size, unsigned alignment);
 Expr convert(Function &, Expr, const CType &, Node *, bool explicit_cast = false);
 Id truth(Function &, Expr, Node *);
 // Canonical scalar argument word; includes the RV64 psABI's required extension.

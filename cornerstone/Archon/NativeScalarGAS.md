@@ -8,8 +8,8 @@ compiler, linker, or emulator. The legacy X-macro pipeline is separate.
 
 | Input spec (exact canonical ArchDB) | Profile | Output |
 | --- | --- | --- |
-| [`stdspec/amd64/root.arch`](stdspec/amd64/root.arch) | `AMD64/SysVAMD64` integer LP64 | ELF GAS (AT&T), default or PIC |
-| [`stdspec/aarch64/root.arch`](stdspec/aarch64/root.arch) | `AArch64/AAPCS64` integer LP64 | ELF GAS (little-endian A64), default or PIC |
+| [`stdspec/amd64/root.arch`](stdspec/amd64/root.arch) | `AMD64/SysVAMD64` LP64 with SSE2 scalar FP | ELF GAS (AT&T), default or PIC |
+| [`stdspec/aarch64/root.arch`](stdspec/aarch64/root.arch) | `AArch64/AAPCS64` LP64 with baseline scalar FP | ELF GAS (little-endian A64), default or PIC |
 
 Generation checks the declared ABI v2 fields against the supported scalar
 calling convention and pins a SHA-256 of the full, canonical ArchDB. A renamed
@@ -56,9 +56,12 @@ library build for either new provider compiles the shared `Backend.c`,
   addresses. Static locals and initialized, zero-filled, and external global
   words are supported, as are `ptr_add`, `global_addr`, and `func_addr`.
 - Direct and indirect calls with validated declared signatures. A dynamically
-  obtained function pointer must obey its declared MachineIR signature. All
-  arguments and results use integer or pointer scalars; there are at most 64
-  arguments and at most one result.
+  obtained function pointer must obey its declared MachineIR signature. There
+  are at most 128 arguments and at most one result.
+- IEEE binary32 and binary64 constants, arithmetic, negation, ordered
+  comparisons, object loads/stores, format conversions, signed/unsigned
+  integer conversions, and fixed-arity mixed FP/integer/pointer signatures.
+  See [MachineIR](MachineIR.md#floating-point-operations) for exact types.
 
 ## Stack and symbols
 
@@ -70,18 +73,24 @@ locals may require up to 16-byte alignment.
 
 | ABI property | AMD64 | AArch64 |
 | --- | --- | --- |
-| Register arguments | `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9` | `x0`–`x7` |
+| Integer/pointer argument registers | `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9` | `x0`–`x7` |
+| FP argument registers (separate bank) | `xmm0`–`xmm7` | low 32/64 bits of `v0`–`v7` (`s`/`d`) |
 | First overflow argument, relative to incoming SP | `rsp + 8` | `sp` |
 | Call boundary | `rsp` aligned to 16 before `call`; callee entry has residue 8 | `sp` aligned to 16 before and after `bl`/`blr` |
 | Integer/pointer result | `rax` | `x0` |
+| FP result | `xmm0` | `s0` or `d0` |
 | Return address | `call` pushes it; `ret` pops it | `x30`; non-leaf functions save it and preserve `x29` with an AAPCS frame record |
 
-SysV AMD64 sets `%al` to zero before every call, including indirect calls,
-because the MachineIR ABI passes no vector arguments. This lets a producer
-declare a fixed all-scalar signature alias for a compatible external variadic
-callee. The producer owns C promotions and signature compatibility; MIR does
-not provide variadic function definitions, `va_start`, or general variadic ABI
-classification.
+Each class fills its own bank before using stack slots. Overflow from both
+classes shares one stack area in argument order with eight-byte slots, including
+for `f32`. The FP rules are reviewed profile behavior; the pinned ABI v2 data
+describes only the integer bank.
+
+SysV AMD64 sets `%al` to the number of FP registers used before every call,
+including indirect calls. A producer may declare a fixed scalar signature alias
+for a compatible external variadic callee, but owns C promotions and signature
+compatibility. MIR does not provide variadic function definitions, `va_start`,
+or general variadic ABI classification.
 
 Default address materialization assumes statically resolved, nearby code/data:
 RIP-relative `lea` on AMD64 and `adrp`/`add` on AArch64. The assembly-only
@@ -92,8 +101,8 @@ required. Both targets leave object production, relocation, and range checks
 to external tools.
 
 There is no native raw encoder, physical record stream, scheduler, ABI
-inference, alternate ABI, register allocator, dynamic frame allocation, FP,
-SIMD, aggregates, atomics, unwind, or TLS in these two providers. Unsupported
+inference, alternate ABI, register allocator, dynamic frame allocation, extended
+precision or complex FP, SIMD, aggregates, atomics, unwind, or TLS in these two providers. Unsupported
 formats, invalid inputs, cancelled work, and limit violations return a
 diagnostic and do not publish any artifact. The existing `assemble_object`
 and `link_executable` Python bridges remain RV64-only.
@@ -109,8 +118,9 @@ python3 -m unittest discover -s tests -p 'test_native_scalar_gas.py' -v
 Tests build the generated host libraries with strict C99 flags and check
 fingerprint/ABI failures, rejected output options, the in-memory C ABI,
 cancellation, and atomic output limits. They compare emitted scalar arithmetic
-and conversions to Python reference values, then execute the linked ABI, CFG,
-and memory cases. AMD64 uses the native GNU assembler/linker and CPU. Its PIC
+and conversions to Python reference values, compare FP operations and mixed
+register/stack calls against independently compiled C, and execute the linked
+ABI, CFG, and memory cases. AMD64 uses the native GNU assembler/linker and CPU. Its PIC
 test links and loads a shared object and checks both data/function
 interposition and the scalar variadic call protocol. AArch64 uses GNU cross
 binutils if found or Clang's AArch64 integrated assembler and LLD, and runs in

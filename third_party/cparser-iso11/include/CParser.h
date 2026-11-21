@@ -66,6 +66,7 @@ class CParser : public Parser
     ASTNode *GenericSelection();
     ASTNode *GenericAssocList();
     ASTNode *GenericAssociation();
+    StringConstASTNode *StringLiteral();
     ASTNode *parsePostfixExpression(ASTNode *expr);
     ASTNode *PostfixExpression(ASTNode *typeName);
     ASTNode *ArgumentExpressionList();

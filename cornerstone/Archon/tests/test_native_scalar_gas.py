@@ -185,6 +185,164 @@ copy 1 0
 ret 2"""
 
 
+def fp_function(name, result, params, values, *insts):
+    return "\n".join((
+        f"function {name} {result} {len(params)} {len(params) + len(values)} 1 0",
+        "types " + " ".join((*params, *values)), f"block 0 {len(insts) - 1}", "params",
+        *insts,
+    ))
+
+
+def floating_program():
+    functions, imports, harness = [], [], []
+    for fmt, ctype, cname in (("f32", "float", "f32"), ("f64", "double", "f64")):
+        for op, expr in (
+            ("fneg", "-a"), ("fadd", "a+b"), ("fsub", "a-b"), ("fmul", "a*b"),
+            ("fdiv", "a/b"), ("feq", "a==b"), ("flt", "a<b"), ("fle", "a<=b"),
+            ("fcast", "(double)a" if fmt == "f32" else "(float)a"),
+            ("sitofp", f"({ctype})a"), ("uitofp", f"({ctype})a"),
+            ("fptosi", "(i64)a"), ("fptoui", "(u64)a"),
+        ):
+            name = f"mir_{op}_{fmt}"
+            binary_op = op in {"fadd", "fsub", "fmul", "fdiv", "feq", "flt", "fle"}
+            inputs = (
+                ("i64",) if op in ("sitofp", "uitofp") else
+                (fmt, fmt) if binary_op else (fmt,)
+            )
+            output = (
+                "i64" if op in ("feq", "flt", "fle", "fptosi", "fptoui") else
+                ("f64" if fmt == "f32" else "f32") if op == "fcast" else fmt
+            )
+            functions.append(fp_function(name, output, inputs, (output,),
+                f"{op} {len(inputs)} 0" + (" 1" if binary_op else ""), f"ret {len(inputs)}"))
+            c_inputs = (["i64"] if op == "sitofp" else ["u64"] if op == "uitofp" else
+                        [ctype, ctype] if binary_op else [ctype])
+            c_output = ("u64" if op == "fptoui" else
+                        {"i64": "i64", "f32": "float", "f64": "double"}[output])
+            harness.append(f"extern {c_output} {name}({', '.join(c_inputs)});")
+            if op in ("sitofp", "uitofp"):
+                sample = "si" if op == "sitofp" else "ui"
+            elif op in ("fptosi", "fptoui"):
+                sample = f"{cname}_" + ("signed" if op == "fptosi" else "unsigned")
+            else:
+                sample = cname
+            expected_args = "a, b" if binary_op else "a"
+            check = (f"same_{output}({name}({expected_args}), {expr})" if output != "i64"
+                     else f"({name}({expected_args}) == ({expr}))")
+            harness.append(f"""
+static int check_{op}_{fmt}(void)
+{{
+    for (unsigned i = 0; i < sizeof {sample} / sizeof *{sample}; ++i) {{
+        volatile {c_inputs[0]} a = {sample}[i];
+        {"for (unsigned j = 0; j < sizeof " + sample + " / sizeof *" + sample + "; ++j) {" if binary_op else ""}
+        {"volatile " + ctype + " b = " + sample + "[j];" if binary_op else ""}
+        if (!{check}) return 1;
+        {"}" if binary_op else ""}
+    }}
+    return 0;
+}}""")
+    functions.append("""\
+function mir_fp_memory f32 3 8 2 0
+types ptr f32 f64 f32 f64 f32 i64 f32
+block 0 6
+params
+fstore 0 1 0xfffffffffffffff8
+fstore 0 2 0
+fload 3 0 0xfffffffffffffff8
+fload 4 0 0
+fcast 5 4
+feq 6 5 5
+cbr 6 1 1 3 1 1 5
+block 1 0
+params 7
+ret 7""")
+    functions.append(fp_function("mir_fp_constants", "f64", (), ("f64", "f32", "f64", "f64"),
+        "fconst 0 0x3ff8000000000000", "fconst 1 0x3e800000", "fcast 2 1", "fmul 3 0 2", "ret 3"))
+    functions.append(fp_function("mir_nan_sign", "f32", (), ("f32", "f32"),
+        "fconst 0 0x7fc0abcd", "fneg 1 0", "ret 1"))
+    # Exercise both banks independently, with their overflow slots interleaved.
+    # Reordering also prevents a wrong-but-symmetric incoming/outgoing layout
+    # from cancelling itself. The large local tests far incoming offsets.
+    count = 12
+    mixed = [t for i in range(count) for t in ("i64", "f64" if i % 2 else "f32")]
+    c_types = [{"i64": "u64", "f32": "float", "f64": "double"}[t] for t in mixed]
+    for indirect in (False, True):
+        offset = int(indirect)
+        op = "call_indirect" if indirect else "call"
+        result = "f32" if indirect else "f64"
+        c_result = "float" if indirect else "double"
+        target = "host_mixed_f32" if indirect else "host_mixed_f64"
+        params = (["func_ptr"] if indirect else []) + mixed
+        args = " ".join(str(2 * ((i + 4) % count) + j + offset)
+                        for i in range(count) for j in range(2))
+        caller = f"mir_mixed_{result}"
+        n = len(params)
+        functions.append(f"""\
+function {caller} {result} {n} {n + 1} 1 1
+types {' '.join(params)} {result}
+local 40000 16
+block 0 1
+params
+{op} {n} {'0 ' if indirect else ''}{target} {len(mixed)} {args}
+ret {n}""")
+        imports.append(f"import {target} {result} {len(mixed)} {' '.join(mixed)}")
+        typed = ", ".join(f"{t} p{i}" for i, t in enumerate(c_types))
+        expect = " && ".join(
+            f"p{2*i} == {100 + ((i+4) % count)} && p{2*i+1} == {((i+4) % count) + 0.25}"
+            for i in range(count)
+        )
+        harness.append(f"{c_result} {target}({typed}) {{ return ({expect}) ? 6.25 : 0; }}")
+        host_sig = ", ".join(c_types)
+        harness.append(f"extern {c_result} {caller}("
+                       + (f"{c_result} (*)({host_sig}), " if indirect else "") + host_sig + ");")
+        arg_text = ", ".join(f"{100 + i}, {i + 0.25}" for i in range(count))
+        harness.append(f"static int check_{caller}(void) {{ return "
+                       f"{caller}({target + ', ' if indirect else ''}{arg_text}) != 6.25; }}")
+    return module(*functions, imports=imports), "\n".join(harness)
+
+
+FP_HARNESS_PREAMBLE = """\
+typedef signed long i64;
+typedef unsigned long u64;
+typedef unsigned u32;
+static u32 bits32(float x) { u32 r; __builtin_memcpy(&r, &x, 4); return r; }
+static u64 bits64(double x) { u64 r; __builtin_memcpy(&r, &x, 8); return r; }
+static int same_f32(float x, float y) {
+    return bits32(x) == bits32(y) || (x != x && y != y);
+}
+static int same_f64(double x, double y) {
+    return bits64(x) == bits64(y) || (x != x && y != y);
+}
+static const float f32[] = {
+    0, -0.0f, 0x1p-149f, -0x1p-126f, -1.125f, 1.5f, 0x1.fffffep127f,
+    __builtin_inff(), -__builtin_inff(), __builtin_nanf("0x26")
+};
+static const double f64[] = {
+    0, -0.0, 0x1p-1074, -0x1p-1022, -1.125, 1.5, 0x1.ffffffp0, 0x1.fffffffffffffp1023,
+    __builtin_inf(), -__builtin_inf(), __builtin_nan("0x26")
+};
+static const i64 si[] = {0, -1, 0x1000001, -0x1000001, 0x20000000000001,
+                        0x7fffffffffffffffL, -0x7fffffffffffffffL-1};
+static const u64 ui[] = {0, 1, 0x1000001, 0x20000000000001, 0x7fffffffffffffffUL,
+                       0x8000000000000000UL, 0x8000008000000001UL, 0x8000000000000401UL,
+                       0x8000000000000400UL, 0xfffffffffffffffeUL, 0xffffffffffffffffUL};
+static const float f32_signed[] = {-0x1p63f, -43.75f, -0.5f, 0, 87.125f, 0x1.fffffep62f};
+static const double f64_signed[] = {-0x1p63, -43.75, -0.5, 0, 87.125, 0x1.fffffffffffffp62};
+static const float f32_unsigned[] = {-0.75f, 0, 87.125f, 0x1p63f, 0x1.fffffep63f};
+static const double f64_unsigned[] = {-0.75, 0, 87.125, 0x1p63, 0x1.fffffffffffffp63};
+extern float mir_fp_memory(double *, float, double);
+extern double mir_fp_constants(void);
+extern float mir_nan_sign(void);
+static int check_objects(void) {
+    struct { float f; u32 guard; double d; u64 after; } data = {1, 42, 6, 17};
+    float from_mem = mir_fp_memory(&data.d, -0.0f, 3.5);
+    return data.guard != 42 || data.after != 17 || data.d != 3.5 ||
+           bits32(data.f) != 0x80000000U || bits32(from_mem) != 0x80000000U ||
+           mir_fp_constants() != 0.375 || bits32(mir_nan_sign()) != 0xffc0abcdU;
+}
+"""
+
+
 START = {
     "amd64": """\
 .text
@@ -250,9 +408,7 @@ class _ScalarGasTests:
     def setUpClass(cls):
         if not shutil.which("cmake") or not shutil.which("cc"):
             raise unittest.SkipTest("requires CMake and a host C compiler")
-        temp = Path("/tmp/opencode")
-        work = tempfile.TemporaryDirectory(prefix=f"archon-{cls.arch}-",
-                                           dir=temp if temp.is_dir() else None)
+        work = tempfile.TemporaryDirectory(prefix=f"archon-{cls.arch}-")
         cls.addClassCleanup(work.cleanup)
         cls.root = Path(work.name)
         cls.db = compile_file(ROOT / "stdspec" / cls.arch / "root.arch")
@@ -344,6 +500,7 @@ class _ScalarGasTests:
                          (target, abi, provider))
         self.assertEqual(manifest["abi_facts_v2"], self.db["abi_facts_v2"])
         self.assertEqual(manifest["artifact"], ["ELF-oriented GAS assembly (default or PIC)"])
+        self.assertEqual(manifest["floating_point"]["formats"], ["IEEE binary32", "IEEE binary64"])
         self.assertEqual(self.run_ok(self.driver, "--list-capabilities"),
                          (f"{target}/{abi}: canonical-mir-v1 -> "
                            "ELF GAS assembly only (default or PIC)\n").encode())
@@ -367,6 +524,44 @@ ret -"""
         self.assertEqual((res.returncode, res.stdout), (1, b""))
         self.assertIn(b"definition does not dominate use", res.stderr)
 
+    def test_floating_point_hardware_and_abi(self):
+        program, checks = floating_program()
+        names = [f"check_{op}_{fmt}" for fmt in ("f32", "f64") for op in
+            "fneg fadd fsub fmul fdiv feq flt fle fcast sitofp uitofp fptosi fptoui".split()]
+        names += ["check_objects", "check_mir_mixed_f64", "check_mir_mixed_f32"]
+        main = "\nint test_main(void) {\n" + "".join(
+            f"    if ({name}()) return {i + 1};\n" for i, name in enumerate(names)
+        ) + "    return 0;\n}\n"
+        out = self.link(self.root, [program], FP_HARNESS_PREAMBLE + checks + main, pic=True)
+        result = self.invoke(*self.executor(), out)
+        self.assertEqual(result.returncode, 0,
+            (names[result.returncode - 1] if 1 <= result.returncode <= len(names) else result.returncode,
+             result.stdout, result.stderr))
+
+    def test_floating_point_verifier_rejects_mistyped_operations(self):
+        malformed = (
+            (fp_function("bad", "f32", (), ("f32",), "fconst 0 0x100000000", "ret 0"),
+             b"f32 bits exceed 32 bits"),
+            (fp_function("bad", "f32", ("f32", "f64"), ("f32",), "fadd 2 0 1", "ret 2"),
+             b"matching FP types"),
+            (fp_function("bad", "f32", ("ptr",), ("f32",), "fload 1 0 2", "ret 1"),
+             b"does not satisfy access alignment"),
+            (fp_function("bad", "f64", ("f64",), ("f64",), "fcast 1 0", "ret 1"),
+             b"different FP source and result types"),
+            (fp_function("bad", "i64", ("f64", "f64"), ("i64",), "eq 2 0 1", "ret 2"),
+             b"integer operation requires"),
+        )
+        for func, message in malformed:
+            with self.subTest(message=message):
+                res = self.invoke(self.driver, "--input", "-", data=module(func))
+                self.assertEqual((res.returncode, res.stdout), (1, b""))
+                self.assertIn(message, res.stderr)
+        func = fp_function("bad", "f64", ("f32",), ("f64",), "call 1 host 1 0", "ret 1")
+        res = self.invoke(self.driver, "--input", "-", data=module(func,
+            imports=("import host f64 1 f64",)))
+        self.assertEqual((res.returncode, res.stdout), (1, b""))
+        self.assertIn(b"call argument type does not match callee", res.stderr)
+
     def test_in_memory_runtime_abi(self):
         source, out = self.root / "client.c", self.root / "client"
         source.write_text(r"""
@@ -386,8 +581,22 @@ int main(void)
     static const ArchonMIRFunction fs[] = {
         {"probe", ARCHON_MIR_I64, ts, 1, 0, bs, 1, 0, 0}
     };
+    static const ArchonMIRType fp_types[] = { ARCHON_MIR_F32, ARCHON_MIR_F32 };
+    static const ArchonMIRInst fp_code[] = {
+        {ARCHON_MIR_FNEG, 1, 0, ARCHON_MIR_NONE, 0, 0, 0, 0}
+    };
+    static const ArchonMIRBlock fp_block[] = {
+        {0, 0, fp_code, 1, {ARCHON_MIR_RETURN, 1, {0, 0, 0}, {0, 0, 0}}}
+    };
+    static const ArchonMIRFunction fp_function[] = {
+        {"negate", ARCHON_MIR_F32, fp_types, 2, 1, fp_block, 1, 0, 0}
+    };
+    static const ArchonMIRModule fp_module = { ARCHON_MIR_SCHEMA_VERSION, fp_function, 1, 0, 0, 0, 0 };
+    static const char fp_text[] =
+        "archon-mir 1 module 1 0 0 function negate f32 1 2 1 0 "
+        "types f32 f32 block 0 1 params fneg 1 0 ret 1 end";
     static const ArchonMIRModule m = { ARCHON_MIR_SCHEMA_VERSION, fs, 1, 0, 0, 0, 0 };
-    ArchonBackendArtifact a = {0};
+    ArchonBackendArtifact a = {0}, t = {0};
     ArchonBackendDiagnostic d;
     ArchonBackendOptions o = {1, 0, 0};
     assert(ARCHON_BACKEND_ABI_VERSION == 1u);
@@ -401,6 +610,11 @@ int main(void)
     o.cancelled = cancelled;
     assert(archon_backend_compile(&m, &o, &a, &d) == ARCHON_BACKEND_CANCELLED);
     assert(!a.data && !a.size);
+    assert(archon_backend_compile(&fp_module, 0, &a, &d) == ARCHON_BACKEND_OK);
+    assert(archon_backend_compile_text(fp_text, sizeof fp_text - 1u, 0, &t, &d) == ARCHON_BACKEND_OK);
+    assert(a.size == t.size && memcmp(a.data, t.data, a.size) == 0);
+    archon_backend_artifact_destroy(&a);
+    archon_backend_artifact_destroy(&t);
 }
 """, encoding="ascii")
         self.run_ok("cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
@@ -515,6 +729,42 @@ int test_main(void)
 
 class AMD64NativeGASTests(_ScalarGasTests, unittest.TestCase):
     arch = "amd64"
+
+    def test_sysv_fp_call_to_compatible_variadic_import(self):
+        # MIR still has a fixed scalar signature. These arguments already
+        # obey C's default promotions: all FP actuals are double.
+        types = ("i64",) + ("f64",) * 10
+        args = " ".join(map(str, range(len(types))))
+        prog = module(
+            fp_function("mir_variadic_fp", "f64", types, ("f64",),
+                        f"call 11 variadic_fp 11 {args}", "ret 11"),
+            imports=(f"import variadic_fp f64 11 {' '.join(types)}",),
+        )
+        self.assertIn(b"\tmovl $8, %eax\n\tcall variadic_fp", self.emit_asm(prog))
+        directory = self.root / "variadic-fp"
+        directory.mkdir()
+        out = self.link(directory, [prog], """\
+#include <stdarg.h>
+extern double mir_variadic_fp(unsigned long, double, double, double, double,
+                              double, double, double, double, double, double);
+double variadic_fp(unsigned long n, ...)
+{
+    double sum = 0;
+    va_list ap;
+    va_start(ap, n);
+    for (unsigned long i = 1; i <= n; ++i) {
+        double x = va_arg(ap, double);
+        sum += x * i;
+    }
+    va_end(ap);
+    return sum;
+}
+int test_main(void)
+{
+    return mir_variadic_fp(10, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5) != 412.5;
+}
+""")
+        self.run_ok(out)
 
     def test_pic_addresses_and_scalar_expectations_for_variadic_callees(self):
         compiler = self.compiler()

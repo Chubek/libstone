@@ -25,6 +25,26 @@ void TreeVisitor::visit(StaticAssertASTNode *n)
 void TreeVisitor::visit(SizeOfExprASTNode *n) { n->getExpr()->accept(this); }
 void TreeVisitor::visit(AlignOfExprASTNode *n) { n->getExpr()->accept(this); }
 
+void TreeVisitor::visit(GenericExprASTNode *n)
+{
+    n->getControl()->accept(this);
+    n->getAssociations()->accept(this);
+}
+
+void TreeVisitor::visit(GenericAssocASTNode *n)
+{
+    n->getType()->accept(this);
+    n->getExpr()->accept(this);
+}
+
+void TreeVisitor::visit(DesignatedInitASTNode *n)
+{
+    n->getDesignators()->accept(this);
+    n->getInit()->accept(this);
+}
+
+void TreeVisitor::visit(ArrayDesignatorASTNode *n) { n->getIndex()->accept(this); }
+
 void TreeVisitor::visit(TypeDeclASTNode *n)
 {
     n->getName()->accept(this);

@@ -264,9 +264,7 @@ ASTNode *CParser::PrimaryExpression()
     }
     else if (_sym == TK_STRING_LIT)
     {
-        getTok();
-        res = new StringConstASTNode(_tok->sval, _tok->spelling);
-        res->setLineNum(_tok->line);
+        res = StringLiteral();
     }
     else if (_sym == TK_FLOAT_LIT)
     {
@@ -282,20 +280,42 @@ ASTNode *CParser::PrimaryExpression()
     }
     else if (_sym == TK__GENERIC)
     {
-        parsingError("_Generic selection is unsupported");
+        res = GenericSelection();
     }
     return res;
+}
+
+StringConstASTNode *CParser::StringLiteral()
+{
+    check(TK_STRING_LIT);
+    const int line = _tok->line;
+    std::string bytes = _tok->sval, spelling = _tok->spelling;
+    // Translation phase 6: concatenate tokens even when their prefixes or
+    // intervening whitespace differ. Retain each token's own spelling.
+    while (_sym == TK_STRING_LIT)
+    {
+        getTok();
+        bytes += _tok->sval;
+        spelling += ' ';
+        spelling += _tok->spelling;
+    }
+    auto *result = new StringConstASTNode(std::move(bytes), std::move(spelling));
+    result->setLineNum(line);
+    return result;
 }
 
 ASTNode *CParser::GenericSelection()
 {
     check(TK__GENERIC);
+    const int line = _tok->line;
     check(TK_LPAR);
-    AssignmentExpression();
+    auto *control = AssignmentExpression();
     check(TK_COMMA);
-    GenericAssocList();
+    auto *associations = GenericAssocList();
     check(TK_RPAR);
-    return NULL_AST_NODE;
+    auto *result = new GenericExprASTNode(control, associations);
+    result->setLineNum(line);
+    return result;
 }
 
 ASTNode *CParser::GenericAssocList()
@@ -311,24 +331,19 @@ ASTNode *CParser::GenericAssocList()
 
 ASTNode *CParser::GenericAssociation()
 {
-    if (isTypeSpecifier(_sym, 1))
-    {
-        TypeName();
-        check(TK_COLON);
-        AssignmentExpression();
-    }
-    else if (_sym == TK_DEFAULT)
-    {
+    const int line = getLookahead().line;
+    ASTNode *type = NULL_AST_NODE;
+    if (_sym == TK_DEFAULT)
         getTok();
-        check(TK_COLON);
-        AssignmentExpression();
-    }
+    else if (isTypeSpecifier(_sym, 1) || isTypeQualifier(_sym))
+        type = TypeName();
     else
-    {
-        parsingError("expected type specifier or default");
-    }
+        parsingError("expected type name or default");
 
-    return NULL_AST_NODE;
+    check(TK_COLON);
+    auto *result = new GenericAssocASTNode(type, AssignmentExpression());
+    result->setLineNum(line);
+    return result;
 }
 
 //-----------------------------------------------------------------------------+
@@ -496,7 +511,9 @@ ASTNode *CParser::UnaryExpression(ASTNode *typeName)
         else if (operation == TK_NOT)
             res = new LogNotExprASTNode(type, operand);
         else if (operation == TK_MINUS)
-            res = AST_MINUS(type, new IntegerConstASTNode(0, "0"), operand);
+            // Keep the integer evaluator's synthetic zero, but distinguish
+            // floating negation from a subtraction (notably for signed zero).
+            res = new MinusExprASTNode(type, new IntegerConstASTNode(0, "0"), operand, true);
         else
             res = new UnaryPlusASTNode(operand);
     }
@@ -988,9 +1005,7 @@ ASTNode *CParser::StaticAssertDeclaration()
     check(TK_LPAR);
     ASTNode *expr = ConstantExpression();
     check(TK_COMMA);
-    check(TK_STRING_LIT);
-    auto *message = new StringConstASTNode(_tok->sval, _tok->spelling);
-    message->setLineNum(_tok->line);
+    auto *message = StringLiteral();
     check(TK_RPAR);
     check(TK_SEMICOLON);
     auto *node = new StaticAssertASTNode(expr, message);
@@ -2088,9 +2103,34 @@ ASTNode *CParser::InitializerList()
     ASTNode *init;
 
     const auto parseInitializer = [&]() -> ASTNode * {
-        if (_sym == TK_PERIOD || _sym == TK_LBRACK)
-            parsingError("designated initializers are unsupported");
-        return Initializer();
+        if (_sym != TK_PERIOD && _sym != TK_LBRACK)
+            return Initializer();
+
+        const int line = getLookahead().line;
+        auto *designators = new SequenceASTNode();
+        do
+        {
+            const unsigned kind = _sym;
+            getTok();
+            if (kind == TK_PERIOD)
+            {
+                check(TK_IDENT);
+                designators->addElement(new IdentASTNode(_tok->sval, _tok->line));
+            }
+            else
+            {
+                const int indexLine = _tok->line;
+                auto *index = new ArrayDesignatorASTNode(ConstantExpression());
+                index->setLineNum(indexLine);
+                check(TK_RBRACK);
+                designators->addElement(index);
+            }
+        } while (_sym == TK_PERIOD || _sym == TK_LBRACK);
+
+        check(TK_ASSIGN);
+        auto *initializer = new DesignatedInitASTNode(designators, Initializer());
+        initializer->setLineNum(line);
+        return initializer;
     };
     init = parseInitializer();
     res = new SequenceASTNode();

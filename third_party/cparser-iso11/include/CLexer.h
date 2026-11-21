@@ -161,8 +161,9 @@ class CLexer : public Lexer
     unsigned keyword(const char *s);
     void readName(Token *t);
     void readNumberLit(Token *t, bool leadingDot = false);
-    void readStringLit(Token *t);
+    void readStringLit(Token *t, bool utf8 = false);
     void readCharLit(Token *t);
+    unsigned readUniversalCharacter(Token *t);
     void comment(int line, int column);
     void initialize();
 

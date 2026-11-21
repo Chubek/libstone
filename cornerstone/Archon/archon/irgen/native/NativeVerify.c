@@ -38,14 +38,9 @@ typedef struct {
     unsigned pred_count;
 } VerifyFunction;
 
-static int value_type(ArchonMIRType type)
-{
-    return type == ARCHON_MIR_I64 || type == ARCHON_MIR_PTR || type == ARCHON_MIR_FUNC_PTR;
-}
-
 static int result_type(ArchonMIRType type)
 {
-    return type == ARCHON_MIR_VOID || value_type(type);
+    return type == ARCHON_MIR_VOID || an_is_value_type(type);
 }
 
 static int array_ok(ANContext *ctx, const void *array, size_t count,
@@ -126,11 +121,15 @@ static int verify_declarations(ANContext *ctx, VerifyModule *m)
             return an_error(ctx, ARCHON_BACKEND_LIMIT, "function parameter limit");
         if (!fn->block_count || fn->param_count > fn->value_count || !result_type(fn->result))
             return an_error(ctx, ARCHON_BACKEND_INVALID, "invalid function declaration");
-        if (!work(ctx, m, fn->value_count + fn->block_count + fn->local_count))
+        if (!an_target_type(ctx, fn->result) ||
+            !work(ctx, m, fn->value_count + fn->block_count + fn->local_count))
             return 0;
-        for (j = 0; j < fn->value_count; ++j)
-            if (!value_type(fn->types[j]))
+        for (j = 0; j < fn->value_count; ++j) {
+            if (!an_is_value_type(fn->types[j]))
                 return an_error(ctx, ARCHON_BACKEND_INVALID, "invalid value type");
+            if (!an_target_type(ctx, fn->types[j]))
+                return 0;
+        }
         for (j = 0; j < fn->local_count; ++j) {
             const ArchonMIRLocal *local = &fn->locals[j];
             uint32_t align = local->alignment;
@@ -149,9 +148,14 @@ static int verify_declarations(ANContext *ctx, VerifyModule *m)
             return 0;
         if (!result_type(import->result))
             return an_error(ctx, ARCHON_BACKEND_INVALID, "invalid import result type");
-        for (j = 0; j < import->param_count; ++j)
-            if (!value_type(import->params[j]))
+        if (!an_target_type(ctx, import->result))
+            return 0;
+        for (j = 0; j < import->param_count; ++j) {
+            if (!an_is_value_type(import->params[j]))
                 return an_error(ctx, ARCHON_BACKEND_INVALID, "invalid import parameter type");
+            if (!an_target_type(ctx, import->params[j]))
+                return 0;
+        }
     }
     for (i = 0; i < module->global_count; ++i) {
         const ArchonMIRGlobal *global = &module->globals[i];

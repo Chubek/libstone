@@ -47,6 +47,10 @@ void StringConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void CharConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void StaticAssertASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void GenericExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void GenericAssocASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void DesignatedInitASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void ArrayDesignatorASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void SizeOfExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 

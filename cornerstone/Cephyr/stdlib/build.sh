@@ -41,7 +41,7 @@ compile() {
 }
 
 set --
-for source in string ctype stdlib stdio stream assert allocator runtime; do
+for source in string ctype stdlib stdio stream assert allocator runtime time multibyte; do
     object="$build/$source.o"
     compile -std=c11 -O2 \
         -c "$root/src/$source.c" -o "$object"
@@ -49,9 +49,10 @@ for source in string ctype stdlib stdio stream assert allocator runtime; do
 done
 
 compile -c "$root/src/syscall$suffix.S" -o "$build/syscall.o"
+compile -c "$root/src/setjmp$suffix.S" -o "$build/setjmp.o"
 compile -c "$root/src/start$suffix.S" -o "$build/crt0.o"
 
-"$AR" rcs "$build/libc.a" "$@" "$build/syscall.o"
+"$AR" rcs "$build/libc.a" "$@" "$build/syscall.o" "$build/setjmp.o"
 
 echo "$build/libc.a"
 echo "$build/crt0.o"

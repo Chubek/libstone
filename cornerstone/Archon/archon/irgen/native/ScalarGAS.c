@@ -17,6 +17,24 @@ typedef struct {
     int record;
 } GasFrame;
 
+typedef enum { GAS_GP, GAS_FP, GAS_STACK } GasArgKind;
+typedef struct { GasArgKind kind; unsigned index; } GasArg;
+typedef struct { unsigned gp, fp, stack; } GasArgState;
+
+/* Both reviewed profiles allocate integer/pointer and FP arguments from
+ * independent register banks. Overflow scalars share one stack area in
+ * declaration order, with 8-byte slots for these types. */
+static GasArg argument(GasArgState *state, ArchonMIRType type)
+{
+    if (an_is_float(type)) {
+        if (state->fp < an_gas_abi.fp_argc)
+            return (GasArg){ GAS_FP, state->fp++ };
+    } else if (state->gp < an_gas_abi.argc) {
+        return (GasArg){ GAS_GP, state->gp++ };
+    }
+    return (GasArg){ GAS_STACK, state->stack++ };
+}
+
 void an_gas_print(ANGas *gas, const char *format, ...)
 {
     ANOut *out = gas->out;
@@ -82,9 +100,12 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
         for (i = 0; i < block->inst_count; ++i) {
             const ArchonMIRInst *ins = &block->insts[i];
             if (an_is_call(ins->op)) {
-                unsigned argc = (unsigned)ins->arg_count;
-                if (argc > an_gas_abi.argc && argc - an_gas_abi.argc > outgoing)
-                    outgoing = argc - an_gas_abi.argc;
+                GasArgState state = {0};
+                size_t n;
+                for (n = 0; n < ins->arg_count; ++n)
+                    (void)argument(&state, fn->types[ins->args[n]]);
+                if (state.stack > outgoing)
+                    outgoing = state.stack;
                 calls = 1;
             }
         }
@@ -123,57 +144,91 @@ static unsigned home(const GasFrame *frame, ArchonValue v)
     return frame->homes + v * an_gas_abi.stack_slot_bytes;
 }
 
-static void parameters(ANGas *gas, const GasFrame *frame, size_t count)
+static void parameters(ANGas *gas, const GasFrame *frame, const ArchonMIRFunction *fn)
 {
     const ANGasABI *abi = &an_gas_abi;
+    GasArgState state = {0};
     size_t i;
-    for (i = 0; i < count && i < abi->argc; ++i)
-        an_gas_stack_store(gas, abi->args[i], home(frame, (ArchonValue)i));
-    for (; i < count; ++i) {
-        unsigned src = frame->size + abi->stack_arg_offset +
-            ((unsigned)i - abi->argc) * abi->stack_slot_bytes;
-        an_gas_stack_load(gas, an_gas_a, src);
-        an_gas_stack_store(gas, an_gas_a, home(frame, (ArchonValue)i));
+    for (i = 0; i < fn->param_count; ++i) {
+        ArchonMIRType type = fn->types[i];
+        GasArg loc = argument(&state, type);
+        unsigned dst = home(frame, (ArchonValue)i);
+        switch (loc.kind) {
+        case GAS_GP:
+            an_gas_stack_store(gas, abi->args[loc.index], dst);
+            break;
+        case GAS_FP:
+            an_gas_fp_store(gas, type, loc.index, dst);
+            break;
+        case GAS_STACK:
+            an_gas_stack_load(gas, an_gas_a,
+                frame->size + abi->stack_arg_offset + loc.index * abi->stack_slot_bytes);
+            if (type == ARCHON_MIR_F32)
+                an_gas_convert(gas, ARCHON_MIR_TRUNC, 32);
+            an_gas_stack_store(gas, an_gas_a, dst);
+            break;
+        }
     }
 }
 
-static void call(ANGas *gas, const GasFrame *frame, const ArchonMIRInst *ins)
+static void call(ANGas *gas, const GasFrame *frame, const ArchonMIRFunction *fn,
+    const ArchonMIRInst *ins)
 {
     const ANGasABI *abi = &an_gas_abi;
+    GasArgState state = {0};
     size_t i;
-    /* Overflow arguments start at pre-call SP on both profiles. Materialize
-     * them before touching the register arguments; all sources are homes. */
-    for (i = abi->argc; i < ins->arg_count; ++i) {
-        an_gas_stack_load(gas, an_gas_a, home(frame, ins->args[i]));
-        an_gas_stack_store(gas, an_gas_a, ((unsigned)i - abi->argc) * abi->stack_slot_bytes);
+    /* Every source is a home. Neither profile's stack scratch can clobber
+     * argument registers, including when loading later overflow arguments. */
+    for (i = 0; i < ins->arg_count; ++i) {
+        ArchonValue arg = ins->args[i];
+        ArchonMIRType type = fn->types[arg];
+        GasArg loc = argument(&state, type);
+        unsigned src = home(frame, arg);
+        switch (loc.kind) {
+        case GAS_GP:
+            an_gas_stack_load(gas, abi->args[loc.index], src);
+            break;
+        case GAS_FP:
+            an_gas_fp_load(gas, type, loc.index, src);
+            break;
+        case GAS_STACK:
+            an_gas_stack_load(gas, an_gas_a, src);
+            an_gas_stack_store(gas, an_gas_a, loc.index * abi->stack_slot_bytes);
+            break;
+        }
     }
-    for (i = 0; i < ins->arg_count && i < abi->argc; ++i)
-        an_gas_stack_load(gas, abi->args[i], home(frame, ins->args[i]));
     if (ins->op == ARCHON_MIR_CALL_INDIRECT) {
         an_gas_stack_load(gas, an_gas_call_target, home(frame, ins->a));
-        an_gas_call_indirect(gas);
+        an_gas_call_indirect(gas, state.fp);
     } else {
-        an_gas_call(gas, ins->symbol);
+        an_gas_call(gas, ins->symbol, state.fp);
     }
-    if (ins->dst != ARCHON_MIR_NONE)
-        an_gas_stack_store(gas, abi->result, home(frame, ins->dst));
+    if (ins->dst != ARCHON_MIR_NONE) {
+        ArchonMIRType type = fn->types[ins->dst];
+        if (an_is_float(type))
+            an_gas_fp_store(gas, type, 0, home(frame, ins->dst));
+        else
+            an_gas_stack_store(gas, abi->result, home(frame, ins->dst));
+    }
 }
 
 static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
-    const ArchonMIRInst *ins)
+    const ArchonMIRFunction *fn, const ArchonMIRInst *ins)
 {
-    unsigned shape = an_shape(ins->op);
+    ArchonMIROpcode op = ins->op;
+    unsigned shape = an_shape(op);
     int disp;
-    if (an_is_call(ins->op)) {
-        call(gas, frame, ins);
+    if (an_is_call(op)) {
+        call(gas, frame, fn, ins);
         return 1;
     }
     if (shape & 2u)
         an_gas_stack_load(gas, an_gas_a, home(frame, ins->a));
     if (shape & 4u)
         an_gas_stack_load(gas, an_gas_b, home(frame, ins->b));
-    switch (ins->op) {
+    switch (op) {
     case ARCHON_MIR_CONST:
+    case ARCHON_MIR_FCONST:
         an_gas_constant(gas, ins->imm);
         break;
     case ARCHON_MIR_COPY:
@@ -185,8 +240,25 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:
-        an_gas_convert(gas, ins->op, (unsigned)ins->imm);
+        an_gas_convert(gas, op, (unsigned)ins->imm);
         break;
+    case ARCHON_MIR_FNEG:
+    case ARCHON_MIR_FADD:
+    case ARCHON_MIR_FSUB:
+    case ARCHON_MIR_FMUL:
+    case ARCHON_MIR_FDIV:
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
+    case ARCHON_MIR_FCAST:
+    case ARCHON_MIR_SITOFP:
+    case ARCHON_MIR_UITOFP:
+    case ARCHON_MIR_FPTOSI:
+    case ARCHON_MIR_FPTOUI:
+        an_gas_float(gas, op, fn->types[ins->a], fn->types[ins->dst]);
+        break;
+    case ARCHON_MIR_FLOAD:
+    case ARCHON_MIR_FSTORE:
     case ARCHON_MIR_LOAD:
     case ARCHON_MIR_LOAD_S8:
     case ARCHON_MIR_LOAD_U8:
@@ -204,7 +276,13 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
     case ARCHON_MIR_STORE_FUNC_PTR:
         /* Signed 12-bit, verified. Avoid an out-of-range unsigned-to-signed cast. */
         disp = ins->imm <= 2047u ? (int)ins->imm : -1 - (int)(UINT64_MAX - ins->imm);
-        an_gas_memory(gas, ins->op, disp);
+        /* FP object accesses preserve raw bits and use exactly the width
+         * prescribed by the type; the integer move does not reinterpret them. */
+        if (op == ARCHON_MIR_FLOAD)
+            op = fn->types[ins->dst] == ARCHON_MIR_F32 ? ARCHON_MIR_LOAD_U32 : ARCHON_MIR_LOAD;
+        else if (op == ARCHON_MIR_FSTORE)
+            op = fn->types[ins->b] == ARCHON_MIR_F32 ? ARCHON_MIR_STORE32 : ARCHON_MIR_STORE;
+        an_gas_memory(gas, op, disp);
         break;
     case ARCHON_MIR_FRAME_ADDR:
         an_gas_local_addr(gas, frame->locals[ins->imm]);
@@ -214,7 +292,7 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
         an_gas_symbol_addr(gas, ins->symbol);
         break;
     default:
-        if (!an_gas_binary(gas, ins->op))
+        if (!an_gas_binary(gas, op))
             return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "no scalar GAS selection rule");
         break;
     }
@@ -245,8 +323,13 @@ static void terminator(ANGas *gas, const ArchonMIRFunction *fn,
     unsigned yes;
     switch (term->kind) {
     case ARCHON_MIR_RETURN:
-        if (term->value != ARCHON_MIR_NONE)
-            an_gas_stack_load(gas, an_gas_abi.result, home(frame, term->value));
+        if (term->value != ARCHON_MIR_NONE) {
+            unsigned offset = home(frame, term->value);
+            if (an_is_float(fn->result))
+                an_gas_fp_load(gas, fn->result, 0, offset);
+            else
+                an_gas_stack_load(gas, an_gas_abi.result, offset);
+        }
         an_gas_leave(gas, frame->size, frame->record);
         break;
     case ARCHON_MIR_BR:
@@ -280,7 +363,7 @@ static int function(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn)
     an_gas_print(gas, "\t.p2align 4\n\t.globl %s\n\t.type %s, %%function\n%s:\n",
         fn->name, fn->name, fn->name);
     an_gas_enter(gas, frame.size, frame.record);
-    parameters(gas, &frame, fn->param_count);
+    parameters(gas, &frame, fn);
     ctx->stage = ARCHON_BACKEND_SELECT;
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *bb = &fn->blocks[b];
@@ -291,7 +374,7 @@ static int function(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn)
         an_gas_label(gas, (unsigned)b);
         for (i = 0; i < bb->inst_count; ++i) {
             ctx->instruction = i;
-            if (!an_continue(ctx) || !instruction(ctx, gas, &frame, &bb->insts[i]) || gas->out->status)
+            if (!an_continue(ctx) || !instruction(ctx, gas, &frame, fn, &bb->insts[i]) || gas->out->status)
                 return 0;
         }
         ctx->instruction = bb->inst_count;

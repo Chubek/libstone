@@ -520,6 +520,12 @@ void GenCVisitor::visit(PlusExprASTNode *n)
 
 void GenCVisitor::visit(MinusExprASTNode *n)
 {
+    if (n->isUnary()) {
+        std::cout << "-(";
+        n->getRhs()->accept(this);
+        std::cout << ")";
+        return;
+    }
     n->getLhs()->accept(this);
     std::cout << " - ";
     n->getRhs()->accept(this);

@@ -166,6 +166,10 @@ static int type(Parser *p, ArchonMIRType *out)
         *out = ARCHON_MIR_PTR;
     else if (is_token(p, "func_ptr"))
         *out = ARCHON_MIR_FUNC_PTR;
+    else if (is_token(p, "f32"))
+        *out = ARCHON_MIR_F32;
+    else if (is_token(p, "f64"))
+        *out = ARCHON_MIR_F64;
     else if (is_token(p, "void"))
         *out = ARCHON_MIR_VOID;
     else
@@ -231,7 +235,13 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"func_ptr_to_int", ARCHON_MIR_FUNC_PTR_TO_INT},
         {"int_to_func_ptr", ARCHON_MIR_INT_TO_FUNC_PTR},
         {"global_addr", ARCHON_MIR_GLOBAL_ADDR}, {"call", ARCHON_MIR_CALL},
-        {"func_addr", ARCHON_MIR_FUNC_ADDR}, {"call_indirect", ARCHON_MIR_CALL_INDIRECT}
+        {"func_addr", ARCHON_MIR_FUNC_ADDR}, {"call_indirect", ARCHON_MIR_CALL_INDIRECT},
+        {"fconst", ARCHON_MIR_FCONST}, {"fload", ARCHON_MIR_FLOAD}, {"fstore", ARCHON_MIR_FSTORE},
+        {"fneg", ARCHON_MIR_FNEG}, {"fadd", ARCHON_MIR_FADD}, {"fsub", ARCHON_MIR_FSUB},
+        {"fmul", ARCHON_MIR_FMUL}, {"fdiv", ARCHON_MIR_FDIV}, {"feq", ARCHON_MIR_FEQ},
+        {"flt", ARCHON_MIR_FLT}, {"fle", ARCHON_MIR_FLE}, {"fcast", ARCHON_MIR_FCAST},
+        {"sitofp", ARCHON_MIR_SITOFP}, {"uitofp", ARCHON_MIR_UITOFP},
+        {"fptosi", ARCHON_MIR_FPTOSI}, {"fptoui", ARCHON_MIR_FPTOUI}
     };
     size_t i;
     unsigned shape;
@@ -251,6 +261,9 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         return 0;
     switch (ins->op) {
     case ARCHON_MIR_CONST:
+    case ARCHON_MIR_FCONST:
+    case ARCHON_MIR_FLOAD:
+    case ARCHON_MIR_FSTORE:
     case ARCHON_MIR_LOAD:
     case ARCHON_MIR_LOAD_S8:
     case ARCHON_MIR_LOAD_U8:

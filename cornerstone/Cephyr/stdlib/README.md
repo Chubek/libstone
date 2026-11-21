@@ -20,14 +20,26 @@ that does not accept Clang's `--target=...` flag, set
 ## Implemented surface
 
 - C11 scalar/type headers for the LP64 data model, with target-specific plain `char`,
-  and the alternative spellings from `<iso646.h>`.
+  floating-point format limits in `<float.h>`, and the alternative spellings
+  from `<iso646.h>`. A format reported by `<float.h>` is not a frontend
+  code-generation guarantee. The library reports `FLT_ROUNDS` as indeterminable.
 - ASCII `ctype` functions and the §7.30 wide classification and mapping
   functions (`<wctype.h>`) in the C locale.
 - The C memory/string functions, plus `strnlen`; collation uses the C locale.
 - C11 §7.11 localization: `setlocale` and `localeconv` support the ASCII `C`
   locale only. `POSIX` is an alias, and the native locale selected by `""` is
   always `C`. The §7.22.7–8 multibyte/wide conversions use this stateless,
-  single-byte encoding and reject non-ASCII input with `EILSEQ`.
+  single-byte encoding and reject non-ASCII input with `EILSEQ`. The four
+  §7.28 `<uchar.h>` functions and the §7.29.6 restartable `<wchar.h>`
+  conversions use the same encoding. A UTF-16 leading surrogate can be
+  pending in `c16rtomb`, but no supplementary character is representable.
+- All of §7.27 `<time.h>` and §7.29.5 `wcsftime`. `time` and `timespec_get`
+  use the Linux realtime clock; `clock` uses process CPU time in microseconds.
+  Calendar time is signed 64-bit Unix time, with Gregorian conversion,
+  local time fixed to UTC, and no DST, `TZ` database, or leap-second tracking.
+- §7.13 `<setjmp.h>` for external target C compilers, including AMD64 SysV,
+  AArch64 AAPCS64, and soft-float RV64 LP64. This is plain ISO `setjmp`:
+  no signal-mask restoration, `sigsetjmp`, or shadow-stack integration.
 - §7.22 general utilities: integer text conversion with base detection and
   `ERANGE`, integer absolute value/division, `qsort`, `bsearch`, deterministic
   `rand`/`srand`, `getenv`, `aligned_alloc` and the other allocation functions,
@@ -50,9 +62,10 @@ that does not accept Clang's `--target=...` flag, set
   size is nonzero.
 
 This is not a complete hosted libc. Missing areas include `scanf`, floating
-conversion and math, `%lc`/`%ls`, wide streams, the `<wchar.h>`/`<uchar.h>`
-APIs, locales beyond `C`, `system`, date/time, signal handling, nonlocal jumps,
-atomics, and threading. An unsupported formatted-output conversion returns
+conversion and math, `%lc`/`%ls`, the remaining `<wchar.h>` APIs (wide
+streams, formatted wide I/O, wide numeric conversion, and wide string
+manipulation), locales beyond `C`, `system`, signal handling, atomics, and
+threading. An unsupported formatted-output conversion returns
 `-1` with `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
 
 ## Variadic ABI boundary
@@ -76,16 +89,25 @@ types or declarations. External target compilation receives the standard
 declarations for these interfaces. `assert` reports the expression, file,
 line, and enclosing function before calling `abort`.
 
+The Cephyr profile defines `__CEPHYR_DIFFTIME_UNAVAILABLE` on targets without
+native scalar floating-point calls. It defines `__CEPHYR_NONLOCAL_JUMPS_UNAVAILABLE`
+on all targets because ordinary native MIR calls do not model returns-twice
+semantics. External compilation sees both `difftime` and the returns-twice
+`setjmp` declaration.
+
 Run `sh tests/run.sh /path/to/build-dir` with Clang, `llvm-ar`, and `ld.lld`
 to statically link and test the packaged library without host headers or libc.
 It checks the stream lifecycle, buffering, file operations, pipe behavior,
-locale, allocation, startup environment, and termination, as well as the
-existing smoke coverage. It runs on matching Linux hardware or with a
+locale, allocation, startup environment, termination, calendar and clock
+operations, restartable conversions, and nonlocal jumps (including
+register restoration). It runs on matching Linux hardware or with a
 user-mode QEMU on `PATH`. Emulator paths can also be provided via
 `CEPHYR_TEST_QEMU_AMD64`, `CEPHYR_TEST_QEMU_AARCH64`, and `CEPHYR_TEST_QEMU`
 (RV64). If a target cannot run, the suite still builds and statically links it.
 
 `tests/headers-cephyr.c` checks the Cephyr header profile.
 `tests/variadic-cephyr.c` exercises a direct scalar variadic call spanning
-argument registers and the stack. Run target binaries on matching Linux hardware
-or under an emulator.
+argument registers and the stack. `tests/time-multibyte-cephyr.c` exercises
+the scalar and pointer APIs, including `difftime` where the native ABI supports
+it. It does not use returns-twice calls. Run target binaries on matching
+Linux hardware or under an emulator.

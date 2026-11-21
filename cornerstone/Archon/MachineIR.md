@@ -13,7 +13,11 @@ scheduling, and RV64 assembly details below apply to the RV64 provider.
 ## Generic representation
 
 In a function, value IDs index `types`; value types are `i64`, `ptr` (a data
-address), or `func_ptr` (a code address). Function arguments define the first
+address), `func_ptr` (a code address), `f32` (IEEE binary32), and `f64`
+(IEEE binary64). FP types require a supported hardware floating-point ABI:
+AMD64/SysVAMD64 or little-endian AArch64/AAPCS64. The RV64I and RV64IM LP64
+providers reject FP types, including FP imports; they do not lower to soft-float
+helpers or emit instructions from F or D. Function arguments define the first
 IDs. Other definitions are block parameters or
 instruction destinations. A value may be used only after its definition, or in
 a block dominated by that definition. Entry is block zero. Each non-entry block
@@ -71,8 +75,29 @@ the backend cannot inspect separately compiled function implementations.
   satisfy the signature; the backend cannot verify the actual run-time address.
   Functions, imports, and calls accept up to `ARCHON_MIR_MAX_PARAMS` (128)
   scalar ABI parameters or arguments.
-  `ret -` returns void.
-  `trap` raises the target breakpoint exception.
+   `ret -` returns void.
+   `trap` raises the target breakpoint exception.
+
+### Floating-point operations
+
+| Text instruction | Contract |
+| --- | --- |
+| `fconst DST BITS` | Load the IEEE representation verbatim; `f32` requires `BITS <= 0xffffffff`. |
+| `fload DST PTR DISP`; `fstore PTR SRC DISP` | Transfer the representation verbatim, at the FP value's width (4 or 8 bytes). Standard memory alignment and displacement rules apply. |
+| `fneg DST SRC` | Flip the sign bit, preserving the rest of the representation, including NaN payload and zero. |
+| `fadd/fsub/fmul/fdiv DST A B` | Use the matching format for both operands and result; round each operation in that format. No implicit widening, reassociation, or contraction. |
+| `feq/flt/fle DST A B` | Ordered comparison of operands of the same format, yielding `i64` 0 or 1. `+0` and `-0` compare equal; unordered (either operand NaN) yields 0. Negate `feq` to implement C `!=` or a truth test against zero. |
+| `fcast DST SRC` | Convert between different FP formats, rounding on narrowing. |
+| `sitofp/uitofp DST SRC` | Convert a signed/unsigned full-width `i64` to the destination FP format. Narrow integer types need explicit sign/zero extension first. |
+| `fptosi/fptoui DST SRC` | Truncate toward zero and convert to signed/unsigned full-width `i64`. NaN, infinity, and a truncated value out of range have no specified result. Check or narrow explicitly as required by the source language. |
+
+`copy`, branches with FP edge arguments, returns and fixed-arity calls preserve
+the FP value's type. `cbr` still requires `i64`. Hardware arithmetic and rounding
+conversions use the target FP environment (assumed default for the supported C
+subset); target NaN arithmetic payloads and exception flags are not portable
+MIR results. These operations provide the scalar building blocks for C11
+§6.3.1.2 and §6.3.1.4–8; source-language promotions, constant translation
+(§6.4.4.2), and floating-environment or Annex F guarantees are not inferred.
 
 ## Runtime text interchange
 

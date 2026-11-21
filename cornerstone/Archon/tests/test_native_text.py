@@ -76,8 +76,7 @@ class RuntimeTextTests(unittest.TestCase):
         cmake = shutil.which("cmake")
         if not cmake or not shutil.which("cc"):
             raise unittest.SkipTest("CMake and a host C compiler are required")
-        temp = tempfile.TemporaryDirectory(prefix="archon-text-",
-                                           dir="/tmp/opencode" if Path("/tmp/opencode").is_dir() else None)
+        temp = tempfile.TemporaryDirectory(prefix="archon-text-")
         cls.addClassCleanup(temp.cleanup)
         cls.work = Path(temp.name)
         generated = write_generated_directory(
@@ -125,6 +124,29 @@ class RuntimeTextTests(unittest.TestCase):
                 result = self.cli("--input", "-", data=source)
                 self.assertEqual((result.returncode, result.stdout), (1, b""))
                 self.assertIn(diagnostic, result.stderr)
+
+    def test_lp64_rejects_float_in_every_output_mode(self):
+        floating = b"""archon-mir 1
+module 1 0 0
+function calc f64 1 2 1 0
+types f64 f64
+block 0 1
+params
+fneg 1 0
+ret 1
+end
+"""
+        floating_import = b"""archon-mir 1
+module 0 1 0
+import fn i64 1 f32
+end
+"""
+        for data in (floating, floating_import):
+            for flag in ((), ("--emit-code",), ("--emit-physical",), ("--pic",)):
+                with self.subTest(data=data, flag=flag):
+                    res = self.cli("--input", "-", *flag, data=data)
+                    self.assertEqual((res.returncode, res.stdout), (1, b""))
+                    self.assertIn(b"RV64 LP64 is soft-float", res.stderr)
 
     def test_indirect_target_types_and_known_signatures(self):
         compiled = self.cli("--input", "-", data=INDIRECT)

@@ -52,6 +52,17 @@ static inline int an_is_call(ArchonMIROpcode opcode)
     return opcode == ARCHON_MIR_CALL || opcode == ARCHON_MIR_CALL_INDIRECT;
 }
 
+static inline int an_is_float(ArchonMIRType type)
+{
+    return type == ARCHON_MIR_F32 || type == ARCHON_MIR_F64;
+}
+
+static inline int an_is_value_type(ArchonMIRType type)
+{
+    return type == ARCHON_MIR_I64 || type == ARCHON_MIR_PTR ||
+        type == ARCHON_MIR_FUNC_PTR || an_is_float(type);
+}
+
 typedef enum {
     AN_ADD, AN_SUB, AN_MUL, AN_DIV, AN_REM, AN_DIVU, AN_REMU,
     AN_AND, AN_OR, AN_XOR, AN_SLL, AN_SRL, AN_SRA, AN_SLT, AN_SLTU,
@@ -141,6 +152,7 @@ void an_call_indirect(ANOut *, const ArchonMIRInst *, const ANFrame *, const ANH
 /* Operation shape: bits 0-2 mean dst,a,b respectively; imm/symbol/args are
  * verified separately according to opcode. Zero means unknown opcode. */
 unsigned an_shape(ArchonMIROpcode);
+int an_target_type(ANContext *, ArchonMIRType);
 int an_legal(ANContext *, const ArchonMIRFunction *, const ArchonMIRInst *);
 void an_convert(ANOut *, ArchonMIROpcode, unsigned dst, unsigned src,
     unsigned count_scratch, unsigned width);

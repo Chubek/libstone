@@ -250,23 +250,23 @@ static unsigned long pp_char(char *c, char *refc)
 		case '\'': r = '\''; c ++; break;
 		case '\"': r = '\"'; c ++; break;
 		case 'u':
-			for (i = 0, c ++; i < 4 && HEXAD(*c); i ++, c ++) {
-				r = (r * 16) + HVAL(*c);
-			}
-			if (i != 4) {
-				error(eval_line, "malformed UCN in %s", refc);
-				throw(eval_exception);
-			}
-			break;
 		case 'U':
-			for (i = 0, c ++; i < 8 && HEXAD(*c); i ++, c ++) {
+		{
+			int digits = *c == 'u' ? 4 : 8;
+			for (i = 0, c ++; i < digits && HEXAD(*c); i ++, c ++) {
 				r = (r * 16) + HVAL(*c);
 			}
-			if (i != 8) {
+			if (i != digits) {
 				error(eval_line, "malformed UCN in %s", refc);
 				throw(eval_exception);
 			}
+			if ((r < 0xa0 && r != 0x24 && r != 0x40 && r != 0x60)
+				|| (r >= 0xd800 && r <= 0xdfff) || r > 0x10ffff) {
+				error(eval_line, "invalid code point in UCN in %s", refc);
+				throw(eval_exception);
+			}
 			break;
+		}
 		case 'x':
 			for (c ++; HEXAD(*c); c ++) r = (r * 16) + HVAL(*c);
 			break;

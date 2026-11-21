@@ -144,9 +144,12 @@ def main() -> None:
                 [*command, "-ffreestanding", "-fsyntax-only", "-"],
                 input=(
                     b"#include <iso646.h>\n"
+                    b"#include <float.h>\n"
                     b"#if __STDC_HOSTED__ != 0 or __STDC_NO_VLA__ != 1\n"
                     b"#error wrong freestanding C11 translation mode\n"
                     b"#endif\n"
+                    b"_Static_assert(FLT_RADIX == 2 && FLT_MANT_DIG == 24 && DBL_MANT_DIG == 53,"
+                    b" \"LP64 floating-point formats\");\n"
                     b"void main(void) { }\n"
                 ),
                 cwd=work, env=env, check=True,
@@ -156,13 +159,19 @@ def main() -> None:
             executable = work / triple
             subprocess.run([*command, "main.c", "definitions.o", "-o", executable],
                            cwd=work, env=env, check=True)
+            runtime_smoke = Path(__file__).resolve().parents[1] / "stdlib/tests/time-multibyte-cephyr.c"
+            runtime_program = work / f"{triple}-runtime"
+            subprocess.run([*command, runtime_smoke, "-o", runtime_program],
+                           cwd=work, env=env, check=True)
             if host in hosts:
-                run = [executable]
+                runner = []
             elif emulator:
-                run = [emulator, executable]
+                runner = [emulator]
             else:
                 print(f"{triple}: linked; execution skipped (no matching host or emulator)")
                 continue
+            subprocess.run([*runner, runtime_program], cwd=work, env=env, check=True)
+            run = [*runner, executable]
             result = subprocess.run([*run, "x"], cwd=work, env=env,
                                     check=True, stdout=subprocess.PIPE)
             if result.stdout != b"atexit: LIFO\n":

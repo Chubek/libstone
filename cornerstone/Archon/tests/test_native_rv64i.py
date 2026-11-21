@@ -79,8 +79,7 @@ class NativeRV64ITests(unittest.TestCase):
         cmake = shutil.which("cmake")
         if not cmake or not shutil.which("cc"):
             raise unittest.SkipTest("C99 compiler and CMake required")
-        tmp = Path("/tmp/opencode")
-        work = tempfile.TemporaryDirectory(prefix="archon-rv64i-", dir=tmp if tmp.is_dir() else None)
+        work = tempfile.TemporaryDirectory(prefix="archon-rv64i-")
         cls.addClassCleanup(work.cleanup)
         cls.root = Path(work.name)
         cls.db = compile_file(RV64I)
@@ -116,6 +115,7 @@ class NativeRV64ITests(unittest.TestCase):
         self.assertEqual((manifest["target"], manifest["isa"], manifest["abi"]),
                          ("RISCV64", "RV64I", "LP64"))
         self.assertEqual(manifest["isa_features"], ["I"])
+        self.assertEqual(manifest["floating_point"]["formats"], [])
         self.assertIn("mul", manifest["expanded_mir"])
         self.assertEqual(set(manifest["unsupported_mir"]),
                          {"div_s", "div_u", "rem_s", "rem_u", "div_checked_s", "mul_checked_s"})
@@ -141,6 +141,21 @@ class NativeRV64ITests(unittest.TestCase):
                     self.assertEqual((result.returncode, result.stdout), (1, b""))
                     self.assertIn(b"function 0, block 0, instruction 0", result.stderr)
                     self.assertIn(opcode + b" is unsupported without M (RV64I)", result.stderr)
+
+    def test_soft_float_abi_does_not_accept_fp_parameters(self):
+        floating = b"""archon-mir 1
+module 1 0 0
+function fp_argument void 1 1 1 0
+types f32
+block 0 0
+params
+ret -
+end
+"""
+        result = subprocess.run([self.driver, "--verify-input", "-"],
+                                input=floating, capture_output=True, timeout=10)
+        self.assertEqual((result.returncode, result.stdout), (1, b""))
+        self.assertIn(b"RV64 LP64 is soft-float", result.stderr)
 
     def test_base_bytes_match_linked_rv64i_assembly(self):
         clang, lld, objcopy = self.clang(), self.tool("ld.lld"), self.tool("llvm-objcopy")

@@ -330,15 +330,26 @@ int main() {
         "#define u8 must_not_expand\n"
         "#define u must_not_expand\n"
         "#define U must_not_expand\n"
-        "#define TEXT u8\"text\"\n"
-        "#if u'A' != 'A' || U'B' != 'B'\n#error bad C11 character token\n#endif\n"
+         "#define TEXT u8\"text\"\n"
+         "#if u'A' != 'A' || U'B' != 'B'\n#error bad C11 character token\n#endif\n"
+         "#if '\\u0040' != '@'\n#error bad universal character name value\n#endif\n"
         "const void *values[] = {TEXT, u\"wide16\", U\"wide32\", L\"wide\"};\n",
         primary.string(), {}, literal_diagnostics);
     assert(literals);
     assert(literals->text.find("must_not_expand") == std::string::npos);
     for (const std::string literal :
          {"u8\"text\"", "u\"wide16\"", "U\"wide32\"", "L\"wide\""})
-        assert(literals->text.find(literal) != std::string::npos);
+         assert(literals->text.find(literal) != std::string::npos);
+
+    for (const auto *condition : {"'\\u0041'", "u'\\udfff'", "U'\\U00110000'"}) {
+        cephyr::Diagnostics bad_ucn_diagnostics;
+        assert(!cephyr::preprocess(
+            std::string("#if ") + condition + "\n#endif\n",
+            primary.string(), {}, bad_ucn_diagnostics));
+        std::ostringstream out;
+        bad_ucn_diagnostics.render(out);
+        assert(out.str().find("invalid code point in UCN") != std::string::npos);
+    }
 
     cephyr::PreprocessOptions comments;
     comments.keep_comments = true;

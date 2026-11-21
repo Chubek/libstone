@@ -1,11 +1,10 @@
 #ifndef _CEPHYR_WCTYPE_H
 #define _CEPHYR_WCTYPE_H
 
-typedef unsigned int wint_t;
+#include <sys/_wide_types.h>
+
 typedef unsigned long wctype_t;
 typedef const int *wctrans_t;
-
-#define WEOF (0xffffffffU)
 
 int iswalnum(wint_t);
 int iswalpha(wint_t);
