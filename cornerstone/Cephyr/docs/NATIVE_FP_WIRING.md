@@ -11,11 +11,15 @@ Since the initial slice documented below, both supported providers also fold
 `float` and `double` arithmetic in static initializers using target-width
 round-to-nearest-even evaluation. Both also support direct scalar variadic
 calls with default promotions and scalar variadic definitions. RV64IM
-supports storage, fixed-prototype transport, negation, and comparisons for
-`float` and `double`, but not general evaluated arithmetic or conversions.
-AMD64 supports x87 `long double` objects and constant initialization, not
-evaluated runtime scalar operations or value transport. Annex F remains
-unsupported.
+supports storage, fixed-prototype transport, negation, comparisons,
+arithmetic, and numeric conversions for `float` and `double`. Arithmetic
+and conversions call pinned LLVM compiler-rt helpers; a link without the
+bundled runtime must supply the required helper symbols. RV64IM FP varargs
+remain unsupported.
+AMD64 supports x87 `long double` objects, scalar access, initialization,
+arithmetic, comparisons, and conversions to and from binary32, binary64, and
+integers through 64 bits. By-value and variadic calls are not supported.
+Annex F remains unsupported.
 
 ## Slice 1: capability, source types, and literal spelling
 

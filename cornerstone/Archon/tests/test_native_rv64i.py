@@ -110,6 +110,91 @@ class NativeRV64ITests(unittest.TestCase):
             self.skipTest("Clang lacks RV64 support")
         return clang
 
+    def test_factir_fallthrough_preserves_phi_copies_and_other_modes(self):
+        mir = b"""\
+archon-mir 1
+module 1 0 0
+function choose i64 3 4 3 0
+types i64 i64 i64 i64
+block 0 0
+params
+cbr 0 1 1 1 2 0
+block 1 0
+params 3
+ret 3
+block 0 0
+params
+ret 2
+end
+"""
+        source, driver = self.root / "edge_facts.c", self.root / "edge_facts"
+        source.write_text(r"""
+#include "Backend.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+static int contains(const void *user, ArchonBackendFactKind kind,
+                    size_t function, size_t block, uint32_t target)
+{
+    return kind == ARCHON_BACKEND_FACT_CONTROL_EDGE && function == 0 && block == 0 &&
+        target == *(const unsigned *)user;
+}
+
+int main(int argc, char **argv)
+{
+    char text[4096];
+    size_t size = fread(text, 1, sizeof(text), stdin);
+    ArchonBackendArtifact artifact = {0};
+    unsigned target, flags;
+    if (argc != 3 || !size || size == sizeof(text)) return 1;
+    target = (unsigned)strtoul(argv[1], NULL, 10);
+    flags = (unsigned)strtoul(argv[2], NULL, 10);
+    const ArchonBackendFactHints facts = {contains, NULL, &target};
+    ArchonBackendStatus status = archon_backend_compile_text_with_facts(
+        text, size, NULL, flags, target < 4 ? &facts : NULL, &artifact, NULL);
+    if (status != ARCHON_BACKEND_OK)
+        return artifact.data || artifact.size ? 99 : (int)status;
+    fwrite(artifact.data, 1, artifact.size, stdout);
+    archon_backend_artifact_destroy(&artifact);
+    return 0;
+}
+""", encoding="ascii")
+        self.run_ok("cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
+                    "-I", self.root / "generated", source,
+                    self.driver.parent / "libarchon_backend.a", "-o", driver)
+        baseline = self.run_ok(self.driver, "--input", "-", data=mir)
+        for target in ("2", "3", "4"):
+            self.assertEqual(baseline, self.run_ok(driver, target, "0", data=mir))
+        optimized = self.run_ok(driver, "1", "0", data=mir)
+        jump = (b"2:\n\tauipc x28, %pcrel_hi(.Larchon0_1)\n"
+                b"\tjalr x0, %pcrel_lo(2b)(x28)\n")
+        self.assertEqual(baseline.count(jump), 1)
+        self.assertEqual(optimized, baseline.replace(jump, b""))
+        for flags in ("2", "4"):  # Physical records and raw machine code.
+            self.assertEqual(self.run_ok(driver, "1", flags, data=mir),
+                             self.run_ok(driver, "4", flags, data=mir))
+        result = subprocess.run([driver, "1", "0"],
+                                input=mir.replace(b"cbr 0 1 1 1", b"cbr 0 1 0"),
+                                capture_output=True, timeout=10)
+        self.assertEqual((result.returncode, result.stdout), (1, b""))
+        qemu = (os.environ.get("ARCHON_QEMU_RISCV64") or shutil.which("qemu-riscv64")
+                or shutil.which("qemu-riscv64-static"))
+        if qemu and shutil.which("clang") and (lld := shutil.which("ld.lld")):
+            asm, harness, output = (self.root / name for name in
+                                    ("edge_run.s", "edge_run.c", "edge_run.elf"))
+            harness.write_text("""\
+extern unsigned long choose(unsigned long, unsigned long, unsigned long);
+int test_main(void) {
+    return choose(0, 17, 42) != 42 || choose(~0UL, 17, 42) != 17;
+}
+""", encoding="ascii")
+            for code in (baseline, optimized):
+                asm.write_bytes(code + START.encode("ascii"))
+                self.run_ok(self.clang(), *FLAGS, "-fuse-ld=" + lld, "-nostdlib", "-static",
+                            "-ffreestanding", "-fno-stack-protector",
+                            "-Wl,--no-relax,-e,_start", asm, harness, "-o", output)
+                self.run_ok(qemu, "-cpu", "rv64,m=false", output)
+
     def test_provider_manifest_and_target_identity(self):
         manifest = json.loads(self.files["BackendManifest.json"])
         self.assertEqual((manifest["target"], manifest["isa"], manifest["abi"]),
@@ -142,6 +227,74 @@ class NativeRV64ITests(unittest.TestCase):
                     self.assertIn(b"function 0, block 0, instruction 0", result.stderr)
                     self.assertIn(opcode + b" is unsupported without M (RV64I)", result.stderr)
 
+    def test_known_bits_select_base_shift_without_overriding_legality(self):
+        source = self.root / "fact_select.c"
+        driver = self.root / "fact_select"
+        source.write_text(r"""
+#include "Backend.h"
+#include <stdio.h>
+#include <string.h>
+
+static int known(const void *user, size_t function, ArchonValue value,
+                 uint64_t *zero, uint64_t *one)
+{
+    const char *mode = user;
+    if (function || value != 1 || strcmp(mode, "absent") == 0)
+        return 0;
+    *one = 8;
+    *zero = strcmp(mode, "partial") == 0 ? 0 :
+            strcmp(mode, "conflict") == 0 ? UINT64_MAX : ~UINT64_C(8);
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    char text[1024];
+    size_t size = fread(text, 1, sizeof(text), stdin);
+    ArchonBackendArtifact artifact = {0};
+    ArchonBackendDiagnostic diagnostic;
+    if (argc != 3 || !size || size == sizeof(text)) return 1;
+    const ArchonBackendFactHints facts = {.known_bits = known, .user = argv[1]};
+    unsigned flags = strcmp(argv[2], "code") == 0 ? ARCHON_BACKEND_MACHINE_CODE :
+                     ARCHON_BACKEND_PHYSICAL_RECORDS;
+    if (archon_backend_compile_text_with_facts(text, size, NULL, flags,
+            &facts, &artifact, &diagnostic) != ARCHON_BACKEND_OK) {
+        fprintf(stderr, "%s\n", diagnostic.message);
+        return 2;
+    }
+    fwrite(artifact.data, 1, artifact.size, stdout);
+    archon_backend_artifact_destroy(&artifact);
+    return 0;
+}
+""", encoding="ascii")
+        self.run_ok(self.tool("cc"), "-std=c99", "-Wall", "-Wextra", "-Werror",
+                    "-I", self.root / "generated", source,
+                    self.root / "build/libarchon_backend.a", "-o", driver)
+        mir = MIR.replace(b"i64 2 3 1 0", b"i64 1 3 1 0").replace(
+            b"block 0 1\nparams", b"block 0 2\nparams\nconst 1 8")
+        for mode in ("records", "code"):
+            baseline = self.run_ok(driver, "absent", mode, data=mir)
+            for hints in ("partial", "conflict"):
+                self.assertEqual(self.run_ok(driver, hints, mode, data=mir), baseline)
+            selected = self.run_ok(driver, "exact", mode, data=mir)
+            if mode == "records":
+                self.assertRegex(selected, rb"(?m)^inst slli [^\n]+ 3$")
+                self.assertNotIn(b"inst beq", selected)
+            else:
+                self.assertLess(len(selected), len(baseline))
+                words = [word for (word,) in struct.iter_unpack("<I", selected)]
+                self.assertTrue(any(word & 0xfff0707f == 0x00301013 for word in words))
+            stale = mir.replace(b"const 1 8", b"const 1 12")
+            self.assertEqual(self.run_ok(driver, "exact", mode, data=stale),
+                             self.run_ok(driver, "absent", mode, data=stale))
+            self.assertEqual(self.run_ok(driver, "exact", mode, data=MIR),
+                             self.run_ok(driver, "absent", mode, data=MIR))
+            rejected = subprocess.run([driver, "exact", mode],
+                                      input=mir.replace(b"mul ", b"mul_checked_s "),
+                                      capture_output=True, timeout=10)
+            self.assertEqual((rejected.returncode, rejected.stdout), (2, b""))
+            self.assertIn(b"mul_checked_s is unsupported without M", rejected.stderr)
+
     def test_soft_float_abi_does_not_accept_fp_parameters(self):
         floating = b"""archon-mir 1
 module 1 0 0
@@ -156,6 +309,22 @@ end
                                 input=floating, capture_output=True, timeout=10)
         self.assertEqual((result.returncode, result.stdout), (1, b""))
         self.assertIn(b"RV64 LP64 is soft-float", result.stderr)
+
+    def test_variadic_prologue_requires_rv64im(self):
+        variadic = b"""archon-mir 1
+module 1 0 0
+function cursor void 1 1 1 0
+types ptr
+block 0 1
+params
+rv64_va_start 0
+ret -
+end
+"""
+        result = subprocess.run([self.driver, "--verify-input", "-"],
+                                input=variadic, capture_output=True, timeout=10)
+        self.assertEqual((result.returncode, result.stdout), (1, b""))
+        self.assertIn(b"RV64_VA_START requires RV64IM LP64", result.stderr)
 
     def test_base_bytes_match_linked_rv64i_assembly(self):
         clang, lld, objcopy = self.clang(), self.tool("ld.lld"), self.tool("llvm-objcopy")

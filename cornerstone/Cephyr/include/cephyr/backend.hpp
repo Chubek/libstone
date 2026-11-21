@@ -12,6 +12,7 @@ namespace cephyr {
 class Diagnostics;
 struct Config;
 struct Target;
+namespace factir { struct Result; }
 
 class Backend {
   struct Impl;
@@ -27,8 +28,9 @@ public:
 
   bool prepare();
   std::optional<std::string> compile(std::string_view mir,
-                                     const std::string &input_name,
-                                     bool position_independent = false);
+                                      const std::string &input_name,
+                                      bool position_independent = false,
+                                      const factir::Result *facts = nullptr);
 };
 
 } // namespace cephyr

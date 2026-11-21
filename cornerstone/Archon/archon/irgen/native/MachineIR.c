@@ -177,6 +177,11 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
     case ARCHON_MIR_FRAME_ADDR:
         an_addr(out, AN_T2, an_abi.stack_pointer, frame->local_offsets[ins->imm]);
         break;
+    case ARCHON_MIR_RV64_VA_START:
+        an_read(out, frame, homes, ins->a, AN_T0);
+        an_addr(out, AN_T2, an_abi.stack_pointer, frame->va_start_offset);
+        an_store(out, AN_T2, AN_T0, 0);
+        break;
     case ARCHON_MIR_GLOBAL_ADDR:
     case ARCHON_MIR_FUNC_ADDR:
         an_address_symbol(out, AN_T2, ins->symbol);
@@ -190,16 +195,28 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:
-        an_read(out, frame, homes, ins->a, AN_T0);
-        an_convert(out, ins->op, AN_T2, AN_T0, AN_T1, (unsigned)ins->imm);
+        if (an_fact_conversion_is_copy(ctx, ins)) {
+            an_read(out, frame, homes, ins->a, AN_T2);
+        } else {
+            an_read(out, frame, homes, ins->a, AN_T0);
+            an_convert(out, ins->op, AN_T2, AN_T0, AN_T1, (unsigned)ins->imm);
+        }
         break;
-    default:
+    default: {
+        unsigned shift;
+        ArchonValue source = an_fact_mul_shift(ctx, ins, &shift);
+        if (source != ARCHON_MIR_NONE) {
+            an_read(out, frame, homes, source, AN_T0);
+            an_select_shift_left_imm(out, AN_T2, AN_T0, shift);
+            break;
+        }
         if (shape & 2u)
             an_read(out, frame, homes, ins->a, AN_T0);
         if (shape & 4u)
             an_read(out, frame, homes, ins->b, AN_T1);
         if (!an_select(out, ins->op, AN_T2, AN_T0, AN_T1, ctx->function, next_label))
             return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "no native selection rule");
+    }
     }
     if (shape & 1u)
         an_write(out, frame, homes, ins->dst, AN_T2);
@@ -256,7 +273,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
     ArchonMIRInst *storage = NULL;
     size_t slots = 0, phi_count = 0, outgoing_words = 0, b, i;
     unsigned next_label = (unsigned)fn->block_count;
-    int calls = 0, ok = 0;
+    int calls = 0, variadic = 0, ok = 0;
     ANFrame frame;
     ANHome *homes = NULL;
     if (ctx->flags & ARCHON_BACKEND_SCHEDULE_PURE) {
@@ -284,6 +301,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
             phi_count = block->param_count;
         for (i = 0; i < block->inst_count; ++i) {
             const ArchonMIRInst *ins = &block->insts[i];
+            variadic |= ins->op == ARCHON_MIR_RV64_VA_START;
             if (an_is_call(ins->op)) {
                 size_t words = an_outgoing_words(ins->arg_count);
                 if (words > outgoing_words)
@@ -292,7 +310,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
             }
         }
     }
-    if (!an_frame(ctx, fn, slots, phi_count, outgoing_words, calls, &frame) ||
+    if (!an_frame(ctx, fn, slots, phi_count, outgoing_words, calls, variadic, &frame) ||
         !an_verify_frame(ctx, fn, slots, phi_count, outgoing_words, calls, &frame))
         goto done;
     ctx->stage = ARCHON_BACKEND_SELECT;
@@ -302,6 +320,13 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
     }
     an_asm_function(out, fn->name);
     an_enter(out, &frame);
+    if (variadic) {
+        /* Save incoming unnamed register slots once, before the body can
+         * clobber them. In RV64IM LP64 even floating scalars use XLEN slots. */
+        for (i = fn->param_count; i < an_abi.argc; ++i)
+            an_store(out, an_abi.args[i], an_abi.stack_pointer,
+                frame.va_start_offset + (int)(8 * (i - fn->param_count)));
+    }
     an_parameters(out, fn, &frame, homes);
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *block = &fn->blocks[b];
@@ -320,7 +345,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
                 goto done;
         }
         ctx->instruction = block->inst_count;
-        an_terminator(out, ctx->function, fn, &frame, homes, &block->term, &next_label);
+        an_terminator(ctx, out, fn, &frame, homes, &block->term, &next_label);
         if (!emission_ok(ctx, out))
             goto done;
     }
@@ -353,9 +378,18 @@ int an_compile_module(ANContext *ctx, const ArchonMIRModule *module, ANOut *out)
     if (!emission_ok(ctx, out))
         return 0;
     for (f = 0; f < module->function_count; ++f) {
+        ANProvenBits *proved;
+        int ok;
         ctx->function = f;
         ctx->block = ctx->instruction = SIZE_MAX;
-        if (!an_continue(ctx) || !compile_function(ctx, &module->functions[f], out))
+        if (!an_continue(ctx))
+            return 0;
+        proved = an_prove_known_bits(ctx, &module->functions[f]);
+        ctx->proven_bits = proved;
+        ok = compile_function(ctx, &module->functions[f], out);
+        ctx->proven_bits = NULL;
+        free(proved);
+        if (!ok)
             return 0;
     }
     ctx->stage = ARCHON_BACKEND_EMIT;

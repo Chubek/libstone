@@ -84,6 +84,7 @@ void TreeVisitor::visit(FieldDeclASTNode *n)
     n->getAlignments()->accept(this);
     n->getName()->accept(this);
     n->getType()->accept(this);
+    n->getWidth()->accept(this);
 }
 
 void TreeVisitor::visit(AsmStmtASTNode *n) {}
@@ -148,6 +149,11 @@ void TreeVisitor::visit(WhileStmtASTNode *n)
 }
 
 void TreeVisitor::visit(CastExprASTNode *n) { n->getExpr()->accept(this); }
+void TreeVisitor::visit(CompoundLiteralASTNode *n)
+{
+    n->getType()->accept(this);
+    n->getInit()->accept(this);
+}
 
 void TreeVisitor::visit(BitNotExprASTNode *n) { n->getExpr()->accept(this); }
 

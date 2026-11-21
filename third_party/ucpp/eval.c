@@ -39,6 +39,8 @@ JMP_BUF eval_exception;
 long eval_line;
 static int emit_eval_warnings;
 static int eval_utf8_source;
+static int eval_char_signed;
+static int eval_wchar_signed;
 
 /*
  * If you want to hardcode a conversion table, define a static array
@@ -229,12 +231,13 @@ suffix_error:
 	return 666;
 }
 
-static unsigned long pp_cchar(char **cursor, const char *refc, unsigned long escape_max)
+static unsigned long pp_cchar(char **cursor, const char *refc,
+	unsigned long escape_max, int *numeric)
 {
 	char *c = *cursor;
 	unsigned long r = 0;
-	int numeric = 0;
 
+	*numeric = 0;
 	if (*c == '\\') {
 		int i;
 
@@ -269,21 +272,21 @@ static unsigned long pp_cchar(char **cursor, const char *refc, unsigned long esc
 			break;
 		}
 		case 'x':
-			numeric = 1;
+			*numeric = 1;
 			c ++;
 			if (!HEXAD(*c)) {
 				error(eval_line, "hexadecimal escape requires a digit in %s", refc);
 				throw(eval_exception);
 			}
 			for (; HEXAD(*c); c ++) {
-				if (r > (ULONG_MAX - HVAL(*c)) / 16)
-					z_error(ARITH_EXCEP_CONST_O);
+				if (r > (escape_max - HVAL(*c)) / 16)
+					goto escape_range_error;
 				r = (r * 16) + HVAL(*c);
 			}
 			break;
 		default:
 			if (OCTAL(*c)) {
-				numeric = 1;
+				*numeric = 1;
 				r = OVAL(*(c ++));
 				if (OCTAL(*c)) r = (r * 8) + OVAL(*(c ++));
 				if (OCTAL(*c)) r = (r * 8) + OVAL(*(c ++));
@@ -307,22 +310,27 @@ static unsigned long pp_cchar(char **cursor, const char *refc, unsigned long esc
 	} else {
 		r = *((unsigned char *)(c ++));
 	}
-	if (numeric && r > escape_max) {
-		error(eval_line, "numeric escape out of range in %s", refc);
-		throw(eval_exception);
-	}
+	if (*numeric && r > escape_max) goto escape_range_error;
 
 	if (transient_characters && r < 256) {
 		r = transient_characters[(size_t)r];
 	}
 	*cursor = c;
 	return r;
+
+escape_range_error:
+	if (escape_max == ULONG_MAX) z_error(ARITH_EXCEP_CONST_O);
+	error(eval_line, "numeric escape out of range in %s", refc);
+	throw(eval_exception);
+	return 0;
 }
 
-static unsigned long pp_char(char *c, const char *refc, int strict)
+static unsigned long pp_char(char *c, const char *refc, int strict, unsigned *bytes)
 {
-	unsigned long result, escape_max = ULONG_MAX;
+	unsigned long result = 0, escape_max = ULONG_MAX;
+	int numeric, first = 1;
 
+	*bytes = 0;
 	if (strict) {
 		switch (*refc) {
 		case '\'': escape_max = 0xffUL; break;
@@ -334,13 +342,36 @@ static unsigned long pp_char(char *c, const char *refc, int strict)
 		error(eval_line, "empty character constant");
 		throw(eval_exception);
 	}
-	/* Keep ucpp's implementation-defined first-character value, but also
-	   validate the spelling and numeric escapes of every remaining c-char. */
-	result = pp_cchar(&c, refc, escape_max);
-	if (*c != '\'') {
-		if (emit_eval_warnings) warning(eval_line, "multicharacter constant");
-		while (*c && *c != '\'') pp_cchar(&c, refc, escape_max);
+	if (!strict) {
+		/* Preserve standalone ucpp and assembler preprocessing behavior. */
+		result = pp_cchar(&c, refc, escape_max, &numeric);
+		if (*c != '\'') {
+			if (emit_eval_warnings) warning(eval_line, "multicharacter constant");
+			while (*c && *c != '\'') pp_cchar(&c, refc, escape_max, &numeric);
+		}
+		return result;
 	}
+
+	/* Match Cephyr's execution encodings: ordinary constants keep the last
+	   four UTF-8 bytes; prefixed constants keep the last code unit. */
+	do {
+		unsigned long value = pp_cchar(&c, refc, escape_max, &numeric);
+		if (first && emit_eval_warnings && *c && *c != '\'')
+			warning(eval_line, "multicharacter constant");
+		first = 0;
+		if (*refc == '\'') {
+			char encoded[4];
+			unsigned i, count = 1;
+			if (numeric) encoded[0] = (char)value;
+			else count = c11_encode_utf8(value, encoded);
+			for (i = 0; i < count; i ++)
+				result = ((result << 8) | (unsigned char)encoded[i]) & 0xffffffffUL;
+			if (*bytes < 2) *bytes += count;
+		} else {
+			result = *refc == 'u' && !numeric && value > 0xffffUL
+				? 0xdc00UL + ((value - 0x10000UL) & 0x3ffUL) : value;
+		}
+	} while (*c && *c != '\'');
 	return result;
 }
 
@@ -353,16 +384,27 @@ static ppval pp_strtoconst(char *refc, int strict)
 	int sp, dec;
 
 	if (*c == '\'' || *c == 'L' || *c == 'u' || *c == 'U') {
-		q.sign = *c == '\'' || (*c == 'L' && WCHAR_SIGNEDNESS);
+		unsigned bytes;
+		unsigned long value;
+		q.sign = *c == '\'' || (*c == 'L' &&
+			(strict ? eval_wchar_signed : WCHAR_SIGNEDNESS));
 		if (*c != '\'' && *(++ c) != '\'') {
 			error(eval_line,
 				"invalid wide character constant: %s", refc);
 			throw(eval_exception);
 		}
+		value = pp_char(c, refc, strict, &bytes);
 		if (q.sign) {
-			q.u.sv = big_s_fromlong(pp_char(c, refc, strict));
+			long signed_value;
+			if (strict && bytes == 1 && eval_char_signed && value >= 0x80UL)
+				signed_value = -1L - (long)(0xffUL - value);
+			else if (strict && value >= 0x80000000UL)
+				signed_value = -1L - (long)(0xffffffffUL - value);
+			else
+				signed_value = (long)value;
+			q.u.sv = big_s_fromlong(signed_value);
 		} else {
-			q.u.uv = big_u_fromulong(pp_char(c, refc, strict));
+			q.u.uv = big_u_fromulong(value);
 		}
 		return q;
 	}
@@ -806,6 +848,8 @@ unsigned long eval_expr(struct token_fifo *tf, int *ret, unsigned long flags)
 
 	emit_eval_warnings = (flags & WARN_STANDARD) != 0;
 	eval_utf8_source = (flags & UTF8_SOURCE) != 0;
+	eval_char_signed = (flags & PP_CHAR_SIGNED) != 0;
+	eval_wchar_signed = (flags & PP_WCHAR_UNSIGNED) == 0;
 	if (catch(eval_exception)) goto eval_err;
 	/* first, distinguish unary + and - from binary + and - */
 	for (sart = tf->art; tf->art < tf->nt; tf->art ++) {

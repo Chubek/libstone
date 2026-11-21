@@ -49,7 +49,19 @@ typedef enum {
     ARCHON_MIR_SITOFP, ARCHON_MIR_UITOFP, ARCHON_MIR_FPTOSI, ARCHON_MIR_FPTOUI,
     /* SysV AMD64: initialize a 24-byte va_list at pointer a. */
     ARCHON_MIR_AMD64_VA_START,
-    ARCHON_MIR_AARCH64_VA_START
+    ARCHON_MIR_AARCH64_VA_START,
+    /* SysV AMD64 x87 operands are pointers to ten value bytes. Arithmetic
+     * updates the first operand in place; comparisons return i64 0/1.
+     * FROM writes to its pointer operand; TO returns f32/f64 or i64.
+     * No operation accesses the six padding bytes of a long double object. */
+    ARCHON_MIR_AMD64_X87_ADD, ARCHON_MIR_AMD64_X87_SUB,
+    ARCHON_MIR_AMD64_X87_MUL, ARCHON_MIR_AMD64_X87_DIV,
+    ARCHON_MIR_AMD64_X87_EQ, ARCHON_MIR_AMD64_X87_LT, ARCHON_MIR_AMD64_X87_LE,
+    ARCHON_MIR_AMD64_X87_FROM_FP, ARCHON_MIR_AMD64_X87_TO_FP,
+    ARCHON_MIR_AMD64_X87_FROM_SI, ARCHON_MIR_AMD64_X87_FROM_UI,
+    ARCHON_MIR_AMD64_X87_TO_SI, ARCHON_MIR_AMD64_X87_TO_UI,
+    /* RV64IM LP64: initialize a va_list cursor at pointer a. */
+    ARCHON_MIR_RV64_VA_START
 } ArchonMIROpcode;
 typedef struct {
     ArchonMIROpcode op;
@@ -168,6 +180,45 @@ ArchonBackendStatus archon_backend_compile_text(const char *text, size_t size,
 ArchonBackendStatus archon_backend_compile_text_ex(const char *text, size_t size,
     const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
     ArchonBackendDiagnostic *diagnostic);
+/* Optional, per-compilation hints for the exact input, in verified source MIR
+ * coordinates. The scheduler may prefer a nonzero answer between independent
+ * instructions of equal local depth. Hints cannot add or remove dependencies
+ * or move an instruction across an effect barrier. A callback is borrowed,
+ * invoked synchronously, and must not mutate the input or throw across C. */
+typedef struct {
+    int (*prefer)(const void *user, size_t function, size_t block, ArchonValue dst);
+    const void *user;
+} ArchonBackendScheduleHints;
+/* Hints are consumed only with ARCHON_BACKEND_SCHEDULE_PURE on supporting
+ * providers. The existing entry points and options ABI are unchanged. */
+ArchonBackendStatus archon_backend_compile_text_with_schedule_hints(const char *text, size_t size,
+    const ArchonBackendOptions *options, unsigned flags, const ArchonBackendScheduleHints *hints,
+    ArchonBackendArtifact *artifact, ArchonBackendDiagnostic *diagnostic);
+
+typedef enum {
+    ARCHON_BACKEND_FACT_OBSERVABLE_INPUT = 1, /* key: function-local SSA value */
+    ARCHON_BACKEND_FACT_CONTROL_EDGE,        /* block: source; key: destination block */
+    ARCHON_BACKEND_FACT_RETURN_VALUE,       /* block: return block; key: returned SSA value */
+} ArchonBackendFactKind;
+
+/* Optional hints for the exact text submitted to the compiler. Coordinates
+ * are zero-based source MIR ordinals; block is SIZE_MAX for function-level
+ * queries. A positive answer is not proof: consumers must check applicability
+ * independently. Callbacks are synchronous, borrowed, and must not mutate the
+ * input or throw across C. NULL preserves the existing compile path. */
+typedef struct {
+    int (*contains)(const void *user, ArchonBackendFactKind kind, size_t function,
+        size_t block, uint32_t key);
+    /* Candidate masks for a function-local i64 SSA value. Unknown bits are
+     * clear in both masks; consumers must independently confirm masks used. */
+    int (*known_bits)(const void *user, size_t function, ArchonValue value,
+        uint64_t *zero, uint64_t *one);
+    const void *user;
+} ArchonBackendFactHints;
+
+ArchonBackendStatus archon_backend_compile_text_with_facts(const char *text, size_t size,
+    const ArchonBackendOptions *options, unsigned flags, const ArchonBackendFactHints *facts,
+    ArchonBackendArtifact *artifact, ArchonBackendDiagnostic *diagnostic);
 void archon_backend_artifact_destroy(ArchonBackendArtifact *artifact);
 const char *archon_backend_target(void);
 

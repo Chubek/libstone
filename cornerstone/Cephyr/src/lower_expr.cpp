@@ -42,8 +42,7 @@ std::string binary_operands(Id lhs, Id rhs) {
 bool is_void(const CType &type) { return type.kind == CType::Kind::void_; }
 
 CType unqualified(CType type) {
-  type.is_const = false;
-  type.is_volatile = false;
+  type.clear_qualifiers();
   return type;
 }
 
@@ -53,6 +52,7 @@ CType array_element_type(const CType &array) {
   auto element = *array.element;
   element.is_const = element.is_const || array.is_const;
   element.is_volatile = element.is_volatile || array.is_volatile;
+  element.is_restrict = element.is_restrict || array.is_restrict;
   return element;
 }
 
@@ -69,7 +69,7 @@ bool is_void_pointer(const CType &type) {
 
 bool is_unqualified_void_pointer(const CType &type) {
   return is_void_pointer(type) && !type.element->is_const &&
-         !type.element->is_volatile;
+         !type.element->is_volatile && !type.element->is_restrict;
 }
 
 bool is_null_pointer_constant(const Expr &value) {
@@ -85,7 +85,8 @@ bool drops_qualifiers(const CType &from, const CType &to) {
   if (!from.pointer() || !to.pointer() || !from.element || !to.element)
     return false;
   return (from.element->is_const && !to.element->is_const) ||
-         (from.element->is_volatile && !to.element->is_volatile);
+         (from.element->is_volatile && !to.element->is_volatile) ||
+         (from.element->is_restrict && !to.element->is_restrict);
 }
 
 bool compatible_object_pointers(const CType &lhs, const CType &rhs) {
@@ -112,6 +113,8 @@ CType pointer_composite(const CType &lhs, const CType &rhs) {
                      (rhs.element && rhs.element->is_const);
   pointee.is_volatile = (lhs.element && lhs.element->is_volatile) ||
                         (rhs.element && rhs.element->is_volatile);
+  pointee.is_restrict = (lhs.element && lhs.element->is_restrict) ||
+                        (rhs.element && rhs.element->is_restrict);
   return pointer_type(pointee);
 }
 
@@ -123,14 +126,15 @@ CType decay(CType type) {
     return pointer_type(array_element_type(type));
   if (type.kind == CType::Kind::function)
     return pointer_type(type);
-  type.is_const = false;
-  type.is_volatile = false;
-  return type;
+  return unqualified(std::move(type));
 }
 
 bool stdarg_builtin(std::string_view name) {
-  return name == "__cephyr_va_start" || name == "__cephyr_va_arg";
+  return name == "__cephyr_va_start" || name == "__cephyr_va_arg" ||
+         name == "__cephyr_va_end";
 }
+
+bool type_modifiable(Node *, const CType &, const TypeContext &);
 
 bool scalar_variadic_signature(const CType &type) {
   return type.element && (is_void(*type.element) || type.element->scalar()) &&
@@ -147,32 +151,45 @@ CType stdarg_builtin_type(const TypeContext &context, Node *node, std::string_vi
     return invalid_type();
   };
   if (!context.source.native_scalar_stdarg())
-    return error("stdarg builtins require a bundled SysV AMD64 or AAPCS64 backend");
-  if (args.size() != 2)
+    return error("stdarg builtins require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
+  const bool rv64 = context.source.native_rv64_soft_fp;
+  const bool end = name == "__cephyr_va_end";
+  if (end && !rv64)
+    return error("__cephyr_va_end requires the bundled RV64IM LP64 backend");
+  if (args.size() != (end ? 1u : 2u))
     return error("invalid stdarg builtin argument count");
   const bool aarch64 = context.source.native_aarch64_stdarg;
-  const auto ap = decay(expression_type(args[0], context));
-  const auto *record = ap.pointer() && ap.element && !ap.element->is_const
-                           ? ap.element->record : nullptr;
-  const auto layout_error = aarch64 ? "stdarg builtin requires a writable AAPCS64 va_list"
-                                    : "stdarg builtin requires a writable SysV AMD64 va_list";
-  if (!record || record->is_union || record->size != (aarch64 ? 32 : 24) ||
-      record->alignment != 8 || record->members.size() != (aarch64 ? 5 : 4))
-    return error(layout_error);
-  for (std::size_t i = 0; i != record->members.size(); ++i) {
-    constexpr std::string_view amd64_names[]{
-        "__gp_offset", "__fp_offset", "__overflow_arg_area", "__reg_save_area"};
-    constexpr unsigned amd64_offsets[]{0, 4, 8, 16};
-    constexpr std::string_view aarch64_names[]{
-        "__stack", "__gr_top", "__vr_top", "__gr_offs", "__vr_offs"};
-    constexpr unsigned aarch64_offsets[]{0, 8, 16, 24, 28};
-    const auto &member = record->members[i];
-    if (member.name != (aarch64 ? aarch64_names[i] : amd64_names[i]) ||
-        member.offset != (aarch64 ? aarch64_offsets[i] : amd64_offsets[i]) ||
-        member.type.is_const ||
-        ((aarch64 ? i >= 3 : i < 2) ? !compatible(member.type, integer_type(32, aarch64))
-                                    : !is_void_pointer(member.type)))
+  const auto ap_type = expression_type(args[0], context);
+  if (rv64) {
+    if (!is_unqualified_void_pointer(ap_type) || !type_modifiable(args[0], ap_type, context))
+      return error("stdarg builtin requires a writable RV64IM LP64 va_list");
+    if (end)
+      return void_type();
+  } else {
+    const auto ap = decay(ap_type);
+    const auto *record = ap.pointer() && ap.element && !ap.element->is_const
+                             ? ap.element->record : nullptr;
+    const auto layout_error = aarch64 ? "stdarg builtin requires a writable AAPCS64 va_list"
+                                      : "stdarg builtin requires a writable SysV AMD64 va_list";
+    if (!record || record->is_union || record->contains_bit_field ||
+        record->size != (aarch64 ? 32 : 24) ||
+        record->alignment != 8 || record->members.size() != (aarch64 ? 5 : 4))
       return error(layout_error);
+    for (std::size_t i = 0; i != record->members.size(); ++i) {
+      constexpr std::string_view amd64_names[]{
+          "__gp_offset", "__fp_offset", "__overflow_arg_area", "__reg_save_area"};
+      constexpr unsigned amd64_offsets[]{0, 4, 8, 16};
+      constexpr std::string_view aarch64_names[]{
+          "__stack", "__gr_top", "__vr_top", "__gr_offs", "__vr_offs"};
+      constexpr unsigned aarch64_offsets[]{0, 8, 16, 24, 28};
+      const auto &member = record->members[i];
+      if (member.name != (aarch64 ? aarch64_names[i] : amd64_names[i]) ||
+          member.offset != (aarch64 ? aarch64_offsets[i] : amd64_offsets[i]) ||
+          member.type.is_const ||
+          ((aarch64 ? i >= 3 : i < 2) ? !compatible(member.type, integer_type(32, aarch64))
+                                      : !is_void_pointer(member.type)))
+        return error(layout_error);
+    }
   }
   if (name == "__cephyr_va_start") {
     const auto *f = context.function;
@@ -396,6 +413,7 @@ bool describes_lvalue(Node *node, const TypeContext &context) {
   switch (node->getKind()) {
   case cparser::NK_IDENT_NODE:
   case cparser::NK_STRING_CONST:
+  case cparser::NK_COMPOUND_LITERAL:
   case cparser::NK_INDIRECT_REF:
   case cparser::NK_ARRAY_REF:
     return true;
@@ -432,14 +450,63 @@ thread_local unsigned type_expression_depth = 0;
 
 } // namespace
 
+std::optional<std::vector<ObjectInitEntry>> plan_compound_literal(
+    const TypeContext &context, Node *node, CType &type, bool evaluated) {
+  auto *literal = static_cast<cparser::CompoundLiteralASTNode *>(node);
+  type = read_type(literal->getType(), context, true);
+  const auto error = [&](Node *at, std::string_view message) {
+    context.diagnostics.error("cephyr.compound-literal", message, location(context.source, at));
+    return std::nullopt;
+  };
+  if (!type.valid())
+    return std::nullopt;
+  if (!size_of(type) && (type.kind != CType::Kind::array || type.count))
+    return error(node, "compound literal requires a complete object type or array of unknown size");
+  auto plan = plan_object_initializer(
+      context, type, literal->getInit(),
+      evaluated && context.function && object_has_qualifier(type, &CType::is_volatile));
+  if (!plan)
+    return std::nullopt;
+  if (!size_of(type))
+    return error(node, "compound literal has incomplete or unsupported object size");
+  // Check initializer constraints even without evaluating the literal (e.g.
+  // as the operand of sizeof or an unselected generic association).
+  for (const auto &entry : *plan) {
+    if (entry.clear || entry.bytes)
+      continue;
+    auto *value = entry.source;
+    while (value->getKind() == cparser::NK_LIST) {
+      const auto values = elements(value);
+      if (values.size() != 1)
+        return error(value, "scalar initializer must contain exactly one expression");
+      value = values.front();
+    }
+    if (value->getKind() == cparser::NK_DESIGNATED_INIT)
+      return error(value, "scalar initializer cannot have a designator");
+    if (!context.function || evaluated)
+      continue; // The static or runtime initializer will check the value.
+    const auto errors = context.diagnostics.error_count();
+    const auto source = decay(expression_type(value, context));
+    if (!assignment_compatible(context, entry.type, source, value)) {
+      if (context.diagnostics.error_count() != errors)
+        return std::nullopt;
+      return error(value, "incompatible compound literal initializer");
+    }
+  }
+  return plan;
+}
+
 CType expression_type(Node *node, const TypeContext &context) {
   const AnalysisDepth depth(type_expression_depth);
   if (!present(node))
     return invalid_type();
   const auto type_of = [&](Node *child) { return expression_type(child, context); };
   const auto as_value = [&](Node *child) { return decay(type_of(child)); };
-  const auto increment_type = [&](Node *child) {
-    const auto type = type_of(child);
+  const auto increment_type = [&](Node *child, bool post = false) {
+    auto type = type_of(child);
+    type.denotes_bit_field = false;
+    if (post)
+      type.bit_field_width = 0;
     return type_modifiable(child, type, context) &&
                    (type.arithmetic() || complete_object_pointer(type))
                ? unqualified(type) : invalid_type();
@@ -451,6 +518,7 @@ CType expression_type(Node *node, const TypeContext &context) {
       if (!result.valid())
         return invalid_type();
     }
+    result.denotes_bit_field = false;
     return result;
   };
 
@@ -470,6 +538,12 @@ CType expression_type(Node *node, const TypeContext &context) {
   }
   case cparser::NK_STRING_CONST:
     return string_constant_type(node, context.source);
+  case cparser::NK_COMPOUND_LITERAL: {
+    CType type;
+    auto plan = plan_compound_literal(context, node, type);
+    return plan && (context.function || validate_static_compound_initializer(context, *plan))
+               ? type : invalid_type();
+  }
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
     auto type = context.lookup(name, node).type;
@@ -512,12 +586,17 @@ CType expression_type(Node *node, const TypeContext &context) {
   case cparser::NK_PREINCREMENT_EXPR:
     return increment_type(static_cast<cparser::PreincrementExprASTNode *>(node)->getExpr());
   case cparser::NK_POSTDECREMENT_EXPR:
-    return increment_type(static_cast<cparser::PostdecrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PostdecrementExprASTNode *>(node)->getExpr(), true);
   case cparser::NK_POSTINCREMENT_EXPR:
-    return increment_type(static_cast<cparser::PostincrementExprASTNode *>(node)->getExpr());
+    return increment_type(static_cast<cparser::PostincrementExprASTNode *>(node)->getExpr(), true);
   case cparser::NK_ADDR_EXPR: {
     auto *operand = static_cast<cparser::AddrExprASTNode *>(node)->getExpr();
     auto type = type_of(operand);
+    if (type.denotes_bit_field) {
+      context.diagnostics.error("cephyr.type", "cannot take the address of a bit-field",
+                                location(context.source, operand));
+      return invalid_type();
+    }
     if (type.valid() && register_subobject(operand, context)) {
       context.diagnostics.error("cephyr.type", "cannot take the address of a register object",
                                 location(context.source, operand));
@@ -553,10 +632,11 @@ CType expression_type(Node *node, const TypeContext &context) {
   }
   case cparser::NK_ASSIGN_EXPR: {
     auto *assign = static_cast<cparser::AssignExprASTNode *>(node);
-    const auto target = type_of(assign->getLhs());
+    auto target = type_of(assign->getLhs());
     if (!type_modifiable(assign->getLhs(), target, context))
       return invalid_type();
     const auto source = as_value(assign->getRhs());
+    target.denotes_bit_field = false;
     return assignment_compatible(context, target, source, assign->getRhs())
                ? unqualified(target) : invalid_type();
   }
@@ -647,6 +727,119 @@ CType expression_type(Node *node, const TypeContext &context) {
 
 namespace {
 
+Expr narrow_bit_field(Function &function, Expr value, const LValue &target) {
+  if (!target.bit_field || !value.type.valid())
+    return value;
+  auto type = unqualified(target.type);
+  auto width = target.bit_field->width;
+  return {type, function.emit(type, type.is_signed ? "sext" : "zext",
+                              id(value.id) + " " + std::to_string(width)), std::nullopt};
+}
+
+bool uses_bit_field_snapshot(const LValue &target) {
+  // AAPCS64 expressly forbids merging the value read and the write's
+  // preservation read (e.g., increment is two reads and one write).
+  return target.type.is_volatile && target.bit_field &&
+         target.bit_field->volatile_access == BitField::VolatileAccess::narrow;
+}
+
+struct VolatileBitFieldAccess {
+  // C11 5.1.2.3p6 and 6.7.3p7: use the target's volatile access policy.
+  // AAPCS64 mandates a container-width load and a load/store pair for a
+  // write, even when every bit is replaced. AMD64/RV64 use only the field's
+  // occupied bytes, with the widest naturally aligned chunks, low first.
+  explicit VolatileBitFieldAccess(const LValue &target)
+      : container(target.bit_field->volatile_access == BitField::VolatileAccess::container),
+        bytes(container ? align_of(target.type) : target.bit_field->bytes()),
+        shift(target.bit_field->shift + (container ? 8 * target.bit_field->byte_in_container : 0)),
+        displacement(container ? 0 : target.bit_field->byte_in_container),
+        mask(target.bit_field->mask() << shift) {}
+
+  bool container;
+  unsigned bytes, shift, displacement;
+  std::uint64_t mask;
+
+  static std::uint64_t byte_mask(unsigned bytes) {
+    return (std::uint64_t{1} << (bytes * 8)) - 1;
+  }
+
+  template <class Step> void for_each_chunk(Step step) const {
+    for (unsigned i = 0; i < bytes;) {
+      auto width = bytes;
+      if (!container) {
+        width = 1;
+        while (2 * width <= bytes - i && (displacement + i) % (2 * width) == 0)
+          width *= 2;
+      }
+      step(width, displacement + i, i * 8);
+      i += width;
+    }
+  }
+};
+
+Id read_bit_field_storage(Function &function, const LValue &target, Node *at,
+                         const VolatileBitFieldAccess &access, bool preserve_only) {
+  const auto word = integer_type(64, false);
+  Id storage = no_value;
+  access.for_each_chunk([&](unsigned width, unsigned disp, unsigned shift) {
+    const auto mask = VolatileBitFieldAccess::byte_mask(width);
+    if (preserve_only && !access.container && ((access.mask >> shift) & mask) == mask)
+      return;
+    const auto *op = width == 4 ? "load_u32" : width == 2 ? "load_u16" : "load_u8";
+    auto part = function.emit(word, op, id(target.address) + " " + std::to_string(disp), at);
+    if (shift)
+      part = function.emit(word, "shl", binary_operands(part, function.constant(shift, word)));
+    storage = storage == no_value ? part : function.emit(word, "or", binary_operands(storage, part));
+  });
+  return storage;
+}
+
+bool supported_volatile_bit_field(Function &function, const LValue &target, Node *at) {
+  if (target.bit_field->volatile_access != BitField::VolatileAccess::unsupported)
+    return true;
+  function.error(at, "volatile bit-field access to an overlapping container or union member is not supported");
+  return false;
+}
+
+Expr read_volatile_bit_field(Function &function, const LValue &target, Node *at,
+                             Id *snapshot = nullptr) {
+  if (!supported_volatile_bit_field(function, target, at))
+    return invalid_expr();
+  const auto word = integer_type(64, false);
+  const VolatileBitFieldAccess access(target);
+  auto storage = read_bit_field_storage(function, target, at, access, false);
+  if (snapshot)
+    *snapshot = storage;
+  if (access.shift)
+    storage = function.emit(word, "lshr", binary_operands(storage, function.constant(access.shift, word)));
+  return narrow_bit_field(function, {word, storage, std::nullopt}, target);
+}
+
+void write_volatile_bit_field(Function &function, const LValue &target, Expr value,
+                              Node *at, Id snapshot = no_value) {
+  if (!supported_volatile_bit_field(function, target, at))
+    return;
+  const auto word = integer_type(64, false);
+  const VolatileBitFieldAccess access(target);
+  auto bits = function.emit(word, "and",
+      binary_operands(value.id, function.constant(target.bit_field->mask(), word)));
+  if (access.shift)
+    bits = function.emit(word, "shl", binary_operands(bits, function.constant(access.shift, word)));
+  if (snapshot == no_value)
+    snapshot = read_bit_field_storage(function, target, at, access, true);
+  const auto keep = VolatileBitFieldAccess::byte_mask(access.bytes) ^ access.mask;
+  if (keep) {
+    const auto kept = function.emit(word, "and", binary_operands(snapshot, function.constant(keep, word)));
+    bits = function.emit(word, "or", binary_operands(bits, kept));
+  }
+  access.for_each_chunk([&](unsigned width, unsigned disp, unsigned shift) {
+    const auto part = shift ? function.emit(word, "lshr",
+        binary_operands(bits, function.constant(shift, word))) : bits;
+    const auto *op = width == 4 ? "store32" : width == 2 ? "store16" : "store8";
+    function.emit_void(op, binary_operands(target.address, part) + " " + std::to_string(disp));
+  });
+}
+
 Expr canonicalize(Function &function, Expr value, Node *at) {
   if (!value.type.integer() || value.id == no_value)
     return value;
@@ -671,6 +864,28 @@ Id invert(Function &function, Id condition) {
 
 Id floating_bits(Function &function, const CType &type, std::uint64_t bits) {
   return function.emit(type, "fconst", std::to_string(bits));
+}
+
+Expr x87_constant(Function &function, Constant value) {
+  return {value.type, function.constant(value.value, size_type()), std::nullopt,
+          function.constant(value.x87_sign_exponent, integer_type(16, false))};
+}
+
+// The scalar snapshot stays in two SSA values, even across side effects
+// and control-flow edges. Materialize only for AMD64 instructions that
+// consume the 10-byte value in memory; never give them the source lvalue.
+LValue x87_temporary(Function &function, Expr value, Node *at) {
+  auto temporary = function.local(unqualified(value.type), at);
+  store(function, temporary, value, at);
+  return temporary;
+}
+
+Id x87_compare(Function &function, const char *op, Expr lhs, Expr rhs, Node *at) {
+  const auto left = x87_temporary(function, lhs, at);
+  const auto right = x87_temporary(function, rhs, at);
+  if (left.address == no_value || right.address == no_value)
+    return no_value;
+  return function.emit(int_type(), op, binary_operands(left.address, right.address), at);
 }
 
 Expr pointer_offset(Function &function, Expr pointer, Expr index, bool subtract,
@@ -815,6 +1030,25 @@ Expr integer_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
   return canonicalize(function, result, at);
 }
 
+// Use ordinary typed imports and LP64 calls: the Archon RV64 provider
+// already transports f32/f64 through the integer argument and result slots.
+// The helper signatures use XLEN integers, never C's narrow ABI slots.
+Expr rv64_soft_fp_call(Function &function, std::string name, const CType &result,
+                      Expr a, Node *at, std::optional<Expr> b = std::nullopt) {
+  CType signature;
+  signature.kind = CType::Kind::function;
+  signature.element = std::make_shared<CType>(result);
+  signature.prototype = true;
+  signature.params.push_back(a.type.integer() ? integer_type(64, a.type.is_signed, 4) : a.type);
+  std::string operands = name + (b ? " 2 " : " 1 ") + id(a.id);
+  if (b) {
+    signature.params.push_back(b->type);
+    operands += " " + id(b->id);
+  }
+  function.unit.rv64_soft_fp_helpers.try_emplace(std::move(name), std::move(signature));
+  return {result, function.emit(result, "call", operands, at), std::nullopt};
+}
+
 Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
                        Node *at) {
   if (kind == cparser::NK_PLUS_EXPR) {
@@ -835,14 +1069,28 @@ Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
         function.error(at, "operator does not accept these floating-point operands");
       return invalid_expr();
     }
-    if (function.unit.source.native_rv64_soft_fp) {
-      function.error(at, "runtime floating-point arithmetic is not supported on RV64IM LP64");
-      return invalid_expr();
-    }
     lhs = convert(function, lhs, type, at);
     rhs = convert(function, rhs, type, at);
     if (!lhs.type.valid() || !rhs.type.valid())
       return invalid_expr();
+    if (type.extended_real()) {
+      const auto left = x87_temporary(function, lhs, at);
+      const auto right = x87_temporary(function, rhs, at);
+      if (left.address == no_value || right.address == no_value)
+        return invalid_expr();
+      const char *operation = kind == cparser::NK_PLUS_EXPR ? "amd64_x87_add" :
+          kind == cparser::NK_MINUS_EXPR ? "amd64_x87_sub" :
+          kind == cparser::NK_MULT_EXPR ? "amd64_x87_mul" : "amd64_x87_div";
+      function.emit_void(operation, binary_operands(left.address, right.address));
+      return load(function, left, at);
+    }
+    if (function.unit.source.native_rv64_soft_fp) {
+      const char *stem = kind == cparser::NK_PLUS_EXPR ? "__add" :
+          kind == cparser::NK_MINUS_EXPR ? "__sub" :
+          kind == cparser::NK_MULT_EXPR ? "__mul" : "__div";
+      return rv64_soft_fp_call(function, std::string(stem) + (type.bits == 32 ? "sf3" : "df3"),
+                             type, lhs, at, rhs);
+    }
     const char *operation = kind == cparser::NK_PLUS_EXPR ? "fadd" :
         kind == cparser::NK_MINUS_EXPR ? "fsub" :
         kind == cparser::NK_MULT_EXPR ? "fmul" : "fdiv";
@@ -911,11 +1159,18 @@ Expr comparison(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
 
   Id result = no_value;
   if (lhs.type.real()) {
-    const char *operation = !relational ? "feq" :
-        (kind == cparser::NK_LE_EXPR || kind == cparser::NK_GE_EXPR) ? "fle" : "flt";
+    const bool inclusive = kind == cparser::NK_LE_EXPR || kind == cparser::NK_GE_EXPR;
     if (kind == cparser::NK_GT_EXPR || kind == cparser::NK_GE_EXPR)
       std::swap(lhs, rhs);
-    result = function.emit(int_type(), operation, binary_operands(lhs.id, rhs.id));
+    if (lhs.type.extended_real()) {
+      const char *op = !relational ? "amd64_x87_eq" : inclusive ? "amd64_x87_le" : "amd64_x87_lt";
+      result = x87_compare(function, op, lhs, rhs, at);
+      if (result == no_value)
+        return invalid_expr();
+    } else {
+      const char *operation = !relational ? "feq" : inclusive ? "fle" : "flt";
+      result = function.emit(int_type(), operation, binary_operands(lhs.id, rhs.id));
+    }
     if (kind == cparser::NK_NE_EXPR)
       result = invert(function, result);
     return {int_type(), result, std::nullopt};
@@ -984,18 +1239,25 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
     function.error(node, "incompatible operands to conditional expression");
     return invalid_expr();
   }
-  if (result_type.extended_real()) {
-    function.error(node, "runtime long double conditional values are not supported");
-    return invalid_expr();
-  }
-
   const auto yes = function.block();
   const auto no = function.block();
   const auto join = function.block();
   Id result = no_value;
-  if (!is_void(result_type))
+  Id sign_exponent = no_value;
+  if (result_type.extended_real()) {
+    result = function.param(join, size_type());
+    sign_exponent = function.param(join, integer_type(16, false));
+  } else if (!is_void(result_type)) {
     result = function.param(join, result_type.kind == CType::Kind::record
-                                     ? pointer_type(result_type) : result_type);
+                                      ? pointer_type(result_type) : result_type);
+  }
+  const auto arguments = [&](const Expr &value) -> std::vector<Id> {
+    if (is_void(result_type))
+      return {};
+    if (result_type.extended_real())
+      return {value.id, value.x87_sign_exponent};
+    return {value.id};
+  };
   function.branch(condition_id, yes, no);
 
   function.select(yes);
@@ -1006,8 +1268,7 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
   if (!yes_value.type.valid())
     function.trap();
   else if (function.open())
-    function.jump(join, is_void(result_type) ? std::vector<Id>{}
-                                            : std::vector<Id>{yes_value.id});
+    function.jump(join, arguments(yes_value));
 
   function.select(no);
   auto no_value_expr = lower_expr(function, node->getElseClause());
@@ -1017,14 +1278,12 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
   if (!no_value_expr.type.valid())
     function.trap();
   else if (function.open())
-    function.jump(join, is_void(result_type)
-                            ? std::vector<Id>{}
-                            : std::vector<Id>{no_value_expr.id});
+    function.jump(join, arguments(no_value_expr));
 
   function.select(join);
   if (!yes_value.type.valid() || !no_value_expr.type.valid())
     return invalid_expr();
-  return {result_type, result, std::nullopt};
+  return {result_type, result, std::nullopt, sign_exponent};
 }
 
 Expr increment(Function &function, Node *operand, bool decrement, bool post,
@@ -1037,7 +1296,9 @@ Expr increment(Function &function, Node *operand, bool decrement, bool post,
                        "lvalue");
     return invalid_expr();
   }
-  auto old = load(function, target, operand);
+  Id snapshot = no_value;
+  auto old = uses_bit_field_snapshot(target) ? read_volatile_bit_field(function, target, operand, &snapshot)
+                                            : load(function, target, operand);
   if (!old.type.valid())
     return invalid_expr();
   Expr updated;
@@ -1054,8 +1315,15 @@ Expr increment(Function &function, Node *operand, bool decrement, bool post,
   updated = convert(function, updated, target.type, at);
   if (!updated.type.valid())
     return invalid_expr();
-  store(function, target, updated, at);
-  return post ? old : updated;
+  if (snapshot != no_value)
+    write_volatile_bit_field(function, target, updated, at, snapshot);
+  else
+    store(function, target, updated, at);
+  auto result = post ? old : narrow_bit_field(function, updated, target);
+  result.type.denotes_bit_field = false;
+  if (post)
+    result.type.bit_field_width = 0;
+  return result;
 }
 
 Expr assignment(Function &function, cparser::AssignExprASTNode *node) {
@@ -1074,12 +1342,21 @@ Expr assignment(Function &function, cparser::AssignExprASTNode *node) {
   }
 
   Expr value;
+  Id snapshot = no_value;
   const auto compound = binary_children(node->getRhs());
   // The parser represents `a op= b` as `a = (a op b)` and deliberately reuses
   // the exact lhs node. Preserve C's single evaluation of `a`.
   if (compound && compound->lhs == node->getLhs()) {
-    auto lhs = load(function, target, node->getLhs());
-    auto rhs = lower_expr(function, compound->rhs);
+    Expr lhs, rhs;
+    if (uses_bit_field_snapshot(target)) {
+      // Take the preservation snapshot after evaluating the RHS: its side
+      // effects may have updated another field sharing the same bytes.
+      rhs = lower_expr(function, compound->rhs);
+      lhs = read_volatile_bit_field(function, target, node->getLhs(), &snapshot);
+    } else {
+      lhs = load(function, target, node->getLhs());
+      rhs = lower_expr(function, compound->rhs);
+    }
     value = arithmetic_binary(function, node->getRhs()->getKind(), lhs, rhs,
                               node->getRhs());
   } else {
@@ -1088,7 +1365,12 @@ Expr assignment(Function &function, cparser::AssignExprASTNode *node) {
   value = convert(function, value, target.type, node->getRhs());
   if (!value.type.valid())
     return invalid_expr();
-  store(function, target, value, node);
+  if (snapshot != no_value)
+    write_volatile_bit_field(function, target, value, node, snapshot);
+  else
+    store(function, target, value, node);
+  value = narrow_bit_field(function, value, target);
+  value.type.denotes_bit_field = false;
   value.constant.reset(); // Assignment is not an integer constant expression.
   return value;
 }
@@ -1149,6 +1431,27 @@ Expr lower_stdarg_builtin(Function &function, cparser::CallExprASTNode *node,
   const auto type = stdarg_builtin_type(TypeContext(function.unit, &function), node, name, args);
   if (!type.valid())
     return invalid_expr();
+  if (function.unit.source.native_rv64_soft_fp) {
+    // Lower the list lvalue, not C's unary &: a register-qualified list
+    // is valid, and va_end must not load a potentially indeterminate value.
+    const auto cursor = lower_lvalue(function, args[0]);
+    if (cursor.address == no_value)
+      return invalid_expr();
+    if (name == "__cephyr_va_end")
+      return {type, no_value, std::nullopt};
+    if (name == "__cephyr_va_start") {
+      function.emit_void("rv64_va_start", id(cursor.address));
+      return {type, no_value, std::nullopt};
+    }
+    // The prologue places register and stack arguments in one sequence
+    // of XLEN slots; every supported promoted type needs exactly one.
+    const auto current = load(function, cursor, node);
+    const auto stride = function.constant(8, difference_type());
+    const auto next = function.emit(cursor.type, "ptr_add", binary_operands(current.id, stride));
+    store(function, cursor, {cursor.type, next, std::nullopt}, node);
+    return load(function, {type, current.id}, node);
+  }
+
   const auto ap = lower_expr(function, args[0]);
   if (!ap.type.valid())
     return invalid_expr();
@@ -1260,7 +1563,7 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
         return invalid_expr();
       }
       if (!native_stdarg) {
-        function.error(arguments[index], "floating-point variadic calls require a bundled SysV AMD64 or AAPCS64 backend");
+        function.error(arguments[index], "floating-point variadic calls require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
         return invalid_expr();
       }
       argument = convert(function, argument, real_type(64), arguments[index]);
@@ -1413,6 +1716,13 @@ Expr lower_binary(Function &function, Node *node) {
   if (node->getKind() == cparser::NK_MINUS_EXPR &&
       static_cast<cparser::MinusExprASTNode *>(node)->isUnary()) {
     auto value = lower_expr(function, children->rhs);
+    if (value.type.extended_real()) {
+      const auto word = integer_type(16, false);
+      const auto sign = function.constant(0x8000, word);
+      value.x87_sign_exponent = function.emit(
+          word, "xor", binary_operands(value.x87_sign_exponent, sign), node);
+      return value;
+    }
     if (value.type.real())
       return {value.type, function.emit(value.type, "fneg", id(value.id)), std::nullopt};
     return arithmetic_binary(function, node->getKind(),
@@ -1447,6 +1757,25 @@ void attach_integer_constant(Function &function, Node *node, Expr &result) {
 Expr load(Function &function, LValue value, Node *at) {
   if (!value.type.valid() || value.address == no_value)
     return invalid_expr();
+  if (value.bit_field) {
+    if (value.type.is_volatile)
+      return read_volatile_bit_field(function, value, at);
+    const auto field = *value.bit_field;
+    const auto word = integer_type(64, false);
+    Id storage = no_value;
+    // Load exactly the bytes occupied by the field. The base-type unit may
+    // extend outside the record member or be unaligned at this address.
+    for (unsigned i = 0; i < field.bytes(); ++i) {
+      const auto address = offset_address(function, value.address, i, integer_type(8, false));
+      auto byte = function.emit(word, "load_u8", id(address) + " 0", at);
+      if (i != 0)
+        byte = function.emit(word, "shl", binary_operands(byte, function.constant(i * 8, word)));
+      storage = i == 0 ? byte : function.emit(word, "or", binary_operands(storage, byte));
+    }
+    if (field.shift)
+      storage = function.emit(word, "lshr", binary_operands(storage, function.constant(field.shift, word)));
+    return narrow_bit_field(function, {word, storage, std::nullopt}, value);
+  }
   if (value.type.kind == CType::Kind::array) {
     if (value.register_object) {
       function.error(at, "cannot convert a register array to a pointer");
@@ -1480,11 +1809,17 @@ Expr load(Function &function, LValue value, Node *at) {
             std::nullopt};
   }
   if (value.type.real()) {
-    if (value.type.extended_real()) {
-      function.error(at, "runtime long double loads are not supported");
-      return invalid_expr();
-    }
     const auto type = unqualified(value.type);
+    if (value.type.extended_real()) {
+      // Snapshot the value in two integer SSA slots. Do not keep the source
+      // address as the value: an assignment may overwrite it before reuse.
+      // SysV AMD64 stores the 10-byte payload at offset zero; the remaining
+      // six bytes are padding. Volatile accesses use these same ordered chunks.
+      const auto low = function.emit(size_type(), "load", id(value.address) + " 0", at);
+      const auto high = function.emit(integer_type(16, false), "load_u16",
+                                      id(value.address) + " 8", at);
+      return {type, low, std::nullopt, high};
+    }
     return {type, function.emit(type, "fload", id(value.address) + " 0"), std::nullopt};
   }
   if (!value.type.integer()) {
@@ -1529,6 +1864,39 @@ void store(Function &function, LValue target, Expr value, Node *at) {
   value = convert(function, value, target.type, at);
   if (!value.type.valid())
     return;
+  if (target.bit_field) {
+    if (target.type.is_volatile) {
+      write_volatile_bit_field(function, target, value, at);
+      return;
+    }
+    const auto field = *target.bit_field;
+    const auto word = integer_type(64, false);
+    auto positioned = function.emit(word, "and",
+        binary_operands(value.id, function.constant(field.mask(), word)));
+    if (field.shift)
+      positioned = function.emit(word, "shl",
+          binary_operands(positioned, function.constant(field.shift, word)));
+    for (unsigned i = 0; i < field.bytes(); ++i) {
+      const auto address = offset_address(function, target.address, i, integer_type(8, false));
+      auto byte = positioned;
+      if (i != 0)
+        byte = function.emit(word, "lshr", binary_operands(byte, function.constant(i * 8, word)));
+      const auto mask = ((field.mask() << field.shift) >> (i * 8)) & 0xff;
+      if (mask != 0xff) {
+        const auto previous = function.emit(word, "load_u8", id(address) + " 0", at);
+        const auto kept = function.emit(word, "and",
+            binary_operands(previous, function.constant(0xff ^ mask, word)));
+        byte = function.emit(word, "or", binary_operands(byte, kept));
+      }
+      function.emit_void("store8", id(address) + " " + id(byte) + " 0");
+    }
+    return;
+  }
+  if (target.type.extended_real()) {
+    function.emit_void("store", binary_operands(target.address, value.id) + " 0");
+    function.emit_void("store16", binary_operands(target.address, value.x87_sign_exponent) + " 8");
+    return;
+  }
 
   const char *operation = nullptr;
   if (target.type.pointer())
@@ -1573,10 +1941,6 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
     function.error(at, "void expression cannot be converted to a value");
     return invalid_expr();
   }
-  if (target.extended_real() || value.type.extended_real()) {
-    function.error(at, "runtime long double conversions and assignments are not supported");
-    return invalid_expr();
-  }
   if (!explicit_cast && target.kind == CType::Kind::record &&
       compatible(unqualified(target), value.type))
     return {unqualified(target), value.id, std::nullopt};
@@ -1591,29 +1955,68 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
                 : std::nullopt};
   }
 
+  if (target.extended_real() || value.type.extended_real()) {
+    const auto type = unqualified(target);
+    if (target.extended_real() && value.type.extended_real()) {
+      value.type = type;
+      return value;
+    }
+    if (!target.arithmetic() || !value.type.arithmetic()) {
+      function.error(at, "long double conversions require arithmetic types");
+      return invalid_expr();
+    }
+    if (target.extended_real()) {
+      const auto temporary = function.local(type, at);
+      if (temporary.address == no_value)
+        return invalid_expr();
+      const char *operation = "amd64_x87_from_fp";
+      if (value.type.integer()) {
+        value = canonicalize(function, value, at);
+        if (!value.type.valid())
+          return invalid_expr();
+        operation = value.type.is_signed ? "amd64_x87_from_si" : "amd64_x87_from_ui";
+      }
+      function.emit_void(operation, binary_operands(temporary.address, value.id));
+      return load(function, temporary, at);
+    }
+    const auto temporary = x87_temporary(function, value, at);
+    if (temporary.address == no_value)
+      return invalid_expr();
+    const char *operation = target.real() ? "amd64_x87_to_fp" :
+        target.is_signed ? "amd64_x87_to_si" : "amd64_x87_to_ui";
+    return canonicalize(function, {type, function.emit(type, operation, id(temporary.address), at),
+                                   std::nullopt}, at);
+  }
+
   if (target.real() && value.type.arithmetic()) {
     const auto type = unqualified(target);
     if (value.type.real() && type.bits == value.type.bits)
       return {type, value.id, std::nullopt};
-    if (function.unit.source.native_rv64_soft_fp) {
-      function.error(at, "runtime floating-point conversions are not supported on RV64IM LP64");
-      return invalid_expr();
-    }
     if (value.type.real()) {
+      if (function.unit.source.native_rv64_soft_fp)
+        return rv64_soft_fp_call(function, type.bits == 64 ? "__extendsfdf2" : "__truncdfsf2",
+                               type, value, at);
       return {type, function.emit(type, "fcast", id(value.id)), std::nullopt};
     }
     value = canonicalize(function, value, at);
     if (!value.type.valid())
       return invalid_expr();
+    if (function.unit.source.native_rv64_soft_fp)
+      return rv64_soft_fp_call(function, std::string(value.type.is_signed ? "__floatdi" : "__floatundi") +
+                                       (type.bits == 32 ? "sf" : "df"),
+                             type, value, at);
     return {type, function.emit(type, value.type.is_signed ? "sitofp" : "uitofp", id(value.id)),
             std::nullopt};
   }
   if (target.integer() && value.type.real()) {
-    if (function.unit.source.native_rv64_soft_fp) {
-      function.error(at, "runtime floating-point conversions are not supported on RV64IM LP64");
-      return invalid_expr();
-    }
     const auto type = unqualified(target);
+    if (function.unit.source.native_rv64_soft_fp) {
+      auto result = rv64_soft_fp_call(function, std::string(type.is_signed ? "__fix" : "__fixuns") +
+                                               (value.type.bits == 32 ? "sfdi" : "dfdi"),
+                                     integer_type(64, type.is_signed, 4), value, at);
+      result.type = type;
+      return canonicalize(function, result, at);
+    }
     const auto operation = type.is_signed ? "fptosi" : "fptoui";
     return canonicalize(function, {type, function.emit(type, operation, id(value.id)), std::nullopt}, at);
   }
@@ -1700,6 +2103,11 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
 Id truth(Function &function, Expr value, Node *at) {
   if (!value.type.valid())
     return no_value;
+  if (value.type.extended_real()) {
+    const auto zero = x87_constant(function, Constant{value.type, 0});
+    const auto is_zero = x87_compare(function, "amd64_x87_eq", value, zero, at);
+    return is_zero == no_value ? no_value : invert(function, is_zero);
+  }
   if (value.type.real()) {
     const auto zero = floating_bits(function, value.type, 0);
     const auto is_zero = function.emit(int_type(), "feq", binary_operands(value.id, zero));
@@ -1745,8 +2153,12 @@ static LValue lower_member(Function &function, LValue object, Node *name) {
   }
   if (object.address == no_value)
     return invalid_lvalue();
-  return {member->type, offset_address(function, object.address, member->offset, member->type), {},
-           object.register_object};
+  auto offset = member->offset;
+  if (member->type.is_volatile && member->bit_field &&
+      member->bit_field->volatile_access != BitField::VolatileAccess::unsupported)
+    offset -= member->bit_field->byte_in_container;
+  return {member->type, offset_address(function, object.address, offset, member->type), {},
+           object.register_object, nullptr, member->bit_field};
 }
 
 LValue lower_lvalue(Function &function, Node *node) {
@@ -1828,6 +2240,8 @@ LValue lower_lvalue(Function &function, Node *node) {
     const auto symbol = function.unit.add_string(node, array);
     return {array, function.emit(pointer_type(array), "global_addr", symbol)};
   }
+  case cparser::NK_COMPOUND_LITERAL:
+    return lower_compound_literal(function, node);
   default:
     function.error(node, "expression is not an lvalue");
     return invalid_lvalue();
@@ -1861,15 +2275,15 @@ Expr lower_expr(Function &function, Node *node) {
   case cparser::NK_STRING_CONST:
     result = string_literal(function, node);
     break;
+  case cparser::NK_COMPOUND_LITERAL:
+    return load(function, lower_compound_literal(function, node), node);
   case cparser::NK_REAL_CONST: {
     const auto value = real_constant(node, TypeContext(function.unit, &function));
     if (!value)
       return invalid_expr();
-    if (value->type.extended_real()) {
-      function.error(node, "runtime long double values are not supported");
-      return invalid_expr();
-    }
-    result = {value->type, floating_bits(function, value->type, value->value), std::nullopt};
+    result = value->type.extended_real()
+        ? x87_constant(function, *value)
+        : Expr{value->type, floating_bits(function, value->type, value->value), std::nullopt};
     break;
   }
   case cparser::NK_IDENT_NODE: {
@@ -2008,6 +2422,10 @@ Expr lower_expr(Function &function, Node *node) {
       }
     }
     auto lvalue = lower_lvalue(function, operand);
+    if (lvalue.bit_field) {
+      function.error(operand, "cannot take the address of a bit-field", "cephyr.type");
+      return invalid_expr();
+    }
     if (lvalue.register_object) {
       function.error(operand, "cannot take the address of a register object", "cephyr.type");
       return invalid_expr();
@@ -2083,6 +2501,7 @@ Expr lower_expr(Function &function, Node *node) {
     for (auto *expression : expressions)
       result = lower_expr(function, expression);
     result.constant.reset();
+    result.type.denotes_bit_field = false;
     break;
   }
   case cparser::NK_COMPOUND_EXPR: {
@@ -2095,6 +2514,7 @@ Expr lower_expr(Function &function, Node *node) {
     for (auto *expression : expressions)
       result = lower_expr(function, expression);
     result.constant.reset();
+    result.type.denotes_bit_field = false;
     break;
   }
   case cparser::NK_NOP_EXPR:

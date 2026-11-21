@@ -23,8 +23,28 @@ extern D receive_double;
 extern float call_float(void);
 extern double call_double(D *);
 
-static U32 bits32(float x) { return ((F32){.value = x}).bits; }
-static U64 bits64(double x) { return ((F64){.value = x}).bits; }
+/* Do not let Clang turn bit-pattern checks into floating comparisons. */
+static U32 bits32(float x) { volatile F32 v = {.value = x}; return v.bits; }
+static U64 bits64(double x) { volatile F64 v = {.value = x}; return v.bits; }
+
+#define ARITHMETIC(T, suffix)                      \
+    extern T add_##suffix(T, T), sub_##suffix(T, T), mul_##suffix(T, T), div_##suffix(T, T); \
+    extern T from_signed_##suffix(long), from_unsigned_##suffix(U64); \
+    extern long to_signed_##suffix(T);             \
+    extern U64 to_unsigned_##suffix(T);
+ARITHMETIC(float, f)
+ARITHMETIC(double, d)
+
+extern double widen_float(float);
+extern float narrow_double(double);
+extern float from_unsigned_int(unsigned int);
+extern signed char to_signed_char(double);
+extern unsigned int to_unsigned_int(float);
+extern double mixed_math(float, unsigned int, double);
+extern float compound_math(float *, float);
+
+/* This TU also uses Clang's own RV64IM helper lowering. */
+float clang_add(float x, float y) { return x + y; }
 
 float clang_float(long pick, float a, double b, long x, long y, long z,
                   long u, long v, float stack_float, double stack_double) {
@@ -94,5 +114,56 @@ int test_main(void) {
     }
     if (bits32(call_float()) != 0xc0500000 || bits64(call_double(clang_double)) != 0xc00a000000000000UL)
         return 9;
+    /* Expected bits are independent of the compiler-rt implementations. */
+    if (bits32(add_f(1.0f, 0x1p-24f)) != 0x3f800000 ||
+        bits32(add_f(0x1.000002p0f, 0x1p-24f)) != 0x3f800002 ||
+        bits32(sub_f(0x1p-126f, 0x1.fffffcp-127f)) != 1 ||
+        bits32(mul_f(0x1p-126f, -0x1p-24f)) != 0x80000000 ||
+        bits32(mul_f(0x1.8p-126f, 0x1p-23f)) != 2 ||
+        bits32(div_f(-1.0f, 3.0f)) != 0xbeaaaaab ||
+        bits32(div_f(0x1p-149f, 1.0f)) != 1)
+        return 10;
+    if (bits64(add_d(1.0, 0x1p-53)) != 0x3ff0000000000000UL ||
+        bits64(add_d(0x1.0000000000001p0, 0x1p-53)) != 0x3ff0000000000002UL ||
+        bits64(sub_d(0x1p-1022, 0x1.ffffffffffffep-1023)) != 1 ||
+        bits64(mul_d(0x1p-1022, -0x1p-53)) != 0x8000000000000000UL ||
+        bits64(mul_d(0x1.8p-1022, 0x1p-52)) != 2 ||
+        bits64(div_d(-1.0, 3.0)) != 0xbfd5555555555555UL ||
+        bits64(div_d(0x1p-1074, 1.0)) != 1)
+        return 11;
+    if (bits32(add_f(0x1.fffffep127f, 0x1.fffffep127f)) != 0x7f800000 ||
+        bits64(div_d(1.0, -0.0)) != 0xfff0000000000000UL ||
+        (bits32(mul_f(values32[8].value, 0.0f)) & 0x7fffffff) <= 0x7f800000 ||
+        (bits64(add_d(values64[9].value, 1.0)) & 0x7fffffffffffffffUL) <= 0x7ff0000000000000UL)
+        return 12;
+    if (bits64(widen_float(-0x1p-149f)) != 0xb6a0000000000000UL ||
+        bits64(widen_float(-0.0f)) != 0x8000000000000000UL ||
+        bits32(narrow_double(0x1.000001p0)) != 0x3f800000 ||
+        bits32(narrow_double(0x1.000003p0)) != 0x3f800002 ||
+        bits32(narrow_double(0x1.8p-149)) != 2 ||
+        bits32(narrow_double(0x1.ffffffp127)) != 0x7f800000)
+        return 13;
+    if (bits32(from_signed_f(-16777219L)) != 0xcb800002 ||
+        bits32(from_signed_f(-0x7fffffffffffffffL - 1)) != 0xdf000000 ||
+        bits32(from_unsigned_f(~0UL)) != 0x5f800000 ||
+        bits64(from_signed_d(-0x7fffffffffffffffL - 1)) != 0xc3e0000000000000UL ||
+        bits64(from_unsigned_d(~0UL)) != 0x43f0000000000000UL ||
+        bits32(from_unsigned_int(0x80000000U)) != 0x4f000000)
+        return 14;
+    if (to_signed_f(-3.75f) != -3 || to_signed_d(-3.75) != -3 ||
+        to_signed_f(-0x1p63f) != -0x7fffffffffffffffL - 1 ||
+        to_signed_d(-0x1p63) != -0x7fffffffffffffffL - 1 ||
+        to_unsigned_f(0x1p63f) != 0x8000000000000000UL ||
+        to_unsigned_d(0x1.fffffffffffffp63) != 0xfffffffffffff800UL ||
+        to_unsigned_d(-0.75) != 0 ||
+        to_signed_char(-127.75) != -127 || to_unsigned_int(0x1p31f) != 0x80000000U)
+        return 15;
+    float local = 1.5f;
+    if (bits64(mixed_math(1.0f, 7, 2.0)) != 0x4030400000000000UL ||
+        bits32(compound_math(&local, 3.0f)) != 0x40c00000 ||
+        bits32(local) != 0x40f00000)
+        return 16;
     return 0;
 }
+
+int main(void) { return test_main(); }

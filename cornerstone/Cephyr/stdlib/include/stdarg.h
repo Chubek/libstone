@@ -27,8 +27,15 @@ typedef struct __cephyr_aarch64_va_record {
 #define va_arg(ap, type) __cephyr_va_arg(&(ap), (type *)0)
 #define va_end(ap) ((void)(&(ap)))
 #define va_copy(dst, src) ((void)((dst) = (src)))
+#elif defined(__CEPHYR_HAS_RV64_STDARG)
+/* RV64IM LP64 uses one pointer into the contiguous argument save area. */
+typedef void *va_list;
+#define va_start(ap, last) __cephyr_va_start((ap), last)
+#define va_arg(ap, type) __cephyr_va_arg((ap), (type *)0)
+#define va_end(ap) __cephyr_va_end((ap))
+#define va_copy(dst, src) ((void)((dst) = (src)))
 #else
-#error "Cephyr <stdarg.h> requires a bundled SysV AMD64 or AAPCS64 backend"
+#error "Cephyr <stdarg.h> requires a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend"
 #endif
 #else
 typedef __builtin_va_list va_list;

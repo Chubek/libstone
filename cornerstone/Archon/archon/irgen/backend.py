@@ -203,7 +203,12 @@ def _emit_rv64(facts, archdb_version):
         "optimizer": "none",
         "oracle": False,
     }
-    if not has_m:
+    if has_m:
+        manifest["variadic"] = {
+            "mir": ["rv64_va_start"],
+            "abi": "LP64 scalar XLEN slots with a contiguous integer-register save area",
+        }
+    else:
         manifest["expanded_mir"] = {"mul": "RV64I shift-and-add modulo 2^64"}
         manifest["unsupported_mir"] = [
             "div_s", "rem_s", "div_u", "rem_u", "div_checked_s", "mul_checked_s",
@@ -217,7 +222,7 @@ def _emit_rv64(facts, archdb_version):
         f'#define AN_TARGET_NAME "{target}/{abi}"\n'
         f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
         f"#define AN_RV64_HAS_M {int(has_m)}\n"
-        + ("#define AN_RV64_SOFT_FP_TRANSPORT 1\n" if has_m else "")
+        + ("#define AN_RV64_SOFT_FP_TRANSPORT 1\n#define AN_RV64_STDARG 1\n" if has_m else "")
         + "\n".join(definitions) + "\n#endif\n"
     )
     files["CMakeLists.txt"] = _render_backend_cmake(

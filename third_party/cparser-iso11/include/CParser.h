@@ -27,7 +27,7 @@ class CParser : public Parser
     std::vector<Token> _gotos;
     ASTNode *_returnType = nullptr;
 
-    enum class DeclaratorName { Required, Optional, Forbidden };
+    enum class DeclaratorName { Required, Parameter, Forbidden };
     struct DeclaratorPart
     {
         enum Kind { Pointer, Array, Function } kind;
@@ -37,6 +37,8 @@ class CParser : public Parser
         ASTNode *operand = NULL_AST_NODE; // Array bound or function parameters
         STScope *scope = nullptr;
         bool variadic = false;
+        bool staticBound = false;
+        bool starBound = false;
     };
 
     class ParseDepth
@@ -69,9 +71,9 @@ class CParser : public Parser
     ASTNode *GenericAssociation();
     StringConstASTNode *StringLiteral();
     ASTNode *parsePostfixExpression(ASTNode *expr);
-    ASTNode *PostfixExpression(ASTNode *typeName);
+    ASTNode *CompoundLiteral(ASTNode *typeName, int line);
     ASTNode *ArgumentExpressionList();
-    ASTNode *UnaryExpression(ASTNode *typeName);
+    ASTNode *UnaryExpression();
     ASTNodeKind UnaryOperator();
     ASTNode *CastExpression();
     ASTNode *MultiplicativeExpression();

@@ -18,8 +18,7 @@ class NativeRegalloc(unittest.TestCase):
         cc = shlex.split(os.environ.get("CC", "cc"))
         if not cc or not shutil.which(cc[0]):
             self.skipTest("C99 compiler unavailable")
-        tmp = Path("/tmp/opencode")
-        with tempfile.TemporaryDirectory(dir=tmp if tmp.is_dir() else None) as directory:
+        with tempfile.TemporaryDirectory(prefix="archon-factir-regalloc-") as directory:
             root = Path(directory)
             source = root / "test.c"
             source.write_text(SOURCE, encoding="ascii")
@@ -207,6 +206,88 @@ static void check_home_traffic(const ArchonMIRBlock *block, const ANHome *homes,
     assert(home_loads == expected_loads && home_stores == expected_stores);
 }
 
+static int demand(const void *user, ArchonBackendFactKind kind,
+    size_t f, size_t b, uint32_t dst)
+{
+    (void)f; (void)b;
+    assert(kind == ARCHON_BACKEND_FACT_OBSERVABLE_INPUT && dst < 32);
+    return (*(const uint32_t *)user & (UINT32_C(1) << dst)) != 0;
+}
+
+static void demand_pressure(void)
+{
+    const ArchonMIRType types[] = { I, I, I, I, I, I, I, I, I };
+    const ArchonMIRInst instructions[] = {
+        INS(CONST, 0, N, N), INS(CONST, 1, N, N),
+        INS(CONST, 2, N, N), INS(CONST, 3, N, N),
+        INS(ADD, 4, 0, 1), INS(ADD, 5, 4, 2), INS(ADD, 6, 5, 3),
+        INS(ADD, 7, 6, 3), INS(ADD, 8, 7, 3),
+    };
+    const ArchonMIRBlock block = {
+        .insts = instructions, .inst_count = COUNT(instructions),
+        .term = { .kind = ARCHON_MIR_RETURN, .value = 8 }
+    };
+    const ArchonMIRFunction fn = { "demand_pressure", I, types, COUNT(types), 0, &block, 1, NULL, 0 };
+    ANHome homes[COUNT(types)];
+    ArchonBackendDiagnostic diag = {0};
+    uint32_t bits = 0;
+    const ArchonBackendFactHints hints = { .contains = demand, .user = &bits };
+    ANContext ctx = { .diag = &diag, .facts = &hints };
+    size_t slots;
+    assert(allocate(&fn, NULL, 0, homes) == 1);
+    assert(homes[3].reg == AN_ZERO);
+    check_home_traffic(&block, homes, 3, 1);
+    assert(an_allocate(&ctx, &fn, homes, &slots));
+    assert(slots == 1 && homes[3].reg == AN_ZERO);
+    check_home_traffic(&block, homes, 3, 1);
+    bits = 1u << 3;
+    assert(an_allocate(&ctx, &fn, homes, &slots));
+    assert(an_verify_homes(&ctx, &fn, homes, slots));
+    assert(slots == 1 && homes[2].reg == AN_ZERO && homes[3].reg != AN_ZERO);
+    check_home_traffic(&block, homes, 1, 1);
+}
+
+static void demand_frame(void)
+{
+    const ArchonMIRType types[] = { ARCHON_MIR_PTR, I, I, I, I };
+    const ArchonMIRImport imports[] = {{ "barrier", V, NULL, 0 }};
+    const ArchonMIRInst instructions[] = {
+        INS(CONST, 1, N, N), { ARCHON_MIR_CALL, N, N, N, 0, "barrier", NULL, 0 },
+        INS(STORE, N, 0, 1),
+        INS(CONST, 2, N, N), { ARCHON_MIR_CALL, N, N, N, 0, "barrier", NULL, 0 },
+        INS(STORE, N, 0, 2),
+        INS(CONST, 3, N, N), INS(CONST, 4, N, N),
+        { ARCHON_MIR_CALL, N, N, N, 0, "barrier", NULL, 0 },
+        INS(STORE, N, 0, 3),
+    };
+    const ArchonMIRBlock block = {
+        .insts = instructions, .inst_count = COUNT(instructions),
+        .term = { .kind = ARCHON_MIR_RETURN, .value = 4 }
+    };
+    const ArchonMIRFunction fn = { "demand_frame", I, types, COUNT(types), 1, &block, 1, NULL, 0 };
+    ANHome homes[COUNT(types)];
+    ArchonBackendDiagnostic diag = {0};
+    uint32_t bits = 30;
+    const ArchonBackendFactHints hints = { .contains = demand, .user = &bits };
+    ANContext ctx = { .diag = &diag, .facts = &hints };
+    ANFrame frame;
+    size_t slots = allocate(&fn, imports, COUNT(imports), homes);
+    assert(slots == 5);
+    assert(an_frame(&ctx, &fn, slots, 0, 0, 1, 0, &frame) && frame.frame_size == 48);
+    assert(an_allocate(&ctx, &fn, homes, &slots));
+    assert(an_verify_homes(&ctx, &fn, homes, slots));
+    assert(slots == 3 && homes[1].slot == homes[2].slot && homes[2].slot == homes[3].slot);
+    assert(homes[3].slot != homes[4].slot && homes[0].slot != homes[3].slot);
+    assert(an_frame(&ctx, &fn, slots, 0, 0, 1, 0, &frame) && frame.frame_size == 32);
+    homes[1].slot = homes[0].slot;
+    assert(!an_verify_homes(&ctx, &fn, homes, slots));
+    homes[1].slot = homes[3].slot;
+    homes[2].slot = homes[4].slot; /* Keep both colors in use while injecting overlap. */
+    homes[3].slot = homes[4].slot;
+    assert(!an_verify_homes(&ctx, &fn, homes, slots));
+    assert(diag.status == ARCHON_BACKEND_INTERNAL && diag.instruction == 9);
+}
+
 static void evict_late_interval(void)
 {
     const ArchonMIRType types[] = { ARCHON_MIR_PTR, I, I, I, I, I, I, I };
@@ -346,12 +427,23 @@ static void control_flow(void)
     const ArchonMIRFunction fn = { "control", I, types, COUNT(types), 0,
         blocks, COUNT(blocks), NULL, 0 };
     ANHome homes[COUNT(types)];
+    ArchonBackendDiagnostic diag = {0};
+    uint32_t bits = UINT32_MAX;
+    const ArchonBackendFactHints hints = { .contains = demand, .user = &bits };
+    ANContext ctx = { .diag = &diag, .facts = &hints };
+    size_t slots;
     assert(allocate(&fn, NULL, 0, homes) == 5);
+    assert(an_allocate(&ctx, &fn, homes, &slots) && slots == 5);
+    assert(an_verify_homes(&ctx, &fn, homes, slots));
     assert(homes[0].reg == AN_ZERO && homes[1].reg == AN_ZERO);
     assert(homes[2].reg == AN_T4 && homes[3].reg == AN_T4 + 1);
     assert(homes[4].reg == AN_T4 && homes[8].reg == AN_T4 + 1);
     assert(homes[5].reg == AN_ZERO && homes[6].reg == AN_ZERO);
     assert(homes[7].reg == AN_ZERO); /* Defined in block 2; live into block 1. */
+    assert(homes[7].slot == 4);
+    homes[7].slot = homes[0].slot;
+    assert(!an_verify_homes(&ctx, &fn, homes, 4));
+    assert(diag.status == ARCHON_BACKEND_INTERNAL && diag.block == 0);
 }
 
 static int stop_after(void *user)
@@ -412,6 +504,8 @@ static void large_block(void)
 int main(void)
 {
     pressure();
+    demand_pressure();
+    demand_frame();
     evict_late_interval();
     calls();
     indirect_call();

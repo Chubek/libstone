@@ -3,7 +3,8 @@
 `<cephyr/CephyrSDK.h>` lets an embedding application extend a Cephyr compilation
 with explicit, **trusted in-process callbacks**. Link against `Cephyr::Cephyr` or
 `libcephyr`. Create a `cephyr_sdk` with `struct_size = sizeof(cephyr_sdk)` and
-`abi_version = CEPHYR_SDK_ABI_VERSION`, then set `cephyr_request.sdk` for that call.
+`abi_version = CEPHYR_SDK_ABI_VERSION`, then set `cephyr_request.sdk` or pass
+the SDK to `cephyr_context_compile` for that call.
 A null SDK leaves the normal pipeline unchanged. Cephyr does not search for,
 load, or sandbox user plugins. Only register code that you would trust to run
 with your application's privileges.
@@ -94,14 +95,17 @@ replace the assembler or linker.
 ## Memory, errors, and limits
 
 Keep the SDK descriptor, hook array, and registration strings alive and
-unchanged for the call to `cephyr_compile`. Keep callback state alive for
-the same duration; if using it from concurrent calls, synchronize mutable
-state. Inputs are read-only borrows for the lifetime of each callback. Pass a
+unchanged for the call to `cephyr_compile` or `cephyr_context_compile`.
+A [persistent context](EMBEDDING.md#reusing-a-context-and-loading-trusted-code-c-api)
+does not store its per-call SDK. Keep callback state alive for the same
+duration; if using it from concurrent calls, synchronize mutable state.
+Inputs are read-only borrows for the lifetime of each callback. Pass a
 length-delimited span to `output->set_text` or `output->report`; the host copies
 it before returning, so the callback can use stack storage. Call each sink with
 the exact supplied `output->context`, on the callback's thread before it
 returns. Do not save either interface for later or pass it to another thread.
-Do not reenter `cephyr_compile` on the callback thread or throw through the C API.
+Do not reenter either compile function on the callback thread or throw through
+the C API.
 
 Return `CEPHYR_SDK_OK` to commit or `CEPHYR_SDK_REJECT` to stop. Error diagnostics
 and `-Werror`-promoted warnings also stop compilation. A failed sink call
@@ -111,7 +115,7 @@ does not publish its current translation unit's output; its diagnostics are
 retained. This is not request-wide rollback of earlier translation units or of
 callback side effects.
 
-An invalid registration fails `cephyr_compile` with `CEPHYR_INVALID_ARGUMENT`;
+An invalid registration fails the compile call with `CEPHYR_INVALID_ARGUMENT`;
 callback failures are `CEPHYR_COMPILE_ERROR`. Inspect the compilation result
 with `cephyr_result_diagnostics` for details, then destroy the result.
 

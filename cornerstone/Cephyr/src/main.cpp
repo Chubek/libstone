@@ -1,8 +1,11 @@
 #include "driver.hpp"
+#include "driver_io.hpp"
+#include "embedding_internal.hpp"
 #include "mir_verify.h"
 #include "moonstone_tools.hpp"
 #include "qml_rewrite.hpp"
 #include "sdk_internal.hpp"
+#include "../FactIR.hpp"
 
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
 #include "moonstone_analysis.hpp"
@@ -22,10 +25,12 @@
 #include <algorithm>
 #include <cerrno>
 #include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <locale>
 #include <memory>
 #include <optional>
 #include <set>
@@ -37,16 +42,14 @@
 #include <utility>
 #include <vector>
 
-struct cephyr_result {
-    std::string output;
-    std::string diagnostics;
-};
-
 namespace cephyr {
 namespace {
 
 namespace fs = std::filesystem;
 using Command = std::vector<std::string>;
+using detail::MemoryFile;
+using detail::save;
+using detail::TempDirectory;
 
 enum class Stage { link, object, assembly, preprocess, syntax, mir };
 enum class Language { automatic, c, preprocessed, assembly, assembly_cpp, link, link_option };
@@ -54,6 +57,9 @@ enum class Language { automatic, c, preprocessed, assembly, assembly_cpp, link, 
 struct Input {
     Language language;
     std::string argument;
+    const detail::TranslationUnit *unit = nullptr;
+
+    const std::string &name() const { return unit ? unit->name : argument; }
 };
 
 struct Options {
@@ -61,12 +67,14 @@ struct Options {
     std::vector<Input> inputs;
     fs::path output, config_file, sysroot;
     fs::path profile_output;
+    fs::path factir_smtlib, factir_facts;
     std::string target, stdlib;
     std::string qml_profile;
     QmlProfile qml;
     Command assembler_options;
     PreprocessOptions preprocess;
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
+    std::optional<bool> factir_enabled;
     bool no_headers = false, no_start = false, no_libraries = false, shared = false;
     bool verbose = false, sarif = false, werror = false, help = false, version = false;
     bool moonstone_analysis = false;
@@ -77,6 +85,10 @@ struct Invocation {
     cephyr_result &result;
     std::istream *cli_input = nullptr;
     std::ostream *cli_output = nullptr;
+    std::span<const std::shared_ptr<const detail::TranslationUnit>> units{};
+    const detail::HostSymbols *symbols = nullptr;
+
+    bool embedding() const { return !cli_output; }
 };
 
 constexpr std::string_view help_text = R"(Usage: cephyr [options] file...
@@ -104,6 +116,9 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --stdlib MODE             cephyr, system, or none
   --target TRIPLE|auto      Select a Lua target or a supported native host target
   --config FILE             Read FILE instead of ./Cephyr.toml
+  --no-factir, --factir      Disable or enable verified FactIR (default: on)
+  --factir-smtlib FILE      Write the SMT-LIB obligation (one C input)
+  --factir-facts FILE       Write the committed Datalog facts (one C input)
   --profile NAME            Select a QML profile from the configuration
   --qml-pass NAME           Append a QML pass (repeatable)
   --qml-file PATH           Load a QML rule fragment (repeatable)
@@ -201,7 +216,9 @@ std::optional<unsigned> positive_unsigned(std::string_view text)
     return ec == std::errc{} && ptr == end && value ? std::optional{value} : std::nullopt;
 }
 
-bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Diagnostics &diag)
+bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
+                   Options &opts, Diagnostics &diag,
+                   std::span<const std::shared_ptr<const detail::TranslationUnit>> units)
 {
     bool positional = false, input_dash = false;
     Language current = Language::automatic;
@@ -240,6 +257,13 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
                 if (input_dash)
                     diag.error("cephyr.option", "standard input may only be read once");
                 input_dash = true;
+                if (!units.empty()) {
+                    if (type != Language::c)
+                        diag.error("cephyr.option", "the translation-unit operand '-' must select C");
+                    for (const auto &unit : units)
+                        opts.inputs.push_back({Language::c, "-", unit.get()});
+                    continue;
+                }
             }
             opts.inputs.push_back({type, std::string(token)});
         } else if (token == "--") {
@@ -329,6 +353,12 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
                 diag.error("cephyr.moonstone.profile", "Cephyr was built without Prolific profiling support");
             if (opts.profile_output == "-")
                 diag.error("cephyr.moonstone.profile", "profiling requires a file, not standard output");
+        } else if (token == "--no-factir" || token == "--factir") {
+            opts.factir_enabled = token == "--factir";
+        } else if (option("--factir-smtlib")) {
+            opts.factir_smtlib = argument("--factir-smtlib");
+        } else if (option("--factir-facts")) {
+            opts.factir_facts = argument("--factir-facts");
         } else if (token == "--no-cache" || token == "--cache") {
             opts.use_cache = token == "--cache";
         } else if (token == "-static" || token == "-dynamic") {
@@ -392,6 +422,9 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
         }
     }
     diag.set_warnings_as_errors(opts.werror);
+    if (!units.empty() && (!input_dash || !opts.shared || opts.output != "-" ||
+                           opts.stage != Stage::link || opts.help || opts.version))
+        diag.error("cephyr.option", "linking translation units requires a C input operand '-', -shared and -o -");
     if (opts.help || opts.version)
         return diag.error_count() == 0;
     if (opts.inputs.empty()) {
@@ -407,8 +440,12 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
     }
     if (opts.stage == Stage::syntax && !opts.output.empty())
         diag.error("cephyr.option", "-fsyntax-only does not write an output");
-    if ((opts.stage == Stage::object || opts.stage == Stage::link) && opts.output == "-")
-        diag.error("cephyr.option", "binary output to stdout is not supported");
+    if ((opts.stage == Stage::object || opts.stage == Stage::link) && opts.output == "-") {
+        if (!embedding)
+            diag.error("cephyr.option", "binary output to stdout is not supported");
+        else if (opts.stage == Stage::link && !opts.shared)
+            diag.error("cephyr.option", "capturing native output requires -c or -shared");
+    }
     if (opts.shared && opts.static_link == true)
         diag.error("cephyr.option", "-shared and -static cannot be combined");
     if (opts.shared && opts.stage != Stage::link)
@@ -499,6 +536,8 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
         config.sysroot = fs::absolute(opts.sysroot);
     if (opts.use_cache)
         config.cache_enabled = *opts.use_cache;
+    if (opts.factir_enabled)
+        config.factir_enabled = *opts.factir_enabled;
     if (opts.static_link)
         config.static_link = *opts.static_link;
     if (opts.shared)
@@ -522,18 +561,22 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
 PreprocessOptions preprocessor_options(const Options &opts, const Config &config,
                                           const Target &target, const NativeLoweringProvider *provider,
                                           bool custom_model, bool native_scalar_fp,
-                                          bool native_rv64_record_abi, bool assembler)
+                                          bool native_rv64_lp64, bool assembler)
 {
     auto result = config.preprocess;
     result.assembler = assembler;
+    result.plain_char_signed = provider && provider->plain_char_signed;
+    result.wchar_signed = !provider || provider->wchar_signed;
     std::vector<std::pair<bool, std::string>> builtins{
         {true, "__CEPHYR__=1"}, {true, "__CEPHYR_HAS_VARIADIC_CALLS=1"},
         {true, "__LP64__=1"}, {true, "_LP64=1"},
     };
     if (native_scalar_fp && !assembler)
         builtins.emplace_back(true, "__CEPHYR_HAS_SCALAR_FP=1");
-    if (native_rv64_record_abi && !assembler)
+    if (native_rv64_lp64 && !assembler) {
         builtins.emplace_back(true, "__CEPHYR_HAS_NATIVE_DIVISION_API=1");
+        builtins.emplace_back(true, "__CEPHYR_HAS_RV64_STDARG=1");
+    }
     if (native_scalar_fp && provider->architecture == "AMD64" && !assembler)
         builtins.emplace_back(true, "__CEPHYR_HAS_AMD64_STDARG=1");
     if (native_scalar_fp && provider->architecture == "AArch64" && !assembler)
@@ -574,15 +617,17 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
 std::optional<std::string> read_input(const Input &input, const Invocation &invocation,
                                       Diagnostics &diag)
 {
-    constexpr std::size_t max_input = 16u * 1024u * 1024u;
-    const std::string name = input.argument == "-" ? "<stdin>" : input.argument;
+    constexpr std::size_t max_input = detail::max_source_size;
+    const std::string name = input.unit ? input.name() : input.argument == "-" ? "<stdin>" : input.argument;
     if (input.argument == "-" && !invocation.cli_input) {
         const auto &request = invocation.request;
-        if (request.stdin_size > max_input) {
+        const auto size = input.unit ? input.unit->source.size() : request.stdin_size;
+        if (size > max_input) {
             diag.error("cephyr.limit", "input exceeds the 16 MiB source limit", Location{name});
             return std::nullopt;
         }
-        const std::string_view source(request.stdin_data ? request.stdin_data : "", request.stdin_size);
+        const std::string_view source = input.unit ? std::string_view(input.unit->source) :
+            std::string_view(request.stdin_data ? request.stdin_data : "", size);
         if (source.find('\0') != std::string_view::npos) {
             diag.error("cephyr.input", "input contains a NUL byte", Location{name});
             return std::nullopt;
@@ -614,36 +659,6 @@ std::optional<std::string> read_input(const Input &input, const Invocation &invo
         return std::nullopt;
     }
     return result;
-}
-
-class TempDirectory {
-public:
-    TempDirectory(const fs::path &parent, const char *pattern)
-    {
-        auto name = (parent / pattern).string();
-        if (!mkdtemp(name.data()))
-            throw fs::filesystem_error("cannot create temporary directory", parent,
-                                       std::error_code(errno, std::generic_category()));
-        path = std::move(name);
-    }
-    ~TempDirectory()
-    {
-        std::error_code ignored;
-        fs::remove_all(path, ignored); // only the private directory that mkdtemp created
-    }
-    TempDirectory(const TempDirectory &) = delete;
-    TempDirectory &operator=(const TempDirectory &) = delete;
-    fs::path path;
-};
-
-void save(const fs::path &path, std::string_view text)
-{
-    std::ofstream stream(path, std::ios::binary);
-    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-    stream.close();
-    if (!stream)
-        throw fs::filesystem_error("cannot write output", path,
-                                   std::error_code(errno ? errno : EIO, std::generic_category()));
 }
 
 bool same_file(const fs::path &a, const fs::path &b)
@@ -713,6 +728,45 @@ bool publish_file(const fs::path &output, const fs::path &file, const Options &o
     return true;
 }
 
+bool publish_native(const fs::path &output, const fs::path &file, const Options &opts,
+                    Invocation &invocation, Diagnostics &diag, const MemoryFile *memory = nullptr)
+{
+    if (output != "-")
+        return publish_file(output, file, opts, diag);
+
+    // Only an embedding request can select binary capture. Keep the result
+    // empty until the complete artifact has been read from the tool workspace.
+    constexpr std::size_t limit = 128u * 1024u * 1024u;
+    std::error_code error;
+    if (!fs::is_regular_file(file, error)) {
+        diag.error("cephyr.output", "configured tool did not produce a regular native artifact");
+        return false;
+    }
+    const auto size = fs::file_size(file, error);
+    if (error || size == 0) {
+        diag.error("cephyr.output", "cannot read native artifact from the configured tool");
+        return false;
+    }
+    if (size > limit) {
+        diag.error("cephyr.limit", "captured native artifact exceeds 128 MiB");
+        return false;
+    }
+    if (memory) {
+        invocation.result.output = memory->read(static_cast<std::size_t>(size));
+    } else {
+        std::ifstream stream(file, std::ios::binary);
+        std::string bytes(static_cast<std::size_t>(size), '\0');
+        if (!stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
+            stream.peek() != std::char_traits<char>::eof() || stream.bad()) {
+            diag.error("cephyr.output", "cannot read native artifact from the configured tool");
+            return false;
+        }
+        invocation.result.output = std::move(bytes);
+    }
+    invocation.result.loadable_output = opts.shared;
+    return true;
+}
+
 fs::path output_name(const Input &input, const Options &opts)
 {
     if (!opts.output.empty())
@@ -756,6 +810,60 @@ bool can_publish_profile(const Options &opts, Diagnostics &diag)
     return !same_output;
 }
 
+bool check_factir_outputs(const Options &opts, const Config &config,
+                          const std::set<fs::path> &destinations, Diagnostics &diag)
+{
+    if (opts.factir_smtlib.empty() && opts.factir_facts.empty())
+        return true;
+    if (!config.factir_enabled || opts.stage == Stage::syntax || opts.stage == Stage::preprocess ||
+        std::count_if(opts.inputs.begin(), opts.inputs.end(),
+                      [](const Input &input) { return c_input(input.language); }) != 1) {
+        diag.error("cephyr.factir.output", "FactIR artifacts require enabled FactIR and exactly one C input being lowered");
+        return false;
+    }
+    const auto identity = [](const fs::path &path) {
+        return fs::weakly_canonical(fs::absolute(path));
+    };
+    std::set<fs::path> reserved;
+    for (const auto &path : destinations)
+        reserved.insert(identity(path));
+    for (const auto &path : {config_path(opts), opts.output, opts.profile_output})
+        if (!path.empty() && path != "-")
+            reserved.insert(identity(path));
+    if (opts.stage == Stage::link && opts.output.empty())
+        reserved.insert(identity("a.out"));
+    for (const auto &path : {opts.factir_smtlib, opts.factir_facts}) {
+        if (path.empty())
+            continue;
+        const auto parent = path.has_parent_path() ? path.parent_path() : fs::path(".");
+        if (path == "-" || !fs::is_directory(parent) ||
+            fs::symlink_status(path).type() != fs::file_type::not_found ||
+            !reserved.insert(identity(path)).second ||
+            !can_publish(path, opts, diag)) {
+            diag.error("cephyr.factir.output", "FactIR artifacts require distinct, new output files",
+                       Location{path.string()});
+            return false;
+        }
+    }
+    return true;
+}
+
+bool publish_factir_artifact(const fs::path &path, std::string_view bytes, Diagnostics &diag)
+{
+    if (path.empty())
+        return true;
+    TempDirectory staging(path.has_parent_path() ? path.parent_path() : fs::path("."), ".cephyr-factir-XXXXXX");
+    const auto file = staging.path / "artifact";
+    save(file, bytes);
+    fs::permissions(file, fs::perms::owner_read | fs::perms::owner_write);
+    // Atomic create-only publication, including races with another invocation.
+    std::error_code error;
+    fs::create_hard_link(file, path, error);
+    if (error)
+        diag.error("cephyr.factir.output", "cannot publish a new file: " + error.message(), Location{path.string()});
+    return !error;
+}
+
 template <class Action>
 decltype(auto) measured(MoonstoneProfile *profile, std::string_view stage,
                         std::string_view input, Action &&action)
@@ -773,7 +881,8 @@ void sysroot(Command &args, const Config &config)
         args.push_back("--sysroot=" + config.sysroot.string());
 }
 
-bool execute(const Command &args, const Options &opts, Diagnostics &diag)
+bool execute(const Command &args, const Options &opts, Diagnostics &diag,
+             std::span<const int> descriptors = {}, int stdout_fd = -1)
 {
     if (opts.verbose) {
         std::string line;
@@ -784,7 +893,7 @@ bool execute(const Command &args, const Options &opts, Diagnostics &diag)
         diag.note("cephyr.command", line);
     }
     const auto before = diag.error_count();
-    return run_process(args, diag) == 0 && diag.error_count() == before;
+    return run_process(args, diag, {}, descriptors, stdout_fd) == 0 && diag.error_count() == before;
 }
 
 bool add_qml_bundle(qml::Pipeline &pipeline, const fs::path &path, Diagnostics &diag)
@@ -891,7 +1000,8 @@ bool verify_mir(std::string_view mir, Diagnostics &diag, std::string_view name,
 }
 
 bool assemble(const Config &config, const Target &target, const Options &opts,
-              const fs::path &input, const fs::path &output, Diagnostics &diag)
+              const fs::path &input, const fs::path &output, Diagnostics &diag,
+              std::span<const int> descriptors = {})
 {
     Command cmd = config.assembler.empty() ? target.assembler : config.assembler;
     if (config.assembler.empty())
@@ -906,12 +1016,52 @@ bool assemble(const Config &config, const Target &target, const Options &opts,
         extend(cmd, opts.assembler_options);
     }
     extend(cmd, {input.string(), "-o", output.string()});
-    return execute(cmd, opts, diag);
+    return execute(cmd, opts, diag, descriptors);
 }
 
 struct Runtime {
     fs::path startup, library;
 };
+
+struct ToolArtifact {
+    std::optional<MemoryFile> memory;
+    fs::path path;
+
+    ToolArtifact(bool anonymous, const char *label, const auto &workspace)
+    {
+        if (anonymous) {
+            memory.emplace(label);
+            if (memory->fd() >= 0)
+                path = memory->path();
+            else
+                memory.reset();
+        }
+        if (!memory)
+            path = workspace() / label;
+    }
+
+    void write(std::string_view bytes) const
+    {
+        if (memory)
+            memory->write(bytes);
+        else
+            save(path, bytes);
+    }
+
+    void inherit(std::vector<int> &descriptors) const
+    {
+        if (memory)
+            descriptors.push_back(memory->fd());
+    }
+};
+
+bool anonymous_assembly(const Config &config, const Target &target, const Options &opts)
+{
+    return config.assembler.empty() && config.triple_script.empty() &&
+        config.assembler_style == "driver" &&
+        !target.assembler.empty() && target.assembler.front() == "clang" &&
+        config.assemble_flags.empty() && opts.assembler_options.empty();
+}
 
 bool compiler_driver_link(const Config &config)
 {
@@ -971,6 +1121,9 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
         const char *lang = source.ends_with(".c") ? "c" : "assembler-with-cpp";
         if (source.ends_with(".c"))
             command.push_back("-std=c11");
+        if (source.starts_with("softfloat/"))
+            extend(command, {"-fno-lto", "-fno-fast-math", "-fvisibility=hidden",
+                             "-include", (root / "src/softfloat/cephyr-rv64im.h").string()});
         extend(command, {"-c", "-x", lang, (root / "src" / source).string(), "-o", output.string()});
         return execute(command, opts, diag);
     };
@@ -995,6 +1148,25 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
                 return std::nullopt;
             command.push_back(object.string());
         }
+        if (target.is_linux && (amd64 || aarch64)) {
+            const auto object = workspace / "libc-fenv.o";
+            if (!compile("fenv.c", object))
+                return std::nullopt;
+            command.push_back(object.string());
+        }
+        if (target.architecture == "RISCV64IM" && target.abi == "LP64") {
+            for (const std::string_view name : {"addsf3", "adddf3", "subsf3", "subdf3",
+                                               "mulsf3", "muldf3", "divsf3", "divdf3",
+                                               "extendsfdf2", "truncdfsf2",
+                                               "floatdisf", "floatdidf", "floatundisf", "floatundidf",
+                                               "fixsfdi", "fixdfdi", "fixunssfdi", "fixunsdfdi",
+                                               "fp_mode", "clzdi2", "clzsi2"}) {
+                const auto object = workspace / ("softfloat-" + std::string(name) + ".o");
+                if (!compile("softfloat/" + std::string(name) + ".c", object))
+                    return std::nullopt;
+                command.push_back(object.string());
+            }
+        }
         if (!execute(command, opts, diag))
             return std::nullopt;
     }
@@ -1002,7 +1174,8 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
 }
 
 bool link(const Config &config, const Target &target, const Options &opts,
-          Command inputs, const fs::path &workspace, Diagnostics &diag)
+          Command inputs, std::vector<int> descriptors, const auto &workspace,
+          Invocation &invocation, Diagnostics &diag)
 {
     auto output = opts.output.empty() ? fs::path("a.out") : opts.output;
     if (!can_publish(output, opts, diag))
@@ -1017,12 +1190,14 @@ bool link(const Config &config, const Target &target, const Options &opts,
     else if (config.static_link)
         cmd.push_back("-static");
     const bool driver = compiler_driver_link(config);
+    const auto linker_name = cmd.empty() ? std::string{} : fs::path(cmd.front()).filename().string();
+    const bool lld = !driver && linker_name == "ld.lld";
     if (!opts.shared)
         cmd.push_back(driver ? "-Wl,--fatal-warnings" : "--fatal-warnings");
 
     Runtime runtime;
     if (config.stdlib == "cephyr" && !(opts.no_start && opts.no_libraries)) {
-        auto built = build_runtime(opts, config, target, workspace, diag);
+        auto built = build_runtime(opts, config, target, workspace(), diag);
         if (!built)
             return false;
         runtime = std::move(*built);
@@ -1036,11 +1211,72 @@ bool link(const Config &config, const Target &target, const Options &opts,
     if (!runtime.startup.empty())
         cmd.push_back(runtime.startup.string());
     extend(cmd, inputs);
+    std::optional<ToolArtifact> bridge_source, bridge_object;
+    const bool host_bindings = invocation.symbols && !invocation.symbols->empty();
+    if (host_bindings) {
+#if defined(__x86_64__) && !defined(__ILP32__)
+        const bool host_target = target.is_linux && target.architecture == "AMD64" &&
+            target.abi == "SysVAMD64";
+#else
+        const bool host_target = false;
+#endif
+        if (!host_target || !lld || opts.pic == false) {
+            diag.error("cephyr.host_symbol", "host registration requires AMD64 Linux host and target, PIC, and a direct ld.lld linker");
+            return false;
+        }
+        std::ostringstream bridge;
+        bridge.imbue(std::locale::classic());
+        bridge << ".text\n";
+        // Change only this link's references. LLD can bind data through a
+        // hidden absolute symbol if GOT-to-PC-relative relaxation is disabled.
+        // A function trampoline tail-jumps with all ABI arguments intact
+        // (including %al for variadics). Neither kind is exported by the DSO.
+        cmd.emplace_back("--no-relax");
+        for (const auto &[name, symbol] : *invocation.symbols) {
+            const auto wrapped = "__wrap_" + name;
+            const auto address = reinterpret_cast<std::uintptr_t>(symbol.address);
+            cmd.emplace_back("--wrap=" + name);
+            bridge << ".globl " << wrapped << "\n.hidden " << wrapped << '\n';
+            if (symbol.kind == CEPHYR_HOST_FUNCTION) {
+                bridge << ".type " << wrapped << ",@function\n" << wrapped
+                       << ":\n.byte 0xf3,0x0f,0x1e,0xfa\nmovabs $0x"
+                       << std::hex << address << ", %r11\njmp *%r11\n";
+            } else {
+                bridge << ".set " << wrapped << ", 0x" << std::hex << address << '\n';
+            }
+        }
+        bridge << ".section .note.GNU-stack,\"\",@progbits\n";
+        const bool anonymous = anonymous_assembly(config, target, opts);
+        bridge_source.emplace(anonymous, "host-symbols.s", workspace);
+        bridge_object.emplace(anonymous, "host-symbols.o", workspace);
+        bridge_source->write(std::move(bridge).str());
+        std::vector<int> assemble_fds;
+        bridge_source->inherit(assemble_fds);
+        bridge_object->inherit(assemble_fds);
+        if (!assemble(config, target, opts, bridge_source->path, bridge_object->path, diag, assemble_fds))
+            return false;
+        bridge_object->inherit(descriptors);
+        cmd.push_back(bridge_object->path.string());
+    }
     if (!runtime.library.empty())
         cmd.push_back(runtime.library.string());
-    const auto temporary = workspace / "link-result";
-    extend(cmd, {"-o", temporary.string()});
-    return execute(cmd, opts, diag) && publish_file(output, temporary, opts, diag);
+    // LLD writes via rename for named output. Its stdout mode writes directly
+    // into our anonymous file instead; stderr remains on the diagnostic pipe.
+    const bool passthrough = std::any_of(opts.inputs.begin(), opts.inputs.end(), [](const Input &input) {
+        return input.language == Language::link_option;
+    });
+    const bool anonymous = lld && config.linker.empty() && config.link_flags.empty() &&
+        config.triple_script.empty() &&
+        output == "-" && !passthrough;
+    const ToolArtifact temporary(anonymous, "link-result", workspace);
+    extend(cmd, {"-o", temporary.memory ? "-" : temporary.path.string()});
+    if (!execute(cmd, opts, diag, descriptors, temporary.memory ? temporary.memory->fd() : -1) ||
+        !publish_native(output, temporary.path, opts, invocation, diag,
+                        temporary.memory ? &*temporary.memory : nullptr))
+        return false;
+    if (host_bindings)
+        invocation.result.host_binding_process = getpid();
+    return true;
 }
 
 bool check_auto_tools(const Options &opts, const Config &config, const Target &target,
@@ -1122,7 +1358,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             provider = nullptr;
     }
     const bool sdk_backend = sdk.has_backend(*target);
-    const bool native_rv64_record_abi = provider && !sdk_backend &&
+    const bool native_rv64_lp64 = provider && !sdk_backend &&
         provider->architecture == "RISCV64IM" && provider->abi == "LP64";
     const bool native_scalar_fp = provider && !sdk_backend &&
         (provider->architecture == "AMD64" || provider->architecture == "AArch64");
@@ -1163,6 +1399,14 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
         }
     }
 
+    if (!check_factir_outputs(opts, config, destinations, diag))
+        return false;
+    if (sdk_backend && opts.stage != Stage::mir &&
+        (!opts.factir_smtlib.empty() || !opts.factir_facts.empty())) {
+        diag.error("cephyr.factir.output", "FactIR does not run before a custom SDK backend");
+        return false;
+    }
+    std::optional<factir::Result> exported_facts;
     std::optional<TempDirectory> workspace;
     const auto temporary = [&]() -> const fs::path & {
         if (!workspace)
@@ -1171,10 +1415,12 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     };
     std::optional<Backend> backend;
     const auto preprocessor = preprocessor_options(opts, config, *target, provider,
-                                                  custom_model, native_scalar_fp, native_rv64_record_abi, false);
+                                                  custom_model, native_scalar_fp, native_rv64_lp64, false);
     const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider,
-                                                            custom_model, native_scalar_fp, native_rv64_record_abi, true);
+                                                            custom_model, native_scalar_fp, native_rv64_lp64, true);
     Command link_inputs;
+    std::vector<MemoryFile> link_files;
+    std::vector<int> link_fds;
     std::string preprocessed_output;
     std::size_t ordinal = 0;
     for (const auto &input : opts.inputs) {
@@ -1218,7 +1464,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             }
             continue;
         }
-        const auto name = input.argument == "-" ? "<stdin>" : input.argument;
+        const auto name = input.unit ? input.name() : input.argument == "-" ? "<stdin>" : input.argument;
         auto source = measured(profile, "read_source", name, [&] {
             return read_input(input, invocation, diag);
         });
@@ -1267,12 +1513,14 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             prep->plain_char_signed = provider && provider->plain_char_signed;
             prep->wchar_signed = !provider || provider->wchar_signed;
             prep->native_scalar_fp = native_scalar_fp;
-            prep->native_rv64_soft_fp = provider && !sdk_backend &&
-                provider->architecture == "RISCV64IM" && provider->abi == "LP64";
+            prep->native_rv64_soft_fp = native_rv64_lp64;
             prep->native_amd64_stdarg = native_scalar_fp && provider->architecture == "AMD64";
             prep->native_amd64_x87 = native_scalar_fp && provider->architecture == "AMD64";
             prep->native_aarch64_stdarg = native_scalar_fp && provider->architecture == "AArch64";
-            prep->native_rv64_record_abi = native_rv64_record_abi;
+            prep->native_rv64_record_abi = native_rv64_lp64;
+            if (provider && !sdk_backend)
+                prep->bit_field_abi = provider->architecture == "AArch64" ?
+                    Preprocessed::BitFieldABI::aapcs64 : Preprocessed::BitFieldABI::sysv_rv64;
             auto parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
             if (!parsed || diag.error_count())
                 return false;
@@ -1310,9 +1558,24 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             if ((rewritten || (custom_backend && !qml_pipeline)) &&
                 !verify_mir(lowered->mir, diag, name, "cephyr.sdk.mir"))
                 return false;
+            std::optional<factir::Result> facts;
+            if (config.factir_enabled && !custom_backend) {
+                facts = measured(profile, "factir", name, [&] {
+                    return factir::run(lowered->mir, *target, name, temporary(), diag);
+                });
+                if (!facts)
+                    return false;
+                if (opts.verbose && facts->budget_exceeded)
+                    diag.note("cephyr.factir.budget", "Datalog budget exceeded; no scheduling hints", Location{name});
+            }
+            const auto retain_factir_artifacts = [&] {
+                if (!opts.factir_smtlib.empty() || !opts.factir_facts.empty())
+                    exported_facts = std::move(facts);
+            };
             if (opts.stage == Stage::mir) {
                 if (!publish_text(output_name(input, opts), lowered->mir, opts, invocation, diag))
                     return false;
+                retain_factir_artifacts();
                 continue;
             }
             const bool pic = opts.pic.value_or(opts.shared || (opts.stage == Stage::link && !config.static_link));
@@ -1325,11 +1588,12 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
                 result = measured(profile, "native_backend", name, [&] {
                     if (!backend)
                         backend.emplace(config, *target, temporary() / "backend", diag);
-                    return backend->compile(lowered->mir, name, pic);
+                    return backend->compile(lowered->mir, name, pic, facts ? &*facts : nullptr);
                 });
             }
             if (!result || diag.error_count())
                 return false;
+            retain_factir_artifacts();
             assembly = std::move(*result);
             // Native MIR v1 does not carry C linkage. Change the single
             // binding directive at each definition, rather than emitting a
@@ -1357,19 +1621,28 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
         }
 
         const auto stem = "input-" + std::to_string(ordinal++);
-        const auto assembly_file = temporary() / (stem + ".s");
-        const auto object = temporary() / (stem + ".o");
-        save(assembly_file, assembly);
+        const bool anonymous = invocation.embedding() && anonymous_assembly(config, *target, opts);
+        const ToolArtifact assembly_file(anonymous, (stem + ".s").c_str(), temporary);
+        ToolArtifact object(anonymous, (stem + ".o").c_str(), temporary);
+        assembly_file.write(assembly);
+        std::vector<int> assemble_fds;
+        assembly_file.inherit(assemble_fds);
+        object.inherit(assemble_fds);
         if (!measured(profile, "assemble", name, [&] {
-            return assemble(config, *target, opts, assembly_file, object, diag);
+            return assemble(config, *target, opts, assembly_file.path, object.path, diag, assemble_fds);
         }))
             return false;
         if (opts.stage == Stage::object) {
             const auto output = output_name(input, opts);
-            if (!publish_file(output, object, opts, diag))
+            if (!publish_native(output, object.path, opts, invocation, diag,
+                                object.memory ? &*object.memory : nullptr))
                 return false;
         } else {
-            link_inputs.push_back(object.string());
+            link_inputs.push_back(object.path.string());
+            if (object.memory) {
+                object.inherit(link_fds);
+                link_files.push_back(std::move(*object.memory));
+            }
         }
     }
     if (diag.error_count())
@@ -1377,10 +1650,14 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     if (opts.stage == Stage::preprocess)
         return publish_text(opts.output.empty() ? fs::path("-") : opts.output,
                             preprocessed_output, opts, invocation, diag);
-    if (opts.stage == Stage::link)
-        return measured(profile, "link", {}, [&] {
-            return link(config, *target, opts, std::move(link_inputs), temporary(), diag);
-        });
+    if (opts.stage == Stage::link && !measured(profile, "link", {}, [&] {
+            return link(config, *target, opts, std::move(link_inputs), std::move(link_fds),
+                        temporary, invocation, diag);
+        }))
+        return false;
+    if (exported_facts)
+        return publish_factir_artifact(opts.factir_smtlib, exported_facts->smtlib, diag) &&
+               publish_factir_artifact(opts.factir_facts, exported_facts->facts, diag);
     return true;
 }
 
@@ -1392,7 +1669,7 @@ int drive(Invocation &invocation)
     try {
         const auto &request = invocation.request;
         SdkPipeline sdk(request.sdk);
-        if (request.argc && moonstone_tools::is_tool(request.argv[0])) {
+        if (invocation.units.empty() && request.argc && moonstone_tools::is_tool(request.argv[0])) {
             if (request.sdk) {
                 diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks");
                 status = CEPHYR_INVALID_ARGUMENT;
@@ -1402,7 +1679,8 @@ int drive(Invocation &invocation)
                 if (output && !diag.error_count() && publish_stdout(*output, invocation, diag))
                     status = CEPHYR_OK;
             }
-        } else if (const bool parsed = parse_options(request.argc, request.argv, opts, diag);
+        } else if (const bool parsed = parse_options(request.argc, request.argv, invocation.embedding(),
+                                                     opts, diag, invocation.units);
                    !sdk.validate(diag)) {
             status = CEPHYR_INVALID_ARGUMENT;
         } else if (parsed) {
@@ -1477,7 +1755,9 @@ unsigned cephyr_abi_version(void) { return 1; }
 
 const char *cephyr_version(void) { return CEPHYR_VERSION; }
 
-int cephyr_compile(const cephyr_request *request, cephyr_result **result)
+int cephyr::detail::compile_units(const cephyr_request *request,
+                                std::span<const std::shared_ptr<const TranslationUnit>> units,
+                                const HostSymbols *symbols, cephyr_result **result)
 {
     if (!result)
         return CEPHYR_INVALID_ARGUMENT;
@@ -1494,13 +1774,20 @@ int cephyr_compile(const cephyr_request *request, cephyr_result **result)
     try {
         cephyr::CompilationScope scope;
         auto storage = std::make_unique<cephyr_result>();
-        cephyr::Invocation invocation{*request, *storage};
+        cephyr::Invocation invocation{*request, *storage, nullptr, nullptr, units, symbols};
         const int status = cephyr::drive(invocation);
+        if (status != CEPHYR_OK)
+            storage->loadable_output = false;
         *result = storage.release();
         return status;
     } catch (...) {
         return CEPHYR_INTERNAL_ERROR;
     }
+}
+
+int cephyr_compile(const cephyr_request *request, cephyr_result **result)
+{
+    return cephyr::detail::compile_units(request, {}, nullptr, result);
 }
 
 const char *cephyr_result_output(const cephyr_result *result, size_t *size)

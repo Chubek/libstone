@@ -182,6 +182,13 @@ reject canonicalize forbidden : node(_,
             b'R canonicalize ashr_zero n ashr 2 m x i 0 m x',
             b'R strength_reduce double_right n mul 2 m x i 2 n add 2 m x m x',
             b'R strength_reduce double_left n mul 2 i 2 m x n add 2 m x m x',
+            b'R integer_reduce unsigned_remainder_pow2 n rem_u 2 m x n pow2 1 m d '
+            b'n low_bits_for_pow2 2 m x m d',
+            b'R integer_reduce redundant_mask_right n and 2 n masked_by 2 m x m mask m mask m x',
+            b'R integer_reduce redundant_mask_left n and 2 m mask n masked_by 2 m x m mask m x',
+            b'R integer_reduce redundant_or_right n or 2 n masked_by 2 m x m mask m mask m mask',
+            b'R integer_reduce redundant_or_left n or 2 m mask n masked_by 2 m x m mask m mask',
+            b'R integer_reduce disjoint_and n and 2 n disjoint_bits 2 m x m y m y i 0',
         ])
 
     def test_fragments_reject_invalid_input_without_output(self):

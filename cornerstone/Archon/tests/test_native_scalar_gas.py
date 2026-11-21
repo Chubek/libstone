@@ -458,12 +458,12 @@ class _ScalarGasTests:
         flags = ("--pic",) if pic else ()
         return self.run_ok(self.driver, "--input", "-", *flags, data=data)
 
-    def link(self, directory, programs, harness, *, pic=False):
+    def link(self, directory, programs, harness, *, pic=False, emit=None):
         compiler = self.compiler()
         sources = []
         for i, prog in enumerate(programs):
             path = directory / f"generated{i}.s"
-            path.write_bytes(self.emit_asm(prog, pic=pic))
+            path.write_bytes((emit or self.emit_asm)(prog, pic=pic))
             sources.append(path)
         start, source = directory / "start.s", directory / "harness.c"
         start.write_text(START[self.arch], encoding="ascii")
@@ -562,6 +562,25 @@ ret -"""
         self.assertEqual((res.returncode, res.stdout), (1, b""))
         self.assertIn(b"call argument type does not match callee", res.stderr)
 
+    def test_x87_mir_uses_payload_pointers_and_requires_amd64(self):
+        valid = fp_function("x87_sub", "void", ("ptr", "ptr"), (),
+                            "amd64_x87_sub 0 1", "ret -")
+        if self.arch != "amd64":
+            result = self.invoke(self.driver, "--input", "-", data=module(valid))
+            self.assertEqual((result.returncode, result.stdout), (1, b""))
+            self.assertIn(b"x87 MIR requires SysV AMD64", result.stderr)
+            return
+        self.assertIn(b"fstpt (%rax)", self.emit_asm(module(valid)))
+        invalid = (
+            valid.replace("types ptr ptr", "types ptr f64"),
+            fp_function("x87_narrow", "ptr", ("ptr",), ("ptr",),
+                        "amd64_x87_to_fp 1 0", "ret 1"),
+        )
+        for fn in invalid:
+            result = self.invoke(self.driver, "--input", "-", data=module(fn))
+            self.assertEqual((result.returncode, result.stdout), (1, b""))
+            self.assertIn(b"incorrect operand types for AMD64 x87 operation", result.stderr)
+
     def test_in_memory_runtime_abi(self):
         source, out = self.root / "client.c", self.root / "client"
         source.write_text(r"""
@@ -620,6 +639,123 @@ int main(void)
         self.run_ok("cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
                     "-I", self.generated, source, self.build / "libarchon_backend.a", "-o", out)
         self.run_ok(out)
+
+    def forwarding_case(self):
+        data = module(
+            fp_function("forward", "i64", ("i64", "i64"), ("i64", "i64", "i64"),
+                        "add 2 0 1", "xor 3 2 1", "sub 4 3 2", "ret 4"),
+            fp_function("rhs_only", "i64", ("i64", "i64"), ("i64", "i64"),
+                        "add 2 0 1", "sub 3 0 2", "ret 3"),
+            fp_function("checked_producer", "i64", ("i64", "i64"), ("i64", "i64"),
+                        "add_checked_s 2 0 1", "xor 3 2 1", "ret 3"),
+            fp_function("across_store", "i64", ("i64", "i64", "ptr"), ("i64", "i64"),
+                        "add 3 0 1", "store 2 3 0", "xor 4 3 1", "ret 4"),
+            fp_function("across_call", "i64", ("i64", "i64"), ("i64", "i64"),
+                        "add 2 0 1", "call - witness 1 2", "xor 3 2 1", "ret 3"),
+            """\
+function across_block i64 2 4 2 0
+types i64 i64 i64 i64
+block 0 1
+params
+add 2 0 1
+br 1 0
+block 0 1
+params
+xor 3 2 1
+ret 3""",
+            imports=("import witness void 1 i64",),
+        )
+        source, out = self.root / "forwarding.c", self.root / "forwarding"
+        source.write_text(r"""
+#include "Backend.h"
+#include <stdio.h>
+#include <string.h>
+
+static int contains(const void *user, ArchonBackendFactKind kind,
+                    size_t function, size_t block, uint32_t dst)
+{
+    /* Missing and wrong-ID hints must have no effect. Deliberately match
+     * all definitions in the last five functions to challenge the guards. */
+    (void)block;
+    if (kind != ARCHON_BACKEND_FACT_OBSERVABLE_INPUT) return 0;
+    if (strcmp(user, "missing") == 0) return 0;
+    if (strcmp(user, "wrong") == 0) return dst == 4095;
+    if (strcmp(user, "partial") == 0) return function == 0 && dst == 3;
+    return function == 0 ? dst == 2 || dst == 3 : 1;
+}
+
+int main(int argc, char **argv)
+{
+    char text[16384];
+    size_t size = fread(text, 1, sizeof(text), stdin);
+    ArchonBackendArtifact artifact = {0};
+    ArchonBackendDiagnostic diagnostic;
+    if (argc != 3 || !size || size == sizeof(text)) return 1;
+    const ArchonBackendFactHints facts = {contains, NULL, argv[1]};
+    unsigned flags = strcmp(argv[2], "pic") == 0 ? ARCHON_BACKEND_PIC : 0;
+    if (archon_backend_compile_text_with_facts(text, size, 0, flags,
+            &facts, &artifact, &diagnostic) != ARCHON_BACKEND_OK) {
+        fprintf(stderr, "%s\n", diagnostic.message);
+        return 2;
+    }
+    fwrite(artifact.data, 1, artifact.size, stdout);
+    archon_backend_artifact_destroy(&artifact);
+    return 0;
+}
+""", encoding="ascii")
+        self.run_ok("cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
+                    "-I", self.generated, source, self.build / "libarchon_backend.a", "-o", out)
+        return data, out
+
+    def test_observable_forwarding_removes_only_proved_stack_reloads(self):
+        data, driver = self.forwarding_case()
+        loads = (b"\tmovq 16(%rsp), %rax\n", b"\tmovq 24(%rsp), %rax\n") if self.arch == "amd64" else (
+                 b"\tldr x9, [sp, #16]\n", b"\tldr x9, [sp, #24]\n")
+        for pic in (False, True):
+            mode = "pic" if pic else "normal"
+            baseline = self.emit_asm(data, pic=pic)
+            for hints in ("missing", "wrong"):
+                self.assertEqual(baseline, self.run_ok(driver, hints, mode, data=data))
+            optimized = self.run_ok(driver, "hit", mode, data=data)
+            original_fn, rest = baseline.split(b"\t.size forward,", 1)
+            expected_fn = original_fn
+            for load in loads:
+                self.assertEqual(original_fn.count(load), 1)
+                expected_fn = expected_fn.replace(load, b"", 1)
+            self.assertEqual(optimized, expected_fn + b"\t.size forward," + rest)
+            partial_fn = original_fn.replace(loads[1], b"", 1)
+            self.assertEqual(self.run_ok(driver, "partial", mode, data=data),
+                             partial_fn + b"\t.size forward," + rest)
+
+    def test_observable_forwarding_executes_with_abi_and_effects(self):
+        runner = self.executor()
+        data, driver = self.forwarding_case()
+        harness = r"""
+typedef unsigned long u64;
+extern u64 forward(u64, u64), rhs_only(u64, u64), checked_producer(u64, u64);
+extern u64 across_store(u64, u64, volatile u64 *);
+extern u64 across_call(u64, u64), across_block(u64, u64);
+static volatile u64 witnessed;
+void witness(u64 n) { witnessed = n; }
+int test_main(void)
+{
+    const u64 values[] = {0, 1, 0x7fffffffffffffffUL, 0x8000000000000000UL, ~0UL};
+    for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+        const u64 a = values[i], b = 9, n = a + b, x = n ^ b;
+        volatile u64 saved = ~n;
+        if (forward(a, b) != x - n || rhs_only(a, b) != a - n) return 1;
+        if (across_store(a, b, &saved) != x || saved != n) return 2;
+        witnessed = ~n;
+        if (across_call(a, b) != x || witnessed != n || across_block(a, b) != x) return 3;
+    }
+    return checked_producer(17, 9) != (26 ^ 9) ? 4 : 0;
+}
+"""
+        for hints in ("missing", "hit"):
+            with self.subTest(hints=hints), tempfile.TemporaryDirectory(dir=self.root) as path:
+                elf = self.link(Path(path), [data], harness, emit=lambda prog, pic: self.run_ok(
+                    driver, hints, "pic" if pic else "normal", data=prog))
+                self.run_ok(*runner, elf)
 
     def test_arithmetic_calls_control_flow_and_memory(self):
         values = (0, 1, 2, 63, 64, 127, (1 << 32) + 31, MIN - 1, MIN, MASK - 2, MASK)

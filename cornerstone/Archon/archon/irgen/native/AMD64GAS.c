@@ -98,6 +98,12 @@ void an_gas_convert(ANGas *gas, ArchonMIROpcode op, unsigned width)
             64u - width, op == ARCHON_MIR_SEXT ? "sarq" : "shrq", 64u - width);
 }
 
+void an_gas_shift_left_imm(ANGas *gas, unsigned shift)
+{
+    if (shift)
+        an_gas_print(gas, "\tshlq $%u, %%rax\n", shift);
+}
+
 void an_gas_memory(ANGas *gas, ArchonMIROpcode op, int disp)
 {
     const char *name = NULL, *reg = "%rax";
@@ -280,6 +286,97 @@ void an_gas_float(ANGas *gas, ArchonMIROpcode op, ArchonMIRType src, ArchonMIRTy
         return;
     }
     fp_result(gas, dst_single);
+}
+
+void an_amd64_x87(ANGas *gas, ArchonMIROpcode op, ArchonMIRType b, ArchonMIRType dst)
+{
+    const char *mnemonic;
+    unsigned ordinary, done;
+    /* Keep the x87 stack balanced across every MIR instruction. RAX and RCX
+     * carry addresses or raw scalar bits according to the operation. */
+    switch (op) {
+    case ARCHON_MIR_AMD64_X87_ADD:
+    case ARCHON_MIR_AMD64_X87_SUB:
+    case ARCHON_MIR_AMD64_X87_MUL:
+    case ARCHON_MIR_AMD64_X87_DIV:
+        /* Both operands are loaded before overwriting the lhs. GAS AT&T
+         * fsubrp/fdivrp encode Intel fsubp/fdivp st(1), st. */
+        mnemonic = op == ARCHON_MIR_AMD64_X87_ADD ? "faddp" :
+                   op == ARCHON_MIR_AMD64_X87_SUB ? "fsubrp" :
+                   op == ARCHON_MIR_AMD64_X87_MUL ? "fmulp" : "fdivrp";
+        an_gas_print(gas, "\tfldt (%%rax)\n\tfldt (%%rcx)\n\t%s %%st, %%st(1)\n\tfstpt (%%rax)\n",
+            mnemonic);
+        return;
+    case ARCHON_MIR_AMD64_X87_EQ:
+    case ARCHON_MIR_AMD64_X87_LT:
+    case ARCHON_MIR_AMD64_X87_LE:
+        mnemonic = op == ARCHON_MIR_AMD64_X87_EQ ? "sete" :
+                   op == ARCHON_MIR_AMD64_X87_LT ? "setb" : "setbe";
+        /* Equality is quiet for qNaNs; ordered relations are signaling.
+         * Exclude unordered (PF=1) from all three predicates. */
+        an_gas_print(gas, "\tfldt (%%rcx)\n\tfldt (%%rax)\n\tf%scomip %%st(1), %%st\n"
+            "\tfstp %%st(0)\n\t%s %%al\n\tsetnp %%dl\n\tandb %%dl, %%al\n\tmovzbl %%al, %%eax\n",
+            op == ARCHON_MIR_AMD64_X87_EQ ? "u" : "", mnemonic);
+        return;
+    case ARCHON_MIR_AMD64_X87_FROM_FP:
+        an_gas_print(gas, "\tsubq $16, %%rsp\n\tmovq %%rcx, (%%rsp)\n"
+            "\tfld%c (%%rsp)\n\tfstpt (%%rax)\n\taddq $16, %%rsp\n",
+            b == ARCHON_MIR_F32 ? 's' : 'l');
+        return;
+    case ARCHON_MIR_AMD64_X87_TO_FP:
+        /* Direct store to the nominal format uses the x87 rounding mode,
+         * with no intermediate binary64 rounding for a float result. */
+        an_gas_print(gas, "\tfldt (%%rax)\n\tsubq $16, %%rsp\n\tfstp%c (%%rsp)\n"
+            "\tmov%c (%%rsp), %s\n\taddq $16, %%rsp\n",
+            dst == ARCHON_MIR_F32 ? 's' : 'l', dst == ARCHON_MIR_F32 ? 'l' : 'q',
+            dst == ARCHON_MIR_F32 ? "%eax" : "%rax");
+        return;
+    case ARCHON_MIR_AMD64_X87_FROM_SI:
+    case ARCHON_MIR_AMD64_X87_FROM_UI:
+        an_gas_print(gas, "\tsubq $16, %%rsp\n\tmovq %%rcx, (%%rsp)\n\tfildq (%%rsp)\n");
+        if (op == ARCHON_MIR_AMD64_X87_FROM_UI) {
+            ordinary = gas->next_label++;
+            an_gas_print(gas, "\ttestq %%rcx, %%rcx\n");
+            jump(gas, "jns", ordinary);
+            /* fildq is signed. Add exact 2^64 to its negative result:
+             * every uint64_t is representable at x87's 64-bit precision. */
+            an_gas_print(gas, "\tmovabsq $0x43f0000000000000, %%rdx\n"
+                "\tmovq %%rdx, (%%rsp)\n\tfaddl (%%rsp)\n");
+            an_gas_label(gas, ordinary);
+        }
+        an_gas_print(gas, "\tfstpt (%%rax)\n\taddq $16, %%rsp\n");
+        return;
+    case ARCHON_MIR_AMD64_X87_TO_SI:
+    case ARCHON_MIR_AMD64_X87_TO_UI:
+        an_gas_print(gas, "\tfldt (%%rax)\n\tsubq $16, %%rsp\n");
+        if (op == ARCHON_MIR_AMD64_X87_TO_UI) {
+            ordinary = gas->next_label++;
+            done = gas->next_label++;
+            /* Reduce the upper half of the defined unsigned domain to
+             * signed range using exact subtraction of 2^63. */
+            an_gas_print(gas, "\tmovabsq $0x43e0000000000000, %%rcx\n"
+                "\tmovq %%rcx, (%%rsp)\n\tfldl (%%rsp)\n\tfxch %%st(1)\n"
+                "\txorl %%edx, %%edx\n\tfucomi %%st(1), %%st\n");
+            jump(gas, "jb", ordinary);
+            an_gas_print(gas, "\tfsubp %%st, %%st(1)\n\tmovabsq $0x8000000000000000, %%rdx\n");
+            an_gas_jump(gas, done);
+            an_gas_label(gas, ordinary);
+            an_gas_print(gas, "\tfstp %%st(1)\n");
+            an_gas_label(gas, done);
+        }
+        /* C requires truncation regardless of the active rounding mode.
+         * Use baseline AMD64 x87 (FISTTP would require SSE3). Restore the
+         * original control word without clearing floating status flags. */
+        an_gas_print(gas, "\tfnstcw 8(%%rsp)\n\tmovzwl 8(%%rsp), %%ecx\n"
+            "\torw $0x0c00, %%cx\n\tmovw %%cx, 10(%%rsp)\n\tfldcw 10(%%rsp)\n"
+            "\tfistpq (%%rsp)\n\tfldcw 8(%%rsp)\n\tmovq (%%rsp), %%rax\n\taddq $16, %%rsp\n");
+        if (op == ARCHON_MIR_AMD64_X87_TO_UI)
+            an_gas_print(gas, "\torq %%rdx, %%rax\n");
+        return;
+    default:
+        gas->out->status = ARCHON_BACKEND_INTERNAL;
+        return;
+    }
 }
 
 static void divide(ANGas *gas, ArchonMIROpcode op)

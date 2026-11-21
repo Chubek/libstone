@@ -145,6 +145,12 @@ void an_gas_convert(ANGas *gas, ArchonMIROpcode op, unsigned width)
             op == ARCHON_MIR_SEXT ? "sbfx" : "ubfx", width);
 }
 
+void an_gas_shift_left_imm(ANGas *gas, unsigned shift)
+{
+    if (shift)
+        an_gas_print(gas, "\tlsl x9, x9, #%u\n", shift);
+}
+
 void an_gas_memory(ANGas *gas, ArchonMIROpcode op, int disp)
 {
     const char *name = NULL, *reg = "x9";

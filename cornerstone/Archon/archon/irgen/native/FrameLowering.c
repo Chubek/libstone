@@ -18,19 +18,19 @@ static int add_words(size_t *size, size_t words, size_t limit)
 }
 
 int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
-    size_t phi_count, size_t outgoing_words, int calls, ANFrame *frame)
+    size_t phi_count, size_t outgoing_words, int calls, int variadic, ANFrame *frame)
 {
     const size_t stack_align = an_abi.stack_align;
-    size_t limit, last_incoming = 0, size = 0, i;
+    size_t limit, last_incoming = 0, varargs = 0, size = 0, i;
 
     if (stack_align < WordBytes || (stack_align & (stack_align - 1)))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid ABI stack alignment");
     if (fn->param_count > AN_MAX_PARAMS)
         return an_error(ctx, ARCHON_BACKEND_LIMIT, "too many frame parameters");
-    /* Only the last incoming stack argument constrains the upper end of
-     * the displacement range. The first is at frame_size itself. */
+    /* The first incoming stack word is at frame_size itself. Account for
+     * the last named stack word, or the cursor just past it for va_start. */
     if (fn->param_count > an_abi.argc)
-        last_incoming = (fn->param_count - an_abi.argc - 1) * WordBytes;
+        last_incoming = (fn->param_count - an_abi.argc - (variadic ? 0 : 1)) * WordBytes;
     limit = ((size_t)INT_MAX - last_incoming) & ~(stack_align - 1);
     if (fn->local_count > AN_MAX_VALUE)
         return an_error(ctx, ARCHON_BACKEND_LIMIT, "too many frame objects");
@@ -66,7 +66,17 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
         if (!add_words(&size, 1, limit))
             goto too_large;
     }
+    if (variadic && fn->param_count < an_abi.argc) {
+        varargs = an_abi.argc - fn->param_count;
+        if (!add_words(&size, varargs, limit))
+            goto too_large;
+    }
     frame->frame_size = (int)align_up(size, stack_align);
+    /* Alignment padding goes below the register save area, never between
+     * the last saved register and the incoming stack argument area. */
+    frame->va_start_offset = !variadic ? -1 :
+        varargs ? frame->frame_size - (int)(varargs * WordBytes) :
+                  frame->frame_size + (int)last_incoming;
     return 1;
 
 too_large:

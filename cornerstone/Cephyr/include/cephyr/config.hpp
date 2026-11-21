@@ -60,6 +60,7 @@ struct Config {
     std::map<std::string, QmlProfile, std::less<>> qml_profiles;
 
     bool cache_enabled = true;
+    bool factir_enabled = true;
     bool static_link = true;
     // Driver-only CLI state; intentionally not accepted from Cephyr.toml.
     bool verbose = false;

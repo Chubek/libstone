@@ -10,12 +10,18 @@ struct __cephyr_FILE;
 int fwprintf(struct __cephyr_FILE *restrict, const wchar_t *restrict, ...);
 int swprintf(wchar_t *restrict, size_t, const wchar_t *restrict, ...);
 int wprintf(const wchar_t *restrict, ...);
+int fwscanf(struct __cephyr_FILE *restrict, const wchar_t *restrict, ...);
+int swscanf(const wchar_t *restrict, const wchar_t *restrict, ...);
+int wscanf(const wchar_t *restrict, ...);
 #endif
 #if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG)
 #include <stdarg.h>
 int vfwprintf(struct __cephyr_FILE *restrict, const wchar_t *restrict, va_list);
 int vswprintf(wchar_t *restrict, size_t, const wchar_t *restrict, va_list);
 int vwprintf(const wchar_t *restrict, va_list);
+int vfwscanf(struct __cephyr_FILE *restrict, const wchar_t *restrict, va_list);
+int vswscanf(const wchar_t *restrict, const wchar_t *restrict, va_list);
+int vwscanf(const wchar_t *restrict, va_list);
 #endif
 
 wint_t fgetwc(struct __cephyr_FILE *);

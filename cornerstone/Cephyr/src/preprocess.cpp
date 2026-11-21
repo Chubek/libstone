@@ -488,24 +488,6 @@ void emit_host_error(Diagnostics &diagnostics, const char *code,
     diagnostics.error(code, std::move(message), {file, 0, 0});
 }
 
-std::optional<std::string> read_stream(FILE *stream) {
-    if (std::fflush(stream) != 0 || std::fseek(stream, 0, SEEK_SET) != 0)
-        return std::nullopt;
-
-    std::string data;
-    char buffer[8192];
-    while (true) {
-        const std::size_t count = std::fread(buffer, 1, sizeof(buffer), stream);
-        data.append(buffer, count);
-        if (count != sizeof(buffer)) {
-            if (std::ferror(stream))
-                return std::nullopt;
-            break;
-        }
-    }
-    return data;
-}
-
 struct ActiveDiagnosticScope {
     explicit ActiveDiagnosticScope(UcppDiagnosticContext &context)
         : previous(active_diagnostics) {
@@ -514,6 +496,39 @@ struct ActiveDiagnosticScope {
     ~ActiveDiagnosticScope() { active_diagnostics = previous; }
 
     UcppDiagnosticContext *previous;
+};
+
+struct MemoryOutput {
+    char *bytes = nullptr;
+    std::size_t size = 0;
+    FILE *stream = open_memstream(&bytes, &size);
+
+    int close() {
+        auto *file = stream;
+        stream = nullptr;
+        return std::fclose(file);
+    }
+
+    ~MemoryOutput() {
+        if (stream)
+            close();
+        std::free(bytes);
+    }
+};
+
+struct LexerScope {
+    lexer_state *lexer;
+
+    void finish() {
+        free_lexer_state(lexer);
+        wipeout();
+        lexer = nullptr;
+    }
+
+    ~LexerScope() {
+        if (lexer)
+            finish();
+    }
 };
 
 const char *literal_error(std::string_view body, std::uint32_t escape_max) {
@@ -686,7 +701,8 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     UcppDiagnosticContext diagnostic_context{&diagnostics, file, 0};
     ActiveDiagnosticScope diagnostic_scope(diagnostic_context);
 
-    FILE *output = std::tmpfile();
+    MemoryOutput capture;
+    auto *output = capture.stream;
     if (!output) {
         emit_host_error(diagnostics, "cephyr.preprocessor.io",
                         "unable to create preprocessor output stream: " +
@@ -707,9 +723,11 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     init_tables(1);
     init_include_path(nullptr);
 
+    std::vector<GeneratedLineMarker> markers;
+    std::string synthetic_source;
     struct lexer_state lexer {};
     init_lexer_state(&lexer);
-    std::vector<GeneratedLineMarker> markers;
+    LexerScope lexer_scope{&lexer};
     lexer.line_marker = record_line_marker;
     lexer.line_marker_context = &markers;
     lexer.flags = DEFAULT_CPP_FLAGS | LINE_NUM | GCC_LINE_NUM | COPY_LINE |
@@ -720,11 +738,15 @@ std::optional<Preprocessed> preprocess(const std::string &source,
         lexer.flags &= ~DISCARD_COMMENTS;
     if (options.assembler)
         lexer.flags |= ASSEMBLY_INPUT;
-    else
+    else {
         lexer.flags |= UTF8_SOURCE | C11_CONSTRAINTS;
+        if (options.plain_char_signed)
+            lexer.flags |= PP_CHAR_SIGNED;
+        if (!options.wchar_signed)
+            lexer.flags |= PP_WCHAR_UNSIGNED;
+    }
     lexer.output = output;
 
-    std::string synthetic_source;
     if (!options.forced_includes.empty()) {
         for (const auto &include : options.forced_includes) {
             synthetic_source += "#include ";
@@ -772,24 +794,22 @@ std::optional<Preprocessed> preprocess(const std::string &source,
         failed = (status > 0) || failed;
     failed = check_cpp_errors(&lexer) || failed;
 
-    auto captured = read_stream(output);
-    if (!captured) {
+    const bool write_failed = std::ferror(output);
+    lexer_scope.finish();
+    const int close_status = capture.close();
+    if (write_failed || close_status != 0 || !capture.bytes) {
         emit_host_error(diagnostics, "cephyr.preprocessor.io",
                         "unable to read preprocessor output", file);
-        failed = true;
+        return std::nullopt;
     }
 
-    free_lexer_state(&lexer);
-    wipeout();
-    std::fclose(output);
-
-    if (failed && diagnostic_context.errors == 0 && captured)
+    if (failed && diagnostic_context.errors == 0)
         emit_host_error(diagnostics, "cephyr.preprocessor.error",
                         "preprocessing failed without a diagnostic", file);
-    if (failed || diagnostic_context.errors != 0 || !captured)
+    if (failed || diagnostic_context.errors != 0)
         return std::nullopt;
 
-    auto result = strip_generated_markers(std::move(*captured), file, markers);
+    auto result = strip_generated_markers(std::string(capture.bytes, capture.size), file, markers);
     if (!options.assembler && result.text.find_first_of("\"'") != std::string::npos &&
         !check_literals(result, diagnostics))
         return std::nullopt;

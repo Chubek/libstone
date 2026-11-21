@@ -860,7 +860,7 @@ bool load_config(Config &config, const std::filesystem::path &path,
         root.get(),
         {"target", "representation", "assembler_style", "stdlib",
          "cache_enabled", "static_link", "paths", "tools", "flags",
-         "preprocess", "qml", "profiles"},
+         "preprocess", "qml", "profiles", "factir"},
         {}, source, diagnostics);
     Config candidate = config;
 
@@ -907,6 +907,11 @@ bool load_config(Config &config, const std::filesystem::path &path,
 
     if (auto *table = table_value(root.get(), "qml", source, diagnostics, valid))
         valid = read_qml(candidate, table, source, diagnostics) && valid;
+    if (auto *table = table_value(root.get(), "factir", source, diagnostics, valid)) {
+        valid = known_keys(table, {"enabled"}, "factir", source, diagnostics) && valid;
+        if (auto value = bool_value(table, "enabled", "factir", source, diagnostics, valid))
+            candidate.factir_enabled = *value;
+    }
     if (auto *table = table_value(root.get(), "profiles", source, diagnostics, valid))
         valid = read_profiles(candidate, table, base, source, diagnostics) && valid;
 

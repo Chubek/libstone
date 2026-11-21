@@ -76,7 +76,7 @@ bool executable_available(std::string_view command)
 }
 
 int run_process(const std::vector<std::string> &args, Diagnostics &diag,
-                const std::filesystem::path &cwd)
+                 const std::filesystem::path &cwd, std::span<const int> descriptors, int stdout_fd)
 {
     if (args.empty() || args.front().empty()) {
         diag.error("cephyr.tool", "no executable configured");
@@ -102,10 +102,16 @@ int run_process(const std::vector<std::string> &args, Diagnostics &diag,
     }
     if (!cwd.empty())
         err = posix_spawn_file_actions_addchdir_np(&actions, cwd.c_str());
-    if (!err) err = posix_spawn_file_actions_adddup2(&actions, pipe.fd[1], STDOUT_FILENO);
+    if (!err) err = posix_spawn_file_actions_adddup2(&actions, stdout_fd < 0 ? pipe.fd[1] : stdout_fd,
+                                                   STDOUT_FILENO);
     if (!err) err = posix_spawn_file_actions_adddup2(&actions, pipe.fd[1], STDERR_FILENO);
     if (!err) err = posix_spawn_file_actions_addclose(&actions, pipe.fd[0]);
     if (!err) err = posix_spawn_file_actions_addclose(&actions, pipe.fd[1]);
+    // POSIX specifies that this special case clears FD_CLOEXEC in the child.
+    for (const int fd : descriptors) {
+        if (!err)
+            err = posix_spawn_file_actions_adddup2(&actions, fd, fd);
+    }
     pid_t pid = -1;
     if (!err) err = posix_spawnp(&pid, argv.front(), &actions, nullptr, argv.data(), environ);
     posix_spawn_file_actions_destroy(&actions);

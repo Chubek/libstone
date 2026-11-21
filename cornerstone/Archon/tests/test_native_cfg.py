@@ -102,32 +102,33 @@ int main(void)
     const ArchonMIRFunction fn = { .blocks = blocks, .block_count = 2 };
     const ANFrame frame = { .phi_base = 2048 };
     const ANHome homes[5] = {{0}};
+    ANContext ctx = { .function = 7 };
     ANOut out = {0};
     unsigned next_label = 2, i;
     ArchonMIRTerm term = { .kind = ARCHON_MIR_BR, .value = ARCHON_MIR_NONE,
         .yes = { 1, swap, 2 } };
-    an_terminator(&out, 7, &fn, &frame, homes, &term, &next_label);
+    an_terminator(&ctx, &out, &fn, &frame, homes, &term, &next_label);
     assert(jumps == 1 && jump_values[0][0] == 42 && jump_values[0][1] == 40);
     assert(next_label == 2);
 
     term = (ArchonMIRTerm){ ARCHON_MIR_CBR, 2, { 1, yes, 2 }, { 1, no, 2 } };
     for (i = 0; i < 2; ++i) {
         jumps = 0;
-        an_terminator(&out, 7, &fn, &frame, homes, &term, &next_label);
+        an_terminator(&ctx, &out, &fn, &frame, homes, &term, &next_label);
         assert(jumps == 2 && jump_values[0][0] == 22 && jump_values[0][1] == 11);
         assert(jump_values[1][0] == 11 && jump_values[1][1] == 22);
     }
     assert(labels == 2 && next_label == 4);
 
     term = (ArchonMIRTerm){ .kind = ARCHON_MIR_RETURN, .value = 2 };
-    an_terminator(&out, 7, &fn, &frame, homes, &term, &next_label);
+    an_terminator(&ctx, &out, &fn, &frame, homes, &term, &next_label);
     assert(returns == 1);
     term.value = ARCHON_MIR_NONE;
-    an_terminator(&out, 7, &fn, &frame, homes, &term, &next_label);
+    an_terminator(&ctx, &out, &fn, &frame, homes, &term, &next_label);
     assert(returns == 2);
 
     term = (ArchonMIRTerm){ .kind = ARCHON_MIR_TRAP, .value = ARCHON_MIR_NONE };
-    an_terminator(&out, 7, &fn, &frame, homes, &term, &next_label);
+    an_terminator(&ctx, &out, &fn, &frame, homes, &term, &next_label);
     assert(traps == 1 && returns == 2 && halt == 4 && next_label == 5 &&
         out.status == ARCHON_BACKEND_OK);
     return 0;

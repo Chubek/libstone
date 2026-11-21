@@ -4,7 +4,13 @@
 /* ISO C11 5.2.4.2.2: format characteristics of the bundled Linux LP64 ABIs.
    The frontend may not be able to generate code for every described type. */
 #define FLT_RADIX 2
-#define FLT_ROUNDS (-1) /* The bundled library does not query the active mode. */
+#if defined(__linux__) && defined(__LP64__) && \
+    (defined(__x86_64__) || defined(__AARCH64EL__))
+int __cephyr_flt_rounds(void);
+#define FLT_ROUNDS (__cephyr_flt_rounds())
+#else
+#define FLT_ROUNDS (-1) /* No bundled rounding-mode query for this target. */
+#endif
 #define FLT_EVAL_METHOD 0
 
 #define FLT_MANT_DIG 24

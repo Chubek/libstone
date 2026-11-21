@@ -13,11 +13,11 @@ class Diagnostics;
 namespace qml {
 
 // A configured plan is immutable during rewrite; const calls may run concurrently.
-// Native rules match one pure i64 SSA root with flat operands. A replacement is
-// another supported root using the original operands, a copy, or an i64 const.
-// Literal patterns use earlier definitions in the same block, including pure
-// integer arithmetic and width normalization. Structure checking is not a
-// proof of the semantic equivalence asserted by the supplied rule.
+// Native rules match one i64 SSA root (unsigned remainder requires a
+// nonzero power-of-two divisor). A replacement is another supported root,
+// copy, i64 const, or low-bit extraction with a proven constant width.
+// Guards and literal patterns use earlier definitions in the same block.
+// Structure checking is not a proof of the supplied rule's equivalence.
 class Pipeline {
   public:
     // Append a CEPHYR-QML-1 plan, in rule priority order. A successful append

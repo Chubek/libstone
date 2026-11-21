@@ -30,10 +30,10 @@ static int words(int offset, size_t count, uintmax_t size, uintmax_t *end)
  * active edge arguments and call operands, not destination blocks or an ABI
  * worst-case allowance. Home indices are checked separately by an_verify_homes. */
 static int verify_uses(ANContext *ctx, const ArchonMIRFunction *fn, size_t phi_count,
-    size_t outgoing_words, int calls, size_t spare_slots)
+    size_t outgoing_words, int calls, int variadic, size_t spare_slots)
 {
     size_t b, i, needed_phi = 0, needed_outgoing = 0, insts_left = AN_MAX_INSTS;
-    int has_call = 0;
+    int has_call = 0, has_va_start = 0;
 
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *block = &fn->blocks[b];
@@ -63,6 +63,8 @@ static int verify_uses(ANContext *ctx, const ArchonMIRFunction *fn, size_t phi_c
             ctx->instruction = i;
             if (!(i % 128u) && !an_continue(ctx))
                 return 0;
+            if (inst->op == ARCHON_MIR_RV64_VA_START)
+                has_va_start = 1;
             if (inst->op != ARCHON_MIR_CALL && inst->op != ARCHON_MIR_CALL_INDIRECT)
                 continue;
             if (!calls)
@@ -80,6 +82,8 @@ static int verify_uses(ANContext *ctx, const ArchonMIRFunction *fn, size_t phi_c
     ctx->block = ctx->instruction = SIZE_MAX;
     if (calls && !has_call)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "unexpected saved return address in leaf frame");
+    if (variadic != has_va_start)
+        return an_error(ctx, ARCHON_BACKEND_INTERNAL, "frame does not match va_start use");
     if (needed_phi != phi_count || needed_outgoing != outgoing_words)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "frame capacities do not match function uses");
     return 1;
@@ -89,6 +93,7 @@ int an_verify_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     size_t phi_count, size_t outgoing_words, int calls, const ANFrame *frame)
 {
     const unsigned stack_align = an_abi.stack_align;
+    const int variadic = frame->va_start_offset >= 0;
     uintmax_t size, end = 0;
     size_t i;
 
@@ -126,5 +131,18 @@ int an_verify_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     }
     if (calls ? !words(frame->return_offset, 1, size, &end) : frame->return_offset != -1)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame saved return address");
-    return verify_uses(ctx, fn, phi_count, outgoing_words, calls, slots - fn->param_count);
+    if (variadic && fn->param_count < an_abi.argc) {
+        if (!words(frame->va_start_offset, an_abi.argc - fn->param_count, size, &end) ||
+            end != size)
+            return an_error(ctx, ARCHON_BACKEND_INTERNAL, "register save area must abut incoming stack arguments");
+    } else if (variadic) {
+        size_t named_stack = fn->param_count - an_abi.argc;
+        if (named_stack > ((uintmax_t)INT_MAX - size) / WordBytes ||
+            (uintmax_t)frame->va_start_offset != size + named_stack * WordBytes)
+            return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid first unnamed stack argument");
+    } else if (frame->va_start_offset != -1) {
+        return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid va_start cursor");
+    }
+    return verify_uses(ctx, fn, phi_count, outgoing_words, calls, variadic,
+        slots - fn->param_count);
 }

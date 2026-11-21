@@ -61,12 +61,18 @@ struct CType {
     Kind kind = Kind::invalid;
     unsigned bits = 0, rank = 0;
     bool is_signed = false, is_plain_char = false, is_const = false, is_volatile = false;
+    // Retain the type qualifier without assuming no-alias (§6.7.3.1p6).
+    bool is_restrict = false;
     std::shared_ptr<const CType> element; // pointee, array element, or function result
     std::uint64_t count = 0;             // 0 for incomplete arrays
     std::vector<CType> params;           // adjusted function parameter types
     bool prototype = true, variadic = false;
     const RecordLayout *record = nullptr; // stable within the translation unit
     const void *enum_identity = nullptr;   // parser tag/definition identity; integer representation
+    // Expression-only metadata: the declared type still determines size and
+    // compatibility. The restricted range changes integer promotions.
+    unsigned bit_field_width = 0;
+    bool denotes_bit_field = false;
 
     bool valid() const { return kind != Kind::invalid; }
     bool integer() const { return kind == Kind::integer; }
@@ -77,14 +83,29 @@ struct CType {
     bool aggregate() const { return kind == Kind::record || kind == Kind::array; }
     bool function_pointer() const { return pointer() && element && element->kind == Kind::function; }
     bool scalar() const { return arithmetic() || pointer(); }
+    void clear_qualifiers() { is_const = is_volatile = is_restrict = false; }
+};
+
+struct BitField {
+    unsigned width;
+    unsigned shift; // position within the first byte of the field
+    unsigned byte_in_container; // offset from the aligned base-type container
+    enum class VolatileAccess { unsupported, narrow, container };
+    VolatileAccess volatile_access;
+
+    std::uint64_t mask() const { return (std::uint64_t{1} << width) - 1; }
+    unsigned bytes() const { return (shift + width + 7) / 8; }
 };
 
 struct RecordMember {
     std::string name; // empty for a physical anonymous structure or union
     CType type;
     std::uint64_t offset;
+    // Unnamed fields are represented in the layout but not initialized.
+    std::optional<BitField> bit_field = std::nullopt;
 
     bool flexible_array() const { return type.kind == CType::Kind::array && !type.count; }
+    bool unnamed_bit_field() const { return bit_field && name.empty(); }
 };
 
 struct RecordLayout {
@@ -95,6 +116,7 @@ struct RecordLayout {
     // C11 6.7.2.1p3 also restricts unions that recursively contain such a structure.
     bool contains_flexible_array = false;
     bool contains_anonymous_member = false; // recursively through value members, not pointers
+    bool contains_bit_field = false; // recursively through value members, not pointers
     std::uint64_t size = 0; // zero while the type is incomplete
     unsigned alignment = 0;
     std::vector<RecordMember> members;
@@ -106,6 +128,7 @@ struct RecordLayout {
 struct MemberAccess {
     CType type;
     std::uint64_t offset;
+    std::optional<BitField> bit_field = std::nullopt;
 };
 
 struct Constant {
@@ -154,7 +177,9 @@ CType integer_type(unsigned bits = 32, bool is_signed = true, unsigned rank = 0)
 CType real_type(unsigned bits);
 CType plain_char_type(const Preprocessed &);
 CType pointer_type(const CType &);
-CType read_type(Node *, const TypeContext &, bool allow_incomplete = false);
+CType read_type(Node *, const TypeContext &, bool allow_incomplete = false,
+                bool function_definition = false);
+CType read_parameter_type(Node *, const TypeContext &, bool definition);
 CType read_record_type(Node *, const TypeContext &);
 std::optional<MemberAccess> find_member(const CType &, std::string_view);
 CType qualified_member_type(const CType &, const RecordMember &);
@@ -186,9 +211,11 @@ std::string string_constant_bytes(Node *); // target representation, including t
 
 struct Expr {
     CType type;
-    Id id = no_value; // native pointer to the representation for a record value
+    // Native pointer for a record value, low 64-bit payload for x87.
+    Id id = no_value;
     // Only when evaluated as an ICE (or a single literal) for null conversions.
     std::optional<std::uint64_t> constant;
+    Id x87_sign_exponent = no_value; // separate integer SSA value, not an ABI slot
 };
 
 struct LValue {
@@ -197,6 +224,9 @@ struct LValue {
     std::string static_name = {}; // assembly name for a block-scope static object
     bool register_object = false;
     Symbol *linked = nullptr; // block-scope declaration of a linked entity
+    // For supported volatile bit-fields the address is the aligned base-type
+    // container; nonvolatile bit-fields use the first byte they occupy.
+    std::optional<BitField> bit_field = std::nullopt;
 };
 
 struct Edge {
@@ -255,14 +285,17 @@ struct Unit {
     bool hosted = true;
     std::map<std::string, Symbol> symbols;
     std::vector<std::pair<std::string, CType>> signatures;
+    std::map<std::string, CType> rv64_soft_fp_helpers;
     std::map<std::size_t, std::string> record_pair_calls;
     std::map<std::string, std::vector<std::size_t>> variadic_signatures;
     std::vector<Global> globals;
     std::vector<std::string> locals;
     std::string data_assembly;
     std::map<std::pair<unsigned, std::string>, std::string> strings; // alignment, bytes -> name
+    std::map<const Node *, std::pair<CType, std::string>> static_compound_literals;
     // The parser shares bound expression nodes when it clones typedef types.
     // Resolve each bound where the declarator first appears, not at a later use.
+    // Zero denotes a checked nonconstant bound erased by parameter adjustment.
     std::map<const Node *, std::optional<std::uint64_t>> array_bounds;
     // Multiple declarators share the specifiers and their original scope.
     std::map<const Node *, std::optional<unsigned>> alignment_values;
@@ -270,12 +303,14 @@ struct Unit {
     std::map<const Node *, std::uint64_t> enumeration_constants; // keyed by defining enumerator
     std::size_t block_statics = 0;
     std::size_t function_names = 0;
+    std::size_t compound_literals = 0;
 
     Unit(const Preprocessed &s, Diagnostics &d, bool h) : source(s), diagnostics(d), hosted(h) {}
     Symbol *find_file_symbol(std::string_view);
     void error(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     void warn(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     std::string add_string(Node *literal, const CType &type);
+    std::optional<std::pair<CType, std::string>> add_static_compound_literal(Node *);
     void require_function_name(const std::string &symbol, std::string_view spelling);
     std::string require_signature(const CType &);
     std::string require_variadic_call(const Symbol &, const std::vector<CType> &);
@@ -295,10 +330,19 @@ struct ObjectInitEntry {
     Node *source;
     std::optional<std::string> bytes;
     bool clear = false;
+    std::optional<BitField> bit_field = std::nullopt;
 };
+
+bool object_contains_bit_field(const CType &);
 
 std::optional<std::vector<ObjectInitEntry>> plan_object_initializer(
     const TypeContext &, CType &, Node *, bool direct = false);
+
+// Compound literals use declaration initializer rules but have no C name.
+std::optional<std::vector<ObjectInitEntry>> plan_compound_literal(
+    const TypeContext &, Node *, CType &, bool evaluated = false);
+bool validate_static_compound_initializer(const TypeContext &, const std::vector<ObjectInitEntry> &);
+LValue lower_compound_literal(Function &, Node *);
 
 struct Function {
     struct Label {
@@ -316,6 +360,7 @@ struct Function {
     std::vector<Block> blocks{Block{}};
     std::vector<Instruction> entry_addresses;
     std::vector<std::map<std::string, LValue>> scopes{{}};
+    std::map<const Node *, LValue> compound_literal_slots;
     std::vector<std::pair<Id, Id>> loops; // break, continue (no_value if unavailable)
     // Labels have their own function-wide namespace (C11 6.2.1, 6.2.3).
     std::map<std::string, Label> labels;

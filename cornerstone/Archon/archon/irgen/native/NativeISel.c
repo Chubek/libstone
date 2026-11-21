@@ -102,6 +102,11 @@ static void select_base_mul(ANOut *out, unsigned dst, unsigned a,
 
 /* The caller stages operands and the result in three distinct scratch
  * registers (T0, T1, T2); checked operations may overwrite operand copies. */
+void an_select_shift_left_imm(ANOut *out, unsigned dst, unsigned src, unsigned shift)
+{
+    an_emit(out, shift ? AN_SLLI : AN_ADDI, dst, src, AN_ZERO, (int)shift);
+}
+
 int an_select(ANOut *out, ArchonMIROpcode op, unsigned dst, unsigned a,
     unsigned b, size_t fn, unsigned *next_label)
 {

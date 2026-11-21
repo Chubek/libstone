@@ -23,6 +23,9 @@ struct PreprocessOptions {
     bool hosted = true;
     // Allow hash-prefixed assembler comments in addition to CPP directives.
     bool assembler = false;
+    // Target properties for C character constants in #if and #elif.
+    bool plain_char_signed = false;
+    bool wchar_signed = true;
 };
 
 struct Preprocessed {
@@ -41,18 +44,25 @@ struct Preprocessed {
     bool plain_char_signed = false;
     // Set by the driver only for reviewed hardware floating-point ABI routes.
     bool native_scalar_fp = false;
-    // RV64IM LP64 storage, transport, sign negation and ordered comparisons.
+    // RV64IM LP64 binary32/binary64, with runtime calls for arithmetic and casts.
     bool native_rv64_soft_fp = false;
     bool native_fp_types() const { return native_scalar_fp || native_rv64_soft_fp; }
     bool native_amd64_stdarg = false;
     // The bundled AMD64 SysV frontend knows the x87 extended object format.
     bool native_amd64_x87 = false;
     bool native_aarch64_stdarg = false;
-    bool native_scalar_stdarg() const { return native_amd64_stdarg || native_aarch64_stdarg; }
+    // RV64IM's soft-float ABI also defines the native variadic cursor.
+    bool native_scalar_stdarg() const {
+        return native_amd64_stdarg || native_aarch64_stdarg || native_rv64_soft_fp;
+    }
     // Signedness of the target's 32-bit wchar_t, not a preprocessor macro.
     bool wchar_signed = true;
     // Only the bundled RV64IM LP64 backend has a reviewed record ABI here.
     bool native_rv64_record_abi = false;
+    // Bundled little-endian ABIs agree on allocation order but differ in
+    // whether an unnamed bit-field contributes to the enclosing alignment.
+    enum class BitFieldABI { unavailable, sysv_rv64, aapcs64 };
+    BitFieldABI bit_field_abi = BitFieldABI::unavailable;
 
     Location locate(unsigned line, unsigned column = 0) const;
 };

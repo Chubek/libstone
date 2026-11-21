@@ -59,6 +59,7 @@ bool expression_kind(ASTNodeKind kind) {
            kind == cparser::NK_ALIGNOF_EXPR || kind == cparser::NK_OFFSETOF_EXPR ||
            kind == cparser::NK_UNARY_PLUS_EXPR ||
            kind == cparser::NK_GENERIC_EXPR ||
+           kind == cparser::NK_COMPOUND_LITERAL ||
            (kind >= cparser::NK_INTEGER_CONST && kind <= cparser::NK_PUTI_EXPR);
 }
 
@@ -77,41 +78,27 @@ std::optional<std::uint64_t> object_size(Function &function, const CType &type,
     return size;
 }
 
-void initialize_scalar(Function &function, LValue object, Node *initializer) {
+Node *scalar_initializer_expression(Function &function, Node *initializer) {
     while (initializer->getKind() == cparser::NK_LIST) {
         const auto values = elements(initializer);
         if (values.size() != 1) {
             function.error(initializer,
                            "scalar initializer must contain exactly one expression",
                            "cephyr.local.initializer");
-            return;
+            return nullptr;
         }
         initializer = values.front();
     }
+    return initializer;
+}
+
+void initialize_scalar(Function &function, LValue object, Node *initializer) {
+    initializer = scalar_initializer_expression(function, initializer);
+    if (!initializer)
+        return;
     if (!object.type.scalar()) {
         function.error(initializer, "local aggregate initialization is not supported",
                        "cephyr.local.initializer");
-        return;
-    }
-    if (object.type.extended_real()) {
-        // Until MIR has an x87 value/ABI class, initialize automatic objects
-        // only from a foldable value. Two narrow stores touch the payload;
-        // automatic scalar padding need not be initialized.
-        const auto errors = function.unit.diagnostics.error_count();
-        const auto value = arithmetic_initializer_constant(
-            initializer, object.type, TypeContext(function.unit, &function));
-        if (!value) {
-            if (function.unit.diagnostics.error_count() == errors)
-                function.error(initializer,
-                    "long double automatic initialization requires a supported constant expression");
-            return;
-        }
-        const auto exponent = offset_address(function, object.address, 8, integer_type(16, false));
-        function.emit_void("store", std::to_string(object.address) + " " +
-                            std::to_string(function.constant(value->value, integer_type(64, false))) +
-                            " 0");
-        function.emit_void("store16", std::to_string(exponent) + " " +
-                            std::to_string(function.constant(value->x87_sign_exponent)) + " 0");
         return;
     }
     object.type.is_const = false;
@@ -119,14 +106,31 @@ void initialize_scalar(Function &function, LValue object, Node *initializer) {
 }
 
 void initialize_object(Function &function, LValue object, const std::vector<ObjectInitEntry> &plan,
-                        std::uint64_t size, Node *at) {
+                        std::uint64_t size, Node *at, bool defer_stores = false) {
+    // On reaching a compound literal again in the same block activation,
+    // an initializer can read that literal's previous value through an alias.
+    // Evaluate all explicit values before touching its storage (6.7.9p23).
+    std::vector<Expr> values;
+    if (defer_stores) {
+        values.resize(plan.size());
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            const auto &entry = plan[i];
+            if (entry.clear || entry.bytes)
+                continue;
+            auto *source = entry.type.scalar()
+                ? scalar_initializer_expression(function, entry.source) : entry.source;
+            if (source)
+                values[i] = lower_expr(function, source);
+        }
+    }
     const auto direct = object_has_qualifier(object.type, &CType::is_volatile);
     // A whole-record expression initializes the object directly. Otherwise
     // clear ordinary storage first. Volatile storage must not receive that
     // blanket write followed by a second write to the explicit subobjects.
     if (!direct && (object.type.kind != CType::Kind::record || at->getKind() == cparser::NK_LIST))
         zero_object(function, object.address, size, align_of(object.type));
-    for (const auto &entry : plan) {
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        const auto &entry = plan[i];
         if (entry.clear) {
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
             if (direct)
@@ -158,11 +162,18 @@ void initialize_object(Function &function, LValue object, const std::vector<Obje
             }
         } else if (entry.type.kind == CType::Kind::record) {
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
-            (void)copy_record(function, {entry.type, address}, lower_expr(function, entry.source),
+            auto value = defer_stores ? values[i] : lower_expr(function, entry.source);
+            (void)copy_record(function, {entry.type, address}, value,
                               entry.source, true);
         } else {
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
-            initialize_scalar(function, {entry.type, address}, entry.source);
+            LValue member{entry.type, address, {}, false, nullptr, entry.bit_field};
+            if (defer_stores) {
+                member.type.is_const = false;
+                store(function, member, values[i], entry.source);
+            } else {
+                initialize_scalar(function, member, entry.source);
+            }
         }
     }
 }
@@ -605,6 +616,9 @@ void lower_parameter_slots(Function &function, Node *parameters) {
     std::vector<Parameter> lowered;
     const auto declarations = elements(parameters);
     const auto &parameter_types = function.symbol.type.params;
+    PrototypeScope parameter_scope{nullptr, {}};
+    auto parameter_context = TypeContext(function.unit, &function);
+    parameter_context.prototype = &parameter_scope;
 
     for (Node *node : declarations) {
         if (!present(node))
@@ -615,7 +629,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
             continue;
         }
         auto *parameter = static_cast<cparser::ParmDeclASTNode *>(node);
-        CType type = read_type(parameter->getType(), TypeContext(function.unit, &function), true);
+        CType type = read_parameter_type(parameter->getType(), parameter_context, true);
         if (type.kind == CType::Kind::void_ && declarations.size() == 1 &&
             parameter_types.empty()) {
             if (!identifier(parameter->getName()).empty())
@@ -623,25 +637,24 @@ void lower_parameter_slots(Function &function, Node *parameters) {
                                "cephyr.parameter.type");
             break;
         }
-        if (type.kind == CType::Kind::array && type.element)
-            type = pointer_type(*type.element);
-        else if (type.kind == CType::Kind::function)
-            type = pointer_type(type);
         if (!type.valid() || !(type.scalar() || type.kind == CType::Kind::record)) {
             function.error(node, "parameter type is not supported by native MachineIR",
                            "cephyr.parameter.type");
             continue;
         }
         CType adjusted = type;
-        adjusted.is_const = false;
-        adjusted.is_volatile = false;
+        adjusted.clear_qualifiers();
         if (lowered.size() >= parameter_types.size() ||
             !compatible(adjusted, parameter_types[lowered.size()])) {
             function.error(node, "parameter list does not match the function type",
                            "cephyr.parameter.type");
             continue;
         }
-        lowered.push_back({node, identifier(parameter->getName()), std::move(type)});
+        auto name = identifier(parameter->getName());
+        if (!name.empty())
+            parameter_scope.parameters.emplace(name,
+                TypeBinding{type, (node->getFlags() & SCS_REGISTER) != 0});
+        lowered.push_back({node, std::move(name), std::move(type)});
     }
     if (lowered.size() != parameter_types.size()) {
         function.error(parameters, "parameter list does not match the function type",
@@ -794,6 +807,27 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
 }
 
 } // namespace
+
+LValue lower_compound_literal(Function &function, Node *node) {
+    CType type;
+    const auto plan = plan_compound_literal(TypeContext(function.unit, &function), node, type, true);
+    if (!plan)
+        return {};
+    auto [slot, inserted] = function.compound_literal_slots.try_emplace(node);
+    if (inserted)
+        slot->second = function.local(type, node);
+    const auto object = slot->second;
+    if (object.address == no_value)
+        return {};
+    // The frame slot is fixed per occurrence and per invocation, but the
+    // initialization runs here, each time control reaches the expression.
+    auto *initializer = static_cast<cparser::CompoundLiteralASTNode *>(node)->getInit();
+    if (type.scalar())
+        initialize_scalar(function, object, initializer);
+    else
+        initialize_object(function, object, *plan, *size_of(type), initializer, true);
+    return object;
+}
 
 void lower_function_body(Function &function, Node *parameters, Node *body) {
     const auto initial_errors = function.unit.diagnostics.error_count();

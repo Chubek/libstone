@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef AN_GENERIC_MIR_VERIFY
+typedef void (*ANVerifiedTextVisitor)(void *, const ArchonMIRModule *,
+    const size_t *, const size_t *);
+#endif
+
 /* Parsing allocates only in this call. Payload types must align no more
  * strictly than the arena header; all payloads are C99 scalar or pointer
  * records (not compiler-specific over-aligned types). */
@@ -20,6 +25,9 @@ typedef struct {
     ParseAlloc *allocs;
     ANContext ctx;
     ArchonBackendStatus status;
+#ifdef AN_GENERIC_MIR_VERIFY
+    size_t *starts, *ends, span;
+#endif
 } Parser;
 
 static int fail(Parser *p, ArchonBackendStatus status, const char *reason)
@@ -243,7 +251,21 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"sitofp", ARCHON_MIR_SITOFP}, {"uitofp", ARCHON_MIR_UITOFP},
         {"fptosi", ARCHON_MIR_FPTOSI}, {"fptoui", ARCHON_MIR_FPTOUI},
         {"amd64_va_start", ARCHON_MIR_AMD64_VA_START},
-        {"aarch64_va_start", ARCHON_MIR_AARCH64_VA_START}
+        {"aarch64_va_start", ARCHON_MIR_AARCH64_VA_START},
+        {"rv64_va_start", ARCHON_MIR_RV64_VA_START},
+        {"amd64_x87_add", ARCHON_MIR_AMD64_X87_ADD},
+        {"amd64_x87_sub", ARCHON_MIR_AMD64_X87_SUB},
+        {"amd64_x87_mul", ARCHON_MIR_AMD64_X87_MUL},
+        {"amd64_x87_div", ARCHON_MIR_AMD64_X87_DIV},
+        {"amd64_x87_eq", ARCHON_MIR_AMD64_X87_EQ},
+        {"amd64_x87_lt", ARCHON_MIR_AMD64_X87_LT},
+        {"amd64_x87_le", ARCHON_MIR_AMD64_X87_LE},
+        {"amd64_x87_from_fp", ARCHON_MIR_AMD64_X87_FROM_FP},
+        {"amd64_x87_to_fp", ARCHON_MIR_AMD64_X87_TO_FP},
+        {"amd64_x87_from_si", ARCHON_MIR_AMD64_X87_FROM_SI},
+        {"amd64_x87_from_ui", ARCHON_MIR_AMD64_X87_FROM_UI},
+        {"amd64_x87_to_si", ARCHON_MIR_AMD64_X87_TO_SI},
+        {"amd64_x87_to_ui", ARCHON_MIR_AMD64_X87_TO_UI}
     };
     size_t i;
     unsigned shape;
@@ -387,8 +409,19 @@ static int function(Parser *p, ArchonMIRFunction *fn)
             p->ctx.instruction = i;
             if (!(i % 128u) && !poll_parser(p))
                 return 0;
+#ifdef AN_GENERIC_MIR_VERIFY
+            if (p->starts) {
+                while (p->pos < p->size && space(p->text[p->pos]))
+                    ++p->pos;
+                p->starts[p->span] = p->pos;
+            }
+#endif
             if (!inst(p, &instructions[i]))
                 return 0;
+#ifdef AN_GENERIC_MIR_VERIFY
+            if (p->starts)
+                p->ends[p->span++] = p->pos;
+#endif
         }
         p->ctx.instruction = blk->inst_count;
         if (!term(p, &blk->term))
@@ -465,9 +498,14 @@ static int module(Parser *p, ArchonMIRModule *out)
     return !p->length || fail(p, ARCHON_BACKEND_INVALID, "trailing input");
 }
 
-ArchonBackendStatus archon_backend_compile_text_ex(const char *text, size_t size,
+static ArchonBackendStatus compile_text(const char *text, size_t size,
     const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
-    ArchonBackendDiagnostic *diagnostic)
+    ArchonBackendDiagnostic *diagnostic, const ArchonBackendScheduleHints *hints,
+    const ArchonBackendFactHints *facts
+#ifdef AN_GENERIC_MIR_VERIFY
+    , ANVerifiedTextVisitor visitor, void *user
+#endif
+    )
 {
     Parser p = {0};
     ArchonMIRModule m = {0};
@@ -485,11 +523,30 @@ ArchonBackendStatus archon_backend_compile_text_ex(const char *text, size_t size
         fail(&p, ARCHON_BACKEND_INVALID, "require text and an empty output artifact");
     else if (size > ARCHON_MIR_TEXT_MAX_BYTES)
         fail(&p, ARCHON_BACKEND_LIMIT, "input byte limit exceeded");
+#ifdef AN_GENERIC_MIR_VERIFY
+    (void)hints;
+    (void)facts;
+    if (p.status == ARCHON_BACKEND_OK && visitor) {
+        /* Every recorded instruction occupies at least one input byte. */
+        const size_t spans = size < AN_MAX_MODULE_INSTS ? size + 1 : AN_MAX_MODULE_INSTS;
+        p.starts = arena(&p, spans, sizeof(*p.starts));
+        p.ends = arena(&p, spans, sizeof(*p.ends));
+    }
+#endif
     status = p.status;
     if (status == ARCHON_BACKEND_OK) {
-        if (poll_parser(&p) && module(&p, &m))
+        if (poll_parser(&p) && module(&p, &m)) {
+#ifdef AN_GENERIC_MIR_VERIFY
             status = archon_backend_compile_ex(&m, options, flags, artifact, &parse_diag);
-        else
+            if (status == ARCHON_BACKEND_OK && visitor)
+                visitor(user, &m, p.starts, p.ends);
+#else
+            if (hints || facts)
+                status = an_compile_with_hints(&m, options, flags, hints, facts, artifact, &parse_diag);
+            else
+                status = archon_backend_compile_ex(&m, options, flags, artifact, &parse_diag);
+#endif
+        } else
             status = p.status;
     }
     while (p.allocs) {
@@ -500,6 +557,40 @@ ArchonBackendStatus archon_backend_compile_text_ex(const char *text, size_t size
     if (diagnostic)
         *diagnostic = parse_diag;
     return status;
+}
+
+#ifdef AN_GENERIC_MIR_VERIFY
+ArchonBackendStatus cephyr_visit_mir(const char *text, size_t size, ANVerifiedTextVisitor visitor,
+    void *user, ArchonBackendDiagnostic *diagnostic)
+{
+    ArchonBackendArtifact unused = {0};
+    return compile_text(text, size, NULL, 0, &unused, diagnostic, NULL, NULL, visitor, user);
+}
+#else
+ArchonBackendStatus archon_backend_compile_text_with_schedule_hints(const char *text, size_t size,
+    const ArchonBackendOptions *options, unsigned flags, const ArchonBackendScheduleHints *hints,
+    ArchonBackendArtifact *artifact, ArchonBackendDiagnostic *diagnostic)
+{
+    return compile_text(text, size, options, flags, artifact, diagnostic, hints, NULL);
+}
+
+ArchonBackendStatus archon_backend_compile_text_with_facts(const char *text, size_t size,
+    const ArchonBackendOptions *options, unsigned flags, const ArchonBackendFactHints *facts,
+    ArchonBackendArtifact *artifact, ArchonBackendDiagnostic *diagnostic)
+{
+    return compile_text(text, size, options, flags, artifact, diagnostic, NULL, facts);
+}
+#endif
+
+ArchonBackendStatus archon_backend_compile_text_ex(const char *text, size_t size,
+    const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
+    ArchonBackendDiagnostic *diagnostic)
+{
+    return compile_text(text, size, options, flags, artifact, diagnostic, NULL, NULL
+#ifdef AN_GENERIC_MIR_VERIFY
+        , NULL, NULL
+#endif
+        );
 }
 
 ArchonBackendStatus archon_backend_compile_text(const char *text, size_t size,

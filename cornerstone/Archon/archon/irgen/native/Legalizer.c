@@ -2,6 +2,8 @@
 /* Embedders can reuse the structural verifier without a generated provider. */
 #ifndef AN_GENERIC_MIR_VERIFY
 #include "TargetNative.h"
+#include <stdlib.h>
+#include <string.h>
 #endif
 
 enum { HAS_DST = 1u, HAS_A = 2u, HAS_B = 4u };
@@ -40,10 +42,14 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:
+    case ARCHON_MIR_AMD64_X87_TO_FP:
+    case ARCHON_MIR_AMD64_X87_TO_SI:
+    case ARCHON_MIR_AMD64_X87_TO_UI:
     case ARCHON_MIR_CALL_INDIRECT: /* Optional destination, func_ptr callee in a. */
         return HAS_DST | HAS_A;
     case ARCHON_MIR_AMD64_VA_START:
     case ARCHON_MIR_AARCH64_VA_START:
+    case ARCHON_MIR_RV64_VA_START:
         return HAS_A;
     case ARCHON_MIR_STORE:
     case ARCHON_MIR_FSTORE:
@@ -52,6 +58,13 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_STORE32:
     case ARCHON_MIR_STORE_PTR:
     case ARCHON_MIR_STORE_FUNC_PTR:
+    case ARCHON_MIR_AMD64_X87_ADD:
+    case ARCHON_MIR_AMD64_X87_SUB:
+    case ARCHON_MIR_AMD64_X87_MUL:
+    case ARCHON_MIR_AMD64_X87_DIV:
+    case ARCHON_MIR_AMD64_X87_FROM_FP:
+    case ARCHON_MIR_AMD64_X87_FROM_SI:
+    case ARCHON_MIR_AMD64_X87_FROM_UI:
         return HAS_A | HAS_B;
     case ARCHON_MIR_ADD:
     case ARCHON_MIR_SUB:
@@ -81,6 +94,9 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_FEQ:
     case ARCHON_MIR_FLT:
     case ARCHON_MIR_FLE:
+    case ARCHON_MIR_AMD64_X87_EQ:
+    case ARCHON_MIR_AMD64_X87_LT:
+    case ARCHON_MIR_AMD64_X87_LE:
         return HAS_DST | HAS_A | HAS_B;
     default:
         return 0;
@@ -131,6 +147,18 @@ static int legal_fp_arithmetic_or_conversion(ANContext *ctx)
 #else
     (void)ctx;
     return 1;
+#endif
+}
+
+static int legal_x87(ANContext *ctx, int types_match)
+{
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SYSV_AMD64)
+    if (!types_match)
+        return an_error(ctx, ARCHON_BACKEND_INVALID, "incorrect operand types for AMD64 x87 operation");
+    return 1;
+#else
+    (void)types_match;
+    return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "x87 MIR requires SysV AMD64");
 #endif
 }
 
@@ -229,6 +257,25 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     b = (shape & HAS_B) != 0 ? value_type(fn, inst->b) : ARCHON_MIR_VOID;
 
     switch (op) {
+    case ARCHON_MIR_AMD64_X87_ADD:
+    case ARCHON_MIR_AMD64_X87_SUB:
+    case ARCHON_MIR_AMD64_X87_MUL:
+    case ARCHON_MIR_AMD64_X87_DIV:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && b == ARCHON_MIR_PTR);
+    case ARCHON_MIR_AMD64_X87_EQ:
+    case ARCHON_MIR_AMD64_X87_LT:
+    case ARCHON_MIR_AMD64_X87_LE:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && b == ARCHON_MIR_PTR && dst == ARCHON_MIR_I64);
+    case ARCHON_MIR_AMD64_X87_FROM_FP:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && an_is_float(b));
+    case ARCHON_MIR_AMD64_X87_TO_FP:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && an_is_float(dst));
+    case ARCHON_MIR_AMD64_X87_FROM_SI:
+    case ARCHON_MIR_AMD64_X87_FROM_UI:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && b == ARCHON_MIR_I64);
+    case ARCHON_MIR_AMD64_X87_TO_SI:
+    case ARCHON_MIR_AMD64_X87_TO_UI:
+        return legal_x87(ctx, a == ARCHON_MIR_PTR && dst == ARCHON_MIR_I64);
     case ARCHON_MIR_AMD64_VA_START:
 #if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SYSV_AMD64)
         if (a != ARCHON_MIR_PTR || fn->param_count == 0)
@@ -246,6 +293,15 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
         return 1;
 #else
         return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "AARCH64_VA_START requires AAPCS64");
+#endif
+    case ARCHON_MIR_RV64_VA_START:
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_RV64_STDARG)
+        if (a != ARCHON_MIR_PTR || fn->param_count == 0)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "RV64_VA_START requires a list pointer and named parameters");
+        return 1;
+#else
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "RV64_VA_START requires RV64IM LP64");
 #endif
     case ARCHON_MIR_CONST:
         if (dst != ARCHON_MIR_I64)
@@ -443,3 +499,170 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "missing legality rule for MIR opcode");
     }
 }
+
+#ifndef AN_GENERIC_MIR_VERIFY
+static ANProvenBits proven_value(const ANProvenBits *bits, ArchonValue value)
+{
+    return value == ARCHON_MIR_NONE ? (ANProvenBits){0, 0} : bits[value];
+}
+
+/* A small verifier for claims about the original MIR, not a trusted plugin
+ * optimization. Every transfer may underapproximate the claimed masks, never
+ * overstate them. CFG joins start unknown and require all incoming edges. */
+static ANProvenBits prove_inst(const ArchonMIRInst *ins, const ANProvenBits *bits)
+{
+    ANProvenBits a = proven_value(bits, ins->a), b = proven_value(bits, ins->b);
+    uint64_t low, sign;
+    switch (ins->op) {
+    case ARCHON_MIR_CONST: return (ANProvenBits){~ins->imm, ins->imm};
+    case ARCHON_MIR_COPY: return a;
+    case ARCHON_MIR_AND: return (ANProvenBits){a.zero | b.zero, a.one & b.one};
+    case ARCHON_MIR_OR: return (ANProvenBits){a.zero & b.zero, a.one | b.one};
+    case ARCHON_MIR_XOR:
+        return (ANProvenBits){(a.zero & b.zero) | (a.one & b.one),
+                              (a.zero & b.one) | (a.one & b.zero)};
+    case ARCHON_MIR_LOAD_U8: return (ANProvenBits){~UINT64_C(255), 0};
+    case ARCHON_MIR_LOAD_U16: return (ANProvenBits){~UINT64_C(65535), 0};
+    case ARCHON_MIR_LOAD_U32: return (ANProvenBits){~UINT64_C(0xffffffff), 0};
+    case ARCHON_MIR_EQ: case ARCHON_MIR_SLT: case ARCHON_MIR_ULT:
+        return (ANProvenBits){~UINT64_C(1), 0};
+    case ARCHON_MIR_SHL: case ARCHON_MIR_LSHR:
+        if ((b.zero | b.one) != UINT64_MAX || b.one >= 64)
+            break;
+        if (!b.one)
+            return a;
+        if (ins->op == ARCHON_MIR_SHL)
+            return (ANProvenBits){(a.zero << b.one) | (UINT64_MAX >> (64 - b.one)),
+                                  a.one << b.one};
+        return (ANProvenBits){(a.zero >> b.one) | (UINT64_MAX << (64 - b.one)),
+                              a.one >> b.one};
+    case ARCHON_MIR_TRUNC: case ARCHON_MIR_ZEXT: case ARCHON_MIR_SEXT:
+        if (ins->imm == 64)
+            return a;
+        low = UINT64_MAX >> (64 - ins->imm); /* Verified width 1..63. */
+        sign = UINT64_C(1) << (ins->imm - 1);
+        return (ANProvenBits){(a.zero & low) | ((ins->op != ARCHON_MIR_SEXT || (a.zero & sign)) ? ~low : 0),
+                              (a.one & low) | ((ins->op == ARCHON_MIR_SEXT && (a.one & sign)) ? ~low : 0)};
+    default:
+        break;
+    }
+    return (ANProvenBits){0, 0};
+}
+
+static void prove_value(ANProvenBits *value, ANProvenBits proven, int *changed)
+{
+    if (value->zero != proven.zero || value->one != proven.one) {
+        *value = proven;
+        *changed = 1;
+    }
+}
+
+static void prove_edge(const ArchonMIRFunction *fn, const ArchonMIREdge *edge,
+    const ANProvenBits *bits, ANProvenBits *joins, uint8_t *seen)
+{
+    const ArchonMIRBlock *target = &fn->blocks[edge->target];
+    size_t p;
+    for (p = 0; p < edge->arg_count; ++p) {
+        const ArchonValue value = target->params[p];
+        const ANProvenBits incoming = bits[edge->args[p]];
+        if (!seen[edge->target]) {
+            joins[value] = incoming;
+        } else {
+            joins[value].zero &= incoming.zero;
+            joins[value].one &= incoming.one;
+        }
+    }
+    seen[edge->target] = 1;
+}
+
+ANProvenBits *an_prove_known_bits(const ANContext *ctx, const ArchonMIRFunction *fn)
+{
+    ANProvenBits *bits, *joins;
+    uint8_t *seen;
+    unsigned sweep;
+    if (!ctx->facts || !ctx->facts->known_bits || !fn->value_count)
+        return NULL;
+    bits = calloc(fn->value_count * 2, sizeof(*bits));
+    seen = malloc(fn->block_count);
+    if (!bits || !seen) {
+        free(bits);
+        free(seen);
+        return NULL; /* Best-effort analysis; keep ordinary lowering. */
+    }
+    joins = bits + fn->value_count;
+    for (sweep = 0; sweep < 8; ++sweep) {
+        size_t b, i;
+        int changed = 0;
+        memset(seen, 0, fn->block_count);
+        for (b = 0; b < fn->block_count; ++b) {
+            const ArchonMIRBlock *block = &fn->blocks[b];
+            for (i = 0; i < block->inst_count; ++i) {
+                const ArchonMIRInst *ins = &block->insts[i];
+                if (ins->dst != ARCHON_MIR_NONE && fn->types[ins->dst] == ARCHON_MIR_I64)
+                    prove_value(&bits[ins->dst], prove_inst(ins, bits), &changed);
+            }
+            if (block->term.kind == ARCHON_MIR_BR || block->term.kind == ARCHON_MIR_CBR)
+                prove_edge(fn, &block->term.yes, bits, joins, seen);
+            if (block->term.kind == ARCHON_MIR_CBR)
+                prove_edge(fn, &block->term.no, bits, joins, seen);
+        }
+        for (b = 0; b < fn->block_count; ++b) {
+            const ArchonMIRBlock *block = &fn->blocks[b];
+            for (i = 0; seen[b] && i < block->param_count; ++i) {
+                const ArchonValue value = block->params[i];
+                if (fn->types[value] == ARCHON_MIR_I64)
+                    prove_value(&bits[value], joins[value], &changed);
+            }
+        }
+        if (!changed)
+            break;
+    }
+    free(seen);
+    return bits;
+}
+
+/* Post-verification lowering only: do not use a fact to admit unsupported
+ * input, and never remove a producer (its effects are independent of its
+ * result bits). MIR integer conversions always read/write 64-bit values. */
+int an_fact_conversion_is_copy(ANContext *ctx, const ArchonMIRInst *ins)
+{
+    uint64_t zero, one, sign, upper;
+    if (!is_conversion(ins->op) || ins->imm < 1 || ins->imm >= 64 ||
+        !an_query_known_bits(ctx, ins->a, &zero, &one))
+        return 0;
+    sign = UINT64_C(1) << (ins->imm - 1);
+    upper = ~(sign * 2 - 1);
+    /* A conversion fixes every low bit. TRUNC/ZEXT fill the high bits with
+     * zero; SEXT copies the sign into each high bit. Thus the original bit
+     * vector is unchanged exactly when its upper bits match that fill.
+     * Test sign and upper bits together for SEXT, including width one. */
+    if (ins->op != ARCHON_MIR_SEXT)
+        return (zero & upper) == upper;
+    upper |= sign;
+    return (zero & upper) == upper || (one & upper) == upper;
+}
+
+/* For wrapping i64 multiplication, x * 2^k modulo 2^64 has bit i = 0
+ * for i < k and x[i-k] otherwise: exactly the nontrapping immediate SHL
+ * for k in [0, 63]. Checked multiply, FP and pointer operations are excluded.
+ * A one-hot known-one mask alone is NOT sufficient: every other bit must
+ * be known zero. The removed use is only an operand materialization. */
+ArchonValue an_fact_mul_shift(ANContext *ctx, const ArchonMIRInst *ins, unsigned *shift)
+{
+    const ArchonValue operands[] = {ins->b, ins->a};
+    unsigned i;
+    if (ins->op != ARCHON_MIR_MUL)
+        return ARCHON_MIR_NONE;
+    for (i = 0; i < 2; ++i) {
+        uint64_t zero, one;
+        if (!an_query_known_bits(ctx, operands[i], &zero, &one) ||
+            (zero | one) != UINT64_MAX || !one || (one & (one - 1)))
+            continue;
+        *shift = 0;
+        while ((one >>= 1) != 0)
+            ++*shift;
+        return operands[1 - i];
+    }
+    return ARCHON_MIR_NONE;
+}
+#endif

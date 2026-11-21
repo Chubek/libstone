@@ -195,7 +195,11 @@ void GenCVisitor::visit(FieldDeclASTNode *n)
 
     if (n->getName() != NULL_AST_NODE)
         n->getName()->accept(this);
-
+    if (n->getWidth() != NULL_AST_NODE)
+    {
+        std::cout << " : ";
+        n->getWidth()->accept(this);
+    }
 }
 
 void GenCVisitor::visit(AsmStmtASTNode *n)
@@ -380,6 +384,18 @@ void GenCVisitor::visit(WhileStmtASTNode *n)
 
     if (n->getBody() != NULL_AST_NODE)
         n->getBody()->accept(this);
+}
+
+void GenCVisitor::visit(CompoundLiteralASTNode *n)
+{
+    std::cout << "(";
+    n->getType()->accept(this);
+    std::cout << "){";
+    const bool saved = _inList;
+    _inList = true;
+    n->getInit()->accept(this);
+    _inList = saved;
+    std::cout << "}";
 }
 
 void GenCVisitor::visit(CastExprASTNode *n)

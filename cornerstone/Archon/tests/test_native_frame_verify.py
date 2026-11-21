@@ -111,7 +111,7 @@ static void mixed_regions(ANContext *ctx, ArchonMIROpcode call_op)
     ANFrame frame = {0}, bad;
 
     *ctx->diag = (ArchonBackendDiagnostic){0};
-    assert(an_frame(ctx, &fn, 13, 2, 3, 1, &frame));
+    assert(an_frame(ctx, &fn, 13, 2, 3, 1, 0, &frame));
     assert(frame.frame_size == 208 && frame.slots_base == 24 && frame.phi_base == 128);
     assert(frame.local_offsets[0] == 144 && frame.local_offsets[1] == 160);
     assert(frame.return_offset == 200);
@@ -167,7 +167,7 @@ static void exact_limits(ANContext *ctx)
     /* An empty leaf takes no stack space, and -1 is its only valid RA sentinel. */
     *ctx->diag = (ArchonBackendDiagnostic){0};
     fn.local_count = 0;
-    assert(an_frame(ctx, &fn, 0, 0, 0, 0, &frame));
+    assert(an_frame(ctx, &fn, 0, 0, 0, 0, 0, &frame));
     assert(frame.frame_size == 0 && frame.return_offset == -1);
     assert(an_verify_frame(ctx, &fn, 0, 0, 0, 0, &frame));
     frame.return_offset = -2;
@@ -188,7 +188,7 @@ static void exact_limits(ANContext *ctx)
         block.inst_count = (size_t)calls;
         local.size = (uint32_t)(limit - (int)params * 8 - calls * 8);
         *ctx->diag = (ArchonBackendDiagnostic){0};
-        assert(an_frame(ctx, &fn, params, 0, 0, calls, &frame));
+        assert(an_frame(ctx, &fn, params, 0, 0, calls, 0, &frame));
         assert(frame.frame_size == limit && frame.local_offsets[0] == (int)params * 8);
         assert(frame.return_offset == (calls ? limit - 8 : -1));
         assert(an_verify_frame(ctx, &fn, params, 0, 0, calls, &frame));
@@ -200,7 +200,49 @@ static void exact_limits(ANContext *ctx)
         }
         ++local.size;
         *ctx->diag = (ArchonBackendDiagnostic){0};
-        assert(!an_frame(ctx, &fn, params, 0, 0, calls, &frame));
+        assert(!an_frame(ctx, &fn, params, 0, 0, calls, 0, &frame));
+        assert(ctx->diag->status == ARCHON_BACKEND_LIMIT);
+    }
+}
+
+static void variadic_regions(ANContext *ctx)
+{
+    const ArchonMIRInst init = {ARCHON_MIR_RV64_VA_START, NONE, 0, NONE, 0, NULL, NULL, 0};
+    const ArchonMIRBlock block = {
+        .insts = &init, .inst_count = 1,
+        .term = { .kind = ARCHON_MIR_RETURN, .value = NONE }
+    };
+    const ArchonMIRLocal local = {5, 1};
+    ArchonMIRType types[11] = {ARCHON_MIR_PTR};
+    const size_t param_counts[] = {1, 7, 8, 11};
+    ArchonMIRFunction fn = {"variadic", ARCHON_MIR_VOID, types, 0, 0, &block, 1, &local, 1};
+    ANFrame frame, bad;
+    size_t i;
+
+    for (i = 0; i < sizeof param_counts / sizeof param_counts[0]; ++i) {
+        size_t params = param_counts[i];
+        fn.value_count = fn.param_count = params;
+        *ctx->diag = (ArchonBackendDiagnostic){0};
+        assert(an_frame(ctx, &fn, params, 0, 0, 0, 1, &frame));
+        assert(frame.va_start_offset == frame.frame_size + ((int)params - 8) * 8);
+        assert(an_verify_frame(ctx, &fn, params, 0, 0, 0, &frame));
+        bad = frame;
+        bad.va_start_offset = -1;
+        reject(ctx, &fn, params, 0, 0, 0, &bad, "frame does not match va_start");
+        bad = frame;
+        bad.va_start_offset -= 8;
+        reject(ctx, &fn, params, 0, 0, 0, &bad,
+            params < 8 ? "register save area" : "first unnamed stack argument");
+    }
+
+    /* Named loads still fit, but the first unnamed slot would exceed int. */
+    {
+        ArchonMIRLocal huge = {(uint32_t)((INT_MAX - 8) & ~15) - 10 * 8, 8};
+        fn.value_count = fn.param_count = 10;
+        fn.locals = &huge;
+        *ctx->diag = (ArchonBackendDiagnostic){0};
+        assert(an_frame(ctx, &fn, 10, 0, 0, 0, 0, &frame));
+        assert(!an_frame(ctx, &fn, 10, 0, 0, 0, 1, &frame));
         assert(ctx->diag->status == ARCHON_BACKEND_LIMIT);
     }
 }
@@ -212,6 +254,7 @@ int main(void)
     mixed_regions(&ctx, ARCHON_MIR_CALL);
     mixed_regions(&ctx, ARCHON_MIR_CALL_INDIRECT);
     exact_limits(&ctx);
+    variadic_regions(&ctx);
     return 0;
 }
 """

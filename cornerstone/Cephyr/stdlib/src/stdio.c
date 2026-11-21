@@ -7,6 +7,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "printf_float.h"
 #include "stream.h"
 
 int fputc(int ch, FILE *stream)
@@ -275,6 +276,66 @@ static void emit_integer(struct output_sink *sink, unsigned long long value,
         sink_repeat(sink, ' ', padding);
 }
 
+static void emit_float_digits(struct output_sink *sink,
+                              const struct fp_output *out, int start,
+                              size_t count)
+{
+    if (start < 0) {
+        size_t leading = (size_t)-start;
+        if (leading > count)
+            leading = count;
+        sink_repeat(sink, '0', leading);
+        count -= leading;
+        start += (int)leading;
+    }
+    if (count != 0 && start < out->length) {
+        size_t digits = (size_t)(out->length - start);
+        if (digits > count)
+            digits = count;
+        sink_write(sink, out->digits + start, digits);
+        count -= digits;
+    }
+    sink_repeat(sink, '0', count);
+}
+
+static void emit_float(struct output_sink *sink, double value, char conversion,
+                       int alternate, int plus, int blank, int left, int zero,
+                       int width, int precision)
+{
+    struct fp_output out = {0};
+    fp_prepare(&out, value, conversion, precision, alternate, plus, blank);
+
+    size_t whole = out.point > 0 ? (size_t)out.point : 1;
+    int point = !out.special && (alternate || out.fraction != 0);
+    size_t total = (out.sign != '\0') + (out.hex ? 2 : 0) + whole +
+                   point + out.fraction + out.exponent_length;
+    size_t padding = field_padding(total, width);
+    if (!sink_accepts(sink, total + padding))
+        return;
+
+    int zero_pad = zero && !left && !out.special;
+    if (!left && !zero_pad)
+        sink_repeat(sink, ' ', padding);
+    if (out.sign != '\0')
+        sink_write(sink, &out.sign, 1);
+    if (out.hex)
+        sink_write(sink, out.uppercase ? "0X" : "0x", 2);
+    if (zero_pad)
+        sink_repeat(sink, '0', padding);
+
+    if (out.point <= 0)
+        sink_write(sink, "0", 1);
+    else
+        emit_float_digits(sink, &out, 0, whole);
+    if (point)
+        sink_write(sink, ".", 1);
+    emit_float_digits(sink, &out, out.point, out.fraction);
+    if (out.exponent_length != 0)
+        sink_write(sink, out.exponent, out.exponent_length);
+    if (left)
+        sink_repeat(sink, ' ', padding);
+}
+
 enum length_modifier {
     LENGTH_DEFAULT,
     LENGTH_HH,
@@ -460,6 +521,14 @@ static int format_to_sink(struct output_sink *sink, const char *format,
             emit_integer(sink, read_unsigned(&args, length), 0, base,
                          conversion == 'X', alternate, 0, 0, left, zero,
                          width, precision);
+        } else if ((length == LENGTH_DEFAULT || length == LENGTH_L) &&
+                   (conversion == 'a' || conversion == 'A' ||
+                    conversion == 'e' || conversion == 'E' ||
+                    conversion == 'f' || conversion == 'F' ||
+                    conversion == 'g' || conversion == 'G')) {
+            /* l is a no-op for these conversions; L remains unsupported. */
+            emit_float(sink, va_arg(args, double), conversion, alternate, plus,
+                       blank, left, zero, width, precision);
         } else if (conversion == 'p' && length == LENGTH_DEFAULT) {
             uintptr_t pointer = (uintptr_t)va_arg(args, void *);
             emit_integer(sink, pointer, 0, 16, 0, 2, 0, 0, left, zero, width,

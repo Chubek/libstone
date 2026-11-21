@@ -48,6 +48,7 @@ public:
     void visit(SwitchStmtASTNode *n);
     void visit(WhileStmtASTNode *n);
     void visit(CastExprASTNode *n);
+    void visit(CompoundLiteralASTNode *n);
     void visit(BitNotExprASTNode *n);
     void visit(LogNotExprASTNode *n);
     void visit(PredecrementExprASTNode *n);

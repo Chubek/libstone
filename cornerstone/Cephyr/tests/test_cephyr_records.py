@@ -64,7 +64,6 @@ NEGATIVE = [
      "struct R { int n; } r; r = *p; }", r"compatible complete"),
     ("by-value-overaligned", "struct R { _Alignas(16) long n; }; void f(struct R r) {}",
      r"by-value aggregate"),
-    ("bit-field", "struct R { unsigned n : 3; };", r"bit.field|expected"),
     ("negative-index", "int a[] = {[-1] = 3};", r"nonnegative"),
     ("nonconstant-index", "int f(int n) { int a[2] = {[n] = 3}; return a[0]; }",
      r"integer constant expression"),

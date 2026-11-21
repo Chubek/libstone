@@ -40,8 +40,12 @@ compile() {
     )
 }
 
+sources='string ctype stdlib strtofp stdio scanf stream assert allocator runtime time multibyte wideprintf'
+case "$suffix" in
+    -amd64|-aarch64) sources="$sources fenv" ;;
+esac
 set --
-for source in string ctype stdlib strtofp stdio scanf stream assert allocator runtime time multibyte wideprintf; do
+for source in $sources; do
     object="$build/$source.o"
     compile -std=c11 -O2 \
         -c "$root/src/$source.c" -o "$object"

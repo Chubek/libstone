@@ -8,7 +8,9 @@ from pathlib import Path
 class Workload:
     name: str
     source: str
-    rewrite_expected: bool
+    expected_mir_changes: dict[str, bool]
+    driver: str | None = None
+    removed_integer_ops: tuple[str, int] | None = None
 
 
 FIXTURES = {
@@ -61,13 +63,98 @@ def generated(kind: str, width: int, steps: int) -> Workload:
         f"{kind}-{width}x{steps}",
         "\n\n".join(functions) + "\n\nint main(void) {\n" +
         "\n".join(checks) + "\n    return 0;\n}\n",
-        kind in ("dense", "sparse"),
+        {"canonicalize": kind in ("dense", "sparse"), "strength_reduce": kind == "strength"},
     )
 
 
-def workloads() -> list[Workload]:
+def integer_generated(kind: str, width: int, steps: int) -> Workload:
+    """Compile only the kernels with the selected pass; check against Python."""
+    def operation(index: int, step: int, x: str, seed: int, value: int) -> tuple[str, int]:
+        shift = (8, 16, 32, 40)[(index + step) % 4]
+        if kind == "remainder":
+            return f"({x} % (1UL << {shift}))", value % (1 << shift)
+        if kind == "remainder-high":
+            return f"({x} % (1UL << 63))", value % (1 << 63)
+        if kind == "remainder-one":
+            return f"({x} % 1UL)", 0
+        if kind == "remainder-near":
+            if step % 2:
+                divisor = (seed >> 61) | 1
+                return f"({x} % divisor)", value % divisor
+            return f"({x} % ((1UL << {shift}) - 1UL))", value % ((1 << shift) - 1)
+        if kind == "signed-near":
+            signed = (value >> 1) - (1 << 62)
+            remainder = abs(signed) % (1 << shift)
+            return (f"((unsigned long)(((long)({x} >> 1) - (1L << 62)) % (1L << {shift})))",
+                    -remainder if signed < 0 else remainder)
+        if kind == "mask":
+            if step % 2:
+                return f"(({x} | 255UL) & ({x} & 255UL))", value & 255
+            return f"(({x} & 255UL) & 65535UL)", value & 255
+        if kind == "mask-near":
+            return f"(({x} & 65535UL) & 32767UL)", value & 32767
+        if kind == "mixed":
+            return f"((({x} + 0UL) * 2UL) % (1UL << {shift}))", ((value * 2) & MASK) % (1 << shift)
+        raise ValueError(f"unknown integer workload: {kind}")
+
+    functions = []
+    declarations = []
+    checks = []
+    for index in range(width):
+        seeds = [0, 1, (1 << 63) - 1, 1 << 63, MASK, (0x9E3779B97F4A7C15 * (index + 1)) & MASK]
+        values = seeds.copy()
+        sums = [0] * len(seeds)
+        body = ["    unsigned long divisor = (x >> 61) | 1UL;"] if kind == "remainder-near" else []
+        for step in range(steps):
+            # Mix high and low bits so a previous remainder doesn't constrain
+            # the next dividend to its reduced range.
+            salt = (0xD1B54A32D192ED03 * (step + 1) * (index + 1)) & MASK
+            if kind == "mask-near":
+                # Force bits outside both masks to be set after the XOR, so
+                # neither mask becomes redundant in a later iteration.
+                salt |= (1 << 63) | (1 << 15)
+            results = [operation(index, step, "x", seed, value) for seed, value in zip(seeds, values)]
+            expr = results[0][0]
+            values = [(result ^ salt) & MASK for _, result in results]
+            sums = [(total + value) & MASK for total, value in zip(sums, values)]
+            body.append(f"    x = {expr} ^ 0x{salt:016x}UL;")
+            # Make every step observable even when later masks drop bits.
+            body.append("    sum += x;" if step else "    unsigned long sum = x;")
+        name = f"kernel_{index}"
+        declarations.append(f"unsigned long {name}(unsigned long x);")
+        functions.append(f"unsigned long {name}(unsigned long x) {{\n"
+                         + "\n".join(body) + "\n    return sum;\n}")
+        for seed, value in zip(seeds, sums):
+            checks.append(f"    if ({name}(0x{seed:016x}UL) != 0x{value:016x}UL) "
+                          f"return {len(checks) + 1};")
+    assert len(checks) <= 255
+    mixed = kind == "mixed"
+    integer = not kind.endswith("-near")
+    removed = None
+    if kind in ("remainder", "remainder-high", "remainder-one", "mixed"):
+        removed = ("rem_u", width * steps)
+    elif kind == "mask":
+        removed = ("and", width * steps)
+    return Workload(
+        f"ir-{kind}-{width}x{steps}", "\n\n".join(functions) + "\n",
+        {"canonicalize": mixed, "strength_reduce": mixed,
+         "canonicalize+strength_reduce": mixed, "integer_reduce": integer,
+         "all": integer},
+        "\n".join(declarations) + "\n\nint main(void) {\n" +
+        "\n".join(checks) + "\n    return 0;\n}\n",
+        removed,
+    )
+
+
+def workloads(suite: str) -> list[Workload]:
+    if suite == "integer-reduce":
+        return [integer_generated(kind, 4, 48) for kind in (
+            "remainder", "remainder-high", "remainder-one", "remainder-near", "signed-near",
+            "mask", "mask-near", "mixed",
+        )]
     root = Path(__file__).resolve().parent / "fixtures"
-    result = [Workload(name, (root / (name + ".c")).read_text(encoding="ascii"), expected)
+    result = [Workload(name, (root / (name + ".c")).read_text(encoding="ascii"),
+                       {"canonicalize": expected})
               for name, expected in FIXTURES.items()]
     result.extend(generated(kind, width, steps)
                   for kind in ("dense", "sparse", "inert", "strength")

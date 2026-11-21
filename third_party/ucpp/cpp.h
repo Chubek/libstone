@@ -241,6 +241,8 @@ struct lexer_state {
 #define CHECK_SOURCE_EOF     0x400000UL /* diagnose missing final newline/splice */
 #define PROCESS_TEXT_PRAGMAS 0x800000UL /* execute pragmas rather than dumping them */
 #define C11_CONSTRAINTS	    0x2000000UL /* diagnose malformed C11 constructs */
+#define PP_CHAR_SIGNED	    0x8000000UL /* target plain char is signed */
+#define PP_WCHAR_UNSIGNED  0x10000000UL /* target wchar_t is unsigned */
 
 /* internal flags */
 #define READ_AGAIN	     0x080000UL	/* emit again the last token */

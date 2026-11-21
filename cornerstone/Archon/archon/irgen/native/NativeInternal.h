@@ -23,6 +23,7 @@
 #define AN_T6 31u
 
 typedef struct ANLayout ANLayout;
+typedef struct { uint64_t zero, one; } ANProvenBits;
 typedef struct {
     char *data;
     size_t size, capacity, limit;
@@ -40,7 +41,35 @@ typedef struct {
     ArchonBackendStage stage;
     size_t function, block, instruction;
     unsigned flags;
+    const ArchonBackendScheduleHints *schedule_hints;
+    const ArchonBackendFactHints *facts;
+    const ANProvenBits *proven_bits; /* Replayed against original verified SSA. */
 } ANContext;
+
+static inline int an_fact_at(const ANContext *ctx, ArchonBackendFactKind kind,
+    size_t block, uint32_t key)
+{
+    return ctx->facts && ctx->facts->contains &&
+        ctx->facts->contains(ctx->facts->user, kind, ctx->function, block, key) > 0;
+}
+
+static inline int an_fact(const ANContext *ctx, ArchonBackendFactKind kind, uint32_t key)
+{
+    return an_fact_at(ctx, kind, ctx->block, key);
+}
+
+static inline int an_query_known_bits(const ANContext *ctx, ArchonValue value,
+    uint64_t *zero, uint64_t *one)
+{
+    *zero = *one = 0;
+    if (!ctx->proven_bits ||
+        ctx->facts->known_bits(ctx->facts->user, ctx->function, value, zero, one) <= 0 ||
+        (*zero & *one))
+        return 0;
+    *zero &= ctx->proven_bits[value].zero;
+    *one &= ctx->proven_bits[value].one;
+    return (*zero | *one) != 0;
+}
 typedef struct {
     const char *name;
     unsigned argc, args[8], result, stack_align, stack_pointer, return_address;
@@ -100,6 +129,9 @@ int an_continue(ANContext *);
 int an_symbol(const char *);
 int an_verify(ANContext *, const ArchonMIRModule *);
 int an_compile_module(ANContext *, const ArchonMIRModule *, ANOut *);
+ArchonBackendStatus an_compile_with_hints(const ArchonMIRModule *,
+    const ArchonBackendOptions *, unsigned, const ArchonBackendScheduleHints *,
+    const ArchonBackendFactHints *, ArchonBackendArtifact *, ArchonBackendDiagnostic *);
 /* Operand roles: RRR rd,rs1,rs2; ADDI/SLLI rd,rs1,0,imm;
  * loads rd,base,0,disp; stores source,base,0,disp; JALR rd,base,0,disp. */
 void an_emit(ANOut *, ANOpcode, unsigned, unsigned, unsigned, int);
@@ -123,10 +155,11 @@ int an_schedule_block(ANContext *, const ArchonMIRBlock *, ArchonMIRInst *);
 int an_verify_schedule(ANContext *, const ArchonMIRBlock *, const size_t *order, size_t count);
 typedef struct {
     int frame_size, slots_base, phi_base, return_offset;
+    int va_start_offset; /* -1 if unused, otherwise relative to adjusted SP. */
     int local_offsets[AN_MAX_VALUE];
 } ANFrame;
 int an_frame(ANContext *, const ArchonMIRFunction *, size_t slots,
-    size_t phi_count, size_t outgoing_words, int calls, ANFrame *);
+    size_t phi_count, size_t outgoing_words, int calls, int variadic, ANFrame *);
 int an_verify_frame(ANContext *, const ArchonMIRFunction *, size_t slots,
     size_t phi_count, size_t outgoing_words, int calls, const ANFrame *);
 void an_li(ANOut *, unsigned dst, uint64_t value);
@@ -138,11 +171,8 @@ void an_leave(ANOut *, const ANFrame *);
 void an_read(ANOut *, const ANFrame *, const ANHome *, ArchonValue, unsigned dst);
 void an_write(ANOut *, const ANFrame *, const ANHome *, ArchonValue, unsigned src);
 
-/* Edges: parallel copies from the pre-edge environment and an explicit jump.
- * First block labels [0, block_count); fresh helper labels start at block_count. */
-void an_edge(ANOut *, size_t fn, const ArchonMIRFunction *, const ANFrame *,
-    const ANHome *, const ArchonMIREdge *);
-void an_terminator(ANOut *, size_t fn, const ArchonMIRFunction *, const ANFrame *,
+/* First block labels [0, block_count); fresh helper labels start at block_count. */
+void an_terminator(ANContext *, ANOut *, const ArchonMIRFunction *, const ANFrame *,
     const ANHome *, const ArchonMIRTerm *, unsigned *next_label);
 /* ABI moves operate on verified LP64 signatures and already chosen homes. */
 size_t an_outgoing_words(size_t argc);
@@ -154,11 +184,15 @@ void an_call_indirect(ANOut *, const ArchonMIRInst *, const ANFrame *, const ANH
 unsigned an_shape(ArchonMIROpcode);
 int an_target_type(ANContext *, ArchonMIRType);
 int an_legal(ANContext *, const ArchonMIRFunction *, const ArchonMIRInst *);
+ANProvenBits *an_prove_known_bits(const ANContext *, const ArchonMIRFunction *);
+int an_fact_conversion_is_copy(ANContext *, const ArchonMIRInst *);
+ArchonValue an_fact_mul_shift(ANContext *, const ArchonMIRInst *, unsigned *shift);
 void an_convert(ANOut *, ArchonMIROpcode, unsigned dst, unsigned src,
     unsigned count_scratch, unsigned width);
 /* Selected operation provider; operands use explicit target scratch registers.
  * Handles arithmetic and comparisons; returns 0 only for unsupported opcode. */
 int an_select(ANOut *, ArchonMIROpcode, unsigned dst, unsigned a, unsigned b,
     size_t fn, unsigned *next_label);
+void an_select_shift_left_imm(ANOut *, unsigned dst, unsigned src, unsigned shift);
 
 #endif

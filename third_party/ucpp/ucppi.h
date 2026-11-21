@@ -190,7 +190,7 @@ char *token_name(struct token *);
 void throw_away(struct garbage_fifo *, char *);
 void garbage_collect(struct garbage_fifo *);
 void init_buf_lexer_state(struct lexer_state *, int);
-char *quote_filename(const char *);
+char *quote_filename(const char *, unsigned long);
 #ifdef PRAGMA_TOKENIZE
 struct comp_token_fifo compress_token_list(struct token_fifo *);
 #endif

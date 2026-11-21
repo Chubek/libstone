@@ -1170,7 +1170,7 @@ int substitute_macro(struct lexer_state *ls, struct macro *m, char *spelling,
 		case MAC_FILE:
 			t.type = STRING;
 			t.line = l;
-			bbuf = quote_filename(current_filename);
+			bbuf = quote_filename(current_filename, ls->flags);
 			t.name = bbuf;
 			print_space(ls);
 			print_token(ls, &t, 0);

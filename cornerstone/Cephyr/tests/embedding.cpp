@@ -4,6 +4,8 @@
 #include <atomic>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -78,6 +80,20 @@ int main()
     if (!cephyr::compile({"-E", "-"}, "int untouched;\n", options))
         return 1;
 
+    const char *const preprocess_args[] = {"-E", "-P", "-"};
+    const char *const assembly_args[] = {"--no-cache", "-S", "-o", "-", "-"};
+    using Context = std::unique_ptr<cephyr_context, decltype(&cephyr_context_destroy)>;
+    const auto make_context = [](std::size_t argc, const char *const *argv) {
+        const cephyr_context_options config{sizeof(config), argc, argv, nullptr, nullptr};
+        cephyr_context *context = nullptr;
+        cephyr_context_create(&config, &context);
+        return Context(context, cephyr_context_destroy);
+    };
+    const auto preprocess = make_context(std::size(preprocess_args), preprocess_args);
+    const auto assemble = make_context(std::size(assembly_args), assembly_args);
+    if (!preprocess || !assemble)
+        return 1;
+
     std::atomic<int> failures{0};
     std::atomic<bool> start{false};
     const auto compile = [&](std::string symbol, std::string value) {
@@ -88,13 +104,21 @@ int main()
         // first time at roughly the same moment.
         const auto source = "#define NUMBER " + value + "\nint " + symbol +
                             "(void) { return NUMBER; }\n";
-        auto preprocessed = cephyr::compile({"-E", "-P", "-"}, source);
-        if (!preprocessed || preprocessed.output().find(value) == std::string_view::npos ||
-            preprocessed.output().find("NUMBER") != std::string_view::npos)
+        cephyr_result *result = nullptr;
+        int status = cephyr_context_compile(preprocess.get(), source.data(), source.size(), nullptr, &result);
+        const std::unique_ptr<cephyr_result, decltype(&cephyr_result_destroy)>
+            preprocessed(result, cephyr_result_destroy);
+        const char *text = cephyr_result_output(result, nullptr);
+        if (status != CEPHYR_OK || !text || std::string_view(text).find(value) == std::string_view::npos ||
+            std::string_view(text).find("NUMBER") != std::string_view::npos)
             ++failures;
-        auto assembly = cephyr::compile({"--no-cache", "-S", "-o", "-", "-"}, source);
-        if (!assembly || assembly.output().find(symbol + ":") == std::string_view::npos) {
-            std::cerr << assembly.diagnostics();
+        status = cephyr_context_compile(assemble.get(), source.data(), source.size(), nullptr, &result);
+        const std::unique_ptr<cephyr_result, decltype(&cephyr_result_destroy)>
+            assembly(result, cephyr_result_destroy);
+        text = cephyr_result_output(result, nullptr);
+        if (status != CEPHYR_OK || !text || std::string_view(text).find(symbol + ":") == std::string_view::npos) {
+            if (const char *diagnostics = cephyr_result_diagnostics(result, nullptr))
+                std::cerr << diagnostics;
             ++failures;
         }
     };

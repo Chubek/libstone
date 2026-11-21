@@ -1,5 +1,8 @@
 # Cephyr
 
+See [FactIR](docs/FactIR.md) for the verified MIR rewrite, RV64 scheduler hints,
+and the CLI/TOML controls.
+
 Cephyr is a Unix-style C compiler driver for Archon. It currently implements a
 subset of ISO C11 for **AMD64 / SysV LP64**, **AArch64 / AAPCS64 LP64**, and
 **RV64IM / LP64** on Linux. It is not yet a conforming hosted or freestanding
@@ -182,6 +185,10 @@ parameters = { project_optimizations = { fuel = 256 } }
 `passes` lists QML phase names in execution order. The built-in `canonicalize`
 pass applies identities such as `x + 0 → x` to native integer MIR.
 `strength_reduce` rewrites wrapping multiplication by two to addition.
+The separate `integer_reduce` pass lowers unsigned remainder by a proven
+nonzero power of two. Local known-bit analysis also removes redundant AND
+and OR operands and folds bitwise AND to zero when the operands cannot share
+a set bit.
 A rule fragment may supply another phase, for example:
 
 ```qml
@@ -216,6 +223,23 @@ automatically.
 See the [QML rule format](qml/README.md) and the [Prolific benchmark](benchmark/README.md)
 for rule authoring and reproducible measurements.
 
+## Testing with ArchVirt
+
+Run selected freestanding C11 fixtures and the QML differential programs on
+ArchVirt's AMD64, AArch64, and RV64IM software machines:
+
+```sh
+python3 -B cornerstone/Cephyr/tests/test_cephyr_archvirt.py /path/to/cephyr \
+  --archvirt /path/to/archvirt
+```
+
+Use `--machine` to select a profile, or set CMake's
+`CEPHYR_ARCHVIRT_EXECUTABLE` to register `cephyr.archvirt` with CTest.
+The runner needs LLVM `ld.lld` and uses the DomIOS boot ABI, not Linux
+system calls. It complements rather than replaces hosted libc testing.
+The x86 software profile omits the larger record and CFG fixtures because
+they emit instructions (`CQO`/`IDIV`) that it does not support.
+
 ## Current limits
 
 - The native C subset covers integer and pointer operations, fixed-signature
@@ -228,10 +252,12 @@ for rule authoring and reproducible measurements.
   AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,
   comparisons, and fixed-prototype calls. Both also support a scalar subset
   of `<stdarg.h>` and direct floating-point variadic calls. AMD64 supports
-  `long double` storage and constant initialization, but not evaluated runtime
-  values. RV64IM supports limited software floating point and fixed-prototype
-  passing and returning of supported integer/pointer records. Bit-fields,
-  atomics, and VLAs remain unsupported. See [C11 status](C11.md) for details.
+  `long double` storage, scalar arithmetic, comparisons, and conversions,
+  but not by-value calls. RV64IM supports
+  software floating point and fixed-prototype
+  passing and returning of supported integer/pointer records. Nonvolatile
+  bit-fields are supported outside by-value ABI boundaries. Atomics and VLAs
+  remain unsupported. See [C11 status](C11.md) for details.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux
   executable with Cephyr's CRT and libc. Use `-nostdlib` or `stdlib = "none"`

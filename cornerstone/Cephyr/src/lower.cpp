@@ -66,10 +66,11 @@ bool backend_signature(const Preprocessed &source, const CType &type)
 CType declaration_type(cparser::FunctionDeclASTNode &node, Unit &unit)
 {
     auto *result = node.getType();
+    const bool definition = present(node.getBody());
     if (present(result) && result->getKind() == cparser::NK_FUNCTION_TYPE)
-        return read_type(result, TypeContext(unit), true);
+        return read_type(result, TypeContext(unit), true, definition);
     cparser::FunctionTypeASTNode function(result, node.getPrms());
-    return read_type(&function, TypeContext(unit), true);
+    return read_type(&function, TypeContext(unit), true, definition);
 }
 
 bool valid_main(const CType &type, const Preprocessed &source)
@@ -257,9 +258,10 @@ void write_instruction(std::ostream &out, const Instruction &inst, const std::ve
         op == "const" || op == "fconst" ||
         op == "frame_addr" || op == "global_addr" || op == "func_addr" ? 0 :
         op == "copy" || op == "sext" || op == "zext" || op == "trunc" ||
-        op == "amd64_va_start" || op == "aarch64_va_start" ||
+        op == "amd64_va_start" || op == "aarch64_va_start" || op == "rv64_va_start" ||
         op == "fload" || op == "fneg" || op == "fcast" || op == "sitofp" ||
         op == "uitofp" || op == "fptosi" || op == "fptoui" ||
+        op.starts_with("amd64_x87_to_") ||
         op.ends_with("_to_int") || op.starts_with("int_to_") || op.starts_with("load") ? 1 : 2;
 
     std::string_view operands = inst.operands;
@@ -384,6 +386,7 @@ class ObjectInitPlanner {
     struct Cursor {
         CType type;
         std::uint64_t offset;
+        std::optional<BitField> bit_field = std::nullopt;
     };
     struct Coverage {
         bool whole = false;
@@ -398,6 +401,8 @@ public:
 
     bool initialize(CType &type, Node *node)
     {
+        if (direct && object_contains_bit_field(type))
+            return error(node, "volatile automatic initialization of an aggregate containing bit-fields is not supported");
         if (!initialize(Cursor{type, 0}, node, {}))
             return false;
         if (type.kind == CType::Kind::array && !type.count)
@@ -411,12 +416,12 @@ private:
     bool initialize(const Cursor &object, Node *node, const Path &path)
     {
         const AnalysisDepth guard(depth);
-        const auto &[type, offset] = object;
+        const auto &[type, offset, bit_field] = object;
         const bool braced = node->getKind() == cparser::NK_LIST;
         if (type.scalar() || (type.kind == CType::Kind::record && !braced)) {
             if (!cover(path, node))
                 return false;
-            entries.push_back({offset, type, node, {}});
+            entries.push_back({offset, type, node, {}, false, bit_field});
             clear_active(path);
             return true;
         }
@@ -458,7 +463,9 @@ private:
         // Each pair of braces defines a current object (6.7.9p17–20).
         // Maintain the next relative path, descending into brace-elided
         // aggregates and advancing through enclosing aggregates on exhaustion.
-        Path next{0};
+        Path next;
+        if (const auto index = next_child(type, 0))
+            next.push_back(*index);
         for (auto *initializer : children) {
             Cursor current = object;
             Path selected = path;
@@ -495,9 +502,12 @@ private:
                         return false;
             }
             while (!whole_object(current.type, initializer)) {
-                if (!step(current, selected, 0, initializer))
+                const auto index = next_child(current.type, 0);
+                if (!index)
+                    return error(initializer, "aggregate has no initializable member");
+                if (!step(current, selected, *index, initializer))
                     return false;
-                relative.push_back(0);
+                relative.push_back(*index);
             }
             if (!initialize(current, initializer, selected))
                 return false;
@@ -516,6 +526,20 @@ private:
         type.is_const |= parent.is_const;
         type.is_volatile |= parent.is_volatile;
         return type;
+    }
+
+    static std::optional<std::uint64_t> next_child(const CType &type, std::uint64_t index)
+    {
+        if (type.kind == CType::Kind::array)
+            return !type.count || index < type.count ? std::optional{index} : std::nullopt;
+        if (type.kind == CType::Kind::record && type.record) {
+            const auto &members = type.record->members;
+            for (; index < members.size() && members[index].unnamed_bit_field(); ++index)
+                ;
+            if (index < members.size() && !members[index].flexible_array())
+                return index;
+        }
+        return {};
     }
 
     Coverage *covered(const Path &path, bool insert)
@@ -549,7 +573,8 @@ private:
 
     void append_omitted(const Cursor &object, const Coverage *explicit_init, Node *at)
     {
-        const auto &[type, offset] = object;
+        const auto &type = object.type;
+        const auto offset = object.offset;
         if (!explicit_init) {
             entries.push_back({offset, type, at, {}, true});
             return;
@@ -599,11 +624,11 @@ private:
         while (!path.empty()) {
             auto &last = path.back();
             const auto &parent = parents.back();
-            if (parent.kind == CType::Kind::array ? (!parent.count || last + 1 < parent.count) :
-                (!parent.record->is_union && last + 1 < parent.record->members.size() &&
-                 !parent.record->members[last + 1].flexible_array())) {
-                ++last;
-                return path;
+            if (parent.kind == CType::Kind::array || !parent.record->is_union) {
+                if (const auto index = next_child(parent, last + 1)) {
+                    last = *index;
+                    return path;
+                }
             }
             path.pop_back();
             parents.pop_back();
@@ -639,6 +664,7 @@ private:
                 active_unions[path] = index;
             }
             object.offset += member.offset;
+            object.bit_field = member.bit_field;
         } else {
             return error(at, "initializer requires a complete aggregate type");
         }
@@ -735,6 +761,8 @@ std::string_view record_abi_error(const Preprocessed &source, const CType &signa
         // interoperability is verified, including through named/array members.
         if (type.record && type.record->contains_anonymous_member)
             return "by-value aggregate ABI does not support records containing anonymous members";
+        if (type.record && type.record->contains_bit_field)
+            return "by-value aggregate ABI does not support records containing bit-fields";
         if (!signature.prototype || signature.variadic)
             return "by-value aggregate ABI requires a fixed prototype";
         if (!source.native_rv64_record_abi)
@@ -989,10 +1017,15 @@ CType read_record_type(Node *node, const TypeContext &context)
             return {};
         return (size + mask) & ~mask;
     };
+    // For a structure, extent is the whole-byte part of the layout cursor.
+    // Track the remaining bits separately so large byte extents cannot overflow
+    // when converted to bit offsets. For a union, extent is already in bytes.
     std::uint64_t extent = 0;
+    unsigned tail_bits = 0;
     unsigned max_alignment = 1;
     bool contains_flexible_array = false;
     bool contains_anonymous_member = false;
+    bool contains_bit_field = false;
     std::vector<RecordMember> members;
     decltype(RecordLayout::member_paths) paths;
     for (auto *item : elements(body)) {
@@ -1013,6 +1046,74 @@ CType read_record_type(Node *node, const TypeContext &context)
         auto member_type = read_type(field->getType(), context, true);
         if (!member_type.valid())
             return {};
+        const auto add_path = [&](const std::string &visible, const std::vector<std::uint64_t> &suffix) {
+            auto [it, inserted] = paths.try_emplace(visible);
+            if (inserted) {
+                it->second.push_back(members.size());
+                it->second.insert(it->second.end(), suffix.begin(), suffix.end());
+            }
+            return inserted;
+        };
+        if (auto *width = field->getWidth(); present(width)) {
+            // C11 6.7.2.1p4–5. Plain int uses signed representation; the
+            // bundled implementation does not opt into other base types.
+            if (!member_type.integer() || member_type.enum_identity ||
+                (member_type.bits != 1 &&
+                 (member_type.bits != 32 || member_type.rank != integer_type().rank)))
+                return error(where, "bit-field type must be _Bool, signed int or unsigned int");
+            const auto errors = context.diagnostics.error_count();
+            const auto constant = integer_constant(width, context);
+            if (!constant || !constant->type.integer()) {
+                if (context.diagnostics.error_count() != errors)
+                    return {};
+                return error(width, "bit-field width must be an integer constant expression");
+            }
+            const auto value = normalize(constant->value, constant->type);
+            if (constant->type.is_signed && std::bit_cast<std::int64_t>(value) < 0)
+                return error(width, "bit-field width must be nonnegative");
+            if (value > member_type.bits)
+                return error(width, "bit-field width exceeds the width of its declared type");
+            if (value == 0 && !name.empty())
+                return error(width, "a zero-width bit-field must be unnamed");
+            if (context.source.bit_field_abi == Preprocessed::BitFieldABI::unavailable)
+                return error(where, "bit-field layout requires a bundled AMD64, AArch64 or RV64 ABI");
+
+            const auto alignment = align_of(member_type);
+            const auto bits = static_cast<unsigned>(value);
+            // Clang's Linux SysV/RV64 and AAPCS64 layouts allocate low bits
+            // first. A field cannot cross its base type's aligned unit; a
+            // zero-width field always advances to a unit boundary.
+            if (structure && (!bits || (extent % alignment) * 8 + tail_bits + bits > alignment * 8)) {
+                if (tail_bits && extent == std::numeric_limits<std::uint64_t>::max())
+                    return error(where, "record layout exceeds the object size limit");
+                const auto next = round_up(extent + (tail_bits != 0), alignment);
+                if (!next)
+                    return error(where, "record layout exceeds the object size limit");
+                extent = *next;
+                tail_bits = 0;
+            }
+            const auto offset = structure ? extent : 0;
+            const auto shift = structure ? tail_bits : 0;
+            if (structure) {
+                const auto whole = (shift + bits) / 8;
+                tail_bits = (shift + bits) % 8;
+                if (std::numeric_limits<std::uint64_t>::max() - extent < whole + (tail_bits != 0))
+                    return error(where, "record layout exceeds the object size limit");
+                extent += whole;
+            } else {
+                extent = std::max<std::uint64_t>(extent, (bits + 7) / 8);
+            }
+            if (!name.empty() || context.source.bit_field_abi == Preprocessed::BitFieldABI::aapcs64)
+                max_alignment = std::max(max_alignment, alignment);
+            if (!name.empty() && !add_path(name, {}))
+                return error(where, "duplicate record member: " + name);
+            contains_bit_field = true;
+            const auto access = structure && context.source.bit_field_abi == Preprocessed::BitFieldABI::sysv_rv64
+                ? BitField::VolatileAccess::narrow : BitField::VolatileAccess::unsupported;
+            members.push_back({std::move(name), std::move(member_type), offset,
+                               BitField{bits, shift, static_cast<unsigned>(offset % alignment), access}});
+            continue;
+        }
         const bool flexible = member_type.kind == CType::Kind::array && !member_type.count;
         if (flexible) {
             if (!structure || paths.empty())
@@ -1037,19 +1138,13 @@ CType read_record_type(Node *node, const TypeContext &context)
         if (!requested || !check_object_alignment(*requested, natural, where, context))
             return {};
         const auto alignment = std::max(natural, *requested);
-        const auto offset = structure ? round_up(extent, alignment) : std::optional<std::uint64_t>{0};
+        const auto offset = structure ? round_up(extent + (tail_bits != 0), alignment) :
+                                        std::optional<std::uint64_t>{0};
         if (!offset || *size > std::numeric_limits<std::uint64_t>::max() - *offset)
             return error(where, "record layout exceeds the object size limit");
         extent = std::max(extent, *offset + *size);
+        tail_bits = 0;
         max_alignment = std::max(max_alignment, alignment);
-        const auto add_path = [&](const std::string &visible, const std::vector<std::uint64_t> &suffix) {
-            auto [it, inserted] = paths.try_emplace(visible);
-            if (inserted) {
-                it->second.push_back(members.size());
-                it->second.insert(it->second.end(), suffix.begin(), suffix.end());
-            }
-            return inserted;
-        };
         if (name.empty()) {
             contains_anonymous_member = true;
             for (const auto &[visible, suffix] : member_type.record->member_paths)
@@ -1063,16 +1158,47 @@ CType read_record_type(Node *node, const TypeContext &context)
             value_type = value_type->element.get();
         if (value_type->kind == CType::Kind::record)
             contains_anonymous_member |= value_type->record->contains_anonymous_member;
+        contains_bit_field |= object_contains_bit_field(member_type);
         members.push_back({std::move(name), std::move(member_type), *offset});
     }
     if (paths.empty())
         return error(node, "record must contain at least one named member");
-    const auto size = round_up(extent, max_alignment);
+    const auto size = round_up(extent + (tail_bits != 0), max_alignment);
     if (!size)
         return error(node, "record layout exceeds the object size limit");
+    if (structure && contains_bit_field &&
+        context.source.bit_field_abi == Preprocessed::BitFieldABI::aapcs64) {
+        // AAPCS64 mandates accesses to the full base-type container unless
+        // it overlaps a non-bit-field member or straddles a zero-width field.
+        // Only enable this policy for containers inside a single run of
+        // adjacent bit-fields (C11 3.14); also respect the flexible-array
+        // start, even where it lies inside the fixed representation.
+        std::uint64_t begin = 0;
+        std::size_t first = 0;
+        const auto finish_run = [&](std::size_t last, std::uint64_t end) {
+            for (; first < last; ++first) {
+                auto &member = members[first];
+                auto &field = *member.bit_field;
+                const auto base = member.offset - field.byte_in_container;
+                if (base >= begin && base <= end && *size_of(member.type) <= end - base)
+                    field.volatile_access = BitField::VolatileAccess::container;
+            }
+        };
+        for (std::size_t i = 0; i < members.size(); ++i) {
+            const auto &member = members[i];
+            if (member.bit_field && member.bit_field->width)
+                continue;
+            finish_run(i, member.offset);
+            begin = member.offset + (member.bit_field ? 0 : size_of(member.type).value_or(0));
+            first = i + 1;
+        }
+        finish_run(members.size(), *size);
+    }
     layout.members = std::move(members);
     layout.member_paths = std::move(paths);
     for (const auto &member : layout.members) {
+        if (member.unnamed_bit_field())
+            continue;
         layout.has_const_member |= object_has_qualifier(member.type, &CType::is_const);
         layout.has_volatile_member |= object_has_qualifier(member.type, &CType::is_volatile);
     }
@@ -1080,6 +1206,7 @@ CType read_record_type(Node *node, const TypeContext &context)
     layout.size = *size;
     layout.contains_flexible_array = contains_flexible_array;
     layout.contains_anonymous_member = contains_anonymous_member;
+    layout.contains_bit_field = contains_bit_field;
     return type;
 }
 
@@ -1093,6 +1220,7 @@ std::optional<MemberAccess> find_member(const CType &type, std::string_view name
         const auto &member = access.type.record->members[index];
         access.offset += member.offset;
         access.type = qualified_member_type(access.type, member);
+        access.bit_field = member.bit_field;
     }
     return access;
 }
@@ -1102,7 +1230,19 @@ CType qualified_member_type(const CType &record, const RecordMember &member)
     auto type = member.type;
     type.is_const |= record.is_const;
     type.is_volatile |= record.is_volatile;
+    if (member.bit_field) {
+        type.bit_field_width = member.bit_field->width;
+        type.denotes_bit_field = true;
+    }
     return type;
+}
+
+bool object_contains_bit_field(const CType &type)
+{
+    const auto *element = &type;
+    while (element->kind == CType::Kind::array && element->element)
+        element = element->element.get();
+    return element->kind == CType::Kind::record && element->record && element->record->contains_bit_field;
 }
 
 bool object_has_qualifier(const CType &type, bool CType::*qualifier)
@@ -1171,11 +1311,10 @@ std::string Unit::require_signature(const CType &type)
 
 std::string Unit::require_variadic_call(const Symbol &symbol, const std::vector<CType> &args)
 {
-    // With only integer and pointer arguments, each LP64 variadic
-    // argument occupies one XLEN slot after the C default promotions. The
-    // separate native MIR import records this particular call's ABI; GAS
-    // resolves its alias to the actual function. AMD64 also classifies FP
-    // slots and sets the SysV vector-register count in its normal emitter.
+    // RV64IM LP64 passes every supported scalar in one XLEN slot, named
+    // or unnamed. The separate native MIR import records the promoted
+    // call shape; GAS resolves its alias to the actual function. AMD64
+    // also sets the SysV vector-register count in its normal emitter.
     CType signature = symbol.type;
     signature.params = args;
     signature.variadic = false;
@@ -1538,6 +1677,10 @@ bool copy_record(Function &function, LValue target, Expr value, Node *at, bool i
     }
     if (object_has_qualifier(target.type, &CType::is_volatile) ||
         object_has_qualifier(value.type, &CType::is_volatile)) {
+        if (object_contains_bit_field(target_type)) {
+            function.error(at, "whole-object volatile copy of a record containing bit-fields is not supported");
+            return false;
+        }
         if (has_volatile_union_member(target_type) || has_volatile_union_member(source_type)) {
             function.error(at, "whole-object copy of a union with volatile members is not supported");
             return false;
@@ -1773,7 +1916,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     continue;
                 }
                   if (symbol->type.variadic && !unit.source.native_scalar_stdarg()) {
-                      unit.error(decl.getName(), "variadic definitions require a bundled SysV AMD64 or AAPCS64 backend");
+                       unit.error(decl.getName(), "variadic definitions require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
                      continue;
                  }
                  auto signature = symbol->type;
@@ -1874,6 +2017,16 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
         }
 
         std::vector<std::pair<std::string, CType>> imports = unit.signatures;
+        for (const auto &[name, type] : unit.rv64_soft_fp_helpers) {
+            // Compiler-runtime names occupy the implementation namespace.
+            // Do not let a source declaration or definition change this ABI.
+            if (const auto found = unit.symbols.find(name);
+                found != unit.symbols.end() && !found->second.internal) {
+                unit.error(found->second.declaration,
+                           "'" + name + "' is reserved for the RV64 soft-float runtime");
+            }
+            imports.emplace_back(name, type);
+        }
         for (auto &[source_name, symbol] : unit.symbols) {
             at = symbol.declaration;
             if (!check_linkage_alignment(unit, symbol))

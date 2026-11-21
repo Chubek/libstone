@@ -7,6 +7,16 @@ CEPHYR_1 {
         cephyr_result_output;
         cephyr_result_diagnostics;
         cephyr_result_destroy;
+        cephyr_context_create;
+        cephyr_context_compile;
+        cephyr_context_destroy;
+        cephyr_context_add_translation_unit;
+        cephyr_context_link;
+        cephyr_context_reset;
+        cephyr_context_register_host_symbol;
+        cephyr_module_load;
+        cephyr_module_symbol;
+        cephyr_module_destroy;
 };
 
 CEPHYR_PRIVATE_1 {

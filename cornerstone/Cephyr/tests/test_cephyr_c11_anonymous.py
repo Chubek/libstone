@@ -41,7 +41,6 @@ NEGATIVE = [
     ("abi-indirect", "struct A { struct { int n; }; };"
      "int f(int (*p)(struct A), struct A *arg) { return p(*arg); }",
      r"by-value aggregate ABI.*anonymous"),
-    ("bit-field", "struct A { union { unsigned n : 3; }; };", r"bit.fields are not supported"),
 ]
 
 

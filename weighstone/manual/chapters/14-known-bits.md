@@ -4,7 +4,7 @@
 
 ## Problem and model
 
-KnownBits carries masks for bits definitely zero and definitely one. A mask pair must not mark the same bit in both sets. Transfer operations implement AND, OR and XOR.
+KnownBits carries masks for bits definitely zero and definitely one. A mask pair must not mark the same bit in both sets. Transfer operations implement AND, OR and XOR. The transfers share a mask helper with Cephyr’s machine-word QML analysis.
 
 At every compiler optimization boundary it is necessary to identify what is known about the input program, which arithmetic universe is being modeled, and whether the facts have been inferred conservatively. A result is useful only insofar as it remains true for every execution admitted by those assumptions. This chapter describes this issue in the context of **known bits**.
 

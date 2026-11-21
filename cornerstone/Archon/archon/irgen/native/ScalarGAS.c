@@ -239,8 +239,40 @@ static void call(ANGas *gas, const GasFrame *frame, const ArchonMIRFunction *fn,
     }
 }
 
+/* These integer lowerings leave the result in a, including after its home
+ * store. Do not infer this for new opcodes from their MIR shape alone. */
+static int forwards_integer(ArchonMIROpcode op)
+{
+    switch (op) {
+    case ARCHON_MIR_COPY:
+    case ARCHON_MIR_TRUNC: case ARCHON_MIR_ZEXT: case ARCHON_MIR_SEXT:
+    case ARCHON_MIR_ADD: case ARCHON_MIR_SUB: case ARCHON_MIR_MUL:
+    case ARCHON_MIR_AND: case ARCHON_MIR_OR: case ARCHON_MIR_XOR:
+    case ARCHON_MIR_SHL: case ARCHON_MIR_LSHR: case ARCHON_MIR_ASHR:
+    case ARCHON_MIR_EQ: case ARCHON_MIR_SLT: case ARCHON_MIR_ULT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int forward_lhs(ANContext *ctx, const ArchonMIRFunction *fn,
+    const ArchonMIRInst *prev, const ArchonMIRInst *ins)
+{
+    /* Independently prove the reload redundant: this is the very next
+     * instruction in the same block, its lhs is the exact SSA value just
+     * stored, and its home store and a possible rhs load preserve a. The
+     * omitted load could also write the dedicated address scratch, which is
+     * dead between stack moves. No home store, effect, or order changes. */
+    return prev && prev->dst == ins->a &&
+        forwards_integer(ins->op) &&
+        (prev->op == ARCHON_MIR_CONST || forwards_integer(prev->op)) &&
+        fn->types[prev->dst] == ARCHON_MIR_I64 &&
+        an_fact(ctx, ARCHON_BACKEND_FACT_OBSERVABLE_INPUT, prev->dst);
+}
+
 static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
-    const ArchonMIRFunction *fn, const ArchonMIRInst *ins)
+    const ArchonMIRFunction *fn, const ArchonMIRInst *ins, const ArchonMIRInst *prev)
 {
     ArchonMIROpcode op = ins->op;
     unsigned shape = an_shape(op);
@@ -249,7 +281,17 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
         call(gas, frame, fn, ins);
         return 1;
     }
-    if (shape & 2u)
+    if (op == ARCHON_MIR_MUL) {
+        unsigned shift;
+        ArchonValue source = an_fact_mul_shift(ctx, ins, &shift);
+        if (source != ARCHON_MIR_NONE) {
+            an_gas_stack_load(gas, an_gas_a, home(frame, source));
+            an_gas_shift_left_imm(gas, shift);
+            an_gas_stack_store(gas, an_gas_a, home(frame, ins->dst));
+            return 1;
+        }
+    }
+    if ((shape & 2u) && !forward_lhs(ctx, fn, prev, ins))
         an_gas_stack_load(gas, an_gas_a, home(frame, ins->a));
     if (shape & 4u)
         an_gas_stack_load(gas, an_gas_b, home(frame, ins->b));
@@ -267,7 +309,8 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:
-        an_gas_convert(gas, op, (unsigned)ins->imm);
+        if (!an_fact_conversion_is_copy(ctx, ins))
+            an_gas_convert(gas, op, (unsigned)ins->imm);
         break;
     case ARCHON_MIR_FNEG:
     case ARCHON_MIR_FADD:
@@ -315,6 +358,22 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
         an_gas_local_addr(gas, frame->locals[ins->imm]);
         break;
 #ifdef AN_SYSV_AMD64
+    case ARCHON_MIR_AMD64_X87_ADD:
+    case ARCHON_MIR_AMD64_X87_SUB:
+    case ARCHON_MIR_AMD64_X87_MUL:
+    case ARCHON_MIR_AMD64_X87_DIV:
+    case ARCHON_MIR_AMD64_X87_EQ:
+    case ARCHON_MIR_AMD64_X87_LT:
+    case ARCHON_MIR_AMD64_X87_LE:
+    case ARCHON_MIR_AMD64_X87_FROM_FP:
+    case ARCHON_MIR_AMD64_X87_TO_FP:
+    case ARCHON_MIR_AMD64_X87_FROM_SI:
+    case ARCHON_MIR_AMD64_X87_FROM_UI:
+    case ARCHON_MIR_AMD64_X87_TO_SI:
+    case ARCHON_MIR_AMD64_X87_TO_UI:
+        an_amd64_x87(gas, op, (shape & 4u) ? fn->types[ins->b] : ARCHON_MIR_VOID,
+                     (shape & 1u) ? fn->types[ins->dst] : ARCHON_MIR_VOID);
+        break;
     case ARCHON_MIR_AMD64_VA_START:
         an_amd64_va_start(gas, (unsigned)frame->varargs,
             frame->size + an_gas_abi.stack_arg_offset +
@@ -344,7 +403,7 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
 }
 
 static void edge(ANGas *gas, const ArchonMIRFunction *fn, const GasFrame *frame,
-    const ArchonMIREdge *e)
+    const ArchonMIREdge *e, int fallthrough)
 {
     const ArchonMIRBlock *dst = &fn->blocks[e->target];
     unsigned i, word = an_gas_abi.stack_slot_bytes;
@@ -356,26 +415,45 @@ static void edge(ANGas *gas, const ArchonMIRFunction *fn, const GasFrame *frame,
         an_gas_stack_load(gas, an_gas_a, frame->copies + i * word);
         an_gas_stack_store(gas, an_gas_a, home(frame, dst->params[i]));
     }
-    an_gas_jump(gas, e->target);
+    if (!fallthrough)
+        an_gas_jump(gas, e->target);
 }
 
-static void terminator(ANGas *gas, const ArchonMIRFunction *fn,
-    const GasFrame *frame, const ArchonMIRTerm *term)
+static void terminator(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn,
+    const GasFrame *frame, const ArchonMIRTerm *term, const ArchonMIRInst *prev)
 {
     unsigned yes;
+    /* Independently establish adjacency in actual emission order. The
+     * CBR no-edge sequence must jump around the subsequent yes stub. */
+    int fallthrough = (term->kind == ARCHON_MIR_BR || term->kind == ARCHON_MIR_CBR) &&
+        ctx->block < fn->block_count && ctx->block + 1 < fn->block_count &&
+        term->yes.target == ctx->block + 1 &&
+        an_fact(ctx, ARCHON_BACKEND_FACT_CONTROL_EDGE, term->yes.target);
     switch (term->kind) {
     case ARCHON_MIR_RETURN:
         if (term->value != ARCHON_MIR_NONE) {
             unsigned offset = home(frame, term->value);
             if (an_is_float(fn->result))
                 an_gas_fp_load(gas, fn->result, 0, offset);
-            else
+            else if (fn->result == ARCHON_MIR_I64 && prev && prev->dst == term->value &&
+                     (prev->op == ARCHON_MIR_CONST || forwards_integer(prev->op)) &&
+                     an_fact(ctx, ARCHON_BACKEND_FACT_RETURN_VALUE, term->value)) {
+                /* The immediately preceding lowering left this exact value
+                 * in a, and its home store preserves a. Both scalar epilogues
+                 * preserve the ABI result register during frame teardown. */
+#ifdef AN_AAPCS64
+                an_gas_print(gas, "\tmov %s, %s\n", an_gas_abi.result, an_gas_a);
+#else
+                if (strcmp(an_gas_a, an_gas_abi.result))
+                    an_gas_stack_load(gas, an_gas_abi.result, offset);
+#endif
+            } else
                 an_gas_stack_load(gas, an_gas_abi.result, offset);
         }
         an_gas_leave(gas, frame->size, frame->record);
         break;
     case ARCHON_MIR_BR:
-        edge(gas, fn, frame, &term->yes);
+        edge(gas, fn, frame, &term->yes, fallthrough);
         break;
     case ARCHON_MIR_CBR:
         yes = gas->next_label++;
@@ -384,9 +462,9 @@ static void terminator(ANGas *gas, const ArchonMIRFunction *fn,
         /* The conditional jump skips only the no-edge copy sequence.
          * At most AN_MAX_VALUE copies: well within A64 CBNZ range, even
          * when stack offsets need materialization. */
-        edge(gas, fn, frame, &term->no);
+        edge(gas, fn, frame, &term->no, 0);
         an_gas_label(gas, yes);
-        edge(gas, fn, frame, &term->yes);
+        edge(gas, fn, frame, &term->yes, fallthrough);
         break;
     case ARCHON_MIR_TRAP:
         an_gas_trap(gas);
@@ -423,11 +501,13 @@ static int function(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn)
         an_gas_label(gas, (unsigned)b);
         for (i = 0; i < bb->inst_count; ++i) {
             ctx->instruction = i;
-            if (!an_continue(ctx) || !instruction(ctx, gas, &frame, fn, &bb->insts[i]) || gas->out->status)
+            if (!an_continue(ctx) ||
+                !instruction(ctx, gas, &frame, fn, &bb->insts[i], i ? &bb->insts[i - 1] : NULL) ||
+                gas->out->status)
                 return 0;
         }
         ctx->instruction = bb->inst_count;
-        terminator(gas, fn, &frame, &bb->term);
+        terminator(ctx, gas, fn, &frame, &bb->term, i ? &bb->insts[i - 1] : NULL);
     }
     an_gas_print(gas, "\t.size %s, .-%s\n", fn->name, fn->name);
     return gas->out->status == ARCHON_BACKEND_OK;
@@ -448,9 +528,18 @@ int an_compile_module(ANContext *ctx, const ArchonMIRModule *module, ANOut *out)
 #endif
     an_gas_print(&gas, "\t.text\n");
     for (i = 0; i < module->function_count; ++i) {
+        ANProvenBits *proved;
+        int ok;
         ctx->function = gas.function = i;
         ctx->block = ctx->instruction = SIZE_MAX;
-        if (!an_continue(ctx) || !function(ctx, &gas, &module->functions[i]))
+        if (!an_continue(ctx))
+            return 0;
+        proved = an_prove_known_bits(ctx, &module->functions[i]);
+        ctx->proven_bits = proved;
+        ok = function(ctx, &gas, &module->functions[i]);
+        ctx->proven_bits = NULL;
+        free(proved);
+        if (!ok)
             return 0;
     }
     ctx->stage = ARCHON_BACKEND_EMIT;

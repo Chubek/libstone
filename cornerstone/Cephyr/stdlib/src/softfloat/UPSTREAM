@@ -1,0 +1,10 @@
+The files in this directory other than cephyr-rv64im.h and UPSTREAM are
+unmodified copies from LLVM compiler-rt, tagged llvmorg-22.1.8:
+https://github.com/llvm/llvm-project/tree/llvmorg-22.1.8/compiler-rt/lib/builtins
+LICENSE.TXT is from the compiler-rt directory of the same release.
+
+The build includes cephyr-rv64im.h before each source to select the
+integer-only implementation. The default fp_mode.c supplies fixed
+round-to-nearest-even without observable floating-point exceptions.
+clzdi2.c and clzsi2.c supply the only additional compiler builtin
+dependencies needed by RV64IM compilers without a CLZ instruction.

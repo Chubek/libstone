@@ -304,6 +304,41 @@ class CephyrCLIRegressionTests(unittest.TestCase):
         self.assertIn(b"/* Cephyr CLI block comment sentinel. */", comments)
         self.assertIn(b"// Cephyr CLI line comment sentinel.", comments)
 
+    def test_10b_preprocessing_character_values_follow_target(self) -> None:
+        source = r"""
+#if ('\377' == -1) != SIGNED_CHAR || ('\377' == 255) == SIGNED_CHAR
+#error wrong plain char signedness
+#endif
+#if (L'\xffffffff' == -1) != SIGNED_WCHAR
+#error wrong wchar_t sign extension
+#elif (L'\xffffffff' == 4294967295U) == SIGNED_WCHAR
+#error wrong wchar_t value
+#elif (L'a' - L'b' < 0) != SIGNED_WCHAR
+#error wrong wchar_t type
+#endif
+#if '12345' != 0x32333435 || '\377abc' != (0xff616263 - 0x100000000) || L'xy' != L'y'
+#error wrong multicharacter conversion
+#endif
+#if 'é' != '\u00e9' || '\u00e9' != 0xc3a9 || u'\U0001f642' != 0xde42 || U'🙂' != 0x1f642
+#error wrong execution character encoding
+#endif
+int target_characters_ok;
+"""
+        for target, signed_char, signed_wchar in (
+            ("--target=x86_64-linux-gnu", 1, 1),
+            (RV64, 0, 1),
+            (AARCH64, 0, 0),
+        ):
+            with self.subTest(target=target):
+                # The user macro environment does not change ABI properties.
+                check = self.invoke(
+                    target, "-E", "-P", "-x", "c",
+                    f"-DSIGNED_CHAR={signed_char}", f"-DSIGNED_WCHAR={signed_wchar}",
+                    "-D__CHAR_UNSIGNED__=1" if signed_char else "-U__CHAR_UNSIGNED__",
+                    "-", input_bytes=source.encode("utf-8"),
+                )
+                self.assertIn(b"target_characters_ok", check.stdout)
+
     def test_11_config_preprocessing_and_target_override(self) -> None:
         shutil.copytree(FIXTURES / "include", self.work / "configured-include")
         shutil.copytree(FIXTURES / "system", self.work / "configured-system")
@@ -869,6 +904,16 @@ class CephyrCLIRegressionTests(unittest.TestCase):
         asm_obj = self.work / "plain-assembly.o"
         self.invoke("-x", "assembler", "-c", plain_assembly, "-o", asm_obj)
         self.assert_elf(asm_obj, 1, 62)
+
+    def test_51_binary_stdout_is_embedding_only(self) -> None:
+        for options in (("-c",), ("-shared", "--stdlib=none", "-nostdlib")):
+            with self.subTest(options=options):
+                result = self.invoke(
+                    *options, "-x", "c", "-", "-o", "-",
+                    input_bytes=b"int answer(void) { return 42; }\n", ok=False,
+                )
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(b"binary output to stdout is not supported", result.stderr)
 
     def test_60_shared_none_and_packaged_shared_rejection(self) -> None:
         rejected = self.work / "packaged-libc.so"

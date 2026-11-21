@@ -182,9 +182,6 @@ def main():
                 raise AssertionError(f"{triple}: expected {diagnostic!r}\n{result.stderr}")
 
         amd64 = "x86_64-linux-gnu"
-        rv64 = "riscv64-linux-gnu"
-        reject(rv64, "#include <stdarg.h>\n", "requires a bundled SysV AMD64 or AAPCS64 backend")
-        reject(rv64, "int f(int a, ...) { return a; }\n", "variadic definitions require")
         reject(amd64, "#include <stdarg.h>\nvoid f(int x) { va_list a; va_start(a, x); }",
                "rightmost eligible named parameter")
         reject(amd64, "#include <stdarg.h>\nvoid f(int x, int y, ...) { va_list a; va_start(a, x); }",

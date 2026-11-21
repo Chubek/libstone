@@ -559,7 +559,7 @@ void free_lexer_state(struct lexer_state *ls)
 /*
  * Quote a logical filename for a linemarker or the __FILE__ string literal.
  */
-char *quote_filename(const char *filename)
+char *quote_filename(const char *filename, unsigned long flags)
 {
 	const unsigned char *s = (const unsigned char *)filename;
 	char *quoted = getmem(4 * strlen(filename) + 3), *d = quoted;
@@ -567,10 +567,28 @@ char *quote_filename(const char *filename)
 	*d ++ = '"';
 	for (; *s; s ++) {
 		unsigned c = *s;
+		int octal = c < 32 || c == 127;
+		if ((flags & UTF8_SOURCE) && c >= 128) {
+			const unsigned char *end = s;
+			struct c11_utf8_state state = {0};
+			int status;
+
+			/* Numeric escapes (and host paths) can supply non-UTF-8
+			   bytes. Quote them so __FILE__ stays valid C source. */
+			do {
+				status = c11_utf8_feed(&state, *end ++);
+			} while (!status);
+			if (status > 0) {
+				while (s < end) *d ++ = *s ++;
+				s --;
+				continue;
+			}
+			octal = 1;
+		}
 		if (c == '"' || c == '\\' || c == '?') {
 			*d ++ = '\\';
 			*d ++ = c;
-		} else if (c < 32 || c == 127) {
+		} else if (octal) {
 			*d ++ = '\\';
 			*d ++ = '0' + ((c >> 6) & 7);
 			*d ++ = '0' + ((c >> 3) & 7);
@@ -587,7 +605,7 @@ char *quote_filename(const char *filename)
  */
 static void print_line_info(struct lexer_state *ls, unsigned long flags)
 {
-	char *fn = quote_filename(current_filename);
+	char *fn = quote_filename(current_filename, flags);
 	char *b, *d;
 	size_t start = ls->output_offset;
 
@@ -1491,9 +1509,10 @@ do_include_next:
 }
 
 /* Decode the string literal from #line just once, not on every use. */
-static void decode_line_filename(char *filename)
+static int decode_line_filename(char *filename, long line, int strict)
 {
 	char *read = filename, *write = filename;
+	int embedded_nul = 0;
 	while (*read) {
 		unsigned c = (unsigned char)*read ++;
 		if (c == '\\' && *read) {
@@ -1506,20 +1525,47 @@ static void decode_line_filename(char *filename)
 			case 'r': c = '\r'; break;
 			case 't': c = '\t'; break;
 			case 'v': c = '\v'; break;
+			case '\\': case '\'': case '"': case '?': break;
+			case 'u': case 'U':
+				if (strict) {
+					unsigned long scalar = 0;
+					unsigned count = c == 'u' ? 4 : 8;
+					char encoded[4];
+					while (count --) {
+						int digit = c11_hex_value((unsigned char)*read);
+						if (digit < 0) {
+							error(line, "malformed universal character name in #line filename");
+							return 1;
+						}
+						scalar = scalar * 16 + digit;
+						read ++;
+					}
+					if (!c11_valid_ucn(scalar)) {
+						error(line, "invalid code point in universal character name in #line filename");
+						return 1;
+					}
+					count = c11_encode_utf8(scalar, encoded);
+					memcpy(write, encoded, count);
+					write += count;
+					continue;
+				}
+				break;
 			case 'x': {
 				unsigned value = 0;
 				int count = 0;
-				for (;;) {
-					unsigned h = (unsigned char)*read;
-					if (h >= '0' && h <= '9') h -= '0';
-					else if (h >= 'a' && h <= 'f') h -= 'a' - 10;
-					else if (h >= 'A' && h <= 'F') h -= 'A' - 10;
-					else break;
-					value = (value * 16 + h) & 255;
+				int digit;
+				while ((digit = c11_hex_value((unsigned char)*read)) >= 0) {
+					if (strict && value > (255U - digit) / 16)
+						goto escape_range_error;
+					value = (value * 16 + digit) & 255;
 					read ++;
 					count = 1;
 				}
 				if (count) c = value;
+				else if (strict) {
+					error(line, "hexadecimal escape requires a digit in #line filename");
+					return 1;
+				}
 				break;
 			}
 			default:
@@ -1528,16 +1574,32 @@ static void decode_line_filename(char *filename)
 					c -= '0';
 					for (count = 1; count < 3 && *read >= '0'
 						&& *read <= '7'; count ++)
-						c = (c * 8 + (*read ++ - '0')) & 255;
+						c = c * 8 + (*read ++ - '0');
+					if (strict && c > 255) goto escape_range_error;
+					c &= 255;
+				} else if (strict) {
+					error(line, "invalid escape sequence in #line filename");
+					return 1;
 				}
 				break;
 			}
 		}
-		/* Filenames cannot contain an embedded NUL. */
-		if (c == 0) break;
+		/* Presumed names are NUL-terminated. In C mode, still validate
+		   the remainder of the literal and warn about truncation. */
+		if (c == 0) {
+			if (!strict) break;
+			embedded_nul = 1;
+		}
 		*write ++ = c;
 	}
 	*write = 0;
+	if (embedded_nul)
+		warning(line, "NUL byte truncates #line filename");
+	return 0;
+
+escape_range_error:
+	error(line, "numeric escape out of range in #line filename");
+	return 1;
 }
 
 /* for #line directives */
@@ -1580,12 +1642,13 @@ static int handle_line(struct lexer_state *ls, unsigned long flags)
 		}
 		fname = sdup(tf2.t[i].name + 1);
 		fname[strlen(fname) - 1] = 0;
-		decode_line_filename(fname);
 		for (i ++; i < tf2.nt && ttWHI(tf2.t[i].type); i ++);
 		if (i < tf2.nt) {
 			error(l, "trailing tokens in #line");
 			goto line_macro_err;
 		}
+		if (decode_line_filename(fname, l, (flags & C11_CONSTRAINTS) != 0))
+			goto line_macro_err;
 	}
 	if (fname) {
 		if (current_filename) freemem(current_filename);

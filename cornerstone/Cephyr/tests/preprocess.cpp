@@ -286,6 +286,78 @@ void check_directives(const std::filesystem::path &directory) {
     assert(rendered(changed).find("redefined unidentically") != std::string::npos);
 }
 
+void check_line_filenames() {
+    cephyr::Diagnostics diagnostics;
+    const auto result = cephyr::preprocess(
+        R"(#define WHERE "caf\u00E9-\U0001F642\x2e\143")" "\n"
+        "#line 31 WHERE\n"
+        "const char *unicode_filename = __FILE__;\n"
+        R"(#line 40 "a\"b\\u00E9\?c\n\377")" "\n"
+        "const char *byte_filename = __FILE__;\n"
+        "#line 60 \"\"\n"
+        "const char *empty_filename = __FILE__;\n",
+        "line-filenames.c", {}, diagnostics);
+    assert(result && rendered(diagnostics).empty());
+    const auto verify_filenames = [](const cephyr::Preprocessed &mapped) {
+        auto at = mapped.locate(line_containing(mapped.text, "unicode_filename"));
+        assert(at.file == "café-🙂.c" && at.line == 31);
+        at = mapped.locate(line_containing(mapped.text, "byte_filename"));
+        assert(at.file == "a\"b\\u00E9?c\n\xff" && at.line == 40);
+        at = mapped.locate(line_containing(mapped.text, "empty_filename"));
+        assert(at.file.empty() && at.line == 60);
+        assert(mapped.text.find("\"café-🙂.c\"") != std::string::npos);
+        assert(mapped.text.find(R"("a\"b\\u00E9\?c\012\377")") != std::string::npos);
+        assert(mapped.text.find(R"("")") != std::string::npos);
+    };
+    verify_filenames(*result);
+
+    cephyr::Diagnostics raw;
+    const auto round_trip = cephyr::read_preprocessed(result->output, "line-filenames.i", raw);
+    assert(round_trip && rendered(raw).empty());
+    assert(round_trip->output == result->output);
+    verify_filenames(*round_trip);
+
+    cephyr::Diagnostics truncated;
+    const auto nul = cephyr::preprocess(
+        R"(#line 10 "presumed\0unused")" "\nint nul_name;\n",
+        "line-filenames.c", {}, truncated);
+    assert(nul && truncated.error_count() == 0);
+    assert(rendered(truncated).find("NUL byte truncates #line filename") != std::string::npos);
+    assert(nul->locate(line_containing(nul->text, "nul_name")).file == "presumed");
+
+    for (const auto &[filename, message] : {
+             std::pair{R"("\q")", "invalid escape sequence"},
+             std::pair{R"("\x")", "hexadecimal escape requires a digit"},
+             std::pair{R"("\400")", "numeric escape out of range"},
+             std::pair{R"("\x1000000000000000000000")", "numeric escape out of range"},
+             std::pair{R"("\u123")", "malformed universal character name"},
+             std::pair{R"("\U00110000")", "invalid code point"},
+             std::pair{R"("\uD800")", "invalid code point"},
+             std::pair{R"("\u0041")", "invalid code point"},
+             std::pair{R"("\0\q")", "invalid escape sequence"}}) {
+        cephyr::Diagnostics rejected;
+        assert(!cephyr::preprocess(
+            std::string(R"(#line 70 "pr\u00E9vious.c")") +
+                "\n#define BAD_NAME " + filename + "\n#line 100 BAD_NAME\n",
+            "line-filenames.c", {}, rejected));
+        assert(rejected.error_count() == 1);
+        const auto messages = rendered(rejected);
+        assert(messages.find("prévious.c:71: error") != std::string::npos);
+        assert(messages.find(std::string(message) + " in ") != std::string::npos);
+        assert(messages.find("#line filename") != std::string::npos);
+    }
+
+    cephyr::PreprocessOptions assembler;
+    assembler.assembler = true;
+    cephyr::Diagnostics assembly;
+    const auto unchanged = cephyr::preprocess(
+        R"(#line 10 "assembler\q.c")" "\n"
+        "#if 'ab' == 'a'\n.byte 'ab'\n#endif\n",
+        "line-filenames.S", assembler, assembly);
+    assert(unchanged && assembly.error_count() == 0);
+    assert(unchanged->locate(line_containing(unchanged->text, ".byte")).file == "assemblerq.c");
+}
+
 void check_conditional_expressions() {
     cephyr::Diagnostics diagnostics;
     const auto result = cephyr::preprocess(
@@ -321,6 +393,12 @@ void check_conditional_expressions() {
         "#if '\\377' != 255 || u'\\xffff' != 65535 || U'\\xffffffff' != 4294967295U\n"
         "#error maximum numeric escape values are valid\n"
         "#endif\n"
+        R"(#if 'é' != 0xc3a9 || '\u00e9' != 0xc3a9 || u'🙂' != 0xde42)" "\n"
+        "#error wrong UTF-8 or UTF-16 execution conversion\n"
+        "#endif\n"
+        R"(#if L'\xffffffff' != -1 || L'a' - L'b' >= 0 || U'\U0001F642' != 0x1f642)" "\n"
+        "#error wrong default wide character conversion\n"
+        "#endif\n"
         "int V(value, );\n",
         "if-expressions.c", {}, diagnostics);
     assert(result);
@@ -341,8 +419,9 @@ void check_conditional_expressions() {
              std::pair{"1 || 0xU", "invalid integer constant"},
              std::pair{"'\\x'", "hexadecimal escape requires a digit"},
              std::pair{"'a\\q'", "invalid escape sequence"},
-             std::pair{"'\\400'", "numeric escape out of range"},
-             std::pair{"u'\\x10000'", "numeric escape out of range"},
+              std::pair{"'\\400'", "numeric escape out of range"},
+              std::pair{"u'\\x10000'", "numeric escape out of range"},
+              std::pair{"L'\\x10000000000000000000000000'", "numeric escape out of range"},
              std::pair{"U'\\x100000000'", "numeric escape out of range"}}) {
         cephyr::Diagnostics rejected;
         assert(!cephyr::preprocess(std::string("#if ") + expression + "\n#endif\n",
@@ -460,6 +539,7 @@ int main() {
     check_translation_phases(temporary.path);
     check_extended_source(temporary.path);
     check_directives(temporary.path);
+    check_line_filenames();
     check_conditional_expressions();
     check_expanded_literals(temporary.path);
     check_pragmas();

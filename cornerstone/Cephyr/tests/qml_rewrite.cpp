@@ -325,6 +325,122 @@ P backward
           "default path must verify input even when no phase applies", empty_diag);
 }
 
+void run_integer_guards()
+{
+    constexpr std::string_view text = R"(archon-mir 1
+module 1 0 0
+function f i64 2 21 2 0
+types i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64
+block 0 17
+params
+const 2 0
+const 3 1
+const 4 0x8000000000000000
+const 5 255
+const 6 3
+rem_u 7 0 2
+rem_u 8 0 3
+rem_u 9 0 4
+rem_u 10 0 6
+rem_u 11 0 1
+rem_s 12 0 4
+zext 13 0 8
+sext 14 0 8
+and 15 13 5
+and 16 5 13
+and 17 14 5
+and 18 13 6
+br 1 0
+block 0 2
+params
+rem_u 19 0 4
+and 20 13 5
+ret 20
+end
+)";
+    constexpr std::string_view rules = R"(CEPHYR-QML-1
+R opt remainder n rem_u 2 m x n pow2 1 m d n low_bits_for_pow2 2 m x m d
+R opt mask_right n and 2 n masked_by 2 m x m mask m mask m x
+R opt mask_left n and 2 m mask n masked_by 2 m x m mask m x
+)";
+    Pipeline pipeline;
+    Diagnostics diag;
+    check(pipeline.add_compiled(rules, diag, "integer.qmb") &&
+              pipeline.configure({}, 4, diag), "configure guarded native rules", diag);
+    std::string mir(text);
+    auto expected = mir;
+    const auto replace = [&](std::string_view before, std::string_view after) {
+        expected.replace(expected.find(before), before.size(), after);
+    };
+    replace("\nrem_u 8 0 3\n", "\nconst 8 0\n");
+    replace("\nrem_u 9 0 4\n", "\ntrunc 9 0 63\n");
+    replace("\nand 15 13 5\n", "\ncopy 15 13\n");
+    replace("\nand 16 5 13\n", "\ncopy 16 13\n");
+    check(pipeline.rewrite(mir, diag, "integer.mir") && mir == expected,
+          "only proven unsigned remainder and redundant masks may change", diag);
+    valid(mir, diag);
+    check(pipeline.rewrite(mir, diag, "integer.mir") && mir == expected,
+          "guarded rewrites must be stable", diag);
+}
+
+void run_bit_mask_guards()
+{
+    constexpr std::string_view text = R"(archon-mir 1
+module 1 1 0
+function f i64 2 20 2 0
+types i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64 i64
+block 0 17
+params
+call 2 source 0
+zext 3 2 8
+const 4 255
+or 5 1 4
+or 6 3 5
+or 7 5 3
+const 8 63
+shl 9 0 8
+zext 10 1 63
+and 11 9 10
+and 12 10 9
+sext 13 2 8
+and 14 9 13
+or 15 13 5
+and 16 0 3
+const 17 127
+or 18 3 17
+br 1 0
+block 0 1
+params
+and 19 9 10
+ret 19
+import source i64 0
+end
+)";
+    constexpr std::string_view rules = R"(CEPHYR-QML-1
+R integer_reduce redundant_or_right n or 2 n masked_by 2 m x m mask m mask m mask
+R integer_reduce redundant_or_left n or 2 m mask n masked_by 2 m x m mask m mask
+R integer_reduce disjoint_and n and 2 n disjoint_bits 2 m x m y m y i 0
+)";
+    Pipeline pipeline;
+    Diagnostics diag;
+    check(pipeline.add_compiled(rules, diag, "bit-mask.qmb") &&
+              pipeline.configure({"integer_reduce"}, 4, diag), "configure bit-mask guards", diag);
+    std::string mir(text);
+    auto expected = mir;
+    const auto replace = [&](std::string_view before, std::string_view after) {
+        expected.replace(expected.find(before), before.size(), after);
+    };
+    replace("\nor 6 3 5\n", "\ncopy 6 5\n");
+    replace("\nor 7 5 3\n", "\ncopy 7 5\n");
+    replace("\nand 11 9 10\n", "\nconst 11 0\n");
+    replace("\nand 12 10 9\n", "\nconst 12 0\n");
+    check(pipeline.rewrite(mir, diag, "bit-mask.mir") && mir == expected,
+          "preserve the producer call, overlaps, unknown bits and cross-block uses", diag);
+    valid(mir, diag);
+    check(pipeline.rewrite(mir, diag, "bit-mask.mir") && mir == expected,
+          "bit-mask rewrites must be stable", diag);
+}
+
 void run_malformed_inputs()
 {
     constexpr std::string_view bad[] = {
@@ -334,6 +450,13 @@ void run_malformed_inputs()
         "CEPHYR-QML-1\nR p calls n add 2 m a m b n call 2 m a m b\n",
         "CEPHYR-QML-1\nR p calls n call 2 m a m b m a\n",
         "CEPHYR-QML-1\nR p traps n add_checked_s 2 m a m b m a\n",
+        "CEPHYR-QML-1\nR p unguarded n rem_u 2 m a m b m a\n",
+        "CEPHYR-QML-1\nR p new_trap n add 2 m a n pow2 1 m b n rem_u 2 m a m b\n",
+        "CEPHYR-QML-1\nR p no_pow2 n add 2 m a m b n low_bits_for_pow2 2 m a m b\n",
+        "CEPHYR-QML-1\nR p no_mask n and 2 n masked_by 2 m a m c m b m a\n",
+        "CEPHYR-QML-1\nR p unbound_peer n and 2 n disjoint_bits 2 m a m c m b i 0\n",
+        "CEPHYR-QML-1\nR p literal_peer n and 2 n disjoint_bits 2 m a i 0 m b i 0\n",
+        "CEPHYR-QML-1\nR p bad_guard n mul 2 m a n pow2 1 i 2 m a\n",
         "CEPHYR-QML-1\nR p wrong_arity n sub 1 m a m a\n",
         "CEPHYR-QML-1\nR p unbound n add 2 m a m b m c\n",
         "CEPHYR-QML-1\nR p new_literal n add 2 m a m b n mul 2 m a i 7\n",
@@ -408,5 +531,7 @@ int main()
     run_block_and_type_isolation();
     run_bitwise_and_shifts();
     run_canonical_flag();
+    run_integer_guards();
+    run_bit_mask_guards();
     run_malformed_inputs();
 }

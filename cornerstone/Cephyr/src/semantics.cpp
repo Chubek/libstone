@@ -30,7 +30,7 @@ constexpr unsigned int_rank = 3;
 constexpr unsigned long_rank = 4;
 constexpr unsigned long_long_rank = 5;
 
-constexpr unsigned qualifier_mask = TQ_CONST | TQ_VOLATILE;
+constexpr unsigned qualifier_mask = TQ_CONST | TQ_VOLATILE | TQ_RESTRICT;
 
 std::uint64_t bit_mask(unsigned bits) {
     if (bits == 0 || bits > 64)
@@ -67,8 +67,14 @@ void constant_error(Node *node, const Preprocessed &source, Diagnostics &diagnos
 }
 
 CType unqualified(CType type) {
-    type.is_const = false;
-    type.is_volatile = false;
+    type.clear_qualifiers();
+    return type;
+}
+
+CType qualify(CType type, unsigned qualifiers) {
+    type.is_const = (qualifiers & TQ_CONST) != 0;
+    type.is_volatile = (qualifiers & TQ_VOLATILE) != 0;
+    type.is_restrict = (qualifiers & TQ_RESTRICT) != 0;
     return type;
 }
 
@@ -78,6 +84,7 @@ CType adjust_parameter(CType type) {
         CType element = *type.element;
         element.is_const |= type.is_const;
         element.is_volatile |= type.is_volatile;
+        element.is_restrict |= type.is_restrict;
         return pointer_type(element);
     }
     if (type.kind == CType::Kind::function)
@@ -1209,6 +1216,7 @@ CType read_type_list(cparser::SequenceASTNode *sequence,
     CType result = integer_type(bits, signed_, rank);
     result.is_const = (sequence->getFlags() & TQ_CONST) != 0;
     result.is_volatile = (sequence->getFlags() & TQ_VOLATILE) != 0;
+    result.is_restrict = (sequence->getFlags() & TQ_RESTRICT) != 0;
     return result;
 }
 
@@ -1280,7 +1288,115 @@ CType pointer_type(const CType &pointee) {
     return result;
 }
 
-CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
+enum class ArrayParameter { no, prototype, definition };
+
+static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext &context,
+                             bool allow_incomplete, ArrayParameter parameter) {
+    const auto &source = context.source;
+    auto &diagnostics = context.diagnostics;
+    if (array->hasStarBound() && parameter != ArrayParameter::prototype) {
+        type_error(array, source, diagnostics,
+                   "array bound '*' is only supported on an outermost array parameter at function prototype scope");
+        return {};
+    }
+
+    CType element = read_type(array->getElementType(), context);
+    if (!element.valid())
+        return {};
+    if (element.kind == CType::Kind::record && element.record->contains_flexible_array) {
+        type_error(array, source, diagnostics,
+                   "an array element type cannot contain a flexible array member");
+        return {};
+    }
+    if (element.kind == CType::Kind::void_ || element.kind == CType::Kind::function) {
+        type_error(array, source, diagnostics, "array element type must be a complete object type");
+        return {};
+    }
+
+    std::uint64_t count = 0;
+    if (Node *bound = array->getExpr(); present(bound)) {
+        const auto saved = context.unit.array_bounds.find(bound);
+        if (saved != context.unit.array_bounds.end()) {
+            if (!saved->second || (*saved->second == 0 && parameter != ArrayParameter::prototype)) {
+                type_error(bound, source, diagnostics, "array bound has invalid type or value");
+                return {};
+            }
+            count = *saved->second;
+        } else {
+            const auto remember = [&](std::optional<std::uint64_t> value) {
+                if (!context.speculative)
+                    context.unit.array_bounds.emplace(bound, value);
+            };
+            const auto before = diagnostics.error_count();
+            const auto constant = integer_constant(bound, context);
+            const auto value = constant ? positive_count(*constant) : std::nullopt;
+            if (value && *value) {
+                count = *value;
+                remember(value);
+            } else {
+                if (diagnostics.error_count() != before) {
+                    remember(std::nullopt);
+                    return {};
+                }
+                if (constant) {
+                    remember(std::nullopt);
+                    type_error(bound, source, diagnostics, "array bound must be positive");
+                    return {};
+                }
+                if (parameter == ArrayParameter::no) {
+                    remember(std::nullopt);
+                    type_error(bound, source, diagnostics, "variable-length arrays are not supported");
+                    return {};
+                }
+                const auto type = expression_type(bound, context);
+                if (diagnostics.error_count() != before || !type.integer()) {
+                    remember(std::nullopt);
+                    if (diagnostics.error_count() == before)
+                        type_error(bound, source, diagnostics, "array bound must be a valid integer expression");
+                    return {};
+                }
+                // §6.7.6.2p5: a nonconstant prototype-scope bound is
+                // treated as '*', so only its type needs to be checked.
+                // A definition instead evaluates its bound on entry
+                // (§6.9.1p10), even where adjustment removes that bound.
+                if (parameter == ArrayParameter::definition) {
+                    remember(std::nullopt);
+                    type_error(bound, source, diagnostics,
+                               "nonconstant array parameter bounds in function definitions are not supported");
+                    return {};
+                }
+                remember(std::uint64_t{0});
+            }
+        }
+    } else if (!allow_incomplete) {
+        type_error(array, source, diagnostics, "incomplete array type is not allowed here");
+        return {};
+    }
+
+    CType result;
+    result.kind = CType::Kind::array;
+    result.element = std::make_shared<const CType>(std::move(element));
+    result.count = count;
+    return qualify(std::move(result), array->getFlags() & qualifier_mask);
+}
+
+CType read_parameter_type(Node *node, const TypeContext &context, bool definition) {
+    if (present(node) && node->getKind() == cparser::NK_ARRAY_TYPE) {
+        auto *array = static_cast<cparser::ArrayTypeASTNode *>(node);
+        auto type = read_array_type(array, context, true,
+                                    definition ? ArrayParameter::definition : ArrayParameter::prototype);
+        if (!type.valid())
+            return {};
+        // §6.7.6.3p7: the outer bound does not survive adjustment. A
+        // static minimum is a caller precondition, not a dynamic check.
+        return qualify(adjust_parameter(std::move(type)), array->getBracketQualifiers());
+    }
+    auto type = read_type(node, context, true);
+    return type.kind == CType::Kind::function ? pointer_type(type) : type;
+}
+
+CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
+                bool function_definition) {
     const AnalysisDepth depth(semantic_depth);
     const auto &source = context.source;
     auto &diagnostics = context.diagnostics;
@@ -1290,10 +1406,8 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
     }
 
     const auto qualifiers = node->getFlags() & qualifier_mask;
-    auto qualify = [qualifiers](CType type) {
-        type.is_const = (qualifiers & TQ_CONST) != 0;
-        type.is_volatile = (qualifiers & TQ_VOLATILE) != 0;
-        return type;
+    auto qualify_node = [qualifiers](CType type) {
+        return qualify(std::move(type), qualifiers);
     };
 
     switch (node->getKind()) {
@@ -1303,10 +1417,10 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
     case cparser::NK_VOID_TYPE: {
         CType type;
         type.kind = CType::Kind::void_;
-        return qualify(type);
+        return qualify_node(type);
     }
     case cparser::NK_BOOLEAN_TYPE:
-        return qualify(integer_type(1, false, bool_rank));
+        return qualify_node(integer_type(1, false, bool_rank));
     case cparser::NK_INTEGRAL_TYPE: {
         auto *integer = static_cast<cparser::IntegralTypeASTNode *>(node);
         const unsigned bytes = integer->getAlignment();
@@ -1319,7 +1433,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
                                  integer->isPlainChar() ? source.plain_char_signed : integer->getIsSigned(),
                                  integer->getRank());
         type.is_plain_char = integer->isPlainChar();
-        return qualify(type);
+        return qualify_node(type);
     }
     case cparser::NK_ENUMERAL_TYPE: {
         auto *enumeration = static_cast<cparser::EnumeralTypeASTNode *>(node);
@@ -1329,7 +1443,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         // for comparisons between enumerated types, not for enumerators.
         auto type = integer_type();
         type.enum_identity = enumeration->getIdentity();
-        return qualify(type);
+        return qualify_node(type);
     }
     case cparser::NK_POINTER_TYPE: {
         auto *pointer = static_cast<cparser::PointerTypeASTNode *>(node);
@@ -1338,62 +1452,11 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         CType result = pointer_type(pointee);
         if (!result.valid())
             return {};
-        return qualify(std::move(result));
+        return qualify_node(std::move(result));
     }
-    case cparser::NK_ARRAY_TYPE: {
-        auto *array = static_cast<cparser::ArrayTypeASTNode *>(node);
-        CType element =
-            read_type(array->getElementType(), context, false);
-        if (!element.valid())
-            return {};
-        if (element.kind == CType::Kind::record && element.record->contains_flexible_array) {
-            type_error(node, source, diagnostics,
-                       "an array element type cannot contain a flexible array member");
-            return {};
-        }
-        if (element.kind == CType::Kind::void_ ||
-            element.kind == CType::Kind::function) {
-            type_error(node, source, diagnostics,
-                       "array element type must be a complete object type");
-            return {};
-        }
-
-        std::uint64_t count = 0;
-        if (Node *bound = array->getExpr(); present(bound)) {
-            const auto saved = context.unit.array_bounds.find(bound);
-            if (saved != context.unit.array_bounds.end()) {
-                if (!saved->second) {
-                    type_error(bound, source, diagnostics, "array bound has invalid type or value");
-                    return {};
-                }
-                count = *saved->second;
-            } else {
-                const auto before = diagnostics.error_count();
-                const auto constant = integer_constant(bound, context);
-                const auto value = constant ? positive_count(*constant) : std::nullopt;
-                const bool valid = value && *value != 0;
-                if (!context.speculative)
-                    context.unit.array_bounds.emplace(bound, valid ? value : std::nullopt);
-                if (!valid) {
-                    if (diagnostics.error_count() == before)
-                        type_error(bound, source, diagnostics, constant ? "array bound must be positive"
-                                               : "variable-length arrays are not supported");
-                    return {};
-                }
-                count = *value;
-            }
-        } else if (!allow_incomplete) {
-            type_error(node, source, diagnostics,
-                       "incomplete array type is not allowed here");
-            return {};
-        }
-
-        CType result;
-        result.kind = CType::Kind::array;
-        result.element = std::make_shared<const CType>(std::move(element));
-        result.count = count;
-        return qualify(std::move(result));
-    }
+    case cparser::NK_ARRAY_TYPE:
+        return read_array_type(static_cast<cparser::ArrayTypeASTNode *>(node), context,
+                               allow_incomplete, ArrayParameter::no);
     case cparser::NK_FUNCTION_TYPE: {
         auto *function = static_cast<cparser::FunctionTypeASTNode *>(node);
         CType result_type =
@@ -1431,24 +1494,27 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
                 type_node = declaration->getType();
                 name = declaration->getName();
             }
-            // An incomplete array parameter is valid because adjustment to a
-            // pointer occurs before the completed function type is formed.
-            CType type = read_type(type_node, parameter_context, true);
+            CType type = read_parameter_type(type_node, parameter_context, function_definition);
             if (!type.valid())
                 return {};
             if (type.kind == CType::Kind::void_) {
                 if (parameters.size() != 1 || result.variadic || present(name) ||
-                    type.is_const || type.is_volatile) {
+                    type.is_const || type.is_volatile || type.is_restrict) {
                     type_error(parameter, source, diagnostics,
                                "void must be the sole unnamed, unqualified function parameter");
                     return {};
                 }
                 break;
             }
-            result.params.push_back(adjust_parameter(std::move(type)));
+            if (function_definition && !size_of(type)) {
+                type_error(parameter, source, diagnostics,
+                           "function definition parameter must have complete type after adjustment");
+                return {};
+            }
+            result.params.push_back(unqualified(type));
             if (present(name))
                 prototype.parameters.emplace(identifier(name),
-                    TypeBinding{result.params.back(), (parameter->getFlags() & SCS_REGISTER) != 0});
+                    TypeBinding{std::move(type), (parameter->getFlags() & SCS_REGISTER) != 0});
         }
         return result;
     }
@@ -1459,7 +1525,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
             type_error(node, source, diagnostics, "incomplete structure or union type");
             return {};
         }
-        return qualify(std::move(record));
+        return qualify_node(std::move(record));
     }
     case cparser::NK_UNKNOWN_TYPE:
         type_error(node, source, diagnostics, "unknown or incomplete parser type");
@@ -1469,7 +1535,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         const auto bytes = real->getAlignment();
         if (real->getIsDouble() ? bytes != 8 : bytes != 4) {
             if (real->getIsDouble() && bytes == 16 && source.native_amd64_x87)
-                return qualify(real_type(80));
+                return qualify_node(real_type(80));
             type_error(node, source, diagnostics, "long double floating-point types are not supported");
             return {};
         }
@@ -1477,7 +1543,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
             type_error(node, source, diagnostics, "floating-point types require a supported native FP ABI");
             return {};
         }
-        return qualify(real_type(bytes * 8));
+        return qualify_node(real_type(bytes * 8));
     }
     case cparser::NK_COMPLEX_TYPE:
     case cparser::NK_REFERENCE_TYPE:
@@ -1503,7 +1569,7 @@ void bind_typedef_bounds(Node *node, const TypeContext &context) {
         case cparser::NK_ARRAY_TYPE: {
             auto *array = static_cast<cparser::ArrayTypeASTNode *>(type);
             auto *element = array->getElementType();
-            return present(array->getExpr()) ||
+            return array->hasStarBound() || present(array->getExpr()) ||
                 (present(element) && (element->getKind() == cparser::NK_STRUCT_TYPE ||
                                       element->getKind() == cparser::NK_UNION_TYPE)) ||
                 self(self, element);
@@ -1540,6 +1606,11 @@ CType promote(const CType &type) {
         return {};
     CType value = unqualified(type);
     value.enum_identity = nullptr;
+    const auto width = value.bit_field_width;
+    value.bit_field_width = 0;
+    value.denotes_bit_field = false;
+    if (width && width < 32)
+        return integer_type();
     if (value.rank >= int_rank)
         return value;
     if (value.is_signed || value.bits < 32)
@@ -1578,7 +1649,7 @@ CType common_arithmetic(const CType &lhs, const CType &rhs) {
 
 bool compatible(const CType &left, const CType &right) {
     if (left.kind != right.kind || left.is_const != right.is_const ||
-        left.is_volatile != right.is_volatile)
+        left.is_volatile != right.is_volatile || left.is_restrict != right.is_restrict)
         return false;
     switch (left.kind) {
     case CType::Kind::invalid:
@@ -1847,6 +1918,8 @@ static std::optional<Constant> member_offset(Node *node, const TypeContext &cont
             const auto member = find_member(type, identifier(part));
             if (!member)
                 return error(part, "offsetof designator names no such record member");
+            if (member->bit_field)
+                return error(part, "offsetof cannot name a bit-field");
             bytes += member->offset;
             type = member->type;
         } else {
@@ -1886,6 +1959,10 @@ std::optional<Constant> layout_constant(Node *node, const TypeContext &context) 
         type = read_type(operand, context, true);
     else if (!alignment)
         type = expression_type(operand, context);
+    if (type.denotes_bit_field) {
+        constant_error(node, context.source, context.diagnostics, "sizeof cannot be applied to a bit-field");
+        return std::nullopt;
+    }
 
     // Use completeness for both operators; an incomplete array still reports
     // its element alignment through align_of(), but is not a valid operand.

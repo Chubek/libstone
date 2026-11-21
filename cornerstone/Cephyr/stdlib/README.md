@@ -22,7 +22,10 @@ that does not accept Clang's `--target=...` flag, set
 - C11 scalar/type headers for the LP64 data model, with target-specific plain `char`,
   floating-point format limits in `<float.h>`, and the alternative spellings
   from `<iso646.h>`. A format reported by `<float.h>` is not a frontend
-  code-generation guarantee. The library reports `FLT_ROUNDS` as indeterminable.
+  code-generation guarantee. `FLT_ROUNDS` reflects the hardware rounding mode
+  on AMD64 and AArch64; on RV64IM it is indeterminable.
+- C11 §7.6 `<fenv.h>` on Linux AMD64 and little-endian AArch64. This does
+  not enable `#pragma STDC FENV_ACCESS` or Annex F in the frontend.
 - ASCII `ctype` functions and the §7.30 wide classification and mapping
   functions (`<wctype.h>`) in the C locale.
 - The C memory/string functions, plus `strnlen`; collation uses the C locale.
@@ -93,16 +96,25 @@ that does not accept Clang's `--target=...` flag, set
   bundled `%p` output; use it to read pointers printed within the same run.
   Scansets support ascending byte ranges, parsed left to right; a hyphen
   that cannot form such a range is literal.
+- §7.29.2 wide formatted input (`wscanf`, `fwscanf`, `swscanf`, and their
+  `v` forms) supports the same nonfloating conversion specifiers. Field widths and
+  `%n` count wide characters. `%c`, `%s`, and `%[` without `l` encode
+  their input with `wcrtomb` in the ASCII C locale; with `l` they copy wide
+  characters directly. Scansets interpret ascending wide-character ranges
+  the same way as the byte scanner. Stream calls establish wide orientation
+  and leave the first nonmatching wide character unread, even on pipes.
 
 An unsupported narrow formatted-output conversion returns `-1` with
 `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
 
-On formatted input, floating conversions (`aAeEfFgG` with any valid length)
-stop with `ENOSYS`; malformed directives stop with `EINVAL`; a width larger
-than `SIZE_MAX` stops with `EOVERFLOW`. Integer values outside the destination
+Narrow formatted input supports `aAeEfFgG` for `float *` and, with `l`,
+`double *`. Wide floating input and narrow `long double` input stop with
+`ENOSYS`. Malformed directives stop with `EINVAL`; a width larger than
+`SIZE_MAX` stops with `EOVERFLOW`. Integer values outside the destination
 range stop with `ERANGE` rather than writing the result (C11 does not define
-out-of-range assignments). A field using a wide destination reports
-`EILSEQ` on non-ASCII input. These stops return the number of assignments
+out-of-range assignments). Wide stream decoding and text fields that convert
+between byte and wide characters report `EILSEQ` for unrepresentable input.
+These stops return the number of assignments
 already made, or `EOF` if none (`EILSEQ` follows the ordinary input-failure
 rule: `EOF` only before the first completed conversion). The scanner stops
 before consuming input for a malformed or unsupported directive. Fixed-width
@@ -115,13 +127,13 @@ This inventory is not a conformance claim. In particular:
 
 | Clauses | Known blockers |
 | --- | --- |
-| §4¶6, §§5.2.4.2.2, 7.7, 7.16 | The bundled tree contains all nine freestanding headers. Native `<stdarg.h>` supports scalar arguments on SysV AMD64 and little-endian AAPCS64; RV64IM still needs a `va_list` ABI. AMD64 has `long double` storage and constant initialization, but no evaluated scalar operations or by-value calls. RV64IM has limited binary32/binary64 support, not full scalar arithmetic. `<float.h>` reports ABI format limits and `FLT_ROUNDS == -1`, not native compiler support. |
+| §4¶6, §§5.2.4.2.2, 7.7, 7.16 | The bundled tree contains all nine freestanding headers. Native `<stdarg.h>` supports scalar arguments on SysV AMD64 and little-endian AAPCS64; RV64IM still needs a `va_list` ABI. AMD64 supports `long double` scalar arithmetic, but not by-value calls. RV64IM binary32/binary64 arithmetic and conversions use compiler-runtime helpers. `<float.h>` ABI format limits do not imply native compiler support. |
 | §5.1.2.2, §7.22.4 | The Linux CRT supports ordinary hosted `main` and normal termination; it is not a general platform CRT. `system` is missing. See [startup details](RUNTIME.md). |
-| §§7.3, 7.6, 7.12, 7.25 | No complex arithmetic library, floating environment, math library, or type-generic math. |
+| §§7.3, 7.6, 7.12, 7.25 | No complex arithmetic library, math library, or type-generic math. RV64IM has no `<fenv.h>` implementation. |
 | §§7.8, 7.22 | APIs returning `imaxdiv_t`, `div_t`, `ldiv_t`, and `lldiv_t` by value are also exposed to native Cephyr callers on bundled RV64IM LP64. Other Cephyr targets lack the required aggregate ABI. `strtold` is not implemented or declared. |
 | §7.13 | The runtime contains `setjmp` and `longjmp`, but Cephyr still lacks the returns-twice call semantics required to expose these to native callers. |
 | §§7.17, 7.26 | Atomics and threads are outside the advertised C11 conditional feature set. |
-| §§7.21.6, 7.29.2, 7.29.4.1.1 | Narrow and wide formatted I/O lack floating conversions; wide formatted input and `wcstold` are missing. Native access to the `v` interfaces requires target `va_list` support and declarations. |
+| §§7.21.6, 7.29.2, 7.29.4.1.1 | Narrow formatted I/O lacks `long double` conversions; wide formatted I/O lacks floating conversions. `wcstold` is missing. Native access to the `v` interfaces requires target `va_list` support and declarations. |
 
 ## Variadic ABI boundary
 

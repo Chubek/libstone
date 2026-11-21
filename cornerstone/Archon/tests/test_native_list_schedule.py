@@ -15,7 +15,6 @@ from archon.irgen import generate_ir, write_generated_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "archon" / "irgen" / "native"
-TMP = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
 PROGRAM = """\
 archon-mir 1
 module 1 1 0
@@ -44,7 +43,7 @@ class NativeListScheduleTests(unittest.TestCase):
         cmake = shutil.which("cmake")
         if not cmake or not cc or not shutil.which(cc[0]):
             self.skipTest("CMake and a host C99 compiler are required")
-        with tempfile.TemporaryDirectory(prefix="archon-schedule-driver-", dir=TMP) as directory:
+        with tempfile.TemporaryDirectory(prefix="archon-schedule-driver-") as directory:
             root = Path(directory)
             generated = write_generated_directory(
                 generate_ir(
@@ -101,7 +100,7 @@ class NativeListScheduleTests(unittest.TestCase):
         cc = shlex.split(os.environ.get("CC", "cc"))
         if not cc or not shutil.which(cc[0]):
             self.skipTest("C99 compiler unavailable")
-        with tempfile.TemporaryDirectory(prefix="archon-list-schedule-", dir=TMP) as directory:
+        with tempfile.TemporaryDirectory(prefix="archon-list-schedule-") as directory:
             root = Path(directory)
             source = root / "test.c"
             source.write_text(SOURCE, encoding="ascii")
@@ -184,6 +183,55 @@ static int count_poll(void *data)
     size_t *calls = data;
     ++*calls;
     return 0;
+}
+
+static int advise(const void *user, size_t fn, size_t block, ArchonValue dst)
+{
+    assert(fn == 7 && block == 11);
+    /* Test the legacy nonzero contract, including negative and large values. */
+    return dst == 2 ? *(const int *)user : 0;
+}
+
+static int contains(const void *user, ArchonBackendFactKind kind,
+                    size_t fn, size_t block, uint32_t dst)
+{
+    assert(kind == ARCHON_BACKEND_FACT_OBSERVABLE_INPUT);
+    return advise(user, fn, block, dst);
+}
+
+static void preferences(void)
+{
+    const ArchonMIRInst insts[] = {
+        INS(CONST, 0, N, N, 17),
+        INS(CONST, 1, N, N, 23),
+        INS(COPY, 2, 1, N, 0),
+        INS(STORE, N, 4, 0, 0),
+        INS(COPY, 3, 0, N, 0)
+    };
+    const ArchonMIRBlock block = { .insts = insts, .inst_count = COUNT(insts) };
+    ArchonMIRInst out[COUNT(insts)];
+    const size_t expected[] = { 1, 0, 2, 3, 4 }, hit[] = { 1, 2, 0, 3, 4 };
+    ArchonBackendDiagnostic diag = {0};
+    ANContext ctx = { .diag = &diag, .function = 7, .block = 11 };
+    int reply = 0;
+    const ArchonBackendFactHints facts = { .contains = contains, .user = &reply };
+    const ArchonBackendScheduleHints legacy = { .prefer = advise, .user = &reply };
+    size_t i;
+
+    ctx.facts = &facts;
+    assert(an_schedule_block(&ctx, &block, out));
+    for (i = 0; i < COUNT(insts); ++i)
+        same_inst(&out[i], &insts[expected[i]]);
+    reply = 1000000;
+    assert(an_schedule_block(&ctx, &block, out));
+    for (i = 0; i < COUNT(insts); ++i)
+        same_inst(&out[i], &insts[hit[i]]);
+    ctx.facts = NULL;
+    ctx.schedule_hints = &legacy;
+    reply = -1000000;
+    assert(an_schedule_block(&ctx, &block, out));
+    for (i = 0; i < COUNT(insts); ++i)
+        same_inst(&out[i], &insts[hit[i]]);
 }
 
 static void regions(void)
@@ -345,6 +393,7 @@ int main(void)
     const ArchonMIRBlock empty = { .term = { .kind = ARCHON_MIR_TRAP, .value = N } };
     assert(an_schedule_block(&ctx, &empty, NULL));
     assert(an_verify_schedule(&ctx, &empty, NULL, 0));
+    preferences();
     regions();
     at_limit();
     return 0;

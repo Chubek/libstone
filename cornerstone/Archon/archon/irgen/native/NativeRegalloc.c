@@ -3,9 +3,11 @@
 #include <stdlib.h>
 
 typedef struct {
-    size_t block, definition, end;
+    size_t block, definition, end, reads;
     unsigned reg;
-    int force_stack;
+    unsigned force_stack : 1;
+    unsigned fixed_slot : 1;
+    unsigned demand : 1;
 } ANRange;
 
 static ArchonValue defined_value(const ArchonMIRInst *inst)
@@ -36,13 +38,13 @@ static int find_definitions(ANContext *ctx, const ArchonMIRFunction *fn,
     size_t b, i;
 
     for (i = 0; i < fn->param_count; ++i)
-        ranges[i].force_stack = 1;
+        ranges[i].force_stack = ranges[i].fixed_slot = 1;
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *block = &fn->blocks[b];
         if (!begin_block(ctx, b))
             return 0;
         for (i = 0; i < block->param_count; ++i)
-            ranges[block->params[i]].force_stack = 1;
+            ranges[block->params[i]].force_stack = ranges[block->params[i]].fixed_slot = 1;
         for (i = 0; i < block->inst_count; ++i) {
             ArchonValue dst = defined_value(&block->insts[i]);
             if (!poll_instruction(ctx, i))
@@ -50,6 +52,7 @@ static int find_definitions(ANContext *ctx, const ArchonMIRFunction *fn,
             if (dst != ARCHON_MIR_NONE) {
                 ranges[dst].block = b;
                 ranges[dst].definition = ranges[dst].end = i;
+                ranges[dst].demand = an_fact_at(ctx, ARCHON_BACKEND_FACT_OBSERVABLE_INPUT, b, dst);
             }
         }
     }
@@ -63,20 +66,36 @@ static void note_use(ANRange *ranges, ArchonValue value, size_t b, size_t i,
     if (value == ARCHON_MIR_NONE)
         return;
     range = &ranges[value];
-    if (range->force_stack)
+    if (range->fixed_slot)
         return;
-    if (range->block != b ||
-        (last_call != SIZE_MAX && last_call > range->definition))
+    if (range->block != b) {
+        range->force_stack = range->fixed_slot = 1;
+        return;
+    }
+    if (last_call != SIZE_MAX && last_call > range->definition)
         range->force_stack = 1;
-    else
-        range->end = i;
+    range->end = i;
+    ++range->reads;
 }
 
 static void force_edge_homes(ANRange *ranges, const ArchonMIREdge *edge)
 {
     size_t i;
     for (i = 0; i < edge->arg_count; ++i)
-        ranges[edge->args[i]].force_stack = 1;
+        ranges[edge->args[i]].force_stack = ranges[edge->args[i]].fixed_slot = 1;
+}
+
+static int prefer_incoming(const ANRange *incoming, const ANRange *victim)
+{
+    /* A positive demand fact nominates a range for traffic-aware ranking;
+     * actual MIR reads, not the fact, estimate its spill cost. Missing
+     * demand never implies a value has no users. Preserve the original
+     * farthest-end decision when neither range has a better qualified cost. */
+    if (incoming->demand && incoming->reads > victim->reads)
+        return 1;
+    if (victim->demand && victim->reads > incoming->reads)
+        return 0;
+    return incoming->end < victim->end;
 }
 
 static int find_uses(ANContext *ctx, const ArchonMIRFunction *fn, ANRange *ranges)
@@ -145,7 +164,7 @@ static int assign_registers(ANContext *ctx, const ArchonMIRFunction *fn,
                     victim = current;
             }
             if (r > AN_T6) {
-                if (incoming->end >= victim->end)
+                if (!prefer_incoming(incoming, victim))
                     continue;
                 /* This is an offline decision: the victim's definition
                  * and all of its uses will use its stack home. */
@@ -159,11 +178,73 @@ static int assign_registers(ANContext *ctx, const ArchonMIRFunction *fn,
     return 1;
 }
 
+static int reusable(const ANRange *range)
+{
+    return range->reg == AN_ZERO && !range->fixed_slot && range->demand && range->reads;
+}
+
+static int assign_slots(ANContext *ctx, const ArchonMIRFunction *fn,
+    const ANRange *ranges, ANHome *homes, size_t *slots)
+{
+    /* Compact at the end in value order, so absent a reuse the layout
+     * matches the baseline (including its short-displacement offsets). */
+    uint32_t compact[AN_MAX_VALUE] = {0};
+    size_t ends[AN_MAX_VALUE], count = 0, final = 0, b, i;
+    int candidates = 0;
+    for (i = 0; i < fn->value_count; ++i) {
+        homes[i].reg = ranges[i].reg;
+        homes[i].slot = 0;
+        if (ranges[i].reg == AN_ZERO) {
+            if (reusable(&ranges[i]))
+                candidates = 1;
+            else
+                homes[i].slot = (uint32_t)count++;
+        }
+    }
+    for (b = 0; candidates && b < fn->block_count; ++b) {
+        const ArchonMIRBlock *block = &fn->blocks[b];
+        size_t base = count;
+        if (!begin_block(ctx, b))
+            return 0;
+        for (i = 0; i < block->inst_count; ++i) {
+            ArchonValue dst = defined_value(&block->insts[i]);
+            size_t slot;
+            if (!poll_instruction(ctx, i))
+                return 0;
+            if (dst == ARCHON_MIR_NONE || !reusable(&ranges[dst]))
+                continue;
+            /* Only reuse a spill home from this block whose last read is
+             * strictly before this definition. Calls do not write these
+             * private slots; outgoing arguments occupy a separate region. */
+            for (slot = base; slot < count && ends[slot] >= i; ++slot)
+                ;
+            if (slot == count)
+                ++count;
+            ends[slot] = ranges[dst].end;
+            homes[dst].slot = (uint32_t)slot;
+        }
+    }
+    ctx->block = ctx->instruction = SIZE_MAX;
+    if (!an_continue(ctx))
+        return 0;
+    if (candidates) {
+        for (i = 0; i < fn->value_count; ++i) {
+            uint32_t slot = homes[i].slot;
+            if (homes[i].reg != AN_ZERO)
+                continue;
+            if (!compact[slot])
+                compact[slot] = (uint32_t)++final;
+            homes[i].slot = compact[slot] - 1;
+        }
+    }
+    *slots = candidates ? final : count;
+    return 1;
+}
+
 int an_allocate(ANContext *ctx, const ArchonMIRFunction *fn, ANHome *homes,
     size_t *slots)
 {
     ANRange *ranges;
-    size_t i, count = 0;
     int ok;
 
     ctx->stage = ARCHON_BACKEND_ALLOCATE;
@@ -183,18 +264,7 @@ int an_allocate(ANContext *ctx, const ArchonMIRFunction *fn, ANHome *homes,
         return an_error(ctx, ARCHON_BACKEND_NOMEM, "allocating native live ranges");
 
     ok = find_definitions(ctx, fn, ranges) && find_uses(ctx, fn, ranges) &&
-        assign_registers(ctx, fn, ranges);
-    if (ok) {
-        ctx->block = ctx->instruction = SIZE_MAX;
-        ok = an_continue(ctx);
-    }
-    if (ok) {
-        for (i = 0; i < fn->value_count; ++i) {
-            homes[i].reg = ranges[i].reg;
-            homes[i].slot = homes[i].reg == AN_ZERO ? (uint32_t)count++ : 0;
-        }
-        *slots = count;
-    }
+        assign_registers(ctx, fn, ranges) && assign_slots(ctx, fn, ranges, homes, slots);
     free(ranges);
     return ok;
 }

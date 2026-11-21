@@ -64,3 +64,34 @@ float call_float(void) {
 double call_double(D *callback) {
     return callback(-1.0f, 0, -2.0, 4, 5, 6, 7, 8, -3.25, -1.0f);
 }
+
+#define ARITHMETIC(T, suffix)                      \
+    T add_##suffix(T x, T y) { return x + y; }      \
+    T sub_##suffix(T x, T y) { return x - y; }      \
+    T mul_##suffix(T x, T y) { return x * y; }      \
+    T div_##suffix(T x, T y) { return x / y; }      \
+    T from_signed_##suffix(long x) { return x; }   \
+    T from_unsigned_##suffix(unsigned long x) { return x; } \
+    long to_signed_##suffix(T x) { return x; }     \
+    unsigned long to_unsigned_##suffix(T x) { return x; }
+ARITHMETIC(float, f)
+ARITHMETIC(double, d)
+
+double widen_float(float x) { return x; }
+float narrow_double(double x) { return x; }
+float from_unsigned_int(unsigned int x) { return x; }
+signed char to_signed_char(double x) { return x; }
+unsigned int to_unsigned_int(float x) { return x; }
+
+extern float clang_add(float, float);
+
+double mixed_math(float x, unsigned int y, double z) {
+    double r = clang_add(x, 0.5f);  /* Clang's helper call, then Cephyr's. */
+    return (r + y) * z - r / 2;
+}
+
+float compound_math(float *p, float x) {
+    float old = (*p)++;
+    *p *= x;
+    return *p - old;
+}

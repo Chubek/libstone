@@ -230,6 +230,9 @@ files:
   - path: 'support/Hash.hpp'
     purpose: 'Common deterministic in-process hash combining helper'
     status: implemented-or-documentation
+  - path: 'support/KnownBitMasks.hpp'
+    purpose: 'Shared machine-word and arbitrary-precision known-bit transfers and predicates'
+    status: implemented-or-documentation
   - path: 'support/Permutation.hpp'
     purpose: 'Shared rank and permutation validation'
     status: implemented-or-documentation

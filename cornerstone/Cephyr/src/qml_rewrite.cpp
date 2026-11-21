@@ -4,9 +4,11 @@
 #include "mir_verify.h"
 
 #include <NativeInternal.h>
+#include <support/KnownBitMasks.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <iterator>
@@ -25,12 +27,12 @@ constexpr unsigned max_attempts = 16'000'000;
 
 enum class Op : unsigned char {
     opaque, const_, trunc, zext, sext, copy, add, sub, mul, and_, or_, xor_,
-    shl, lshr, ashr, eq, slt, ult, count
+    shl, lshr, ashr, eq, slt, ult, rem_u, count
 };
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(Op::count)> op_names = {
     "", "const", "trunc", "zext", "sext", "copy", "add", "sub", "mul", "and", "or",
-    "xor", "shl", "lshr", "ashr", "eq", "slt", "ult"
+    "xor", "shl", "lshr", "ashr", "eq", "slt", "ult", "rem_u"
 };
 
 constexpr std::size_t index(Op op) { return static_cast<std::size_t>(op); }
@@ -50,13 +52,21 @@ constexpr Opcode opaque_opcodes[] = {
     {"call", Op::opaque, direct_call}, {"call_indirect", Op::opaque, indirect_call},
     {"amd64_va_start", Op::opaque, 1},
     {"aarch64_va_start", Op::opaque, 1},
+    {"rv64_va_start", Op::opaque, 1},
     {"fconst", Op::opaque, 2}, {"frame_addr", Op::opaque, 2}, {"global_addr", Op::opaque, 2},
     {"func_addr", Op::opaque, 2}, {"ptr_to_int", Op::opaque, 2}, {"int_to_ptr", Op::opaque, 2},
     {"func_ptr_to_int", Op::opaque, 2}, {"int_to_func_ptr", Op::opaque, 2},
     {"fneg", Op::opaque, 2}, {"fcast", Op::opaque, 2}, {"sitofp", Op::opaque, 2},
     {"uitofp", Op::opaque, 2}, {"fptosi", Op::opaque, 2}, {"fptoui", Op::opaque, 2},
+    {"amd64_x87_add", Op::opaque, 2}, {"amd64_x87_sub", Op::opaque, 2},
+    {"amd64_x87_mul", Op::opaque, 2}, {"amd64_x87_div", Op::opaque, 2},
+    {"amd64_x87_eq", Op::opaque, 3}, {"amd64_x87_lt", Op::opaque, 3},
+    {"amd64_x87_le", Op::opaque, 3},
+    {"amd64_x87_from_fp", Op::opaque, 2}, {"amd64_x87_to_fp", Op::opaque, 2},
+    {"amd64_x87_from_si", Op::opaque, 2}, {"amd64_x87_to_si", Op::opaque, 2},
+    {"amd64_x87_from_ui", Op::opaque, 2}, {"amd64_x87_to_ui", Op::opaque, 2},
     {"div_s", Op::opaque, 3}, {"div_u", Op::opaque, 3}, {"rem_s", Op::opaque, 3},
-    {"rem_u", Op::opaque, 3}, {"add_checked_s", Op::opaque, 3}, {"sub_checked_s", Op::opaque, 3},
+    {"add_checked_s", Op::opaque, 3}, {"sub_checked_s", Op::opaque, 3},
     {"mul_checked_s", Op::opaque, 3}, {"div_checked_s", Op::opaque, 3}, {"ptr_add", Op::opaque, 3},
     {"load", Op::opaque, 3}, {"load_ptr", Op::opaque, 3}, {"load_func_ptr", Op::opaque, 3},
     {"load_s8", Op::opaque, 3}, {"load_s16", Op::opaque, 3}, {"load_s32", Op::opaque, 3},
@@ -204,15 +214,19 @@ bool identifier(std::string_view text)
 }
 
 struct Match {
-    enum Kind : unsigned char { any, same, bits } kind = any;
-    std::uint64_t word = 0; // For same, the index of an earlier operand.
+    enum Kind : unsigned char { any, bits, pow2, masked_by, disjoint_bits } kind = any;
+    std::uint64_t word = 0; // Literal bits or the other operand's slot.
+    int same = -1;         // Repeated metavariable: index of an earlier operand.
+
+    bool binary_guard() const { return kind == masked_by || kind == disjoint_bits; }
+    bool guarded() const { return kind == pow2 || binary_guard(); }
 };
 
 struct Rule {
     std::string name;
     std::array<Match, 2> operands;
-    // opaque means a rejection; const_ means a literal replacement. Any
-    // other replacement draws only from the operands of the original root.
+    // opaque means a rejection; const_ means a literal replacement. trunc
+    // denotes low_bits_for_pow2, with its immediate derived from slots[1].
     Op replacement = Op::opaque;
     std::array<unsigned, 2> slots{};
     std::uint64_t word = 0;
@@ -226,6 +240,7 @@ struct Phase {
     RulesByOp checks;
     bool has_rewrites = false;
     bool has_checks = false;
+    bool has_guards = false;
 };
 
 bool root(Tokens &tokens, Op &op)
@@ -239,26 +254,53 @@ bool root(Tokens &tokens, Op &op)
 bool parse_rule(Tokens &tokens, bool reject, Op &op, Rule &rule, std::string_view &error)
 {
     std::array<std::string_view, 2> metas{};
+    std::array<std::string_view, 2> peers{};
     if (tokens.take() != "n" || !root(tokens, op)) {
         error = "expected a supported native i64 root operator with its exact arity";
         return false;
     }
     for (unsigned i = 0; i < arity(op); ++i) {
-        const auto tag = tokens.take();
+        auto tag = tokens.take();
+        auto &match = rule.operands[i];
+        if (tag == "n") {
+            const auto guard = tokens.take();
+            const auto count = tokens.take();
+            if (guard == "pow2" && count == "1")
+                match.kind = Match::pow2;
+            else if (guard == "masked_by" && count == "2")
+                match.kind = Match::masked_by;
+            else if (guard == "disjoint_bits" && count == "2")
+                match.kind = Match::disjoint_bits;
+            else {
+                error = "unknown or malformed native operand guard";
+                return false;
+            }
+            tag = tokens.take();
+            if (tag != "m") {
+                error = "a native operand guard requires a metavariable";
+                return false;
+            }
+        }
         if (tag == "w")
             continue;
         if (tag == "m") {
             metas[i] = tokens.take();
             if (identifier(metas[i])) {
                 if (i != 0 && metas[i] == metas[0])
-                    rule.operands[i] = {Match::same, 0};
+                    match.same = 0;
+                if (match.binary_guard()) {
+                    if (tokens.take() != "m" || !identifier(peers[i] = tokens.take())) {
+                        error = "a binary native operand guard requires a second metavariable";
+                        return false;
+                    }
+                }
                 continue;
             }
-        } else if (tag == "i" && literal(tokens.take(), rule.operands[i].word)) {
-            rule.operands[i].kind = Match::bits;
+        } else if (tag == "i" && literal(tokens.take(), match.word)) {
+            match.kind = Match::bits;
             continue;
         }
-        error = "native patterns require flat metavariable, integer or wildcard operands";
+        error = "native patterns require metavariable, integer, wildcard or guarded operands";
         return false;
     }
 
@@ -276,6 +318,20 @@ bool parse_rule(Tokens &tokens, bool reject, Op &op, Rule &rule, std::string_vie
         }
         return false;
     };
+    for (unsigned i = 0; i < arity(op); ++i) {
+        if (rule.operands[i].binary_guard()) {
+            unsigned slot;
+            if (!source_slot("m", peers[i], slot)) {
+                error = "unbound second metavariable in native operand guard";
+                return false;
+            }
+            rule.operands[i].word = slot;
+        }
+    }
+    if (op == Op::rem_u && rule.operands[1].kind != Match::pow2) {
+        error = "native rem_u requires a pow2 guard on the divisor";
+        return false;
+    }
 
     if (!reject) {
         const auto tag = tokens.take();
@@ -291,13 +347,32 @@ bool parse_rule(Tokens &tokens, bool reject, Op &op, Rule &rule, std::string_vie
                 error = "replacement integer does not fit an i64 bit pattern";
                 return false;
             }
-        } else if (tag == "n" && root(tokens, rule.replacement)) {
-            for (unsigned i = 0; i < arity(rule.replacement); ++i) {
+        } else if (tag == "n") {
+            const auto name = tokens.take();
+            const auto count = tokens.take();
+            const auto entry = find_opcode(name);
+            unsigned operands;
+            if (name == "low_bits_for_pow2" && count == "2") {
+                rule.replacement = Op::trunc;
+                operands = 2;
+            } else if (entry && rule_op(entry->op) && entry->op != Op::rem_u &&
+                       integer(count, operands) && operands == arity(entry->op)) {
+                rule.replacement = entry->op;
+            } else {
+                error = "expected a supported native replacement operator with its exact arity";
+                return false;
+            }
+            for (unsigned i = 0; i < operands; ++i) {
                 const auto child_tag = tokens.take();
                 if (!source_slot(child_tag, tokens.take(), rule.slots[i])) {
                     error = "replacement operands must be bound metavariables or matched integers";
                     return false;
                 }
+            }
+            if (rule.replacement == Op::trunc &&
+                rule.operands[rule.slots[1]].kind != Match::pow2) {
+                error = "low_bits_for_pow2 requires a divisor bound by pow2";
+                return false;
             }
         } else {
             error = "expected a supported flat native i64 replacement, integer or metavariable";
@@ -497,62 +572,77 @@ bool read_module(Lines &lines, std::vector<Function> &module)
     return end.take() == "end" && end.done() && lines.offset == lines.text.size();
 }
 
+using Bits = weighstone::support::KnownBitMasks<std::uint64_t>;
+constexpr auto all_bits = ~std::uint64_t{0};
+
 struct Fact {
-    std::uint64_t word = 0;
+    Bits bits;
     unsigned block = std::numeric_limits<unsigned>::max();
 };
 
-void discover(const Site &site, std::vector<Fact> &facts, unsigned block)
+Bits local_bits(const std::vector<Fact> &facts, unsigned operand, unsigned block)
 {
-    const auto &inst = site.inst;
-    if (inst.op == Op::const_) {
-        facts[site.dst] = {inst.word, block};
-        return;
-    }
-    if (facts[inst.use[0]].block != block)
-        return;
-    const auto a = facts[inst.use[0]].word;
-    if (inst.op == Op::copy) {
-        facts[site.dst] = {a, block};
-        return;
-    }
+    return facts[operand].block == block ? facts[operand].bits : Bits{};
+}
+
+Bits discover(const Inst &inst, const std::vector<Fact> &facts, unsigned block,
+              bool known_bits)
+{
+    if (inst.op == Op::const_)
+        return {~inst.word, inst.word};
+    const auto lhs = local_bits(facts, inst.use[0], block);
+    if (!known_bits && (!lhs.all_known(all_bits) || inst.op == Op::rem_u))
+        return {};
+    if (inst.op == Op::copy)
+        return lhs;
+    constexpr auto all = ~std::uint64_t{0};
     if (inst.op < Op::copy) {
         const auto width = static_cast<unsigned>(inst.word);
-        if (width == 64) {
-            facts[site.dst] = {a, block};
-            return;
-        }
-        const auto mask = (std::uint64_t{1} << width) - 1;
+        const auto mask = all >> (64 - width);
         const auto sign = std::uint64_t{1} << (width - 1);
-        const auto extend = inst.op == Op::sext && (a & sign);
-        facts[site.dst] = {(a & mask) | (extend ? ~mask : 0), block};
-        return;
+        return {(lhs.zero & mask) | (inst.op != Op::sext || (lhs.zero & sign) ? ~mask : 0),
+                (lhs.one & mask) | (inst.op == Op::sext && (lhs.one & sign) ? ~mask : 0)};
     }
-    if (facts[inst.use[1]].block != block)
-        return;
-    const auto b = facts[inst.use[1]].word;
+    const auto rhs = local_bits(facts, inst.use[1], block);
+    if (!known_bits && !rhs.all_known(all_bits))
+        return {};
+    switch (inst.op) {
+    case Op::and_: return lhs.bit_and(rhs);
+    case Op::or_: return lhs.bit_or(rhs);
+    case Op::xor_: return lhs.bit_xor(rhs);
+    case Op::shl: case Op::lshr: case Op::ashr:
+        // Native shifts use the low six count bits, even when the upper
+        // bits of the count are not known.
+        if (((rhs.zero | rhs.one) & 63) == 63) {
+            const unsigned shift = rhs.one & 63;
+            if (!shift)
+                return lhs;
+            if (inst.op == Op::shl)
+                return {(lhs.zero << shift) | (all >> (64 - shift)), lhs.one << shift};
+            const auto high = all << (64 - shift);
+            constexpr auto sign = std::uint64_t{1} << 63;
+            return {(lhs.zero >> shift) | (inst.op == Op::lshr || (lhs.zero & sign) ? high : 0),
+                    (lhs.one >> shift) | (inst.op == Op::ashr && (lhs.one & sign) ? high : 0)};
+        }
+        return {};
+    default: break;
+    }
+    if (!lhs.all_known(all_bits) || !rhs.all_known(all_bits))
+        return {};
+    const auto a = lhs.one, b = rhs.one;
     constexpr auto sign = std::uint64_t{1} << 63;
-    const unsigned shift = b & 63;
     std::uint64_t result;
     switch (inst.op) {
     case Op::add: result = a + b; break;
     case Op::sub: result = a - b; break;
     case Op::mul: result = a * b; break;
-    case Op::and_: result = a & b; break;
-    case Op::or_: result = a | b; break;
-    case Op::xor_: result = a ^ b; break;
-    case Op::shl: result = a << shift; break;
-    case Op::lshr: result = a >> shift; break;
-    case Op::ashr:
-        result = (a >> shift) | ((a & sign) && shift ?
-            (std::numeric_limits<std::uint64_t>::max() << (64 - shift)) : 0);
-        break;
+    case Op::rem_u: if (!b) return {}; result = a % b; break;
     case Op::eq: result = a == b; break;
     case Op::slt: result = (a ^ sign) < (b ^ sign); break;
     case Op::ult: result = a < b; break;
-    default: return;
+    default: return {};
     }
-    facts[site.dst] = {result, block};
+    return {~result, result};
 }
 
 bool matches(const Rule &rule, const Inst &inst, const std::vector<Fact> &facts, unsigned block)
@@ -560,19 +650,51 @@ bool matches(const Rule &rule, const Inst &inst, const std::vector<Fact> &facts,
     for (unsigned i = 0; i < arity(inst.op); ++i) {
         const auto &pattern = rule.operands[i];
         const auto operand = inst.use[i];
-        if (pattern.kind == Match::same && operand != inst.use[pattern.word])
+        if (pattern.same >= 0 && operand != inst.use[pattern.same])
             return false;
-        if (pattern.kind == Match::bits &&
-            (facts[operand].block != block || facts[operand].word != pattern.word))
-            return false;
+        if (pattern.kind != Match::any) {
+            const auto bits = local_bits(facts, operand, block);
+            switch (pattern.kind) {
+            case Match::bits:
+                if (!bits.all_known(all_bits) || bits.one != pattern.word)
+                    return false;
+                break;
+            case Match::pow2:
+                if (!bits.all_known(all_bits) || !std::has_single_bit(bits.one))
+                    return false;
+                break;
+            case Match::masked_by: {
+                const auto mask = local_bits(facts, inst.use[pattern.word], block);
+                if (!bits.masked_by(mask, all_bits))
+                    return false;
+                break;
+            }
+            case Match::disjoint_bits: {
+                const auto other = local_bits(facts, inst.use[pattern.word], block);
+                // Every bit must be known zero on at least one side.
+                if (!bits.disjoint(other, all_bits))
+                    return false;
+                break;
+            }
+            case Match::any: break;
+            }
+        }
     }
     return true;
 }
 
-Inst instantiate(const Rule &rule, const Inst &inst)
+Inst instantiate(const Rule &rule, const Inst &inst, const std::vector<Fact> &facts)
 {
     Inst out{rule.replacement};
-    if (out.op == Op::const_)
+    if (out.op == Op::trunc) {
+        // A successful pow2 match proves a nonzero, exact constant. A
+        // divisor of 1 produces zero, not a truncation to illegal width 0.
+        const auto width = std::countr_zero(facts[inst.use[rule.slots[1]]].bits.one);
+        if (!width)
+            return Inst{Op::const_};
+        out.use[0] = inst.use[rule.slots[0]];
+        out.word = width;
+    } else if (out.op == Op::const_)
         out.word = rule.word;
     else
         for (unsigned i = 0; i < arity(out.op); ++i)
@@ -612,7 +734,7 @@ bool scan(std::vector<Function> &module, const Phase &phase, bool reject, Budget
                         if (reject)
                             return report(site, "cephyr.qml.reject", "QML phase '" + phase.name +
                                           "' rejected MachineIR by rule '" + rule.name + "'");
-                        const auto next = instantiate(rule, site.inst);
+                        const auto next = instantiate(rule, site.inst, facts);
                         if (next == site.inst)
                             continue;
                         if (!budget.fuel || !budget.phase_fuel)
@@ -629,7 +751,7 @@ bool scan(std::vector<Function> &module, const Phase &phase, bool reject, Budget
                 }
                 // Only publish the final definition, never facts from an
                 // intermediate candidate. Recompute all facts for each pass.
-                discover(site, facts, b);
+                facts[site.dst] = {discover(site.inst, facts, b, phase.has_guards), b};
             }
         }
     }
@@ -658,6 +780,9 @@ bool render(const std::vector<Function> &module, std::string &mir,
                 result += ' ' + std::to_string(site.dst);
                 if (site.inst.op == Op::const_)
                     result += ' ' + std::to_string(site.inst.word);
+                else if (site.inst.op == Op::trunc)
+                    result += ' ' + std::to_string(site.inst.use[0]) + ' ' +
+                        std::to_string(site.inst.word);
                 else
                     for (unsigned i = 0; i < arity(site.inst.op); ++i)
                         result += ' ' + std::to_string(site.inst.use[i]);
@@ -753,6 +878,8 @@ bool Pipeline::add_compiled(std::string_view text, Diagnostics &diag, std::strin
         if (!parse_rule(tokens, reject, op, rule, error)) {
             return bad("rule '" + rule.name + "': " + std::string(error));
         }
+        phase.has_guards |= std::any_of(rule.operands.begin(), rule.operands.end(),
+                                      [](const Match &match) { return match.guarded(); });
         auto &dispatch = reject ? phase.checks : phase.rewrites;
         dispatch[index(op)].push_back(std::move(rule));
         (reject ? phase.has_checks : phase.has_rewrites) = true;

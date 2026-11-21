@@ -202,6 +202,25 @@ void check_declarators() {
            "ambiguous parameter name did not resolve as a typedef");
     parses("int " + std::string(63, '(') + "x" + std::string(63, ')') + ";");
     parses("int f(int n, int a[sizeof(n)]); int f(int n, int a[4]) { return n; }");
+
+    auto arrays = parses("int f(int a[static const 2], int [volatile *], int b[restrict]);");
+    auto *array_function = as<FunctionDeclASTNode>(items(arrays.root())[0], NK_FUNCTION_DECL);
+    const auto &array_parameters = items(array_function->getPrms());
+    auto array = [&](std::size_t index) {
+        return as<ArrayTypeASTNode>(
+            as<ParmDeclASTNode>(array_parameters[index], NK_PARM_DECL)->getType(), NK_ARRAY_TYPE);
+    };
+    expect(array(0)->hasStaticBound() && !array(0)->hasStarBound() &&
+           array(0)->getExpr()->getKind() == NK_INTEGER_CONST &&
+           array(0)->getBracketQualifiers() == TQ_CONST &&
+           !(array(0)->getElementType()->getFlags() & TQ_CONST),
+           "array bracket const or static bound was not preserved");
+    expect(array(1)->hasStarBound() && array(1)->getExpr() == NULL_AST_NODE &&
+           array(1)->getBracketQualifiers() == TQ_VOLATILE,
+           "abstract array star bound was not preserved");
+    expect(!array(2)->hasStarBound() && array(2)->getExpr() == NULL_AST_NODE &&
+           array(2)->getBracketQualifiers() == TQ_RESTRICT,
+           "an omitted bound was not distinguished from a star bound");
 }
 
 void check_statement_scopes() {

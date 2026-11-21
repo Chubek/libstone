@@ -41,11 +41,15 @@ void an_aarch64_va_start(ANGas *, unsigned save, unsigned overflow, unsigned gp,
 void an_gas_symbol_addr(ANGas *, const char *symbol);
 void an_gas_constant(ANGas *, uint64_t);
 void an_gas_convert(ANGas *, ArchonMIROpcode, unsigned width);
+void an_gas_shift_left_imm(ANGas *, unsigned shift);
 void an_gas_memory(ANGas *, ArchonMIROpcode, int displacement);
 int an_gas_binary(ANGas *, ArchonMIROpcode);
 /* Operands and result use the existing integer scratch registers only for
  * bit transport to/from target hardware FP. */
 void an_gas_float(ANGas *, ArchonMIROpcode, ArchonMIRType src, ArchonMIRType dst);
+/* AMD64 x87 inputs/results are 10-byte memory payloads except for the
+ * scalar sides of conversions and the integer result of comparisons. */
+void an_amd64_x87(ANGas *, ArchonMIROpcode, ArchonMIRType b, ArchonMIRType dst);
 void an_gas_call(ANGas *, const char *symbol, unsigned fp_args);
 void an_gas_call_indirect(ANGas *, unsigned fp_args);
 void an_gas_jump(ANGas *, unsigned label);

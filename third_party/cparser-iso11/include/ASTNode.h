@@ -158,7 +158,8 @@ enum ASTNodeKind
     NK_GENERIC_EXPR,
     NK_GENERIC_ASSOC,
     NK_DESIGNATED_INIT,
-    NK_ARRAY_DESIGNATOR
+    NK_ARRAY_DESIGNATOR,
+    NK_COMPOUND_LITERAL
 };
 
 class AbstractSyntaxTree;
@@ -736,14 +737,17 @@ class FieldDeclASTNode : public ASTNode
     ASTNode *_type;
     ASTNode *_name;
     ASTNode *_alignments;
+    ASTNode *_width;
 
 public:
-    FieldDeclASTNode(ASTNode *Type, ASTNode *Name, ASTNode *alignments = NULL_AST_NODE)
+    FieldDeclASTNode(ASTNode *Type, ASTNode *Name, ASTNode *alignments = NULL_AST_NODE,
+                     ASTNode *width = NULL_AST_NODE)
     {
         kind = NK_FIELD_DECL;
         ASSIGN_AST_NODE_REF(_type, Type);
         ASSIGN_AST_NODE_REF(_name, Name);
         ASSIGN_AST_NODE_REF(_alignments, alignments);
+        ASSIGN_AST_NODE_REF(_width, width);
     }
 
     ~FieldDeclASTNode()
@@ -751,6 +755,7 @@ public:
         DELETE_AST_NODE_REF(_type);
         DELETE_AST_NODE_REF(_name);
         DELETE_AST_NODE_REF(_alignments);
+        DELETE_AST_NODE_REF(_width);
     }
 
     void setType(ASTNode *Type) { ASSIGN_AST_NODE_REF(_type, Type); }
@@ -759,6 +764,7 @@ public:
     ASTNode *getName() { return _name; }
     ASTNode *getType() { return _type; }
     ASTNode *getAlignments() { return _alignments; }
+    ASTNode *getWidth() { return _width; }
 
     void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -1109,6 +1115,27 @@ public:
     ASTNode *getBody() { return _body; }
 
 
+    void accept(TreeVisitor *v);
+};
+
+class CompoundLiteralASTNode : public ASTNode
+{
+    ASTNode *_type;
+    ASTNode *_init;
+
+public:
+    CompoundLiteralASTNode(ASTNode *type, ASTNode *init) : ASTNode(NK_COMPOUND_LITERAL)
+    {
+        ASSIGN_AST_NODE_REF(_type, type);
+        ASSIGN_AST_NODE_REF(_init, init);
+    }
+    ~CompoundLiteralASTNode()
+    {
+        DELETE_AST_NODE_REF(_type);
+        DELETE_AST_NODE_REF(_init);
+    }
+    ASTNode *getType() const { return _type; }
+    ASTNode *getInit() const { return _init; }
     void accept(TreeVisitor *v);
 };
 
@@ -2191,9 +2218,14 @@ class ArrayTypeASTNode : public ASTNode
 {
     ASTNode *_type;
     ASTNode *_expr;
+    unsigned _bracketQualifiers;
+    bool _staticBound;
+    bool _starBound;
 
 public:
-    ArrayTypeASTNode(ASTNode *Type, ASTNode *Expr)
+    ArrayTypeASTNode(ASTNode *Type, ASTNode *Expr, unsigned bracketQualifiers = 0,
+                     bool staticBound = false, bool starBound = false)
+        : _bracketQualifiers(bracketQualifiers), _staticBound(staticBound), _starBound(starBound)
     {
         kind = NK_ARRAY_TYPE;
         ASSIGN_AST_NODE_REF(_type, Type);
@@ -2209,6 +2241,10 @@ public:
     void setType(ASTNode *Type) { _type = Type; }
     ASTNode *getExpr() { return _expr; }
     ASTNode *getElementType() { return _type; }
+    // These qualify the adjusted parameter pointer, not the array element.
+    unsigned getBracketQualifiers() const { return _bracketQualifiers; }
+    bool hasStaticBound() const { return _staticBound; }
+    bool hasStarBound() const { return _starBound; }
 
     void accept(TreeVisitor *v);
 };

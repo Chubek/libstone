@@ -212,6 +212,12 @@ void PrintTreeVisitor::visit(FieldDeclASTNode *n)
         std::cout << "Type:" << std::endl;
         n->getType()->accept(this);
     }
+    if (n->getWidth() != NULL_AST_NODE)
+    {
+        printTab(_level);
+        std::cout << "Width:" << std::endl;
+        n->getWidth()->accept(this);
+    }
     _level--;
 }
 
@@ -431,6 +437,15 @@ void PrintTreeVisitor::visit(WhileStmtASTNode *n)
         std::cout << "Body:" << std::endl;
         n->getBody()->accept(this);
     }
+    _level--;
+}
+
+void PrintTreeVisitor::visit(CompoundLiteralASTNode *n)
+{
+    _level++;
+    printTab(_level);
+    std::cout << "NK_COMPOUND_LITERAL" << std::endl;
+    TreeVisitor::visit(n);
     _level--;
 }
 

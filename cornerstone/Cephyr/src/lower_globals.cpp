@@ -215,20 +215,23 @@ bool pointer_compatible(const CType &destination, const CType &source) {
         return false;
     // Initialization may add, but not discard, pointed-to qualifiers.
     if ((source.element->is_const && !destination.element->is_const) ||
-        (source.element->is_volatile && !destination.element->is_volatile))
+        (source.element->is_volatile && !destination.element->is_volatile) ||
+        (source.element->is_restrict && !destination.element->is_restrict))
         return false;
     if (destination.element->kind == CType::Kind::void_ ||
         source.element->kind == CType::Kind::void_)
         return true;
     auto destination_element = *destination.element;
     auto source_element = *source.element;
-    destination_element.is_const = source_element.is_const = false;
-    destination_element.is_volatile = source_element.is_volatile = false;
+    destination_element.clear_qualifiers();
+    source_element.clear_qualifiers();
     return compatible(destination_element, source_element);
 }
 
-std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination,
-                                            Node *expression, const Function *scope) {
+std::optional<Relocation> symbol_relocation(const TypeContext &context, const CType &destination,
+                                            Node *expression, bool materialize) {
+    auto &unit = context.unit;
+    const auto *scope = context.function;
     bool address_of = false;
     if (expression->getKind() == cparser::NK_ADDR_EXPR) {
         address_of = true;
@@ -247,7 +250,7 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
                                    bool subtract = false) -> std::optional<Storage> {
         if (object.type.kind != CType::Kind::array || !object.type.element)
             return {};
-        const auto index = integer_constant(index_node, TypeContext(unit, scope));
+        const auto index = integer_constant(index_node, context);
         const auto signed_index = index ? signed_value(*index) : std::nullopt;
         if (!signed_index || (subtract ? *signed_index > 0 : *signed_index < 0))
             return {};
@@ -261,6 +264,7 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
             return {};
         element.is_const |= object.type.is_const;
         element.is_volatile |= object.type.is_volatile;
+        element.is_restrict |= object.type.is_restrict;
         object.type = std::move(element);
         object.offset += static_cast<std::int64_t>(position * *stride);
         return object;
@@ -269,17 +273,21 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     // with static duration is usable as an address constant (C11 6.6p9).
     const auto find_storage = [&](Node *id) -> std::optional<Storage> {
         const auto source_name = identifier(id);
+        for (auto *prototype = context.prototype; prototype; prototype = prototype->parent)
+            if (prototype->parameters.contains(source_name))
+                return std::nullopt;
         if (scope) {
             if (const auto binding = scope->find_linked(source_name, id)) {
                 auto &target = *binding->linked;
-                if (target.internal && target.type.kind == CType::Kind::function)
+                if (materialize && target.internal && target.type.kind == CType::Kind::function)
                     target.used = true;
                 return Storage{binding->type, target.name};
             }
             if (auto local = scope->find_local(source_name)) {
                 if (local->static_name.empty())
                     return std::nullopt;
-                scope->require_static(*local);
+                if (materialize)
+                    scope->require_static(*local);
                 return Storage{local->type, local->static_name};
             }
             return std::nullopt;
@@ -287,7 +295,7 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
         auto *target = unit.find_file_symbol(source_name);
         if (!target)
             return std::nullopt;
-        if (target->internal && target->type.kind == CType::Kind::function)
+        if (materialize && target->internal && target->type.kind == CType::Kind::function)
             target->used = true; // Diagnose an internal declaration without a definition.
         return Storage{target->type, target->name};
     };
@@ -295,14 +303,26 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     const auto subobject = [&](auto &&self, Node *node, bool allow_one_past) -> std::optional<Storage> {
         const AnalysisDepth guard(depth);
         if (present(node) && node->getKind() == cparser::NK_GENERIC_EXPR)
-            node = select_generic(node, TypeContext(unit, scope));
+            node = select_generic(node, context);
         if (!present(node))
             return {};
         if (node->getKind() == cparser::NK_IDENT_NODE)
             return find_storage(node);
         if (node->getKind() == cparser::NK_STRING_CONST) {
             auto type = string_constant_type(node, unit.source);
-            return Storage{type, unit.add_string(node, type)};
+            return Storage{type, materialize ? unit.add_string(node, type) : std::string{}};
+        }
+        if (node->getKind() == cparser::NK_COMPOUND_LITERAL) {
+            if (scope) // A literal occurring within a function is automatic.
+                return {};
+            if (!materialize) {
+                auto type = expression_type(node, context);
+                return type.valid() ? std::optional<Storage>{Storage{std::move(type), {}}}
+                                    : std::nullopt;
+            }
+            if (auto object = unit.add_static_compound_literal(node))
+                return Storage{std::move(object->first), std::move(object->second)};
+            return {};
         }
         std::optional<Storage> object;
         Node *member_name = nullptr;
@@ -335,6 +355,12 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
         const auto member = find_member(object->type, identifier(member_name));
         if (!member || member->offset > max_offset - object->offset)
             return {};
+        if (member->bit_field) {
+            if (address_of)
+                context.diagnostics.error("cephyr.type", "cannot take the address of a bit-field",
+                                          location(context.source, member_name));
+            return {};
+        }
         object->offset += static_cast<std::int64_t>(member->offset);
         object->type = member->type;
         return object;
@@ -344,11 +370,15 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     // equivalent &literal[i] form handled in subobject.
     Node *literal = nullptr, *index = nullptr;
     bool subtract = false;
+    const auto array_literal = [](Node *node) {
+        return node && (node->getKind() == cparser::NK_STRING_CONST ||
+                        node->getKind() == cparser::NK_COMPOUND_LITERAL);
+    };
     if (!address_of && expression->getKind() == cparser::NK_PLUS_EXPR) {
         auto *plus = static_cast<cparser::PlusExprASTNode *>(expression);
         literal = plus->getLhs();
         index = plus->getRhs();
-        if (literal->getKind() != cparser::NK_STRING_CONST)
+        if (!array_literal(literal))
             std::swap(literal, index);
     } else if (!address_of && expression->getKind() == cparser::NK_MINUS_EXPR) {
         auto *minus = static_cast<cparser::MinusExprASTNode *>(expression);
@@ -358,9 +388,9 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
             subtract = true;
         }
     }
-    auto storage = subobject(subobject, literal && literal->getKind() == cparser::NK_STRING_CONST ?
-                                     literal : expression, address_of);
-    if (storage && literal && literal->getKind() == cparser::NK_STRING_CONST) {
+    const bool has_addend = array_literal(literal);
+    auto storage = subobject(subobject, has_addend ? literal : expression, address_of);
+    if (storage && has_addend) {
         storage = array_element(std::move(*storage), index, true, subtract);
         address_of = true; // The resulting relocation points at the selected element.
     }
@@ -374,6 +404,7 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
         auto element = *type.element;
         element.is_const |= type.is_const;
         element.is_volatile |= type.is_volatile;
+        element.is_restrict |= type.is_restrict;
         source_type = pointer_type(element);
     } else {
         return {};
@@ -384,7 +415,8 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
 }
 
 bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
-                           Image &image, std::uint64_t offset, const Function *scope) {
+                            Image &image, std::uint64_t offset, const Function *scope,
+                            std::optional<BitField> bit_field = std::nullopt) {
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
@@ -399,8 +431,20 @@ bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
             unit.error(
                 initializer,
                  "static initializer is not a supported arithmetic constant expression",
-                "cephyr.global.initializer");
+                 "cephyr.global.initializer");
         return false;
+    }
+    if (bit_field) {
+        const auto field = *bit_field;
+        const auto mask = field.mask() << field.shift;
+        const auto bits = (value->value & field.mask()) << field.shift;
+        for (unsigned i = 0; i < field.bytes(); ++i) {
+            auto &byte = image.bytes[static_cast<std::size_t>(offset + i)];
+            const auto byte_mask = (mask >> (i * 8)) & 0xff;
+            byte = static_cast<unsigned char>((static_cast<unsigned char>(byte) & ~byte_mask) |
+                   (bits >> (i * 8)));
+        }
+        return true;
     }
     const auto width = size_of(type);
     if (type.extended_real()) {
@@ -419,34 +463,37 @@ bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
     return true;
 }
 
-bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
-                         Image &image, std::uint64_t offset, const Function *scope) {
+bool initialize_pointer(const TypeContext &context, const CType &type, Node *initializer,
+                        Image *image, std::uint64_t offset = 0) {
+    const auto error = [&](std::string_view code, std::string_view message) {
+        context.diagnostics.error(code, message, location(context.source, initializer));
+    };
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
-        unit.error(initializer, "scalar initializer has more than one value",
-                   "cephyr.global.initializer");
+        error("cephyr.global.initializer", "scalar initializer has more than one value");
         return false;
     }
     if (initializer->getKind() == cparser::NK_GENERIC_EXPR) {
-        initializer = select_generic(initializer, TypeContext(unit, scope));
+        initializer = select_generic(initializer, context);
         if (!initializer)
             return false;
     }
 
-    const auto before_relocation = unit.diagnostics.error_count();
-    if (auto relocation = symbol_relocation(unit, type, initializer, scope)) {
-        image.relocations.emplace(offset, std::move(*relocation));
+    const auto before_relocation = context.diagnostics.error_count();
+    if (auto relocation = symbol_relocation(context, type, initializer, image != nullptr)) {
+        if (image)
+            image->relocations.emplace(offset, std::move(*relocation));
         return true;
     }
-    if (unit.diagnostics.error_count() != before_relocation)
+    if (context.diagnostics.error_count() != before_relocation)
         return false;
 
-    const auto errors = unit.diagnostics.error_count();
+    const auto errors = context.diagnostics.error_count();
     Node *integer_node = initializer;
     if (initializer->getKind() == cparser::NK_CAST_EXPR) {
         auto *cast = static_cast<cparser::CastExprASTNode *>(initializer);
-        auto cast_type = read_type(cast->getType(), TypeContext(unit, scope), true);
+        auto cast_type = read_type(cast->getType(), context, true);
         if (cast_type.pointer()) {
             // A cast of an integer constant zero to void * is itself a
             // null-pointer constant, notably in the packaged NULL macro.
@@ -458,16 +505,14 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
         }
     }
     if (present(integer_node)) {
-        auto value = integer_constant(integer_node, TypeContext(unit, scope));
+        auto value = integer_constant(integer_node, context);
         if (value && normalize(value->value, value->type) == 0)
             return true;
     }
 
-    if (errors == unit.diagnostics.error_count())
-        unit.error(initializer,
-                   "pointer initializer is neither a null pointer constant nor a supported "
-                   "symbol address",
-                   "cephyr.global.relocation");
+    if (errors == context.diagnostics.error_count())
+        error("cephyr.global.relocation",
+              "pointer initializer is neither a null pointer constant nor a supported symbol address");
     return false;
 }
 
@@ -476,7 +521,7 @@ bool initialize_scalar(Unit &unit, const CType &type, Node *initializer,
     if (type.arithmetic())
         return initialize_arithmetic(unit, type, initializer, image, offset, scope);
     if (type.pointer())
-        return initialize_pointer(unit, type, initializer, image, offset, scope);
+        return initialize_pointer(TypeContext(unit, scope), type, initializer, &image, offset);
     unit.error(initializer, "static structure or union initializers must use braces",
                "cephyr.global.type");
     return false;
@@ -485,6 +530,14 @@ bool initialize_scalar(Unit &unit, const CType &type, Node *initializer,
 bool initialize_aggregate(Unit &unit, const std::vector<ObjectInitEntry> &plan, Image &image,
                           const Function *scope) {
     for (const auto &entry : plan) {
+        if (entry.bit_field) {
+            // Union member changes are handled by the planner's separate
+            // reset entries. Within a byte preserve all neighboring fields.
+            if (!initialize_arithmetic(unit, entry.type, entry.source, image, entry.offset,
+                                       scope, entry.bit_field))
+                return false;
+            continue;
+        }
         const auto extent = entry.bytes ? entry.bytes->size() : *size_of(entry.type);
         const auto end = entry.offset + extent;
         // A later designator may override a pointer, or switch the active
@@ -514,7 +567,12 @@ bool zero_representable(const CType &type) {
         return type.count && type.element && zero_representable(*type.element);
     if (type.kind == CType::Kind::record && type.record && type.record->size) {
         const auto &members = type.record->members;
-        return std::all_of(members.begin(), type.record->is_union ? members.begin() + 1 : members.end(),
+        if (type.record->is_union) {
+            const auto first = std::find_if_not(members.begin(), members.end(),
+                [](const RecordMember &member) { return member.unnamed_bit_field(); });
+            return first != members.end() && zero_representable(first->type);
+        }
+        return std::all_of(members.begin(), members.end(),
                            [](const RecordMember &member) { return zero_representable(member.type); });
     }
     return false;
@@ -554,6 +612,31 @@ bool global_name_available(Unit &unit, std::string_view name, Node *at) {
 
 } // namespace
 
+bool validate_static_compound_initializer(const TypeContext &context,
+                                          const std::vector<ObjectInitEntry> &plan) {
+    for (const auto &entry : plan) {
+        if (entry.clear || entry.bytes)
+            continue;
+        if (entry.type.pointer()) {
+            if (!initialize_pointer(context, entry.type, entry.source, nullptr))
+                return false;
+        } else {
+            bool valid;
+            auto *value = scalar_initializer(entry.source, valid);
+            const auto errors = context.diagnostics.error_count();
+            if (valid && entry.type.arithmetic() &&
+                arithmetic_initializer_constant(value, entry.type, context))
+                continue;
+            if (errors == context.diagnostics.error_count())
+                context.diagnostics.error("cephyr.compound-literal",
+                    "static compound literal initializer is not a supported arithmetic constant expression",
+                    location(context.source, value));
+            return false;
+        }
+    }
+    return true;
+}
+
 std::string Unit::add_string(Node *literal, const CType &type) {
     // Do not share a byte-identical object with an insufficient alignment.
     auto key = std::pair{align_of(type), string_constant_bytes(literal)};
@@ -584,14 +667,12 @@ void Unit::require_function_name(const std::string &symbol, std::string_view spe
     data_assembly += object_assembly(symbol, true, true, 1, image);
 }
 
-bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
+namespace {
+
+bool define_global_object(Unit &unit, Symbol &symbol, Node *initializer,
+                          const Function *scope,
+                          std::optional<std::vector<ObjectInitEntry>> aggregate_init = {}) {
     Node *definition = symbol.definition;
-    if (!present(definition) ||
-        definition->getKind() != cparser::NK_VAR_DECL) {
-        unit.error(definition, "global definition is not a variable declaration",
-                   "cephyr.global.definition");
-        return false;
-    }
     if (!valid_symbol(symbol.name)) {
         unit.error(definition, "global assembler name is invalid",
                    "cephyr.global.symbol");
@@ -600,18 +681,15 @@ bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
     if (!global_name_available(unit, symbol.name, definition))
         return false;
 
-    auto *declaration =
-        static_cast<cparser::VarDeclASTNode *>(definition);
-    auto *initializer = declaration->getInit();
     // An inferred bound completes the visible type only at the end of its
     // initializer list (C11 6.7.9p22), not during initializer evaluation.
     CType type = symbol.type;
-    std::optional<std::vector<ObjectInitEntry>> aggregate_init;
-    if (type.aggregate() && present(initializer)) {
+    if (!aggregate_init && type.aggregate() && present(initializer)) {
         aggregate_init = plan_object_initializer(TypeContext(unit, scope), type, initializer);
         if (!aggregate_init)
             return false;
-    } else if (type.kind == CType::Kind::array && !type.count) {
+    }
+    if (type.kind == CType::Kind::array && !type.count && !present(initializer)) {
         if (symbol.internal) {
             unit.error(definition, scope ? "block-scope static array has incomplete type"
                                          : "tentative definition with internal linkage has incomplete array type",
@@ -677,6 +755,36 @@ bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
     }
     symbol.type = std::move(type);
     return true;
+}
+
+} // namespace
+
+bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
+    auto *definition = symbol.definition;
+    if (!present(definition) || definition->getKind() != cparser::NK_VAR_DECL) {
+        unit.error(definition, "global definition is not a variable declaration",
+                   "cephyr.global.definition");
+        return false;
+    }
+    auto *declaration = static_cast<cparser::VarDeclASTNode *>(definition);
+    return define_global_object(unit, symbol, declaration->getInit(), scope);
+}
+
+std::optional<std::pair<CType, std::string>> Unit::add_static_compound_literal(Node *node) {
+    if (const auto found = static_compound_literals.find(node); found != static_compound_literals.end())
+        return found->second;
+    CType type;
+    auto plan = plan_compound_literal(TypeContext(*this), node, type);
+    if (!plan)
+        return std::nullopt;
+    // The TU prefix is reserved, and nested initializers can themselves
+    // materialize literals before this one is emitted.
+    auto name = "__cephyr_tu_compound_" + std::to_string(compound_literals++);
+    Symbol storage{type, std::move(name), node, node, true, false, true};
+    auto *initializer = static_cast<cparser::CompoundLiteralASTNode *>(node)->getInit();
+    if (!define_global_object(*this, storage, initializer, nullptr, std::move(plan)))
+        return std::nullopt;
+    return static_compound_literals.emplace(node, std::pair{type, storage.name}).first->second;
 }
 
 } // namespace cephyr::detail

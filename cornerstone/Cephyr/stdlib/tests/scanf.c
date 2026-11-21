@@ -191,26 +191,16 @@ static void failures(void)
     assert(sscanf("1", "%18446744073709551616d", &value) == EOF && errno == EOVERFLOW);
     assert(sscanf("1", "%18446744073709551615d", &value) == 1 && value == 1);
 
-    const char *unsupported[] = { "%a", "%lA", "%e", "%E", "%f", "%F", "%g", "%G" };
-    /* Check storage byte-wise without compiler-specific soft-float helpers. */
-    float f;
-    double d;
     long double ld;
-    memset(&f, 0, sizeof(f));
-    memset(&d, 0, sizeof(d));
     memset(&ld, 0, sizeof(ld));
-    for (size_t i = 0; i < sizeof(unsupported) / sizeof(*unsupported); ++i) {
-        errno = 0;
-        int result = i == 1 ? sscanf("1", unsupported[i], &d)
-                            : sscanf("1", unsupported[i], &f);
-        assert(result == EOF && errno == ENOSYS &&
-               filled_with(&f, sizeof(f), 0) && filled_with(&d, sizeof(d), 0));
-    }
+    errno = 0;
+    assert(sscanf("2", "%Lf", &ld) == EOF && errno == ENOSYS &&
+           filled_with(&ld, sizeof(ld), 0));
     errno = 0;
     assert(sscanf("1 2", "%d%Lf", &value, &ld) == 1 &&
            errno == ENOSYS && value == 1 && filled_with(&ld, sizeof(ld), 0));
     errno = 0;
-    assert(sscanf("1", "%*f") == EOF && errno == ENOSYS);
+    assert(sscanf("1", "%*Lf") == EOF && errno == ENOSYS);
 }
 
 static void stream(void)
@@ -242,9 +232,8 @@ static void stream(void)
     assert(feof(file) && !ferror(file));
     assert(fscanf(file, "%c", bytes) == EOF);
     rewind(file);
-    float unsupported = 0;
     errno = 0;
-    assert(fscanf(file, "%f", &unsupported) == EOF && errno == ENOSYS &&
+    assert(fscanf(file, "%*Lf") == EOF && errno == ENOSYS &&
            ftell(file) == 0 && fgetc(file) == '1');
     assert(fclose(file) == 0);
 

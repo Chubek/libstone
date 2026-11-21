@@ -138,16 +138,24 @@ static int prioritize_dependency(ANContext *ctx, const uint16_t *def,
     return 1;
 }
 
+static int preferred(const ANContext *ctx, ArchonValue dst)
+{
+    if (ctx->facts)
+        return an_fact(ctx, ARCHON_BACKEND_FACT_OBSERVABLE_INPUT, dst);
+    return ctx->schedule_hints && ctx->schedule_hints->prefer &&
+        ctx->schedule_hints->prefer(ctx->schedule_hints->user, ctx->function, ctx->block, dst) != 0;
+}
+
 static int schedule_region(ANContext *ctx, const ArchonMIRInst *insts,
     size_t begin, size_t end, uint16_t *def, size_t *order)
 {
-    uint16_t depth[AN_MAX_VALUE], bucket[AN_MAX_VALUE + 1u];
+    uint16_t depth[AN_MAX_VALUE], priority[AN_MAX_VALUE], bucket[2u * AN_MAX_VALUE + 2u];
     const size_t length = end - begin;
     size_t i, next = begin;
 
     if (length > AN_MAX_VALUE)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "too many SSA definitions in schedule region");
-    memset(bucket, 0, (length + 1u) * sizeof(bucket[0]));
+    memset(bucket, 0, (2u * length + 2u) * sizeof(bucket[0]));
     for (i = begin; i < end; ++i) {
         const ArchonValue dst = insts[i].dst;
         ctx->instruction = i;
@@ -165,19 +173,21 @@ static int schedule_region(ANContext *ctx, const ArchonMIRInst *insts,
             !prioritize_dependency(ctx, def, depth, begin, i, inst->a) ||
             !prioritize_dependency(ctx, def, depth, begin, i, inst->b))
             return 0;
-        ++bucket[depth[i - begin]];
+        priority[i - begin] = (uint16_t)(2u * depth[i - begin] + preferred(ctx, inst->dst));
+        ++bucket[priority[i - begin]];
     }
-    /* List scheduling by longest local def-use chain, then original index.
+    /* List scheduling by longest local def-use chain, optional preference
+     * for equal-depth instructions, then original index.
      * Every predecessor has strictly higher depth than its users. Thus the
      * next highest-priority instruction is always ready, and stable buckets
      * implement the ready-list choice without maintaining a graph or heap. */
-    for (i = length; i; --i) {
+    for (i = 2u * length + 1u; i; --i) {
         size_t size = bucket[i];
         bucket[i] = (uint16_t)next;
         next += size;
     }
     for (i = begin; i < end; ++i)
-        order[bucket[depth[i - begin]]++] = i;
+        order[bucket[priority[i - begin]]++] = i;
     return 1;
 }
 

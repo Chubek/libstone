@@ -18,7 +18,11 @@ a pinned operation or a block terminator, and block parameters and edges are
 unchanged.
 
 Within each contiguous region of movable instructions, higher priority goes
-to longer local def-use chains, with ties broken by original index. Each
+to longer local def-use chains. With
+`archon_backend_compile_text_with_schedule_hints`, the native RV64 scheduler
+can prefer a caller-marked SSA destination at equal depth. Remaining ties
+are broken by original index. Hints are local to the exact input and cannot
+alter barriers or def-use constraints. Each
 producer ranks strictly ahead of its consumers, so stable buckets can pick
 the highest-priority ready instruction without a search loop. Each region
 uses linear time and is bounded by the native SSA and instruction limits.

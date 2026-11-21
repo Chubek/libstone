@@ -2,3 +2,17 @@
 # immutable SSA value does not repeat the C expression that produced it.
 rewrite strength_reduce double_right : mul(?x, 2) => add(?x, ?x);
 rewrite strength_reduce double_left : mul(2, ?x) => add(?x, ?x);
+
+# Separately opt in to fact-based reduction. Unsigned x % 2^k is exactly
+# the low k bits of x, including k=0 (zero) and k=63. Signed remainder
+# and zero or unknown divisors are not covered by this identity.
+rewrite integer_reduce unsigned_remainder_pow2 : rem_u(?x, pow2(?d)) => low_bits_for_pow2(?x, ?d);
+
+# Every possibly set bit of x must be a known-one bit of the mask.
+rewrite integer_reduce redundant_mask_right : and(masked_by(?x, ?mask), ?mask) => ?x;
+rewrite integer_reduce redundant_mask_left : and(?mask, masked_by(?x, ?mask)) => ?x;
+rewrite integer_reduce redundant_or_right : or(masked_by(?x, ?mask), ?mask) => ?mask;
+rewrite integer_reduce redundant_or_left : or(?mask, masked_by(?x, ?mask)) => ?mask;
+
+# The intersection is empty if neither operand can set a bit the other may set.
+rewrite integer_reduce disjoint_and : and(disjoint_bits(?x, ?y), ?y) => 0;

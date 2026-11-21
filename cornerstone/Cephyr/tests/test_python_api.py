@@ -105,6 +105,56 @@ class CephyrPythonAPITests(unittest.TestCase):
         self.assertIsInstance(result.diagnostics, bytes)
         self.assertIn(b"cephyr_python_add:", result.output)
 
+    def test_native_artifact_capture(self) -> None:
+        result = self.compiler.compile(
+            (*self.config_args, "-c", "-o", "-", "-"),
+            b"int cephyr_python_object(void) { return 3; }\n",
+        )
+        self.assertTrue(result.ok, result.diagnostics)
+        self.assertGreaterEqual(len(result.output), 64)
+        self.assertEqual(result.output[:7], b"\x7fELF\x02\x01\x01")
+        self.assertEqual(result.output[16:20], b"\x01\0\x3e\0")  # ET_REL, EM_X86_64
+        self.assertIn(b"cephyr_python_object\0", result.output)
+
+    def test_bad_tool_artifact_is_not_published(self) -> None:
+        tool = self.root / "assembler.py"
+        tool.write_text(textwrap.dedent("""\
+            import sys
+            from pathlib import Path
+
+            out = Path(sys.argv[sys.argv.index("-o") + 1])
+            mode = sys.argv[1]
+            if mode == "directory":
+                out.mkdir()
+            elif mode == "empty":
+                out.touch()
+            elif mode == "oversize":
+                with out.open("wb") as fp:
+                    fp.truncate(128 * 1024 * 1024 + 1)
+            elif mode == "failed":
+                out.write_bytes(b"partial output")
+                sys.exit(1)
+            """), encoding="utf-8")
+        config = self.root / "bad-artifact.toml"
+        for mode, diagnostic in (
+            ("missing", b"did not produce a regular native artifact"),
+            ("directory", b"did not produce a regular native artifact"),
+            ("empty", b"cannot read native artifact"),
+            ("oversize", b"captured native artifact exceeds 128 MiB"),
+            ("failed", b"exited with status 1"),
+        ):
+            with self.subTest(mode=mode):
+                argv = json.dumps([sys.executable, str(tool), mode], ensure_ascii=False)
+                config.write_text(f"[tools]\nassembler = {argv}\n", encoding="utf-8")
+                result = self.compiler.compile(
+                    ("--config", config, "--target=x86_64-linux-gnu", "-c",
+                     "-x", "assembler", "-", "-o", "-"),
+                    b".text\n",
+                )
+                self.assertEqual(result.status, cephyr.Status.COMPILE_ERROR, result.diagnostics)
+                self.assertEqual(result.output, b"")
+                self.assertIn(diagnostic, result.diagnostics)
+
     def test_archon_does_not_replace_host_imports(self) -> None:
         host_archon = ModuleType("archon")
         before = list(sys.path)

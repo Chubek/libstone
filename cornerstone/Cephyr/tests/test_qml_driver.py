@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import subprocess
 import tempfile
@@ -14,6 +15,45 @@ import unittest
 SOURCE = "unsigned long transform(unsigned long x) { return ((x + 0ul) - 0ul) + 0ul; }\n"
 ADD = "rewrite local_add remove_add_zero : add(?x, 0) => ?x;\n"
 SUB = "rewrite local_sub remove_sub_zero : sub(?x, 0) => ?x;\n"
+DIFFERENTIAL = Path(__file__).with_name("fixtures") / "qml_differential"
+
+
+def differential_inputs():
+    def signed_boundaries(bits):
+        half = 1 << (bits - 1)
+        return (-half, -half + 1, -1, 0, 1, half - 2, half - 1)
+
+    def unsigned_boundaries(bits):
+        half = 1 << (bits - 1)
+        return (0, 1, half - 1, half, half + 1, 2 * half - 2, 2 * half - 1)
+
+    yield from zip(signed_boundaries(64), signed_boundaries(32),
+                   unsigned_boundaries(64), unsigned_boundaries(32))
+    rng = random.Random(0x514D4C)
+    for _ in range(24):
+        yield (rng.getrandbits(64) - (1 << 63), rng.getrandbits(32) - (1 << 31),
+               rng.getrandbits(64), rng.getrandbits(32))
+
+
+def differential_expected(inputs):
+    mask64 = (1 << 64) - 1
+    mask32 = (1 << 32) - 1
+    for _, _, u64, u32 in inputs:
+        seen = (2 * u64) & mask64
+        cell = (seen >> 1) ^ u32
+        returned = (2 * (seen + u32) + cell + u64 % (1 << 63)) & mask64
+        yield (2 * u32) & mask32, returned, cell, seen
+
+
+def differential_initializer(case, expected):
+    def signed_literal(value, suffix):
+        # Even signed minima must not rely on unsigned-to-signed conversion.
+        return f"(-{-value - 1}{suffix} - 1{suffix})" if value < 0 else f"{value}{suffix}"
+
+    s64, s32, u64, u32 = case
+    doubled32, returned, cell, seen = expected
+    return (f"{{{signed_literal(s64, 'L')}, {signed_literal(s32, '')}, {u64}UL, {u32}U, "
+            f"{doubled32}U, {returned}UL, {cell}UL, {seen}UL}},\n")
 
 
 class QmlDriverTests(unittest.TestCase):
@@ -37,7 +77,7 @@ class QmlDriverTests(unittest.TestCase):
         if no_tools:
             env["PATH"] = str(self.work / "no-programs")
         result = subprocess.run(
-            [ARGS.cephyr, *args], cwd=self.work, env=env, capture_output=True,
+            [ARGS.cephyr, "--no-factir", *args], cwd=self.work, env=env, capture_output=True,
             text=True, check=False, timeout=60,
         )
         if success:
@@ -68,6 +108,46 @@ class QmlDriverTests(unittest.TestCase):
         self.assertNotRegex(both, r"(?m)^(mul|xor) ")
         self.assertRegex(both, r"(?m)^add \d+ (\d+) \1$")
 
+    def test_guarded_integer_reductions(self):
+        self.file("input.c", """
+volatile unsigned long sample;
+unsigned long reduce(void) { return sample % (1UL << 8); }
+unsigned long masked(unsigned long x) { return (x & 255UL) & 65535UL; }
+unsigned long partial_mask(unsigned long x, unsigned long y) {
+    return (y | 255UL) & (x & 255UL);
+}
+unsigned long narrow_mask(unsigned long x) { return (x & 255UL) & 127UL; }
+unsigned long odd_divisor(unsigned long x) { return x % 255UL; }
+unsigned long unknown_divisor(unsigned long x, unsigned long y) { return x % y; }
+unsigned long maybe_zero_divisor(unsigned long x, unsigned long y) {
+    return x % (y & 256UL);
+}
+long signed_remainder(long x) { return x % 256L; }
+double floating(double x) { return x * 256.0; }
+""")
+        baseline = self.mir(no_tools=True).stdout
+        selected = self.mir("--qml-pass=integer_reduce", no_tools=True).stdout
+
+        def function(mir, name):
+            return mir.split(f"\nfunction {name} ", 1)[1].split("\nfunction ", 1)[0]
+
+        before = function(baseline, "reduce")
+        after = function(selected, "reduce")
+        self.assertRegex(before, r"(?m)^rem_u ")
+        self.assertNotRegex(after, r"(?m)^rem_u ")
+        self.assertRegex(after, r"(?m)^trunc \d+ \d+ 8$")
+        self.assertEqual(re.findall(r"(?m)^load .*$", after),
+                         re.findall(r"(?m)^load .*$", before))
+        self.assertEqual(len(re.findall(r"(?m)^load ", after)), 1)
+        self.assertEqual(len(re.findall(r"(?m)^and ", function(baseline, "masked"))), 2)
+        self.assertEqual(len(re.findall(r"(?m)^and ", function(selected, "masked"))), 1)
+        self.assertEqual(len(re.findall(r"(?m)^and ", function(baseline, "partial_mask"))), 2)
+        self.assertEqual(len(re.findall(r"(?m)^and ", function(selected, "partial_mask"))), 1)
+        for name in ("narrow_mask", "odd_divisor", "unknown_divisor",
+                     "maybe_zero_divisor", "signed_remainder", "floating"):
+            with self.subTest(name=name):
+                self.assertEqual(function(selected, name), function(baseline, name))
+
     def test_rewrites_preserve_wrapping_values_and_call_count(self):
         self.file("input.c", """
 unsigned int count;
@@ -75,9 +155,14 @@ unsigned long next_value(void) {
     ++count;
     return 0xffffffffffffffffUL;
 }
+volatile unsigned long cell;
 int main(void) {
     unsigned long y = ((next_value() + 0UL) * 2UL) ^ 0UL;
-    return y != 0xfffffffffffffffeUL || count != 1U;
+    cell = y;
+    unsigned long remainder = cell % (1UL << 63);
+    unsigned long masked = (cell & 255UL) & 65535UL;
+    return y != 0xfffffffffffffffeUL || count != 1U ||
+           remainder != 0x7ffffffffffffffeUL || masked != 254UL;
 }
 """)
         host = platform.machine().lower()
@@ -89,11 +174,75 @@ int main(void) {
         for triple, native_hosts, emulator in targets:
             with self.subTest(target=triple):
                 self.run_cephyr(f"--target={triple}", "--qml-pass=canonicalize",
-                                "--qml-pass=strength_reduce", "input.c", "-o", triple)
+                                "--qml-pass=strength_reduce", "--qml-pass=integer_reduce",
+                                "input.c", "-o", triple)
                 if host in native_hosts or emulator:
                     runner = [] if host in native_hosts else [emulator]
                     result = subprocess.run([*runner, str(self.work / triple)],
                                             capture_output=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result)
+
+    def test_native_pipelines_against_boundary_and_seeded_reference(self):
+        inputs = list(differential_inputs())
+        expected = list(differential_expected(inputs))
+        fields = ("signed64", "signed32", "unsigned32", "unsigned64 result",
+                  "cell after call", "cell seen by call", "call count")
+        self.assertLessEqual(len(inputs) * len(fields), 255)
+        self.file("inputs.inc", "".join(
+            differential_initializer(case, result) for case, result in zip(inputs, expected)
+        ))
+        for name in ("kernel.c", "driver.c", "start.S"):
+            self.file(name, (DIFFERENTIAL / name).read_text(encoding="utf-8"))
+
+        host = platform.machine().lower()
+        targets = (
+            ("x86_64-linux-gnu", {"x86_64", "amd64"}, None),
+            ("aarch64-linux-gnu", {"aarch64", "arm64"}, ARGS.qemu_aarch64),
+            ("riscv64-linux-gnu", {"riscv64"}, ARGS.qemu),
+        )
+        pipelines = {
+            "baseline": (),
+            "canonicalize": ("canonicalize",),
+            "strength_reduce": ("strength_reduce",),
+            "combined": ("canonicalize", "strength_reduce"),
+            "integer_reduce": ("integer_reduce",),
+            "all": ("canonicalize", "strength_reduce", "integer_reduce"),
+        }
+        for triple, native_hosts, emulator in targets:
+            target = f"--target={triple}"
+            self.run_cephyr(target, "-c", "driver.c", "-o", "driver.o")
+            self.run_cephyr(target, "-c", "start.S", "-o", "start.o")
+            for name, passes in pipelines.items():
+                with self.subTest(target=triple, pipeline=name):
+                    flags = tuple(f"--qml-pass={phase}" for phase in passes)
+                    mir = self.run_cephyr(target, "--emit-mir", "-o", "-", "kernel.c", *flags).stdout
+                    # Check each selected pass really did work, without pinning
+                    # the total number of rewrite opportunities or SSA IDs.
+                    if "canonicalize" in passes:
+                        self.assertNotRegex(mir, r"(?m)^xor ")
+                    else:
+                        self.assertRegex(mir, r"(?m)^xor ")
+                    if "strength_reduce" in passes:
+                        self.assertRegex(mir, r"(?m)^add \d+ (\d+) \1$")
+                    else:
+                        self.assertNotRegex(mir, r"(?m)^add \d+ (\d+) \1$")
+                    if "integer_reduce" in passes:
+                        self.assertNotRegex(mir, r"(?m)^rem_u ")
+                    else:
+                        self.assertRegex(mir, r"(?m)^rem_u ")
+
+                    binary = self.work / "differential"
+                    self.run_cephyr(target, "-nostdlib", "-static", "kernel.c",
+                                    "driver.o", "start.o", *flags, "-o", str(binary))
+                    if host not in native_hosts and emulator is None:
+                        continue
+                    runner = [] if host in native_hosts else [emulator]
+                    result = subprocess.run([*runner, str(binary)], cwd=self.work,
+                                            capture_output=True, text=True, timeout=20, check=False)
+                    if 0 < result.returncode <= len(inputs) * len(fields):
+                        case, field = divmod(result.returncode - 1, len(fields))
+                        self.fail(f"{fields[field]} mismatch for case {case}: {inputs[case]}; "
+                                  f"expected unsigned observations: {expected[case]}")
                     self.assertEqual(result.returncode, 0, result)
 
     def test_profile_file_paths_merge_and_refresh(self):

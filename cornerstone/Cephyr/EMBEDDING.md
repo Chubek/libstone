@@ -54,8 +54,10 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
 - Pass driver arguments without `argv[0]`. `-` reads the byte span from the
   request, not the host process's standard input. A zero-size span represents
   empty input. `-E` defaults to captured output, and `--emit-mir -o -` and
-  `-S -o -` capture text in the result. `-fsyntax-only` produces diagnostics
-  without a compiler artifact. Objects and executables go to files.
+  `-S -o -` capture text in the result. `-c -o -` captures a relocatable
+  object and `-shared -o -` captures a shared object. Executables still go
+  to files, and the CLI does not support writing binary artifacts to stdout.
+  `-fsyntax-only` produces diagnostics without a compiler artifact.
 - `CEPHYR_OK` and `CEPHYR_COMPILE_ERROR` both return a result. An invalid
   request (`CEPHYR_INVALID_ARGUMENT`) or internal error
   (`CEPHYR_INTERNAL_ERROR`) can return no result. The call overwrites the
@@ -103,6 +105,106 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   another thread that needs Cephyr's native backend. Python hosts should
   check `cephyr_python_version()` matches their CPython major/minor before
   calling `cephyr_compile`.
+
+## Reusing a context and loading trusted code (C API)
+
+Create a `cephyr_context` to keep a copy of driver arguments and resource
+roots across calls. Include an input operand of `-` to compile the source
+span passed to `cephyr_context_compile`. Each call is a separate driver
+invocation: C declarations, macro definitions, object files, and SDK hooks
+do not accumulate. Supply SDK hooks per call; they are borrowed only for that
+call. Results outlive the context. A context can be shared among compiling
+threads, but don't destroy it while any call is using it.
+
+For a multi-file module, call `cephyr_context_add_translation_unit` once per
+C source span, then `cephyr_context_link(context, sdk, &artifact)`. Keep a
+single C `-` operand alongside `-shared -o -`: the units replace that operand
+in append order. A unit's optional logical filename is used for diagnostics
+and preprocessing. Each unit is compiled independently, then the objects are
+linked together once. You can append another unit and retry without losing
+earlier units. `cephyr_context_reset` clears the collection and registered
+symbols without changing the driver arguments. Concurrent links use snapshots;
+results and loaded modules do not borrow the context.
+
+On AMD64 Linux with direct LLD, `cephyr_context_register_host_symbol` can bind
+an external C function or data declaration in those links. For example, register
+`"counter"` as `CEPHYR_HOST_DATA` with `&counter`, and declare it as
+`extern int counter;` in the source. This refers to the actual host storage; a
+function registration instead uses an ABI-preserving trampoline and is not
+guaranteed to compare equal to the original function pointer. Use a matching
+signature or data type and keep the target address valid through all module
+calls and destructors. Only subsequent links see registration changes.
+Registered names are reserved for imports. These bindings are not globally
+visible, and artifacts containing them are only meaningful in the linking
+process—do not save or distribute their output bytes. Unregistered references
+follow ordinary Linux loader rules; a missing strong symbol fails eager load.
+
+Use `cephyr_module_load` on a successful `-shared -o -` result to run trusted
+code for the host ABI. This example uses a dependency-free module:
+
+```c
+#include <cephyr/Cephyr.h>
+#include <stdio.h>
+
+int main(void)
+{
+    const char *const args[] = {
+        "--target=auto", "-shared", "--stdlib=none", "-nostdlib", "-o", "-", "-"
+    };
+    const cephyr_context_options options = {
+        .struct_size = sizeof(options), .argc = sizeof(args) / sizeof(*args), .argv = args
+    };
+    const char source[] = "int answer(void) { return 42; }\n";
+    cephyr_context *context = NULL;
+    cephyr_result *artifact = NULL, *details = NULL;
+    cephyr_module *module = NULL;
+    void *symbol = NULL;
+
+    int status = cephyr_context_create(&options, &context);
+    if (status == CEPHYR_OK)
+        status = cephyr_context_compile(context, source, sizeof(source) - 1, NULL, &artifact);
+    if (status == CEPHYR_OK)
+        status = cephyr_module_load(artifact, &module, &details);
+    if (status == CEPHYR_OK)
+        status = cephyr_module_symbol(module, "answer", &symbol);
+
+    const int ok = status == CEPHYR_OK && symbol;
+    if (ok)
+        printf("%d\n", ((int (*)(void))symbol)());  /* POSIX dlsym conversion */
+    else if (details || artifact)
+        fputs(cephyr_result_diagnostics(details ? details : artifact, NULL), stderr);
+    cephyr_module_destroy(module);
+    cephyr_result_destroy(details);
+    cephyr_result_destroy(artifact);
+    cephyr_context_destroy(context);
+    return !ok;
+}
+```
+
+- Native capture returns a length-delimited byte span (up to 128 MiB),
+  including embedded NUL bytes. With the default Linux Clang/LLD tool path,
+  embedding assembles through memory files and can capture the shared link
+  into an anonymous memory file. This is not a diskless toolchain:
+  generated Archon backend sources and its compiled library, runtime
+  compilation/archive members, external QML bundles, configured tool or
+  pass-through cases, and atomic filesystem publication can still use
+  named files. Memory files also require access to `/proc/self/fd`.
+- Loading uses the Linux dynamic loader with eager relocation and local
+  visibility (`RTLD_NOW | RTLD_LOCAL`). It normally loads from an anonymous
+  memory file; without memfd/proc support it uses a private temporary
+  directory and unlinks the artifact after loading. The backing filesystem
+  must allow executable mappings. Dependencies follow ordinary loader rules;
+  do not rely on `$ORIGIN` referring to the app or source directory. There is
+  no relocatable-object loader or change to the process's global symbol scope.
+- Load only code you trust to run with your application's privileges.
+  Constructors may execute during load, and destructors may execute when the
+  loader reference is released. Keep `libcephyr` loaded while any module,
+  context, or result is live. A module does not borrow the context or result;
+  symbol addresses borrow the module. Stop using them and finish outstanding
+  calls before destroying it. Use the actual ABI signature for a function.
+  Check the lookup status: a valid ELF symbol can have a null address.
+- C++ and Python's one-shot `compile` wrappers can also capture binary
+  artifacts. The context and loader entry points are currently C APIs.
 
 ## Python
 

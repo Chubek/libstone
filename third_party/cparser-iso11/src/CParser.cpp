@@ -444,43 +444,13 @@ ASTNode *CParser::GenericAssociation()
 //-----------------------------------------------------------------------------+
 ASTNode *CParser::parsePostfixExpression(ASTNode *expr)
 {
-    if (_sym == TK_PERIOD)
-    {
-        ASTNode *tmp;
-
-        getTok();
-        check(TK_IDENT);
-        tmp = new IdentASTNode(_tok->sval, _tok->line);
-        return new StructRefASTNode(expr, parsePostfixExpression(tmp));
-    }
-    else if (_sym == TK_PTR_OP)
-    {
-        ASTNode *tmp;
-
-        getTok();
-        check(TK_IDENT);
-        tmp = new IdentASTNode(_tok->sval, _tok->line);
-        return new IndirectRefASTNode(NULL_AST_NODE, expr,
-                                      parsePostfixExpression(tmp));
-    }
-    else
-    {
-        return expr;
-    }
-}
-
-ASTNode *CParser::PostfixExpression(ASTNode *typeName)
-{
-    ASTNode *index = NULL_AST_NODE;
-    ASTNode *expr = PrimaryExpression();
-
     for (;;)
     {
         if (_sym == TK_LBRACK)
         {
             getTok();
-            index = Expression();
-            expr = new ArrayRefASTNode(typeName, expr, index);
+            auto *index = Expression();
+            expr = new ArrayRefASTNode(NULL_AST_NODE, expr, index);
             check(TK_RBRACK);
         }
         else if (_sym == TK_LPAR)
@@ -530,6 +500,13 @@ ASTNode *CParser::PostfixExpression(ASTNode *typeName)
     return expr;
 }
 
+ASTNode *CParser::CompoundLiteral(ASTNode *typeName, int line)
+{
+    auto *literal = new CompoundLiteralASTNode(typeName, Initializer());
+    literal->setLineNum(line);
+    return parsePostfixExpression(literal);
+}
+
 ASTNode *CParser::ArgumentExpressionList()
 {
     SequenceASTNode *args = new SequenceASTNode(AssignmentExpression());
@@ -548,26 +525,37 @@ bool isFirstOfPostfixExpression(unsigned n)
            n == TK__GENERIC || n == TK___FUNC__;
 }
 
-ASTNode *CParser::UnaryExpression(ASTNode *typeName)
+ASTNode *CParser::UnaryExpression()
 {
     ParseDepth depth(*this);
     ASTNode *res = NULL_AST_NODE;
     ASTNode *expr = NULL_AST_NODE;
 
-    if (isFirstOfPostfixExpression(_sym))
+    if (_sym == TK_LPAR &&
+        (isTypeSpecifier(getLATok(2), 2) || isTypeQualifier(getLATok(2))))
     {
-        res = PostfixExpression(typeName);
+        const int line = getLookahead().line;
+        getTok();
+        auto *type = TypeName();
+        check(TK_RPAR);
+        if (_sym != TK_LBRACE)
+            parsingError("expected '{' after compound literal type");
+        res = CompoundLiteral(type, line);
+    }
+    else if (isFirstOfPostfixExpression(_sym))
+    {
+        res = parsePostfixExpression(PrimaryExpression());
     }
     else if (_sym == TK_INC_OP)
     {
         getTok();
-        expr = UnaryExpression(typeName);
+        expr = UnaryExpression();
         res = new PreincrementExprASTNode(expr);
     }
     else if (_sym == TK_DEC_OP)
     {
         getTok();
-        expr = UnaryExpression(typeName);
+        expr = UnaryExpression();
         res = new PredecrementExprASTNode(expr);
     }
     else if (_sym == TK_AND || _sym == TK_TIMES || _sym == TK_PLUS ||
@@ -606,16 +594,19 @@ ASTNode *CParser::UnaryExpression(ASTNode *typeName)
         {
             if (isTypeSpecifier(getLATok(2), 2) || isTypeQualifier(getLATok(2)))
             {
+                const int line = getLookahead().line;
                 getTok();
                 expr = TypeName();
                 check(TK_RPAR);
+                if (_sym == TK_LBRACE)
+                    expr = CompoundLiteral(expr, line);
             }
             else
-                expr = UnaryExpression(NULL_AST_NODE);
+                expr = UnaryExpression();
         }
         else
         {
-            expr = UnaryExpression(NULL_AST_NODE);
+            expr = UnaryExpression();
         }
         res = new SizeOfExprASTNode(expr);
     }
@@ -667,27 +658,18 @@ ASTNodeKind CParser::UnaryOperator()
 ASTNode *CParser::CastExpression()
 {
     ParseDepth depth(*this);
-    ASTNode *typeName = NULL_AST_NODE;
-    ASTNode *expr = NULL_AST_NODE;
-    bool cast = false;
-
     if (_sym == TK_LPAR &&
         (isTypeSpecifier(getLATok(2), 2) || isTypeQualifier(getLATok(2))))
     {
+        const int line = getLookahead().line;
         getTok();
-        cast = true;
-        typeName = TypeName();
+        auto *type = TypeName();
         check(TK_RPAR);
+        if (_sym == TK_LBRACE)
+            return CompoundLiteral(type, line);
+        return new CastExprASTNode(type, CastExpression());
     }
-    expr = cast ? CastExpression() : UnaryExpression(typeName);
-    if (cast)
-    {
-        return new CastExprASTNode(typeName, expr);
-    }
-    else
-    {
-        return expr;
-    }
+    return UnaryExpression();
 }
 
 ASTNode *CParser::MultiplicativeExpression()
@@ -1330,7 +1312,8 @@ static ASTNode *cloneType(ASTNode *type)
         {
             auto *array = static_cast<ArrayTypeASTNode *>(type);
             copy = new ArrayTypeASTNode(cloneType(array->getElementType()),
-                                        array->getExpr());
+                                        array->getExpr(), array->getBracketQualifiers(),
+                                        array->hasStaticBound(), array->hasStarBound());
             break;
         }
         case NK_FUNCTION_TYPE:
@@ -1654,8 +1637,9 @@ ASTNode *CParser::StructOrUnionSpecifier()
                 continue;
             auto *field = static_cast<FieldDeclASTNode *>(member);
             auto *name = field->getName();
-            if (field->getType()->getKind() == NK_VOID_TYPE ||
-                field->getType()->getKind() == NK_FUNCTION_TYPE)
+            if (field->getWidth() == NULL_AST_NODE &&
+                (field->getType()->getKind() == NK_VOID_TYPE ||
+                 field->getType()->getKind() == NK_FUNCTION_TYPE))
                 _ast->error(name->getLineNum(), "record member must have an object type");
             auto *type = _ast->getStbType(field->getType());
             if (!type)
@@ -1770,14 +1754,19 @@ SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec, ASTNode *align
 
 ASTNode *CParser::StructDeclarator(ASTNode *typeSpec, ASTNode *alignments)
 {
+    const int line = getLookahead().line;
+    ASTNode *name = _sym == TK_COLON ? NULL_AST_NODE : Declarator(typeSpec);
+    ASTNode *width = NULL_AST_NODE;
     if (_sym == TK_COLON)
-        parsingError(alignments != NULL_AST_NODE ? "_Alignas is not allowed on a bit-field" :
-                                                 "bit-fields are not supported");
-    ASTNode *name = Declarator(typeSpec);
-    if (_sym == TK_COLON)
-        parsingError(alignments != NULL_AST_NODE ? "_Alignas is not allowed on a bit-field" :
-                                                 "bit-fields are not supported");
-    return new FieldDeclASTNode(typeSpec, name, alignments);
+    {
+        if (alignments != NULL_AST_NODE)
+            parsingError("_Alignas is not allowed on a bit-field");
+        getTok();
+        width = ConstantExpression();
+    }
+    auto *field = new FieldDeclASTNode(typeSpec, name, alignments, width);
+    field->setLineNum(line);
+    return field;
 }
 
 ASTNode *CParser::EnumSpecifier()
@@ -1915,12 +1904,18 @@ ASTNode *CParser::Declarator(ASTNode * &typeSpec, DeclaratorName mode,
                 typeSpec->setFlags(part->qualifiers);
                 break;
             case DeclaratorPart::Array:
+                if ((part->qualifiers || part->staticBound) &&
+                    (mode != DeclaratorName::Parameter || &*part != parts.data()))
+                    _ast->errorAt(part->line, part->column,
+                                  "array bracket qualifiers and static require the outermost array derivation of a function parameter");
                 if (base == NK_VOID_TYPE || base == NK_FUNCTION_TYPE ||
                     (base == NK_ARRAY_TYPE &&
-                     static_cast<ArrayTypeASTNode *>(typeSpec)->getExpr() == NULL_AST_NODE))
+                     static_cast<ArrayTypeASTNode *>(typeSpec)->getExpr() == NULL_AST_NODE &&
+                     !static_cast<ArrayTypeASTNode *>(typeSpec)->hasStarBound()))
                     _ast->errorAt(part->line, part->column,
                                   "array element type must be a complete object type");
-                typeSpec = new ArrayTypeASTNode(typeSpec, part->operand);
+                typeSpec = new ArrayTypeASTNode(typeSpec, part->operand, part->qualifiers,
+                                                part->staticBound, part->starBound);
                 break;
             case DeclaratorPart::Function:
             {
@@ -1996,12 +1991,29 @@ ASTNode *CParser::DeclaratorParts(std::vector<DeclaratorPart> &parts,
         getTok();
         if (part.kind == DeclaratorPart::Array)
         {
-            if (_sym == TK_STATIC || isTypeQualifier(_sym))
-                parsingError("array parameter qualifiers and static bounds are unsupported");
+            if (_sym == TK_STATIC)
+            {
+                getTok();
+                part.staticBound = true;
+            }
+            while (isTypeQualifier(_sym))
+                TypeQualifier(part.qualifiers);
+            if (!part.staticBound && _sym == TK_STATIC)
+            {
+                getTok();
+                part.staticBound = true;
+            }
             if (_sym == TK_TIMES && getLATok(2) == TK_RBRACK)
-                parsingError("variable-length array star bounds are unsupported");
-            if (_sym != TK_RBRACK)
+            {
+                if (part.staticBound)
+                    parsingError("static array bound requires a size expression, not '*'");
+                getTok();
+                part.starBound = true;
+            }
+            else if (_sym != TK_RBRACK)
                 part.operand = AssignmentExpression();
+            else if (part.staticBound)
+                parsingError("static array bound requires a size expression");
             check(TK_RBRACK);
         }
         else
@@ -2167,7 +2179,7 @@ ASTNode *CParser::ParameterDeclaration()
         _ast->error(line, "register is the only storage class allowed on a parameter");
     if (flags & (FS_INLINE | FS_NORETURN))
         _ast->error(line, "function specifier is not allowed on a parameter");
-    auto *name = Declarator(typeSpec, DeclaratorName::Optional);
+    auto *name = Declarator(typeSpec, DeclaratorName::Parameter);
     auto *parameter = new ParmDeclASTNode(typeSpec, name);
     parameter->setLineNum(line);
     parameter->setFlags(flags & DS_STORAGE_MASK);

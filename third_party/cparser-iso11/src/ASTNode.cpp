@@ -95,6 +95,7 @@ void SwitchStmtASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void WhileStmtASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void CastExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void CompoundLiteralASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void BitNotExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 

@@ -29,7 +29,6 @@ NEGATIVE = {
     "bad-static": "double g(void); static double x = g();\n",
     "overflow-literal": "double f(void) { return 1e9999999; }\n",
     "overflow-object": "static float x = 0x1p128;\n",
-    "variadic": "extern int g(int, ...); int f(float x) { return g(1, x); }\n",
 }
 
 
@@ -93,17 +92,18 @@ def main():
             else:
                 print(f"{triple}: linked; execution skipped (no emulator)")
 
-        # RV64IM supports storage/transport, not runtime addition. Reject it
-        # during C lowering even when asking for only generic MachineIR.
+        # RV64IM lowers runtime arithmetic to typed, integer-ABI helper
+        # calls rather than issuing hardware FP instructions.
         rv = (*base, "--target=riscv64-linux-gnu")
         rv_source = work / "rv64.c"
         rv_source.write_text(
             '#ifdef __CEPHYR_HAS_SCALAR_FP\n#error "unexpected hard FP macro"\n#endif\n'
             "float f(float x) { return x + 0.25f; }\n", encoding="ascii")
-        for stage, output in (("-S", work / "rv64.s"), ("--emit-mir", work / "rv64.mir")):
-            check(*rv, stage, rv_source, "-o", output, expected="runtime floating-point arithmetic")
-            if output.exists():
-                raise AssertionError(f"RV64 soft-float unexpectedly published {output}")
+        rv_mir = work / "rv64.mir"
+        check(*rv, "--emit-mir", rv_source, "-o", rv_mir)
+        words = rv_mir.read_text(encoding="ascii").split()
+        if "__addsf3" not in words or "fadd" in words:
+            raise AssertionError("RV64 float arithmetic did not lower to a soft-float helper")
         rv_int_cast = work / "rv64-ice.c"
         rv_int_cast.write_text(
             "_Static_assert((int)0x1.8p1 == 3, \"integer constant expression\");\n"
@@ -118,10 +118,7 @@ def main():
             src = work / f"bad-{name}.c"
             out = work / f"bad-{name}.s"
             src.write_text(text, encoding="ascii")
-            # The two hardware FP providers accept scalar FP variadic calls;
-            # RV64IM's partial soft-float slice still excludes them.
-            target = rv if name == "variadic" else amd
-            check(*target, "-S", src, "-o", out, expected="error")
+            check(*amd, "-S", src, "-o", out, expected="error")
             if out.exists():
                 raise AssertionError(f"{name}: unexpectedly published {out}")
 

@@ -67,7 +67,11 @@ line_markers = true
 hosted = true
 
 # Optional QML optimization profile; none is selected by default.
-# Select one with --profile NAME or uncomment the [qml] selector.
+# FactIR runs before the native backend or MIR emission. Override with --no-factir.
+# [factir]
+# enabled = false
+
+# Select a QML profile with --profile NAME or uncomment the [qml] selector.
 # [qml]
 # profile = "optimizing"
 #

@@ -3,7 +3,49 @@
 #include <iostream>
 #define CHECK(condition) do { if (!(condition)) throw std::runtime_error("test failed: " #condition); } while (false)
 using namespace weighstone::ccint;
+
+static void check_abstract_masks() {
+    using Masks = weighstone::support::KnownBitMasks<std::uint64_t>;
+    constexpr std::uint64_t mask = 7;
+    const auto contains = [](Masks facts, std::uint64_t value) {
+        return (facts.zero & value) == 0 && (facts.one & value) == facts.one;
+    };
+    for (std::uint64_t az=0; az<=mask; ++az) for (std::uint64_t ao=0; ao<=mask; ++ao) {
+        if (az & ao) continue;
+        for (std::uint64_t bz=0; bz<=mask; ++bz) for (std::uint64_t bo=0; bo<=mask; ++bo) {
+            if (bz & bo) continue;
+            const Masks a{az, ao}, b{bz, bo};
+            const Masks results[] = {a.bit_and(b), a.bit_or(b), a.bit_xor(b)};
+            Masks expected[] = {{mask, mask}, {mask, mask}, {mask, mask}};
+            bool subset = true, disjoint = true;
+            for (std::uint64_t x=0; x<=mask; ++x) for (std::uint64_t y=0; y<=mask; ++y) {
+                if (!contains(a, x) || !contains(b, y)) continue;
+                const std::uint64_t values[] = {x & y, x | y, x ^ y};
+                for (unsigned i=0; i<3; ++i) {
+                    expected[i].zero &= mask ^ values[i];
+                    expected[i].one &= values[i];
+                }
+                subset &= (x & y) == x;
+                disjoint &= (x & y) == 0;
+            }
+            for (unsigned i=0; i<3; ++i) {
+                CHECK(results[i].zero == expected[i].zero);
+                CHECK(results[i].one == expected[i].one);
+            }
+            CHECK(a.masked_by(b, mask) == subset);
+            CHECK(a.disjoint(b, mask) == disjoint);
+        }
+    }
+    constexpr auto all = ~std::uint64_t{0};
+    constexpr auto high = std::uint64_t{1} << 63;
+    CHECK((Masks{all ^ high, high}.all_known(all)));
+    CHECK((Masks{all ^ high, 0}.masked_by(Masks{0, high}, all)));
+    CHECK((Masks{all ^ high, 0}.disjoint(Masks{high, 0}, all)));
+    CHECK((!Masks{all ^ high, 0}.disjoint(Masks{}, all)));
+}
+
 int main() {
+    check_abstract_masks();
     // Exhaustive fixed-width arithmetic at small widths.
     for (unsigned w=1; w<=5; ++w) {
         const unsigned mod=1u<<w;

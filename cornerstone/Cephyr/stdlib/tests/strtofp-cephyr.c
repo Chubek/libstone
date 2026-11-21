@@ -38,8 +38,7 @@ static int check_float(const char *text, uint32_t bits, int consumed, int error)
 }
 
 #if !defined(__CEPHYR__) && (defined(__x86_64__) || defined(__aarch64__))
-/* The runtime has no public fenv.h; exercise the platform rounding modes
-   without changing the test's own FP expressions (it compares bits). */
+/* Set the hardware mode independently of fenv.h to test strtofp itself. */
 static void set_rounding(unsigned mode)
 {
 #if defined(__x86_64__)

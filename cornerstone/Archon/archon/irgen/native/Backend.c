@@ -74,8 +74,9 @@ static void output_error(ANContext *ctx, ArchonBackendStatus status)
     an_error(ctx, status, message);
 }
 
-ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
-    const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
+ArchonBackendStatus an_compile_with_hints(const ArchonMIRModule *module,
+    const ArchonBackendOptions *options, unsigned flags, const ArchonBackendScheduleHints *hints,
+    const ArchonBackendFactHints *facts, ArchonBackendArtifact *artifact,
     ArchonBackendDiagnostic *diagnostic)
 {
     /* Always keep a diagnostic, even when the caller only needs the status. */
@@ -86,7 +87,8 @@ ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
     };
     ANContext ctx = {
         .options = options, .diag = &diag, .stage = ARCHON_BACKEND_INPUT,
-        .function = SIZE_MAX, .block = SIZE_MAX, .instruction = SIZE_MAX, .flags = flags
+        .function = SIZE_MAX, .block = SIZE_MAX, .instruction = SIZE_MAX, .flags = flags,
+        .schedule_hints = hints, .facts = facts
     };
     ANOut out = {0};
     int compiled;
@@ -150,6 +152,13 @@ done:
     if (diagnostic)
         *diagnostic = diag;
     return diag.status;
+}
+
+ArchonBackendStatus archon_backend_compile_ex(const ArchonMIRModule *module,
+    const ArchonBackendOptions *options, unsigned flags, ArchonBackendArtifact *artifact,
+    ArchonBackendDiagnostic *diagnostic)
+{
+    return an_compile_with_hints(module, options, flags, NULL, NULL, artifact, diagnostic);
 }
 
 ArchonBackendStatus archon_backend_compile(const ArchonMIRModule *module,

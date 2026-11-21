@@ -3,6 +3,7 @@
 
 #include "cephyr/Cephyr.h"
 #include "cephyr/backend.hpp"
+#include "../FactIR.hpp"
 
 #include "cephyr/cache.hpp"
 #include "cephyr/config.hpp"
@@ -580,6 +581,8 @@ struct Backend::Impl {
                                               const ArchonBackendOptions *,
                                               unsigned, ArchonBackendArtifact *,
                                               ArchonBackendDiagnostic *);
+  using CompileWithHints = decltype(&archon_backend_compile_text_with_schedule_hints);
+  using CompileWithFacts = decltype(&archon_backend_compile_text_with_facts);
   using DestroyArtifact = void (*)(ArchonBackendArtifact *);
   using BackendTarget = const char *(*)();
 
@@ -592,6 +595,8 @@ struct Backend::Impl {
   bool ready = false;
   void *library = nullptr;
   CompileText compile_text = nullptr;
+  CompileWithHints compile_with_hints = nullptr;
+  CompileWithFacts compile_with_facts = nullptr;
   DestroyArtifact destroy_artifact = nullptr;
   BackendTarget backend_target = nullptr;
   std::string fingerprint;
@@ -811,6 +816,11 @@ struct Backend::Impl {
       backend_target = nullptr;
       return false;
     }
+    // Optional additive Archon API; older configured packages still work.
+    compile_with_hints = reinterpret_cast<CompileWithHints>(
+        dlsym(library, "archon_backend_compile_text_with_schedule_hints"));
+    compile_with_facts = reinterpret_cast<CompileWithFacts>(
+        dlsym(library, "archon_backend_compile_text_with_facts"));
     return true;
   }
 
@@ -934,7 +944,7 @@ struct Backend::Impl {
 
   std::optional<std::string> compile(std::string_view mir,
                                      const std::string &input_name,
-                                     bool position_independent) {
+                                     bool position_independent, const factir::Result *facts) {
     if (!prepare())
       return std::nullopt;
     ArchonBackendArtifact artifact{};
@@ -942,8 +952,45 @@ struct Backend::Impl {
     ArchonBackendOptions options{};
     const unsigned flags =
         position_independent ? static_cast<unsigned>(ARCHON_BACKEND_PIC) : 0u;
-    const auto status = compile_text(mir.data(), mir.size(), &options, flags,
-                                     &artifact, &diagnostic);
+    if (facts && !facts->matches(mir, target))
+      facts = nullptr;
+    const bool rv64 = target.architecture == "RISCV64IM" || target.architecture == "RISCV64I";
+    const bool use_schedule = facts && !facts->preferred.empty() && rv64;
+    const bool use_facts = facts && compile_with_facts &&
+        (!facts->coordinates.empty() || !facts->known_bits.empty() || !facts->preferred.empty());
+    struct HintInput {
+      const factir::Result *facts;
+      std::size_t accepted = 0;
+    } hint_input{facts};
+    const ArchonBackendScheduleHints hints{
+        [](const void *user, std::size_t function, std::size_t block, ArchonValue dst) noexcept -> int {
+          auto &input = *static_cast<HintInput *>(const_cast<void *>(user));
+          const int preferred = factir::Result::prefer(input.facts, function, block, dst);
+          input.accepted += preferred;
+          return preferred;
+        }, &hint_input};
+    const ArchonBackendFactHints native_facts{
+        [](const void *user, ArchonBackendFactKind kind, std::size_t function,
+           std::size_t block, std::uint32_t key) noexcept -> int {
+          auto &input = *static_cast<HintInput *>(const_cast<void *>(user));
+          const bool found = input.facts->contains(kind, function, block, key);
+          if (kind == ARCHON_BACKEND_FACT_OBSERVABLE_INPUT)
+            input.accepted += found;
+          return found;
+        },
+        [](const void *user, std::size_t function, ArchonValue value,
+           std::uint64_t *zero, std::uint64_t *one) noexcept -> int {
+          const auto &input = *static_cast<const HintInput *>(user);
+          return factir::Result::query_known_bits(input.facts, function, value, zero, one);
+        }, &hint_input};
+    const auto status = use_facts ?
+        compile_with_facts(mir.data(), mir.size(), &options,
+                           flags | (use_schedule ? static_cast<unsigned>(ARCHON_BACKEND_SCHEDULE_PURE) : 0u),
+                           &native_facts, &artifact, &diagnostic) :
+        use_schedule && compile_with_hints ?
+        compile_with_hints(mir.data(), mir.size(), &options, flags | ARCHON_BACKEND_SCHEDULE_PURE,
+                           &hints, &artifact, &diagnostic) :
+        compile_text(mir.data(), mir.size(), &options, flags, &artifact, &diagnostic);
     struct ArtifactGuard {
       DestroyArtifact destroy;
       ArchonBackendArtifact *artifact;
@@ -973,6 +1020,14 @@ struct Backend::Impl {
             input_name);
       return std::nullopt;
     }
+    if (use_schedule && config.verbose) {
+      if (use_facts)
+        diagnostics.note("cephyr.factir.schedule", "Archon FactIR scheduling/allocation received " +
+            std::to_string(hint_input.accepted) + " positive observable-value answer(s)", Location{input_name});
+      else if (compile_with_hints)
+        diagnostics.note("cephyr.factir.schedule", "Archon pure scheduler preferred " +
+            std::to_string(hint_input.accepted) + " FactIR value(s)", Location{input_name});
+    }
     return std::string(artifact.data, artifact.size);
   }
 };
@@ -987,9 +1042,10 @@ Backend::~Backend() = default;
 bool Backend::prepare() { return impl_->prepare(); }
 
 std::optional<std::string> Backend::compile(std::string_view mir,
-                                            const std::string &input_name,
-                                            bool position_independent) {
-  return impl_->compile(mir, input_name, position_independent);
+                                             const std::string &input_name,
+                                             bool position_independent,
+                                             const factir::Result *facts) {
+  return impl_->compile(mir, input_name, position_independent, facts);
 }
 
 } // namespace cephyr

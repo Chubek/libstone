@@ -6,6 +6,7 @@ include(CMakePackageConfigHelpers)
 option(CEPHYR_BUILD_TESTS "Build and register Cephyr tests" ON)
 option(CEPHYR_INSTALL_PYTHON "Install the in-process Python bindings" ON)
 option(CEPHYR_ENABLE_MOONSTONE "Enable optional Moonstone compiler integrations" OFF)
+set(CEPHYR_ARCHVIRT_EXECUTABLE "" CACHE FILEPATH "ArchVirt executable for optional guest tests")
 if(CEPHYR_BUILD_TESTS)
   enable_testing()
 endif()
@@ -16,6 +17,8 @@ endif()
 get_filename_component(cephyr_repo "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(cephyr_vendor "${cephyr_repo}/third_party")
 set(cephyr_archon "${cephyr_repo}/cornerstone/Archon")
+# QML uses only Weighstone's dependency-free machine-word mask helper.
+set(cephyr_weighstone "${cephyr_repo}/weighstone")
 if(CEPHYR_ENABLE_MOONSTONE AND NOT TARGET Moonstone::Core)
   if(DEFINED LIBSTONE_BUILD_MOONSTONE AND NOT LIBSTONE_BUILD_MOONSTONE)
     message(FATAL_ERROR "CEPHYR_ENABLE_MOONSTONE requires LIBSTONE_BUILD_MOONSTONE in a root build")
@@ -113,13 +116,15 @@ set_target_properties(cephyr_cparser cephyr_ucpp cephyr_tomlc99 cephyr_diagnosti
   PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(cephyr_native "${cephyr_archon}/archon/irgen/native")
+set(cephyr_satie "${cephyr_vendor}/satie")
 add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
   src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
-  src/moonstone_tools.cpp src/qml_rewrite.cpp
+  src/embedding.cpp src/moonstone_tools.cpp src/qml_rewrite.cpp
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
-  "${cephyr_native}/Legalizer.c")
+  "${cephyr_native}/Legalizer.c"
+  "${cephyr_repo}/novostone/Datalog/Datalog.cpp" "${cephyr_satie}/src/SatieMemory.cpp")
 add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
 add_dependencies(cephyr_compiler cephyr_qml_assets)
 target_compile_features(cephyr_compiler PRIVATE cxx_std_20 INTERFACE cxx_std_17)
@@ -137,9 +142,10 @@ endif()
 set(cephyr_exports "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Cephyr.map")
 target_link_options(cephyr_compiler PRIVATE "LINKER:--version-script=${cephyr_exports}" "LINKER:-z,defs")
 set_property(TARGET cephyr_compiler APPEND PROPERTY LINK_DEPENDS "${cephyr_exports}")
-target_include_directories(cephyr_compiler PRIVATE "${cephyr_native}")
+target_include_directories(cephyr_compiler PRIVATE "${cephyr_native}" "${cephyr_weighstone}")
 target_include_directories(cephyr_compiler SYSTEM PRIVATE
-  "${cephyr_repo}" "${cephyr_vendor}/lmdbxx" "${CEPHYR_LMDB_INCLUDE_DIR}")
+  "${cephyr_repo}" "${cephyr_vendor}/lmdbxx" "${CEPHYR_LMDB_INCLUDE_DIR}"
+  "${cephyr_satie}/include" "${cephyr_satie}/third_party/memtkx/include")
 target_link_libraries(cephyr_compiler PRIVATE cephyr_diagnostics cephyr_cparser cephyr_ucpp cephyr_tomlc99
   libstone_kaguya Archon::Archon "${CEPHYR_LMDB_LIBRARY}" ${CMAKE_DL_LIBS})
 if(TARGET Wetstone::wetstone)
@@ -239,7 +245,7 @@ install(FILES benchmark/README.md benchmark/run.py benchmark/workloads.py
 install(DIRECTORY benchmark/fixtures DESTINATION "${cephyr_data_dir}/benchmark")
 install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md MOONSTONE.md MOONSTONE_ANALYSIS.md
   DESTINATION "${cephyr_data_dir}")
-install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md
+install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md docs/FactIR.md
   DESTINATION "${cephyr_data_dir}/docs")
 install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
 
@@ -307,6 +313,27 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qml_driver.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_qml_test_args} ${cephyr_test_args})
   set_tests_properties(cephyr.qml-driver PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.factir COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_factir.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_test_args})
+  set_tests_properties(cephyr.factir PROPERTIES TIMEOUT 120)
+  add_executable(cephyr-factir-proof-test tests/factir_proof.cpp "${cephyr_satie}/src/SatieMemory.cpp")
+  target_compile_features(cephyr-factir-proof-test PRIVATE cxx_std_20)
+  target_include_directories(cephyr-factir-proof-test PRIVATE include "${cephyr_native}")
+  target_include_directories(cephyr-factir-proof-test SYSTEM PRIVATE
+    "${cephyr_repo}" "${cephyr_vendor}/lmdbxx" "${CEPHYR_LMDB_INCLUDE_DIR}"
+    "${cephyr_satie}/include" "${cephyr_satie}/third_party/memtkx/include")
+  add_test(NAME cephyr.factir-proof COMMAND cephyr-factir-proof-test)
+  add_test(NAME cephyr.qml-cfg COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qml_cfg.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_test_args})
+  set_tests_properties(cephyr.qml-cfg PROPERTIES TIMEOUT 120)
+  if(CEPHYR_ARCHVIRT_EXECUTABLE)
+    add_test(NAME cephyr.archvirt COMMAND "${Python3_EXECUTABLE}" -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_archvirt.py" "$<TARGET_FILE:cephyr>"
+      --archvirt "${CEPHYR_ARCHVIRT_EXECUTABLE}")
+    set_tests_properties(cephyr.archvirt PROPERTIES TIMEOUT 180)
+  endif()
   add_test(NAME cephyr.qml-frontend COMMAND "${Python3_EXECUTABLE}" -B -m unittest
     discover -s "${cephyr_qml}/tests")
   set_tests_properties(cephyr.qml-frontend PROPERTIES TIMEOUT 60)
@@ -315,7 +342,7 @@ if(CEPHYR_BUILD_TESTS)
     "${cephyr_native}/Legalizer.c")
   target_compile_features(cephyr-qml-rewrite-test PRIVATE c_std_99 cxx_std_20)
   target_compile_definitions(cephyr-qml-rewrite-test PRIVATE AN_GENERIC_MIR_VERIFY=1)
-  target_include_directories(cephyr-qml-rewrite-test PRIVATE "${cephyr_native}")
+  target_include_directories(cephyr-qml-rewrite-test PRIVATE "${cephyr_native}" "${cephyr_weighstone}")
   target_link_libraries(cephyr-qml-rewrite-test PRIVATE cephyr_diagnostics)
   add_test(NAME cephyr.qml-rewrite COMMAND cephyr-qml-rewrite-test)
   add_test(NAME cephyr.c11-sample COMMAND "${Python3_EXECUTABLE}"
@@ -326,7 +353,7 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_records.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.c11-records PROPERTIES TIMEOUT 120)
-  foreach(feature IN ITEMS anonymous frontend strings volatile volatile_aggregates)
+  foreach(feature IN ITEMS anonymous bitfields compound_literals frontend strings volatile volatile_aggregates)
     string(REPLACE "_" "-" test_feature "${feature}")
     add_test(NAME cephyr.c11-${test_feature} COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_${feature}.py" "$<TARGET_FILE:cephyr>"
@@ -389,7 +416,7 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_static_fp.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_fp_test_args})
   set_tests_properties(cephyr.c11-static-fp PROPERTIES TIMEOUT 120)
-  foreach(feature IN ITEMS signals strtofp wide_printf)
+  foreach(feature IN ITEMS fenv printf_float scanf_float signals strtofp wide_printf)
     string(REPLACE "_" "-" test_feature "${feature}")
     add_test(NAME cephyr.c11-${test_feature} COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_${feature}.py"

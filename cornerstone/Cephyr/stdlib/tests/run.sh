@@ -25,7 +25,11 @@ for arch in x86_64 aarch64 riscv64; do
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    for source in smoke io files general time multibyte nonlocal scanf wide-stream wide-string wide-printf-cephyr variadic-cephyr signals-cephyr strtofp-cephyr; do
+    fenv=
+    if [ "$arch" != riscv64 ]; then
+        fenv=fenv-cephyr
+    fi
+    for source in smoke io files general time multibyte nonlocal scanf wide-scanf wide-stream wide-string wide-printf-cephyr variadic-cephyr signals-cephyr strtofp-cephyr printf-float-cephyr $fenv; do
         "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
@@ -64,6 +68,16 @@ for arch in x86_64 aarch64 riscv64; do
     run "$output/test-wide-string"
     run "$output/test-signals-cephyr"
     run "$output/test-strtofp-cephyr"
+    run "$output/test-printf-float-cephyr"
+    if [ -n "$fenv" ]; then
+        run "$output/test-fenv-cephyr"
+        run "$output/test-fenv-cephyr" xr
+        run "$output/test-fenv-cephyr" xu
+        if [ "$arch" = x86_64 ]; then
+            run "$output/test-fenv-cephyr" sr
+            run "$output/test-fenv-cephyr" su
+        fi
+    fi
     text=$(run "$output/test-wide-printf-cephyr")
     test "$text" = "wide:-7!"
     text=$(run "$output/test-variadic-cephyr")
@@ -74,6 +88,7 @@ for arch in x86_64 aarch64 riscv64; do
 Invalid argument"
     run "$output/test-nonlocal"
     printf '18? 24\n' | run "$output/test-scanf"
+    printf '18? 24\n' | run "$output/test-wide-scanf"
     text=$(printf 'c!' | run "$output/test-io" pipe)
     test "$text" = C
     mkdir -p "$output/remove-dir"
