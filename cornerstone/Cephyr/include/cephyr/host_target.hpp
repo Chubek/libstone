@@ -13,6 +13,7 @@ struct Config;
 struct NativeLoweringProvider {
     std::string_view architecture, abi, stdspec;
     bool plain_char_signed = false;
+    bool wchar_signed = true;
 };
 
 // Cephyr's own C lowering support, not a list of Archon IRGen targets.

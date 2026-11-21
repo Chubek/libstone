@@ -153,6 +153,7 @@ def main() -> None:
         ("aarch64-linux-gnu", {"aarch64", "arm64"}, args.qemu_aarch64),
         ("riscv64-linux-gnu", {"riscv64"}, args.qemu),
     ]
+    runtime_tests = Path(__file__).resolve().parents[1] / "stdlib/tests"
     with tempfile.TemporaryDirectory(prefix="cephyr-c11-sample-") as directory:
         work = Path(directory)
         env["XDG_CACHE_HOME"] = str(work / "cache")
@@ -189,10 +190,21 @@ def main() -> None:
             executable = work / triple
             subprocess.run([*command, "main.c", "definitions.o", "-o", executable],
                            cwd=work, env=env, check=True)
-            runtime_smoke = Path(__file__).resolve().parents[1] / "stdlib/tests/time-multibyte-cephyr.c"
-            runtime_program = work / f"{triple}-runtime"
-            subprocess.run([*command, runtime_smoke, "-o", runtime_program],
-                           cwd=work, env=env, check=True)
+            subprocess.run(
+                [*command, "-ffreestanding", "-fsyntax-only", runtime_tests / "headers-cephyr.c"],
+                cwd=work, env=env, check=True,
+            )
+            runtime_programs = [
+                (runtime_tests / "time-multibyte-cephyr.c", work / f"{triple}-runtime", b""),
+                (
+                    runtime_tests / "variadic-cephyr.c",
+                    work / f"{triple}-variadic",
+                    b"-7 65535 -9000000000 4 5 6 7 stack 12345678901234\n",
+                ),
+            ]
+            for source, program, _ in runtime_programs:
+                subprocess.run([*command, source, "-o", program],
+                               cwd=work, env=env, check=True)
             if host in hosts:
                 runner = []
             elif emulator:
@@ -200,7 +212,11 @@ def main() -> None:
             else:
                 print(f"{triple}: linked; execution skipped (no matching host or emulator)")
                 continue
-            subprocess.run([*runner, runtime_program], cwd=work, env=env, check=True)
+            for _, program, expected in runtime_programs:
+                result = subprocess.run([*runner, program], cwd=work, env=env,
+                                        stdout=subprocess.PIPE, check=True)
+                if result.stdout != expected:
+                    raise RuntimeError(f"{program.name}: unexpected output {result.stdout!r}")
             run = [*runner, executable]
             result = subprocess.run([*run, "x"], cwd=work, env=env,
                                     check=True, stdout=subprocess.PIPE)

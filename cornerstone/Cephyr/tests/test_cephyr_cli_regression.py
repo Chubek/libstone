@@ -1191,7 +1191,7 @@ class CephyrCLIRegressionTests(unittest.TestCase):
 
     def test_97_block_static_initializer_constraints(self) -> None:
         for source, message in (
-            (b"int f(int n) { static int x = n; return x; }", b"integer constant expression"),
+            (b"int f(int n) { static int x = n; return x; }", b"arithmetic constant expression"),
             (b"int a; int f(void) { int a; static int *x = &a; return *x; }",
              b"supported symbol address"),
             (b"int f(void) { static int a[]; return a != 0; }", b"incomplete type"),

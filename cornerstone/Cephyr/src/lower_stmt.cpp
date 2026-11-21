@@ -93,33 +93,68 @@ void initialize_scalar(Function &function, LValue object, Node *initializer) {
                        "cephyr.local.initializer");
         return;
     }
+    if (object.type.extended_real()) {
+        // Until MIR has an x87 value/ABI class, initialize automatic objects
+        // only from a foldable value. Two narrow stores touch the payload;
+        // automatic scalar padding need not be initialized.
+        const auto errors = function.unit.diagnostics.error_count();
+        const auto value = arithmetic_initializer_constant(
+            initializer, object.type, TypeContext(function.unit, &function));
+        if (!value) {
+            if (function.unit.diagnostics.error_count() == errors)
+                function.error(initializer,
+                    "long double automatic initialization requires a supported constant expression");
+            return;
+        }
+        const auto exponent = offset_address(function, object.address, 8, integer_type(16, false));
+        function.emit_void("store", std::to_string(object.address) + " " +
+                            std::to_string(function.constant(value->value, integer_type(64, false))) +
+                            " 0");
+        function.emit_void("store16", std::to_string(exponent) + " " +
+                            std::to_string(function.constant(value->x87_sign_exponent)) + " 0");
+        return;
+    }
     object.type.is_const = false;
     store(function, object, lower_expr(function, initializer), initializer);
 }
 
 void initialize_object(Function &function, LValue object, const std::vector<ObjectInitEntry> &plan,
-                       std::uint64_t size, Node *at) {
-    if (object_has_qualifier(object.type, &CType::is_volatile)) {
-        function.error(at, "volatile object access is not supported");
-        return;
-    }
-
+                        std::uint64_t size, Node *at) {
+    const auto direct = object_has_qualifier(object.type, &CType::is_volatile);
     // A whole-record expression initializes the object directly. Otherwise
-    // clear the representation first, covering omitted members and padding.
-    if (object.type.kind != CType::Kind::record || at->getKind() == cparser::NK_LIST)
+    // clear ordinary storage first. Volatile storage must not receive that
+    // blanket write followed by a second write to the explicit subobjects.
+    if (!direct && (object.type.kind != CType::Kind::record || at->getKind() == cparser::NK_LIST))
         zero_object(function, object.address, size, align_of(object.type));
     for (const auto &entry : plan) {
         if (entry.clear) {
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
-            zero_object(function, address, *size_of(entry.type), align_of(entry.type));
+            if (direct)
+                zero_initialized_subobject(function, address, entry.type);
+            else
+                zero_object(function, address, *size_of(entry.type), align_of(entry.type));
         } else if (entry.bytes) {
             auto offset = entry.offset;
-            const auto byte_type = integer_type(8, false);
-            for (unsigned char byte : *entry.bytes) {
-                if (byte)
-                    store(function, {byte_type, offset_address(function, object.address, offset, byte_type)},
-                          {integer_type(), function.constant(byte), byte}, entry.source);
-                ++offset;
+            auto element = *entry.type.element;
+            element.is_const = false; // This store initializes the element.
+            element.is_volatile |= entry.type.is_volatile;
+            const auto width = element.bits / 8;
+            const auto count = entry.bytes->size() / width;
+            for (std::size_t i = 0; i < count; ++i) {
+                std::uint64_t value = 0;
+                for (unsigned byte = 0; byte < width; ++byte)
+                    value |= std::uint64_t(static_cast<unsigned char>((*entry.bytes)[i * width + byte]))
+                             << (byte * 8);
+                if (direct || value)
+                    store(function, {element, offset_address(function, object.address, offset, element)},
+                          {element, function.constant(value, element), value}, entry.source);
+                offset += width;
+            }
+            if (direct && count < entry.type.count) {
+                auto tail = entry.type;
+                tail.count -= count;
+                zero_initialized_subobject(function,
+                    offset_address(function, object.address, offset, element), tail);
             }
         } else if (entry.type.kind == CType::Kind::record) {
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
@@ -138,6 +173,14 @@ void lower_local_declaration(Function &function, Node *node) {
         (void)read_type(declaration->getBody(), TypeContext(function.unit, &function), true);
         return;
     }
+    const auto context = TypeContext(function.unit, &function);
+    if (node->getKind() == cparser::NK_FUNCTION_DECL) {
+        auto &decl = *static_cast<cparser::FunctionDeclASTNode *>(node);
+        auto type = read_type(decl.getType(), context, true);
+        if (type.valid())
+            declare_block_linkage(function, node, decl.getName(), std::move(type), decl.getFlags());
+        return;
+    }
     if (node->getKind() != cparser::NK_VAR_DECL) {
         function.error(node, "unsupported local declaration",
                        "cephyr.local.unsupported");
@@ -150,13 +193,8 @@ void lower_local_declaration(Function &function, Node *node) {
     Node *type_node = declaration->getType();
     const unsigned flags =
         node->getFlags() | (present(type_node) ? type_node->getFlags() : 0);
-    if (flags & SCS_EXTERN) {
-        function.error(at, "block-scope extern declarations are not supported",
-                       "cephyr.local.storage");
-        return;
-    }
     const std::string name = identifier(name_node);
-    CType type = read_type(type_node, TypeContext(function.unit, &function), true);
+    CType type = read_type(type_node, context, true);
     if (!type.valid()) {
         if (!name.empty())
             function.declare_local(name, {}, at);
@@ -174,13 +212,29 @@ void lower_local_declaration(Function &function, Node *node) {
         return;
     }
 
-    const auto context = TypeContext(function.unit, &function);
     const auto alignment = alignment_specifiers(declaration->getAlignments(), context);
     if (!alignment || !check_object_alignment(*alignment, align_of(type), at, context))
         return;
 
     Node *initializer = declaration->getInit();
+    if (flags & SCS_EXTERN) {
+        if (present(initializer))
+            function.error(at, "block-scope declaration with linkage cannot have an initializer");
+        else
+            declare_block_linkage(function, node, name_node, std::move(type), flags,
+                present(declaration->getAlignments()) ? alignment : std::nullopt);
+        return;
+    }
     if (flags & SCS_STATIC) {
+        if (function.symbol.inline_only) {
+            const CType *element = &type;
+            while (!element->is_const && element->kind == CType::Kind::array && element->element)
+                element = element->element.get();
+            if (!element->is_const) {
+                function.error(at, "external inline definition defines a modifiable static object");
+                return;
+            }
+        }
         // The name has block scope and no C linkage, even though the object
         // is emitted with a private assembly symbol and static duration.
         const auto native_name = "__cephyr_tu_block_" + std::to_string(function.unit.block_statics++);
@@ -201,7 +255,9 @@ void lower_local_declaration(Function &function, Node *node) {
         return;
     std::optional<std::vector<ObjectInitEntry>> aggregate_init;
     if (type.aggregate() && present(initializer)) {
-        aggregate_init = plan_object_initializer(TypeContext(function.unit, &function), type, initializer);
+        aggregate_init = plan_object_initializer(
+            TypeContext(function.unit, &function), type, initializer,
+            object_has_qualifier(type, &CType::is_volatile));
         if (!aggregate_init)
             return;
     }
@@ -483,7 +539,31 @@ void lower_return(Function &function, cparser::ReturnStmtASTNode *statement) {
         function.trap();
         return;
     }
-    function.ret(abi_value(function, value));
+    switch (record_abi(result)) {
+    case RecordABI::scalar:
+        function.ret(abi_value(function, value));
+        break;
+    case RecordABI::word:
+        function.ret(pack_record_abi(function, value));
+        break;
+    case RecordABI::pair: {
+        const auto word_type = integer_type(64, false);
+        for (unsigned index = 0; index < 2; ++index) {
+            const auto address = offset_address(function, function.record_result_address,
+                                                8 * index, word_type);
+            store(function, {word_type, address},
+                  {word_type, pack_record_abi(function, value, index), std::nullopt}, expression);
+        }
+        function.ret();
+        break;
+    }
+    case RecordABI::indirect:
+        if (copy_record(function, {result, function.record_result_address}, value, expression, true))
+            function.ret();
+        else
+            function.trap();
+        break;
+    }
 }
 
 void lower_goto(Function &function, cparser::GotoStmtASTNode *statement) {
@@ -524,7 +604,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
     };
     std::vector<Parameter> lowered;
     const auto declarations = elements(parameters);
-    const auto &abi_types = function.symbol.type.params;
+    const auto &parameter_types = function.symbol.type.params;
 
     for (Node *node : declarations) {
         if (!present(node))
@@ -537,17 +617,17 @@ void lower_parameter_slots(Function &function, Node *parameters) {
         auto *parameter = static_cast<cparser::ParmDeclASTNode *>(node);
         CType type = read_type(parameter->getType(), TypeContext(function.unit, &function), true);
         if (type.kind == CType::Kind::void_ && declarations.size() == 1 &&
-            abi_types.empty()) {
+            parameter_types.empty()) {
             if (!identifier(parameter->getName()).empty())
                 function.error(node, "void parameter must not have an identifier",
                                "cephyr.parameter.type");
-            return;
+            break;
         }
         if (type.kind == CType::Kind::array && type.element)
             type = pointer_type(*type.element);
         else if (type.kind == CType::Kind::function)
             type = pointer_type(type);
-        if (!type.valid() || !type.scalar()) {
+        if (!type.valid() || !(type.scalar() || type.kind == CType::Kind::record)) {
             function.error(node, "parameter type is not supported by native MachineIR",
                            "cephyr.parameter.type");
             continue;
@@ -555,15 +635,15 @@ void lower_parameter_slots(Function &function, Node *parameters) {
         CType adjusted = type;
         adjusted.is_const = false;
         adjusted.is_volatile = false;
-        if (lowered.size() >= abi_types.size() ||
-            !compatible(adjusted, abi_types[lowered.size()])) {
+        if (lowered.size() >= parameter_types.size() ||
+            !compatible(adjusted, parameter_types[lowered.size()])) {
             function.error(node, "parameter list does not match the function type",
                            "cephyr.parameter.type");
             continue;
         }
         lowered.push_back({node, identifier(parameter->getName()), std::move(type)});
     }
-    if (lowered.size() != abi_types.size()) {
+    if (lowered.size() != parameter_types.size()) {
         function.error(parameters, "parameter list does not match the function type",
                        "cephyr.parameter.type");
         return;
@@ -572,11 +652,20 @@ void lower_parameter_slots(Function &function, Node *parameters) {
     // ABI parameters must occupy the first value IDs. Allocate all IDs before
     // frame_addr instructions for their normalized local slots.
     std::vector<Id> incoming;
-    for (const CType &type : abi_types)
+    for (const CType &type : abi_parameter_types(function.symbol.type, true))
         incoming.push_back(function.value(type));
+    auto arg = incoming.begin();
+    const auto result = record_abi(*function.symbol.type.element);
+    if (result == RecordABI::indirect)
+        function.record_result_address = *arg++;
+    else if (result == RecordABI::pair)
+        function.record_result_address = incoming.back();
 
     for (std::size_t index = 0; index != lowered.size(); ++index) {
         const Parameter &parameter = lowered[index];
+        const auto abi = record_abi(parameter_types[index]);
+        const Id first = *arg++;
+        const Id second = abi == RecordABI::pair ? *arg++ : no_value;
         if (parameter.name.empty()) {
             function.error(parameter.node, "function parameter has no identifier",
                            "cephyr.parameter.name");
@@ -587,9 +676,23 @@ void lower_parameter_slots(Function &function, Node *parameters) {
             continue;
         slot.register_object = (parameter.node->getFlags() & SCS_REGISTER) != 0;
         function.declare_local(parameter.name, slot, parameter.node);
-        slot.type.is_const = false; // Bind the incoming value, not a C assignment.
-        store(function, slot, Expr{abi_types[index], incoming[index], std::nullopt},
-              parameter.node);
+        if (slot.type.kind == CType::Kind::record) {
+            if (slot.type.is_volatile)
+                function.error(parameter.node, "volatile by-value aggregate parameters are not supported",
+                               "cephyr.abi.aggregate");
+            else if (abi == RecordABI::indirect)
+                copy_record(function, slot, {parameter_types[index], first, std::nullopt},
+                            parameter.node, true);
+            else {
+                unpack_record_abi(function, slot, first);
+                if (abi == RecordABI::pair)
+                    unpack_record_abi(function, slot, second, 1);
+            }
+        } else {
+            slot.type.is_const = false; // Bind the incoming value, not a C assignment.
+            store(function, slot, Expr{parameter_types[index], first, std::nullopt},
+                  parameter.node);
+        }
     }
 }
 
@@ -616,6 +719,7 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
         return;
     case cparser::NK_VAR_DECL:
     case cparser::NK_TYPE_DECL:
+    case cparser::NK_FUNCTION_DECL:
         lower_local_declaration(function, statement);
         return;
     case cparser::NK_STATIC_ASSERT:
@@ -694,6 +798,19 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
 void lower_function_body(Function &function, Node *parameters, Node *body) {
     const auto initial_errors = function.unit.diagnostics.error_count();
     lower_parameter_slots(function, parameters);
+    if (function.symbol.type.variadic &&
+        function.unit.diagnostics.error_count() == initial_errors) {
+        const auto declarations = elements(parameters);
+        if (!declarations.empty() && declarations.back()->getKind() == cparser::NK_PARM_DECL) {
+            auto *last = static_cast<cparser::ParmDeclASTNode *>(declarations.back());
+            const auto slot = function.find_local(identifier(last->getName()));
+            const auto declared = read_type(last->getType(), TypeContext(function.unit, &function), true);
+            if (slot && !slot->register_object && declared.scalar() &&
+                (!declared.integer() || declared.bits >= 32) &&
+                (!declared.real() || declared.bits == 64))
+                function.va_start_parameter = slot->address;
+        }
+    }
 
     // C11 6.4.2.2: as if `static const char __func__[] = "name";`
     // immediately followed the function body's opening brace.

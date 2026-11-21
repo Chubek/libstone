@@ -42,6 +42,9 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_SEXT:
     case ARCHON_MIR_CALL_INDIRECT: /* Optional destination, func_ptr callee in a. */
         return HAS_DST | HAS_A;
+    case ARCHON_MIR_AMD64_VA_START:
+    case ARCHON_MIR_AARCH64_VA_START:
+        return HAS_A;
     case ARCHON_MIR_STORE:
     case ARCHON_MIR_FSTORE:
     case ARCHON_MIR_STORE8:
@@ -92,7 +95,7 @@ static ArchonMIRType value_type(const ArchonMIRFunction *fn, ArchonValue value)
 
 int an_target_type(ANContext *ctx, ArchonMIRType type)
 {
-#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SCALAR_GAS_FP)
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SCALAR_GAS_FP) || defined(AN_RV64_SOFT_FP_TRANSPORT)
     (void)ctx;
     (void)type;
 #else
@@ -118,6 +121,17 @@ static int legal_displacement(ANContext *ctx, uint64_t imm, unsigned alignment)
 static int is_conversion(ArchonMIROpcode op)
 {
     return op == ARCHON_MIR_TRUNC || op == ARCHON_MIR_ZEXT || op == ARCHON_MIR_SEXT;
+}
+
+static int legal_fp_arithmetic_or_conversion(ANContext *ctx)
+{
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+    return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED,
+                    "runtime floating-point arithmetic and conversions are not supported on RV64IM LP64");
+#else
+    (void)ctx;
+    return 1;
+#endif
 }
 
 static int is_memory(ArchonMIROpcode op)
@@ -215,6 +229,24 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     b = (shape & HAS_B) != 0 ? value_type(fn, inst->b) : ARCHON_MIR_VOID;
 
     switch (op) {
+    case ARCHON_MIR_AMD64_VA_START:
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SYSV_AMD64)
+        if (a != ARCHON_MIR_PTR || fn->param_count == 0)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "AMD64_VA_START requires a list pointer and named parameters");
+        return 1;
+#else
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "AMD64_VA_START requires SysV AMD64");
+#endif
+    case ARCHON_MIR_AARCH64_VA_START:
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_AAPCS64)
+        if (a != ARCHON_MIR_PTR || fn->param_count == 0)
+            return an_error(ctx, ARCHON_BACKEND_INVALID,
+                            "AARCH64_VA_START requires a list pointer and named parameters");
+        return 1;
+#else
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "AARCH64_VA_START requires AAPCS64");
+#endif
     case ARCHON_MIR_CONST:
         if (dst != ARCHON_MIR_I64)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "CONST requires an i64 destination");
@@ -247,7 +279,7 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     case ARCHON_MIR_FDIV:
         if (!an_is_float(dst) || dst != a || dst != b)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "floating arithmetic requires matching FP types");
-        return 1;
+        return legal_fp_arithmetic_or_conversion(ctx);
     case ARCHON_MIR_FEQ:
     case ARCHON_MIR_FLT:
     case ARCHON_MIR_FLE:
@@ -257,17 +289,17 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     case ARCHON_MIR_FCAST:
         if (!an_is_float(dst) || !an_is_float(a) || a == dst)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "FCAST requires different FP source and result types");
-        return 1;
+        return legal_fp_arithmetic_or_conversion(ctx);
     case ARCHON_MIR_SITOFP:
     case ARCHON_MIR_UITOFP:
         if (!an_is_float(dst) || a != ARCHON_MIR_I64)
             return an_error(ctx, ARCHON_BACKEND_INVALID, "integer-to-float conversion requires (i64) -> f32 or f64");
-        return 1;
+        return legal_fp_arithmetic_or_conversion(ctx);
     case ARCHON_MIR_FPTOSI:
     case ARCHON_MIR_FPTOUI:
         if (dst != ARCHON_MIR_I64 || !an_is_float(a))
             return an_error(ctx, ARCHON_BACKEND_INVALID, "float-to-integer conversion requires (f32 or f64) -> i64");
-        return 1;
+        return legal_fp_arithmetic_or_conversion(ctx);
     case ARCHON_MIR_TRUNC:
     case ARCHON_MIR_ZEXT:
     case ARCHON_MIR_SEXT:

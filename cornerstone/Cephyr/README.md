@@ -222,14 +222,16 @@ for rule authoring and reproducible measurements.
   calls, direct external scalar variadic calls, scalar and aggregate storage,
   structure and union member access and copy, flexible array members,
   designated initializers, enums, fundamental alignment specifiers, `offsetof`,
-  fixed-size `sizeof` in integer constant expressions,
+  fixed-size `sizeof` in integer constant expressions, scalar volatile access,
   `_Static_assert`, `__func__`, `_Generic`, loops, `goto`, and `switch` including
   fallthrough.
   AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,
-  comparisons, and fixed-prototype calls. RV64IM runtime floating point,
-  floating arguments to variadic functions, `long double`, by-value aggregate
-  calls and returns, atomics, volatile accesses, VLAs, and native variadic
-  definitions remain unsupported.
+  comparisons, and fixed-prototype calls. Both also support a scalar subset
+  of `<stdarg.h>` and direct floating-point variadic calls. AMD64 supports
+  `long double` storage and constant initialization, but not evaluated runtime
+  values. RV64IM supports limited software floating point and fixed-prototype
+  passing and returning of supported integer/pointer records. Bit-fields,
+  atomics, and VLAs remain unsupported. See [C11 status](C11.md) for details.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux
   executable with Cephyr's CRT and libc. Use `-nostdlib` or `stdlib = "none"`

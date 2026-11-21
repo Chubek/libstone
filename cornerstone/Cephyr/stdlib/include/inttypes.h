@@ -172,7 +172,8 @@ typedef struct {
 #define SCNxPTR "lx"
 
 intmax_t imaxabs(intmax_t);
-#if defined(__CEPHYR__) && !defined(__CEPHYR_HAS_STRUCT_VALUE_ABI)
+#if defined(__CEPHYR__) && !defined(__CEPHYR_HAS_STRUCT_VALUE_ABI) && \
+    !defined(__CEPHYR_HAS_NATIVE_DIVISION_API)
 #define __CEPHYR_STRUCT_VALUE_API_UNAVAILABLE 1
 #else
 imaxdiv_t imaxdiv(intmax_t, intmax_t);

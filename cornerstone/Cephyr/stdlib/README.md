@@ -43,12 +43,23 @@ that does not accept Clang's `--target=...` flag, set
 - §7.13 `<setjmp.h>` for external target C compilers, including AMD64 SysV,
   AArch64 AAPCS64, and soft-float RV64 LP64. This is plain ISO `setjmp`:
   no signal-mask restoration, `sigsetjmp`, or shadow-stack integration.
+- §7.14 `<signal.h>` with `signal`, `raise`, the six ISO C signals, and
+  `sig_atomic_t` with matching §7.20.3 limits in `<stdint.h>`. Dispositions
+  apply to both `raise` and Linux delivery from outside the program. Handler
+  registrations persist; Linux blocks the delivered signal in its handler.
+  No POSIX signal APIs are exposed. See [signal details](RUNTIME.md#signals).
 - §7.22 general utilities: integer text conversion with base detection and
   `ERANGE`, integer absolute value/division, `qsort`, `bsearch`, deterministic
   `rand`/`srand`, `getenv`, `aligned_alloc` and the other allocation functions,
   and separate `atexit`/`at_quick_exit` handler lists. The shared integer
-  parser also handles `wcstol`, `wcstoll`, `wcstoul`, `wcstoull`, `wcstoimax`,
-  and `wcstoumax` (§7.29.4.1.2 and §7.8.2.4).
+   parser also handles `wcstol`, `wcstoll`, `wcstoul`, `wcstoull`, `wcstoimax`,
+   and `wcstoumax` (§7.29.4.1.2 and §7.8.2.4).
+- Floating text conversion (§§7.22.1.1, 7.22.1.3, 7.29.4.1.1):
+  `atof`, `strtof`, `strtod`, `wcstof`, and `wcstod` accept decimal and
+  hexadecimal forms, infinity, and quiet NaN in the C locale. Each conversion
+  rounds directly to its destination format. External callers have all five
+  functions on the three runtime targets; Cephyr declarations require native
+  scalar floating-point calls. See [range and rounding details](RUNTIME.md#floating-text-conversion).
 - §7.21 narrow streams: standard streams, `fopen`, `freopen`, `fclose`, file
   positioning, one byte of `ungetc`, and character, line, and block I/O.
   The Linux text and binary modes both transfer bytes without translation.
@@ -67,10 +78,12 @@ that does not accept Clang's `--target=...` flag, set
   it over `tmpnam`, which generates a name but does not reserve it. If using
   such a name to create a file, use the exclusive `fopen` mode (`"wx"`).
   Mode-only `freopen(NULL, ...)` is not supported.
-- `printf` output for `%d`, `%i`, `%u`, `%o`, `%x`, `%X`, `%c`, `%s`, `%p`,
-  `%n`, and `%%`, including ordinary flags, widths, precisions, and integer
-  length modifiers. `snprintf` always bounds and terminates output when its
-  size is nonzero.
+- `printf` output for `%d`, `%i`, `%u`, `%o`, `%x`, `%X`, `%c`, `%s`, `%lc`,
+  `%ls`, `%p`, `%n`, and `%%`, including ordinary flags, widths, precisions,
+  and integer length modifiers. `%lc` and `%ls` encode ASCII wide characters
+  in the C locale; unrepresentable values give `-1` with `EILSEQ`. For
+  `%ls`, the precision bounds the bytes converted, and `snprintf` still
+  counts the complete result even if its output buffer is too small.
 - §7.21.6 formatted input (`scanf`, `fscanf`, `sscanf`, and their `v` forms)
   for `%d`, `%i`, `%u`, `%o`, `%x`, `%X`, `%c`, `%s`, `%[`, `%p`, `%n`,
   and `%%`. Includes field widths, assignment suppression, integer length
@@ -81,11 +94,8 @@ that does not accept Clang's `--target=...` flag, set
   Scansets support ascending byte ranges, parsed left to right; a hyphen
   that cannot form such a range is literal.
 
-This is not a complete hosted libc. Missing areas include floating
-conversion (narrow and wide) and math, `%lc`/`%ls` **output**, formatted wide
-I/O (§7.29.2), locales beyond `C`, `system`, signal handling, atomics, and
-threading. An unsupported narrow formatted-output conversion returns
-`-1` with `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
+An unsupported narrow formatted-output conversion returns `-1` with
+`EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
 
 On formatted input, floating conversions (`aAeEfFgG` with any valid length)
 stop with `ENOSYS`; malformed directives stop with `EINVAL`; a width larger
@@ -99,6 +109,20 @@ before consuming input for a malformed or unsupported directive. Fixed-width
 character fields and wide fields stage input so that a failed field does not
 write its destination; staging large fields can fail with `ENOMEM`.
 
+## Remaining C11 conformance blockers
+
+This inventory is not a conformance claim. In particular:
+
+| Clauses | Known blockers |
+| --- | --- |
+| §4¶6, §§5.2.4.2.2, 7.7, 7.16 | The bundled tree contains all nine freestanding headers. Native `<stdarg.h>` supports scalar arguments on SysV AMD64 and little-endian AAPCS64; RV64IM still needs a `va_list` ABI. AMD64 has `long double` storage and constant initialization, but no evaluated scalar operations or by-value calls. RV64IM has limited binary32/binary64 support, not full scalar arithmetic. `<float.h>` reports ABI format limits and `FLT_ROUNDS == -1`, not native compiler support. |
+| §5.1.2.2, §7.22.4 | The Linux CRT supports ordinary hosted `main` and normal termination; it is not a general platform CRT. `system` is missing. See [startup details](RUNTIME.md). |
+| §§7.3, 7.6, 7.12, 7.25 | No complex arithmetic library, floating environment, math library, or type-generic math. |
+| §§7.8, 7.22 | APIs returning `imaxdiv_t`, `div_t`, `ldiv_t`, and `lldiv_t` by value are also exposed to native Cephyr callers on bundled RV64IM LP64. Other Cephyr targets lack the required aggregate ABI. `strtold` is not implemented or declared. |
+| §7.13 | The runtime contains `setjmp` and `longjmp`, but Cephyr still lacks the returns-twice call semantics required to expose these to native callers. |
+| §§7.17, 7.26 | Atomics and threads are outside the advertised C11 conditional feature set. |
+| §§7.21.6, 7.29.2, 7.29.4.1.1 | Narrow and wide formatted I/O lack floating conversions; wide formatted input and `wcstold` are missing. Native access to the `v` interfaces requires target `va_list` support and declarations. |
+
 ## Variadic ABI boundary
 
 The library sources are compiled by the external target compiler, whose target
@@ -106,16 +130,16 @@ variadic ABI is trusted. Cephyr-generated calls are a separate capability.
 When the driver defines `__CEPHYR_HAS_VARIADIC_CALLS`, Cephyr's `stdio.h`
 declares the non-`v` formatted input and output functions for direct calls with
 supported integer and pointer arguments. Without that macro it defines
-`__CEPHYR_VARIADIC_IO_UNAVAILABLE` instead. Cephyr does not support variadic
-function definitions or `va_list`, even when it can make direct calls:
-`stdio.h` does not declare the `v` forms under `__CEPHYR__`, and including
-`stdarg.h` in that profile is an error.
+`__CEPHYR_VARIADIC_IO_UNAVAILABLE` instead. The ability to make direct
+variadic calls does not itself imply support for variadic definitions,
+`va_list`, or the `v` forms.
 
-Cephyr supports fundamental alignment, `max_align_t`, and `offsetof`.
-`long double` and by-value aggregate calls and returns are still unsupported.
-Under `__CEPHYR__`, headers expose `__CEPHYR_STRUCT_VALUE_API_UNAVAILABLE`
-rather than substitute ABI-wrong declarations when a library function needs
-that ABI. External target compilation receives the standard declarations.
+Cephyr supports fundamental alignment, `max_align_t`, and `offsetof`. The
+bundled RV64IM LP64 target exposes `div`, `ldiv`, `lldiv`, and `imaxdiv` to
+native callers. On targets without the required ABI, the library headers
+define `__CEPHYR_STRUCT_VALUE_API_UNAVAILABLE` instead of substituting
+ABI-incompatible declarations. External target compilation receives the
+standard declarations.
 `assert` reports the expression, file, line, and enclosing function before
 calling `abort`.
 
@@ -129,8 +153,9 @@ Run `sh tests/run.sh /path/to/build-dir` with Clang, `llvm-ar`, and `ld.lld`
 to statically link and test the packaged library without host headers or libc.
 It checks the stream lifecycle, buffering, file operations, pipe behavior,
 locale, allocation, startup environment, termination, calendar and clock
-operations, restartable conversions, formatted input, unformatted wide streams,
-wide strings, and nonlocal jumps (including register restoration).
+operations, restartable conversions, floating text conversion, formatted input,
+unformatted wide streams, wide strings, signal delivery, and nonlocal jumps
+(including register restoration).
 It runs on matching Linux hardware or with a
 user-mode QEMU on `PATH`. Emulator paths can also be provided via
 `CEPHYR_TEST_QEMU_AMD64`, `CEPHYR_TEST_QEMU_AARCH64`, and `CEPHYR_TEST_QEMU`
@@ -138,9 +163,21 @@ user-mode QEMU on `PATH`. Emulator paths can also be provided via
 
 `tests/headers-cephyr.c` checks the Cephyr header profile.
 `tests/variadic-cephyr.c` exercises direct `snprintf` and `sscanf` calls spanning
-argument registers and the stack. `tests/time-multibyte-cephyr.c` exercises
+argument registers and the stack, plus `%lc` and `%ls` buffer and stream output.
+`tests/time-multibyte-cephyr.c` exercises
 the scalar and pointer APIs, including `difftime` where the native ABI supports
 it, wide stream positioning and round trips, wide string comparison, and wide
 integer conversion. The wide portions construct `wchar_t` arrays using
 ordinary execution-set codes, so they do not depend on frontend support for
 wide literals. Run target binaries on matching Linux hardware or under an emulator.
+
+`python3 ../tests/test_cephyr_c11_signals.py --cephyr /path/to/cephyr` builds
+Cephyr-generated signal callers and checks delivery, disposition replacement,
+external delivery, and `abort`. Pass `--qemu-aarch64` and `--qemu` for the cross
+targets, or `--external-dir /path/to/build-dir` to test binaries built by
+`tests/run.sh` as well.
+
+`python3 ../tests/test_cephyr_c11_strtofp.py --cephyr /path/to/cephyr` checks
+floating text conversion from native AMD64 and AArch64 callers and checks
+declaration gating for RV64IM. Pass `--qemu-aarch64` and `--qemu` for the cross
+targets. The external-compiler suite tests the actual conversions on RV64IM.

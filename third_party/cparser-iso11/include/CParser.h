@@ -93,7 +93,8 @@ class CParser : public Parser
     ASTNode *Declaration(ASTNode *declSpec, ASTNode *alignments);
     ASTNode *TypedefDeclaration(ASTNode *declSpec);
     ASTNode *StaticAssertDeclaration();
-    ASTNode *DeclarationSpecifiers(bool typeOnly, ASTNode **alignments = nullptr);
+    ASTNode *DeclarationSpecifiers(bool typeOnly, ASTNode **alignments = nullptr,
+                                   bool *taglessRecord = nullptr);
     SequenceASTNode *InitDeclaratorList(ASTNode *typeSpec, ASTNode *alignments);
     ASTNode *InitDeclarator(ASTNode *typeSpec, ASTNode *alignments);
     ASTNode *InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,

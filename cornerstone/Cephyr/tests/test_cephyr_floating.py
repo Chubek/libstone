@@ -1,4 +1,4 @@
-"""End-to-end native scalar FP: Cephyr objects, independent C ABI caller, and RV64 refusal.
+"""End-to-end native scalar FP: independent C ABI caller and RV64 arithmetic refusal.
 
 Run with a Cephyr executable after the frontend FP wiring is enabled; this test
 does not use a host compiler to produce any of the code under test.
@@ -93,15 +93,15 @@ def main():
             else:
                 print(f"{triple}: linked; execution skipped (no emulator)")
 
-        # Native C must reject this target during lowering even without an
-        # assembler or when asked for only generic MachineIR.
+        # RV64IM supports storage/transport, not runtime addition. Reject it
+        # during C lowering even when asking for only generic MachineIR.
         rv = (*base, "--target=riscv64-linux-gnu")
         rv_source = work / "rv64.c"
         rv_source.write_text(
             '#ifdef __CEPHYR_HAS_SCALAR_FP\n#error "unexpected hard FP macro"\n#endif\n'
             "float f(float x) { return x + 0.25f; }\n", encoding="ascii")
         for stage, output in (("-S", work / "rv64.s"), ("--emit-mir", work / "rv64.mir")):
-            check(*rv, stage, rv_source, "-o", output, expected="floating-point")
+            check(*rv, stage, rv_source, "-o", output, expected="runtime floating-point arithmetic")
             if output.exists():
                 raise AssertionError(f"RV64 soft-float unexpectedly published {output}")
         rv_int_cast = work / "rv64-ice.c"
@@ -118,7 +118,10 @@ def main():
             src = work / f"bad-{name}.c"
             out = work / f"bad-{name}.s"
             src.write_text(text, encoding="ascii")
-            check(*amd, "-S", src, "-o", out, expected="error")
+            # The two hardware FP providers accept scalar FP variadic calls;
+            # RV64IM's partial soft-float slice still excludes them.
+            target = rv if name == "variadic" else amd
+            check(*target, "-S", src, "-o", out, expected="error")
             if out.exists():
                 raise AssertionError(f"{name}: unexpectedly published {out}")
 

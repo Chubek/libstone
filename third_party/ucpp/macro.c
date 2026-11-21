@@ -218,6 +218,8 @@ static void add_special_macros(void)
 		size_t i;
 		for (i = 0; i < sizeof c11_unavailable / sizeof *c11_unavailable; i++)
 			add_predefined_number(c11_unavailable[i], "1");
+		add_predefined_number("__STDC_UTF_16__", "1");
+		add_predefined_number("__STDC_UTF_32__", "1");
 	}
 #endif
 }

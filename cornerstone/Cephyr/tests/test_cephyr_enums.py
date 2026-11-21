@@ -123,7 +123,7 @@ NEGATIVE = [
      "case A: return 1; case B: return 2; } return 0; }", r"duplicate case value"),
     ("not-lvalue", "enum { A }; int *p(void) { return &A; }", r"lvalue"),
     ("out-of-block", "int f(void) { { enum { A = 1 }; } return A; }", r"undeclared|no valid declaration"),
-    ("out-of-prototype", "void f(enum { A } x); int n = A;", r"integer constant expression"),
+    ("out-of-prototype", "void f(enum { A } x); int n = A;", r"no valid declaration for 'A'"),
     ("incomplete", "enum E { A = sizeof(enum E) };", r"needs a prior definition"),
     ("different-types", "enum E { A }; enum F { B }; void f(enum E *p) { enum F *q = p; }",
      r"incompatible"),

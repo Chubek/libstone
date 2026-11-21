@@ -141,7 +141,7 @@ class RuntimeTextTests(unittest.TestCase):
                 self.assertEqual((result.returncode, result.stdout), (1, b""))
                 self.assertIn(diagnostic, result.stderr)
 
-    def test_lp64_rejects_float_in_every_output_mode(self):
+    def test_lp64_accepts_float_negation_in_every_output_mode(self):
         floating = b"""archon-mir 1
 module 1 0 0
 function calc f64 1 2 1 0
@@ -152,17 +152,30 @@ fneg 1 0
 ret 1
 end
 """
-        floating_import = b"""archon-mir 1
-module 0 1 0
-import fn i64 1 f32
+        for flag in ((), ("--emit-code",), ("--emit-physical",), ("--pic",)):
+            with self.subTest(flag=flag):
+                res = self.cli("--input", "-", *flag, data=floating)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertTrue(res.stdout)
+                if flag != ("--emit-code",):
+                    self.assertIn(b"xor ", res.stdout)
+
+    def test_lp64_rejects_unimplemented_float_arithmetic_in_every_output_mode(self):
+        floating = b"""archon-mir 1
+module 1 0 0
+function calc f32 2 3 1 0
+types f32 f32 f32
+block 0 1
+params
+fadd 2 0 1
+ret 2
 end
 """
-        for data in (floating, floating_import):
-            for flag in ((), ("--emit-code",), ("--emit-physical",), ("--pic",)):
-                with self.subTest(data=data, flag=flag):
-                    res = self.cli("--input", "-", *flag, data=data)
-                    self.assertEqual((res.returncode, res.stdout), (1, b""))
-                    self.assertIn(b"RV64 LP64 is soft-float", res.stderr)
+        for flag in ((), ("--emit-code",), ("--emit-physical",), ("--pic",)):
+            with self.subTest(flag=flag):
+                res = self.cli("--input", "-", *flag, data=floating)
+                self.assertEqual((res.returncode, res.stdout), (1, b""))
+                self.assertIn(b"arithmetic and conversions are not supported on RV64IM LP64", res.stderr)
 
     def test_indirect_target_types_and_known_signatures(self):
         compiled = self.cli("--input", "-", data=INDIRECT)

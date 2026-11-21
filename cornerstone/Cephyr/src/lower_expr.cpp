@@ -1,4 +1,5 @@
 #include <cephyr/lower.hpp>
+#include <cephyr/preprocess.hpp>
 
 #include "Backend.h"
 
@@ -127,8 +128,75 @@ CType decay(CType type) {
   return type;
 }
 
+bool stdarg_builtin(std::string_view name) {
+  return name == "__cephyr_va_start" || name == "__cephyr_va_arg";
+}
+
+bool scalar_variadic_signature(const CType &type) {
+  return type.element && (is_void(*type.element) || type.element->scalar()) &&
+         std::all_of(type.params.begin(), type.params.end(),
+                     [](const CType &param) { return param.scalar(); });
+}
+
+// The header's type argument is encoded as a cast to a pointer to the
+// requested type. It is a type carrier only and must not be evaluated.
+CType stdarg_builtin_type(const TypeContext &context, Node *node, std::string_view name,
+                         const std::vector<Node *> &args) {
+  const auto error = [&](std::string_view message) {
+    context.diagnostics.error("cephyr.stdarg", message, location(context.source, node));
+    return invalid_type();
+  };
+  if (!context.source.native_scalar_stdarg())
+    return error("stdarg builtins require a bundled SysV AMD64 or AAPCS64 backend");
+  if (args.size() != 2)
+    return error("invalid stdarg builtin argument count");
+  const bool aarch64 = context.source.native_aarch64_stdarg;
+  const auto ap = decay(expression_type(args[0], context));
+  const auto *record = ap.pointer() && ap.element && !ap.element->is_const
+                           ? ap.element->record : nullptr;
+  const auto layout_error = aarch64 ? "stdarg builtin requires a writable AAPCS64 va_list"
+                                    : "stdarg builtin requires a writable SysV AMD64 va_list";
+  if (!record || record->is_union || record->size != (aarch64 ? 32 : 24) ||
+      record->alignment != 8 || record->members.size() != (aarch64 ? 5 : 4))
+    return error(layout_error);
+  for (std::size_t i = 0; i != record->members.size(); ++i) {
+    constexpr std::string_view amd64_names[]{
+        "__gp_offset", "__fp_offset", "__overflow_arg_area", "__reg_save_area"};
+    constexpr unsigned amd64_offsets[]{0, 4, 8, 16};
+    constexpr std::string_view aarch64_names[]{
+        "__stack", "__gr_top", "__vr_top", "__gr_offs", "__vr_offs"};
+    constexpr unsigned aarch64_offsets[]{0, 8, 16, 24, 28};
+    const auto &member = record->members[i];
+    if (member.name != (aarch64 ? aarch64_names[i] : amd64_names[i]) ||
+        member.offset != (aarch64 ? aarch64_offsets[i] : amd64_offsets[i]) ||
+        member.type.is_const ||
+        ((aarch64 ? i >= 3 : i < 2) ? !compatible(member.type, integer_type(32, aarch64))
+                                    : !is_void_pointer(member.type)))
+      return error(layout_error);
+  }
+  if (name == "__cephyr_va_start") {
+    const auto *f = context.function;
+    const auto last = args[1]->getKind() == cparser::NK_IDENT_NODE && f
+                          ? f->find_local(identifier(args[1])) : std::nullopt;
+    if (!last || f->va_start_parameter == no_value || last->address != f->va_start_parameter)
+      return error("va_start requires the rightmost eligible named parameter of a variadic definition");
+    return void_type();
+  }
+  if (args[1]->getKind() != cparser::NK_CAST_EXPR)
+    return error("va_arg requires a type name");
+  const auto pointer = read_type(static_cast<cparser::CastExprASTNode *>(args[1])->getType(),
+                                 context, true);
+  if (!pointer.pointer() || !pointer.element)
+    return error("va_arg requires a type name");
+  const auto type = unqualified(*pointer.element);
+  if (!(type.pointer() || (type.integer() && type.bits >= 32) ||
+        (type.real() && type.bits == 64)))
+    return error("va_arg supports only promoted integer, pointer and double types (not long double)");
+  return type;
+}
+
 bool modifiable(const CType &type) {
-  if (!type.valid() || type.is_const || type.is_volatile)
+  if (!type.valid() || type.is_const)
     return false;
   return type.scalar();
 }
@@ -350,8 +418,8 @@ bool register_subobject(Node *node, const TypeContext &context) {
 CType member_type(const CType &record, Node *name, const TypeContext &context) {
   if (!record.valid())
     return {};
-  if (const auto *member = find_member(record, identifier(name)))
-    return qualified_member_type(record, *member);
+  if (const auto member = find_member(record, identifier(name)))
+    return member->type;
   const auto message = record.kind != CType::Kind::record
       ? "member access requires a structure or union operand"
       : !size_of(record) ? "member access requires a complete structure or union type"
@@ -400,20 +468,11 @@ CType expression_type(Node *node, const TypeContext &context) {
     const auto value = real_constant(node, context);
     return value ? value->type : invalid_type();
   }
-  case cparser::NK_STRING_CONST: {
-    auto value = string_constant(node, context.source, context.diagnostics);
-    if (!value)
-      return invalid_type();
-    CType result;
-    result.kind = CType::Kind::array;
-    result.element = std::make_shared<CType>(plain_char_type(context.source));
-    // string_constant includes the terminating null character.
-    result.count = value->size();
-    return result;
-  }
+  case cparser::NK_STRING_CONST:
+    return string_constant_type(node, context.source);
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
-    auto type = context.lookup(name).type;
+    auto type = context.lookup(name, node).type;
     if (!type.valid())
       context.diagnostics.error("cephyr.type", "no valid declaration for '" + name + "'",
                                 location(context.source, node));
@@ -510,13 +569,20 @@ CType expression_type(Node *node, const TypeContext &context) {
   }
   case cparser::NK_CALL_EXPR: {
     auto *call = static_cast<cparser::CallExprASTNode *>(node);
+    if (present(call->getExpr()) && call->getExpr()->getKind() == cparser::NK_IDENT_NODE) {
+      const auto name = identifier(call->getExpr());
+      if (stdarg_builtin(name))
+        return stdarg_builtin_type(context, node, name, elements(call->getArgs()));
+    }
     const auto callee = as_value(call->getExpr());
     if (!callee.function_pointer() || !callee.element->element)
       return invalid_type();
     const auto &signature = *callee.element;
-    if (signature.variadic && (signature.element->real() ||
-        std::any_of(signature.params.begin(), signature.params.end(),
-                    [](const CType &type) { return type.real(); })))
+    if (signature.variadic && (!scalar_variadic_signature(signature) ||
+        (!context.source.native_scalar_stdarg() &&
+         (signature.element->real() ||
+          std::any_of(signature.params.begin(), signature.params.end(),
+                      [](const CType &type) { return type.real(); })))))
       return invalid_type();
     const auto args = elements(call->getArgs());
     if (signature.prototype && (args.size() < signature.params.size() ||
@@ -527,7 +593,7 @@ CType expression_type(Node *node, const TypeContext &context) {
       if (i < signature.params.size()) {
         if (!assignment_compatible(context, signature.params[i], argument, args[i]))
           return invalid_type();
-      } else if (!argument.scalar() || argument.real()) {
+      } else if (!argument.scalar() || (argument.real() && !context.source.native_scalar_stdarg())) {
         return invalid_type();
       }
     }
@@ -769,6 +835,10 @@ Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
         function.error(at, "operator does not accept these floating-point operands");
       return invalid_expr();
     }
+    if (function.unit.source.native_rv64_soft_fp) {
+      function.error(at, "runtime floating-point arithmetic is not supported on RV64IM LP64");
+      return invalid_expr();
+    }
     lhs = convert(function, lhs, type, at);
     rhs = convert(function, rhs, type, at);
     if (!lhs.type.valid() || !rhs.type.valid())
@@ -914,6 +984,10 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
     function.error(node, "incompatible operands to conditional expression");
     return invalid_expr();
   }
+  if (result_type.extended_real()) {
+    function.error(node, "runtime long double conditional values are not supported");
+    return invalid_expr();
+  }
 
   const auto yes = function.block();
   const auto no = function.block();
@@ -1019,18 +1093,120 @@ Expr assignment(Function &function, cparser::AssignExprASTNode *node) {
   return value;
 }
 
-Expr direct_call(Function &function, cparser::CallExprASTNode *node,
-                 const std::string &name) {
-  auto found = function.unit.symbols.find(name);
-  if (found == function.unit.symbols.end() ||
-      found->second.type.kind != CType::Kind::function) {
-    function.error(node, "called identifier is not a declared function");
+std::string call_operands(std::string target, const std::vector<Id> &args) {
+  std::ostringstream operands;
+  operands << target << ' ' << args.size();
+  for (const auto argument : args)
+    operands << ' ' << argument;
+  return operands.str();
+}
+
+Expr record_call_result(Function &function, const CType &signature, std::string target,
+                        Id callee, std::vector<Id> args, Node *at) {
+  const auto &type = *signature.element;
+  const auto abi = record_abi(type);
+  const auto temporary = function.local(type, at);
+  if (temporary.address == no_value)
     return invalid_expr();
+
+  if (abi == RecordABI::pair) {
+    // The shim writes two full XLEN words. Keep its buffer separate from
+    // the C object's storage, which may have only 9--15 bytes.
+    const auto buffer = function.local(record_pair_buffer_type(), at);
+    if (buffer.address == no_value)
+      return invalid_expr();
+    if (callee == no_value)
+      callee = function.emit(pointer_type(signature), "func_addr", target, at);
+    args.push_back(callee);
+    args.push_back(buffer.address);
+    const auto thunk = function.unit.require_record_pair_call(signature);
+    function.emit_void("call", "- " + call_operands(thunk, args));
+    const auto word_type = integer_type(64, false);
+    for (unsigned index = 0; index < 2; ++index) {
+      const auto address = offset_address(function, buffer.address, 8 * index, word_type);
+      const auto word = load(function, {word_type, address}, at);
+      unpack_record_abi(function, temporary, word.id, index);
+    }
+  } else {
+    const bool indirect_call = callee != no_value;
+    if (indirect_call)
+      target = id(callee) + ' ' + function.unit.require_signature(signature);
+    const auto opcode = indirect_call ? "call_indirect" : "call";
+    if (abi == RecordABI::indirect) {
+      args.insert(args.begin(), temporary.address);
+      function.emit_void(opcode, "- " + call_operands(target, args));
+    } else {
+      const Id word = function.emit(integer_type(64, false), opcode, call_operands(target, args), at);
+      unpack_record_abi(function, temporary, word);
+    }
   }
-  auto &symbol = found->second;
-  const auto &type = symbol.type;
+  return {type, temporary.address, std::nullopt};
+}
+
+Expr lower_stdarg_builtin(Function &function, cparser::CallExprASTNode *node,
+                          std::string_view name) {
+  const auto args = elements(node->getArgs());
+  const auto type = stdarg_builtin_type(TypeContext(function.unit, &function), node, name, args);
+  if (!type.valid())
+    return invalid_expr();
+  const auto ap = lower_expr(function, args[0]);
+  if (!ap.type.valid())
+    return invalid_expr();
+  const bool aarch64 = function.unit.source.native_aarch64_stdarg;
+  if (name == "__cephyr_va_start") {
+    function.emit_void(aarch64 ? "aarch64_va_start" : "amd64_va_start", id(ap.id));
+    return {type, no_value, std::nullopt};
+  }
+
+  // SysV indexes from one save-area base; AAPCS64 uses negative offsets
+  // from the end of each independent save area. Scalar slots always fit
+  // exactly when an unused register remains. Both ABIs advance the shared
+  // stack cursor by eight bytes. The va_list is evaluated exactly once.
+  auto offset_type = integer_type(32, aarch64);
+  auto pointer = pointer_type(void_type());
+  offset_type.is_volatile = pointer.is_volatile = ap.type.element->is_volatile;
+  const bool fp = type.real();
+  const auto offset_field = (aarch64 ? 24 : 0) + (fp ? 4 : 0);
+  const LValue offset_slot{offset_type, offset_address(function, ap.id, offset_field, offset_type)};
+  const auto offset = load(function, offset_slot, node);
+  const auto limit = function.constant(aarch64 ? 0 : (fp ? 176 : 48), offset_type);
+  const auto in_register = function.emit(int_type(), aarch64 ? "slt" : "ult",
+                                         binary_operands(offset.id, limit));
+  const auto regs = function.block(), stack = function.block(), join = function.block();
+  const auto address = function.param(join, pointer_type(type));
+  function.branch(in_register, regs, stack);
+
+  function.select(regs);
+  const auto base_field = aarch64 && !fp ? 8 : 16;
+  const auto base = load(function, {pointer, offset_address(function, ap.id, base_field, pointer)}, node);
+  const auto reg_address = function.emit(pointer_type(type), "ptr_add", binary_operands(base.id, offset.id));
+  const auto increment = function.constant(fp ? 16 : 8, offset_type);
+  const auto next = function.emit(offset_type, "add", binary_operands(offset.id, increment));
+  store(function, offset_slot, {offset_type, next, std::nullopt}, node);
+  function.jump(join, {reg_address});
+
+  function.select(stack);
+  const LValue overflow_slot{pointer, offset_address(function, ap.id, aarch64 ? 0 : 8, pointer)};
+  const auto overflow = load(function, overflow_slot, node);
+  const auto stride = function.constant(8, difference_type());
+  const auto next_overflow = function.emit(pointer, "ptr_add", binary_operands(overflow.id, stride));
+  store(function, overflow_slot, {pointer, next_overflow, std::nullopt}, node);
+  function.jump(join, {overflow.id});
+
+  function.select(join);
+  return load(function, {type, address}, node);
+}
+
+Expr direct_call(Function &function, cparser::CallExprASTNode *node,
+                 const LValue &binding) {
+  auto &symbol = *binding.linked;
+  const auto &type = binding.type;
   if (!type.element) {
     function.error(node, "function declaration has no result type");
+    return invalid_expr();
+  }
+  if (const auto error = record_abi_error(function.unit.source, type); !error.empty()) {
+    function.error(node, error, "cephyr.abi.aggregate");
     return invalid_expr();
   }
   if (!type.prototype) {
@@ -1038,11 +1214,16 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
                          "not supported");
     return invalid_expr();
   }
-  if (type.variadic && (symbol.internal || symbol.definition)) {
+  const bool native_stdarg = function.unit.source.native_scalar_stdarg();
+  if (type.variadic && !scalar_variadic_signature(type)) {
+    function.error(node, "variadic calls do not support aggregate parameters or results");
+    return invalid_expr();
+  }
+  if (type.variadic && !native_stdarg && (symbol.internal || symbol.definition)) {
     function.error(node, "variadic calls require an external declaration");
     return invalid_expr();
   }
-  if (type.variadic && (type.element->real() ||
+  if (type.variadic && !native_stdarg && (type.element->real() ||
       std::any_of(type.params.begin(), type.params.end(), [](const CType &p) { return p.real(); }))) {
     function.error(node, "floating-point variadic calls are not supported");
     return invalid_expr();
@@ -1074,43 +1255,48 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
       argument = convert(function, argument, promote(argument.type),
                          arguments[index]);
     } else if (argument.type.real()) {
-      function.error(arguments[index], "floating-point variadic calls are not supported");
-      return invalid_expr();
+      if (argument.type.extended_real()) {
+        function.error(arguments[index], "variadic long double arguments are not supported");
+        return invalid_expr();
+      }
+      if (!native_stdarg) {
+        function.error(arguments[index], "floating-point variadic calls require a bundled SysV AMD64 or AAPCS64 backend");
+        return invalid_expr();
+      }
+      argument = convert(function, argument, real_type(64), arguments[index]);
     } else if (!argument.type.pointer()) {
-      function.error(arguments[index],
-                     "variadic argument must be an integer or pointer");
+      function.error(arguments[index], native_stdarg
+                         ? "variadic argument must be an integer, pointer or supported floating type"
+                         : "variadic argument must be an integer or pointer");
       return invalid_expr();
     }
     if (!argument.type.valid())
       return invalid_expr();
     if (type.variadic)
       adjusted.push_back(argument.type);
-    lowered.push_back(abi_value(function, argument));
+    if (!append_abi_argument(function, argument, arguments[index], lowered))
+      return invalid_expr();
   }
 
   std::string name_for_call = symbol.name;
   // A variadic declaration has no single native signature. Each promoted
-  // call shape uses a fixed-signature import aliased to the external symbol.
-  if (type.variadic)
+  // call shape uses a fixed-signature import aliased to the actual symbol.
+  if (type.variadic) {
     name_for_call = function.unit.require_variadic_call(symbol, adjusted);
-  else
+    if (symbol.internal)
+      symbol.used = true;
+  } else
     symbol.used = true;
-  std::ostringstream operands;
-  operands << name_for_call << ' ' << lowered.size();
-  for (const auto argument : lowered)
-    operands << ' ' << argument;
-
   const auto result_type = *type.element;
+  if (result_type.kind == CType::Kind::record)
+    return record_call_result(function, type, name_for_call, no_value, std::move(lowered), node);
+  const auto operands = call_operands(name_for_call, lowered);
   if (is_void(result_type)) {
-    function.emit_void("call", "- " + operands.str());
+    function.emit_void("call", "- " + operands);
     return {result_type, no_value, std::nullopt};
   }
-  if (!result_type.scalar()) {
-    function.error(node, "aggregate function results are not supported");
-    return invalid_expr();
-  }
   Expr result{result_type,
-              function.emit(result_type, "call", operands.str()),
+              function.emit(result_type, "call", operands),
               std::nullopt};
   // The psABI representation of uint32_t is sign-extended. Re-establish the C
   // semantic value before it participates in an expression.
@@ -1128,6 +1314,10 @@ Expr indirect_call(Function &function, cparser::CallExprASTNode *node) {
   const auto &type = *callee.type.element;
   if (!type.element) {
     function.error(node, "function-pointer type has no result type");
+    return invalid_expr();
+  }
+  if (const auto error = record_abi_error(function.unit.source, type); !error.empty()) {
+    function.error(node, error, "cephyr.abi.aggregate");
     return invalid_expr();
   }
   if (!type.prototype) {
@@ -1156,26 +1346,20 @@ Expr indirect_call(Function &function, cparser::CallExprASTNode *node) {
         convert(function, argument, type.params[index], arguments[index]);
     if (!argument.type.valid())
       return invalid_expr();
-    lowered.push_back(abi_value(function, argument));
+    if (!append_abi_argument(function, argument, arguments[index], lowered))
+      return invalid_expr();
   }
-
-  std::ostringstream operands;
-  operands << callee.id << ' ' << function.unit.require_signature(type) << ' '
-           << lowered.size();
-  for (const auto argument : lowered)
-    operands << ' ' << argument;
 
   const auto result_type = *type.element;
+  if (result_type.kind == CType::Kind::record)
+    return record_call_result(function, type, {}, callee.id, std::move(lowered), node);
+  const auto operands = call_operands(id(callee.id) + ' ' + function.unit.require_signature(type), lowered);
   if (is_void(result_type)) {
-    function.emit_void("call_indirect", "- " + operands.str());
+    function.emit_void("call_indirect", "- " + operands);
     return {result_type, no_value, std::nullopt};
   }
-  if (!result_type.scalar()) {
-    function.error(node, "aggregate function results are not supported");
-    return invalid_expr();
-  }
   Expr result{result_type,
-              function.emit(result_type, "call_indirect", operands.str()),
+              function.emit(result_type, "call_indirect", operands),
               std::nullopt};
   return canonicalize(function, result, node);
 }
@@ -1189,24 +1373,23 @@ Expr call(Function &function, cparser::CallExprASTNode *node) {
   }
   if (present(callee) && callee->getKind() == cparser::NK_IDENT_NODE) {
     const auto name = identifier(callee);
-    if (!function.find_local(name)) {
-      const auto found = function.unit.symbols.find(name);
-      if (found == function.unit.symbols.end() ||
-          found->second.type.kind == CType::Kind::function)
-        return direct_call(function, node, name);
+    if (stdarg_builtin(name))
+      return lower_stdarg_builtin(function, node, name);
+    if (const auto binding = function.find_linked(name, callee)) {
+      if (binding->type.kind == CType::Kind::function)
+        return direct_call(function, node, *binding);
+    } else if (!function.find_local(name)) {
+      function.error(node, "called identifier is not a declared function");
+      return invalid_expr();
     }
   }
   return indirect_call(function, node);
 }
 
 Expr string_literal(Function &function, Node *node) {
-  auto bytes =
-      string_constant(node, function.unit.source, function.unit.diagnostics);
-  if (!bytes)
-    return invalid_expr();
-  const auto symbol = function.unit.add_string(std::move(*bytes));
-  auto character = plain_char_type(function.unit.source);
-  auto type = pointer_type(character);
+  const auto array = string_constant_type(node, function.unit.source);
+  const auto symbol = function.unit.add_string(node, array);
+  auto type = pointer_type(*array.element);
   return {type, function.emit(type, "global_addr", symbol), std::nullopt};
 }
 
@@ -1274,10 +1457,6 @@ Expr load(Function &function, LValue value, Node *at) {
   }
   if (value.type.kind == CType::Kind::function)
     return {pointer_type(value.type), value.address, std::nullopt};
-  if (value.type.is_volatile) {
-    function.error(at, "volatile object access is not supported");
-    return invalid_expr();
-  }
   if (value.type.kind == CType::Kind::record) {
     // Keep a value distinct from the source object, in particular for the
     // lifetime of array members of non-lvalue record expressions (6.2.4p8).
@@ -1287,6 +1466,11 @@ Expr load(Function &function, LValue value, Node *at) {
       return invalid_expr();
     return {temporary.type, temporary.address, std::nullopt};
   }
+  // Cephyr's MIR conservatively treats every memory operation as observable:
+  // QML leaves it intact, and the native backends emit it in block order, even
+  // if the result is unused. A scalar volatile access thus needs the same
+  // width-specific opcode as an ordinary access. Any future load/store
+  // optimization must distinguish volatile operations before rewriting them.
   if (value.type.pointer()) {
     auto result_type = unqualified(value.type);
     const auto operation =
@@ -1296,6 +1480,10 @@ Expr load(Function &function, LValue value, Node *at) {
             std::nullopt};
   }
   if (value.type.real()) {
+    if (value.type.extended_real()) {
+      function.error(at, "runtime long double loads are not supported");
+      return invalid_expr();
+    }
     const auto type = unqualified(value.type);
     return {type, function.emit(type, "fload", id(value.address) + " 0"), std::nullopt};
   }
@@ -1336,10 +1524,6 @@ void store(Function &function, LValue target, Expr value, Node *at) {
     return;
   if (target.type.is_const) {
     function.error(at, "assignment to a const-qualified object");
-    return;
-  }
-  if (target.type.is_volatile) {
-    function.error(at, "volatile object access is not supported");
     return;
   }
   value = convert(function, value, target.type, at);
@@ -1389,6 +1573,10 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
     function.error(at, "void expression cannot be converted to a value");
     return invalid_expr();
   }
+  if (target.extended_real() || value.type.extended_real()) {
+    function.error(at, "runtime long double conversions and assignments are not supported");
+    return invalid_expr();
+  }
   if (!explicit_cast && target.kind == CType::Kind::record &&
       compatible(unqualified(target), value.type))
     return {unqualified(target), value.id, std::nullopt};
@@ -1405,9 +1593,13 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
 
   if (target.real() && value.type.arithmetic()) {
     const auto type = unqualified(target);
+    if (value.type.real() && type.bits == value.type.bits)
+      return {type, value.id, std::nullopt};
+    if (function.unit.source.native_rv64_soft_fp) {
+      function.error(at, "runtime floating-point conversions are not supported on RV64IM LP64");
+      return invalid_expr();
+    }
     if (value.type.real()) {
-      if (type.bits == value.type.bits)
-        return {type, value.id, std::nullopt};
       return {type, function.emit(type, "fcast", id(value.id)), std::nullopt};
     }
     value = canonicalize(function, value, at);
@@ -1417,6 +1609,10 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
             std::nullopt};
   }
   if (target.integer() && value.type.real()) {
+    if (function.unit.source.native_rv64_soft_fp) {
+      function.error(at, "runtime floating-point conversions are not supported on RV64IM LP64");
+      return invalid_expr();
+    }
     const auto type = unqualified(target);
     const auto operation = type.is_signed ? "fptosi" : "fptoui";
     return canonicalize(function, {type, function.emit(type, operation, id(value.id)), std::nullopt}, at);
@@ -1482,7 +1678,7 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
       return invalid_expr();
     }
     if (target.function_pointer()) {
-      if (!explicit_cast && !compatible(target, value.type)) {
+      if (!explicit_cast && !compatible(unqualified(target), value.type)) {
         function.error(at, "incompatible function-pointer conversion");
         return invalid_expr();
       }
@@ -1542,12 +1738,15 @@ Id abi_value(Function &function, Expr value) {
 }
 
 static LValue lower_member(Function &function, LValue object, Node *name) {
-  const auto type = member_type(object.type, name, TypeContext(function.unit, &function));
-  if (!type.valid() || object.address == no_value)
+  const auto member = find_member(object.type, identifier(name));
+  if (!member) {
+    member_type(object.type, name, TypeContext(function.unit, &function));
     return invalid_lvalue();
-  const auto *member = find_member(object.type, identifier(name));
-  return {type, offset_address(function, object.address, member->offset, type), {},
-          object.register_object};
+  }
+  if (object.address == no_value)
+    return invalid_lvalue();
+  return {member->type, offset_address(function, object.address, member->offset, member->type), {},
+           object.register_object};
 }
 
 LValue lower_lvalue(Function &function, Node *node) {
@@ -1563,6 +1762,16 @@ LValue lower_lvalue(Function &function, Node *node) {
   }
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
+    if (auto binding = function.find_linked(name, node)) {
+      if (binding->type.kind == CType::Kind::function) {
+        function.error(node, "function designator is not an object lvalue");
+        return invalid_lvalue();
+      }
+      binding->linked->used = true;
+      binding->address = function.emit(pointer_type(binding->type), "global_addr",
+                                       binding->linked->name);
+      return *binding;
+    }
     if (auto local = function.find_local(name)) {
       if (!local->static_name.empty()) {
         function.require_static(*local);
@@ -1571,21 +1780,8 @@ LValue lower_lvalue(Function &function, Node *node) {
       }
       return *local;
     }
-    auto found = function.unit.symbols.find(name);
-    if (found == function.unit.symbols.end()) {
-      function.error(node, "use of undeclared identifier");
-      return invalid_lvalue();
-    }
-    auto &symbol = found->second;
-    if (symbol.type.kind == CType::Kind::function) {
-      function.error(node, "function designator is not an object lvalue");
-      return invalid_lvalue();
-    }
-    symbol.used = true;
-    auto address_type = pointer_type(symbol.type);
-    const auto address =
-        function.emit(address_type, "global_addr", symbol.name);
-    return {symbol.type, address};
+    function.error(node, "use of undeclared identifier");
+    return invalid_lvalue();
   }
   case cparser::NK_STRUCT_REF: {
     auto *dot = static_cast<cparser::StructRefASTNode *>(node);
@@ -1628,16 +1824,9 @@ LValue lower_lvalue(Function &function, Node *node) {
                : invalid_lvalue();
   }
   case cparser::NK_STRING_CONST: {
-    auto value = string_literal(function, node);
-    auto bytes =
-        string_constant(node, function.unit.source, function.unit.diagnostics);
-    if (!value.type.valid() || !bytes)
-      return invalid_lvalue();
-    CType array;
-    array.kind = CType::Kind::array;
-    array.element = value.type.element;
-    array.count = bytes->size();
-    return {array, value.id};
+    auto array = string_constant_type(node, function.unit.source);
+    const auto symbol = function.unit.add_string(node, array);
+    return {array, function.emit(pointer_type(array), "global_addr", symbol)};
   }
   default:
     function.error(node, "expression is not an lvalue");
@@ -1676,22 +1865,21 @@ Expr lower_expr(Function &function, Node *node) {
     const auto value = real_constant(node, TypeContext(function.unit, &function));
     if (!value)
       return invalid_expr();
+    if (value->type.extended_real()) {
+      function.error(node, "runtime long double values are not supported");
+      return invalid_expr();
+    }
     result = {value->type, floating_bits(function, value->type, value->value), std::nullopt};
     break;
   }
   case cparser::NK_IDENT_NODE: {
     const auto name = identifier(node);
-    if (!function.find_local(name)) {
-      auto found = function.unit.symbols.find(name);
-      if (found != function.unit.symbols.end() &&
-          found->second.type.kind == CType::Kind::function) {
-        found->second.used = true;
-        const auto type = pointer_type(found->second.type);
-        result = {type,
-                  function.emit(type, "func_addr", found->second.name),
-                  std::nullopt};
-        break;
-      }
+    if (const auto binding = function.find_linked(name, node);
+        binding && binding->type.kind == CType::Kind::function) {
+      binding->linked->used = true;
+      const auto type = pointer_type(binding->type);
+      result = {type, function.emit(type, "func_addr", binding->linked->name), std::nullopt};
+      break;
     }
     result = load(function, lower_lvalue(function, node), node);
     break;
@@ -1811,22 +1999,12 @@ Expr lower_expr(Function &function, Node *node) {
     }
     if (operand->getKind() == cparser::NK_IDENT_NODE) {
       const auto name = identifier(operand);
-      if (const auto local = function.find_local(name)) {
-        if (local->register_object) {
-          function.error(operand, "cannot take the address of a register object", "cephyr.type");
-          return invalid_expr();
-        }
-      } else {
-        auto symbol = function.unit.symbols.find(name);
-        if (symbol != function.unit.symbols.end() &&
-            symbol->second.type.kind == CType::Kind::function) {
-          symbol->second.used = true;
-          const auto type = pointer_type(symbol->second.type);
-          result = {type,
-                    function.emit(type, "func_addr", symbol->second.name),
-                    std::nullopt};
-          break;
-        }
+      if (const auto binding = function.find_linked(name, operand);
+          binding && binding->type.kind == CType::Kind::function) {
+        binding->linked->used = true;
+        const auto type = pointer_type(binding->type);
+        result = {type, function.emit(type, "func_addr", binding->linked->name), std::nullopt};
+        break;
       }
     }
     auto lvalue = lower_lvalue(function, operand);

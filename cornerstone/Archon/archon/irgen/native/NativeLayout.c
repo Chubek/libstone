@@ -4,7 +4,8 @@
 #include <string.h>
 
 #define AN_LABEL_LIMIT (2u * AN_MAX_BLOCK + 4u * AN_MAX_INSTS)
-#define AN_REFERENCE_LIMIT (3u * AN_MAX_BLOCK + 5u * AN_MAX_INSTS)
+/* An RV64IM ordered FP comparison can emit up to six local transfers. */
+#define AN_REFERENCE_LIMIT (3u * AN_MAX_BLOCK + 6u * AN_MAX_INSTS)
 
 typedef struct {
     size_t from;

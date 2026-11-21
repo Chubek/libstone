@@ -9,17 +9,21 @@
 
 #define FRAME_LIMIT 65536u
 
+typedef enum { GAS_GP, GAS_FP, GAS_STACK } GasArgKind;
+typedef struct { GasArgKind kind; unsigned index; } GasArg;
+typedef struct { unsigned gp, fp, stack; } GasArgState;
+
 /* All MIR values occupy a word, and every region is disjoint. Offsets are
  * nonnegative from the adjusted stack pointer, which remains fixed throughout
  * the body (including during call setup). */
 typedef struct {
     unsigned size, homes, copies, locals[AN_MAX_VALUE];
     int record;
+#if defined(AN_SYSV_AMD64) || defined(AN_AAPCS64)
+    int varargs;
+    GasArgState named;
+#endif
 } GasFrame;
-
-typedef enum { GAS_GP, GAS_FP, GAS_STACK } GasArgKind;
-typedef struct { GasArgKind kind; unsigned index; } GasArg;
-typedef struct { unsigned gp, fp, stack; } GasArgState;
 
 /* Both reviewed profiles allocate integer/pointer and FP arguments from
  * independent register banks. Overflow scalars share one stack area in
@@ -93,12 +97,20 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
     unsigned outgoing = 0, phis = 0, size;
     size_t b, i;
     int calls = 0;
+#if defined(AN_SYSV_AMD64) || defined(AN_AAPCS64)
+    int variadic = 0;
+#endif
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *block = &fn->blocks[b];
         if (block->param_count > phis)
             phis = (unsigned)block->param_count;
         for (i = 0; i < block->inst_count; ++i) {
             const ArchonMIRInst *ins = &block->insts[i];
+#ifdef AN_SYSV_AMD64
+            variadic |= ins->op == ARCHON_MIR_AMD64_VA_START;
+#elif defined(AN_AAPCS64)
+            variadic |= ins->op == ARCHON_MIR_AARCH64_VA_START;
+#endif
             if (an_is_call(ins->op)) {
                 GasArgState state = {0};
                 size_t n;
@@ -124,6 +136,21 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
         size += local->size;
     }
     frame->record = -1;
+#if defined(AN_SYSV_AMD64) || defined(AN_AAPCS64)
+    frame->varargs = -1;
+    if (variadic) {
+        frame->named = (GasArgState){0};
+        for (i = 0; i < fn->param_count; ++i)
+            (void)argument(&frame->named, fn->types[i]);
+        size = align_up(size, 16);
+        frame->varargs = (int)size;
+#ifdef AN_SYSV_AMD64
+        size += AN_AMD64_VA_SAVE_BYTES;
+#else
+        size += AN_AARCH64_VA_SAVE_BYTES;
+#endif
+    }
+#endif
     if (calls && an_gas_abi.link) {
         /* AAPCS frame record: previous FP, then saved LR. */
         size = align_up(size, align);
@@ -287,6 +314,21 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
     case ARCHON_MIR_FRAME_ADDR:
         an_gas_local_addr(gas, frame->locals[ins->imm]);
         break;
+#ifdef AN_SYSV_AMD64
+    case ARCHON_MIR_AMD64_VA_START:
+        an_amd64_va_start(gas, (unsigned)frame->varargs,
+            frame->size + an_gas_abi.stack_arg_offset +
+                frame->named.stack * an_gas_abi.stack_slot_bytes,
+            frame->named.gp, frame->named.fp);
+        break;
+#elif defined(AN_AAPCS64)
+    case ARCHON_MIR_AARCH64_VA_START:
+        an_aarch64_va_start(gas, (unsigned)frame->varargs,
+            frame->size + an_gas_abi.stack_arg_offset +
+                frame->named.stack * an_gas_abi.stack_slot_bytes,
+            frame->named.gp, frame->named.fp);
+        break;
+#endif
     case ARCHON_MIR_GLOBAL_ADDR:
     case ARCHON_MIR_FUNC_ADDR:
         an_gas_symbol_addr(gas, ins->symbol);
@@ -363,6 +405,13 @@ static int function(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn)
     an_gas_print(gas, "\t.p2align 4\n\t.globl %s\n\t.type %s, %%function\n%s:\n",
         fn->name, fn->name, fn->name);
     an_gas_enter(gas, frame.size, frame.record);
+#ifdef AN_SYSV_AMD64
+    if (frame.varargs >= 0)
+        an_amd64_save_varargs(gas, (unsigned)frame.varargs, frame.named.gp, frame.named.fp);
+#elif defined(AN_AAPCS64)
+    if (frame.varargs >= 0)
+        an_aarch64_save_varargs(gas, (unsigned)frame.varargs, frame.named.gp, frame.named.fp);
+#endif
     parameters(gas, &frame, fn);
     ctx->stage = ARCHON_BACKEND_SELECT;
     for (b = 0; b < fn->block_count; ++b) {

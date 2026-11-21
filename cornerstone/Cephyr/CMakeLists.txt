@@ -326,6 +326,51 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_records.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.c11-records PROPERTIES TIMEOUT 120)
+  foreach(feature IN ITEMS anonymous frontend strings volatile volatile_aggregates)
+    string(REPLACE "_" "-" test_feature "${feature}")
+    add_test(NAME cephyr.c11-${test_feature} COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_${feature}.py" "$<TARGET_FILE:cephyr>"
+      ${cephyr_test_args})
+    set_tests_properties(cephyr.c11-${test_feature} PROPERTIES TIMEOUT 120)
+  endforeach()
+  foreach(feature IN ITEMS stdarg long_double)
+    string(REPLACE "_" "-" test_feature "${feature}")
+    add_test(NAME cephyr.c11-amd64-${test_feature} COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_amd64_${feature}.py"
+      "$<TARGET_FILE:cephyr>" --cc "${CMAKE_C_COMPILER}")
+    set_tests_properties(cephyr.c11-amd64-${test_feature} PROPERTIES TIMEOUT 120)
+  endforeach()
+  set(cephyr_record_abi_test_args)
+  if(CEPHYR_QEMU_EXECUTABLE)
+    list(APPEND cephyr_record_abi_test_args --qemu "${CEPHYR_QEMU_EXECUTABLE}")
+  endif()
+  add_test(NAME cephyr.c11-record-abi COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_record_abi.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_record_abi_test_args})
+  set_tests_properties(cephyr.c11-record-abi PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.c11-rv64-soft-fp COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_rv64_soft_fp.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_record_abi_test_args})
+  set_tests_properties(cephyr.c11-rv64-soft-fp PROPERTIES TIMEOUT 120)
+  set(cephyr_aarch64_stdarg_test_args)
+  if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
+    list(APPEND cephyr_aarch64_stdarg_test_args --qemu "${CEPHYR_QEMU_AARCH64_EXECUTABLE}")
+  endif()
+  add_test(NAME cephyr.c11-aarch64-stdarg COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_aarch64_stdarg.py"
+    "$<TARGET_FILE:cephyr>" ${cephyr_aarch64_stdarg_test_args})
+  set_tests_properties(cephyr.c11-aarch64-stdarg PROPERTIES TIMEOUT 120)
+  set(cephyr_linkage_test_args)
+  if(CEPHYR_QEMU_EXECUTABLE)
+    list(APPEND cephyr_linkage_test_args --qemu-riscv64 "${CEPHYR_QEMU_EXECUTABLE}")
+  endif()
+  if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
+    list(APPEND cephyr_linkage_test_args --qemu-aarch64 "${CEPHYR_QEMU_AARCH64_EXECUTABLE}")
+  endif()
+  add_test(NAME cephyr.c11-linkage COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_linkage.py"
+    "$<TARGET_FILE:cephyr>" ${cephyr_linkage_test_args})
+  set_tests_properties(cephyr.c11-linkage PROPERTIES TIMEOUT 120)
   foreach(feature IN ITEMS alignment enums)
     add_test(NAME cephyr.c11-${feature} COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_${feature}.py" "$<TARGET_FILE:cephyr>"
@@ -340,6 +385,17 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_floating.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_fp_test_args})
   set_tests_properties(cephyr.c11-floating PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.c11-static-fp COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_static_fp.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_fp_test_args})
+  set_tests_properties(cephyr.c11-static-fp PROPERTIES TIMEOUT 120)
+  foreach(feature IN ITEMS signals strtofp wide_printf)
+    string(REPLACE "_" "-" test_feature "${feature}")
+    add_test(NAME cephyr.c11-${test_feature} COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_${feature}.py"
+      --cephyr "$<TARGET_FILE:cephyr>" ${cephyr_test_args})
+    set_tests_properties(cephyr.c11-${test_feature} PROPERTIES TIMEOUT 120)
+  endforeach()
   add_test(NAME cephyr.moonstone-tools COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_moonstone_tools.py" "$<TARGET_FILE:cephyr>"
     --cc "${CMAKE_C_COMPILER}" --cxx "${CMAKE_CXX_COMPILER}" ${cephyr_moonstone_test_args})

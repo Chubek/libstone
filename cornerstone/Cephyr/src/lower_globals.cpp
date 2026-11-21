@@ -1,7 +1,5 @@
 #include <cephyr/lower.hpp>
 
-#include "floating_literal.hpp"
-
 #include <AbstractSyntaxTree.h>
 
 #include <algorithm>
@@ -229,10 +227,6 @@ bool pointer_compatible(const CType &destination, const CType &source) {
     return compatible(destination_element, source_element);
 }
 
-bool string_pointer_compatible(const CType &destination, const Preprocessed &source) {
-    return pointer_compatible(destination, pointer_type(plain_char_type(source)));
-}
-
 std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination,
                                             Node *expression, const Function *scope) {
     bool address_of = false;
@@ -249,25 +243,53 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     };
     constexpr auto max_offset = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     unsigned depth = 0;
+    const auto array_element = [&](Storage object, Node *index_node, bool allow_one_past,
+                                   bool subtract = false) -> std::optional<Storage> {
+        if (object.type.kind != CType::Kind::array || !object.type.element)
+            return {};
+        const auto index = integer_constant(index_node, TypeContext(unit, scope));
+        const auto signed_index = index ? signed_value(*index) : std::nullopt;
+        if (!signed_index || (subtract ? *signed_index > 0 : *signed_index < 0))
+            return {};
+        const auto position = subtract ? std::uint64_t{0} - static_cast<std::uint64_t>(*signed_index)
+                                       : static_cast<std::uint64_t>(*signed_index);
+        const auto count = object.type.count;
+        auto element = *object.type.element;
+        const auto stride = size_of(element);
+        if ((count && (position > count || (!allow_one_past && position == count))) ||
+            !stride || !*stride || position > (max_offset - object.offset) / *stride)
+            return {};
+        element.is_const |= object.type.is_const;
+        element.is_volatile |= object.type.is_volatile;
+        object.type = std::move(element);
+        object.offset += static_cast<std::int64_t>(position * *stride);
+        return object;
+    };
     // A block-scope object may shadow a file-scope symbol, but only one
     // with static duration is usable as an address constant (C11 6.6p9).
     const auto find_storage = [&](Node *id) -> std::optional<Storage> {
         const auto source_name = identifier(id);
         if (scope) {
+            if (const auto binding = scope->find_linked(source_name, id)) {
+                auto &target = *binding->linked;
+                if (target.internal && target.type.kind == CType::Kind::function)
+                    target.used = true;
+                return Storage{binding->type, target.name};
+            }
             if (auto local = scope->find_local(source_name)) {
                 if (local->static_name.empty())
                     return std::nullopt;
                 scope->require_static(*local);
                 return Storage{local->type, local->static_name};
             }
-        }
-        const auto found = unit.symbols.find(source_name);
-        if (found == unit.symbols.end())
             return std::nullopt;
-        auto &target = found->second;
-        if (target.internal && target.type.kind == CType::Kind::function)
-            target.used = true; // Diagnose an internal declaration without a definition.
-        return Storage{target.type, target.name};
+        }
+        auto *target = unit.find_file_symbol(source_name);
+        if (!target)
+            return std::nullopt;
+        if (target->internal && target->type.kind == CType::Kind::function)
+            target->used = true; // Diagnose an internal declaration without a definition.
+        return Storage{target->type, target->name};
     };
 
     const auto subobject = [&](auto &&self, Node *node, bool allow_one_past) -> std::optional<Storage> {
@@ -278,6 +300,10 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
             return {};
         if (node->getKind() == cparser::NK_IDENT_NODE)
             return find_storage(node);
+        if (node->getKind() == cparser::NK_STRING_CONST) {
+            auto type = string_constant_type(node, unit.source);
+            return Storage{type, unit.add_string(node, type)};
+        }
         std::optional<Storage> object;
         Node *member_name = nullptr;
         if (node->getKind() == cparser::NK_STRUCT_REF) {
@@ -299,38 +325,45 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
                 object = self(self, index_node, false); // i[a] == a[i]
                 index_node = ref->getExpr();
             }
-            if (!object || object->type.kind != CType::Kind::array || !object->type.element)
-                return {};
-            const auto index = integer_constant(index_node, TypeContext(unit, scope));
-            const auto signed_index = index ? signed_value(*index) : std::nullopt;
-            if (!signed_index || *signed_index < 0)
-                return {};
-            const auto position = static_cast<std::uint64_t>(*signed_index);
-            const auto count = object->type.count;
-            auto element = *object->type.element;
-            const auto stride = size_of(element);
-            if ((count && (position > count || (!allow_one_past && position == count))) ||
-                !stride || !*stride || position > (max_offset - object->offset) / *stride)
-                return {};
-            element.is_const |= object->type.is_const;
-            element.is_volatile |= object->type.is_volatile;
-            object->type = std::move(element);
-            object->offset += static_cast<std::int64_t>(position * *stride);
-            return object;
+            return object ? array_element(std::move(*object), index_node, allow_one_past)
+                          : std::nullopt;
         } else {
             return {};
         }
         if (!object)
             return {};
-        const auto *member = find_member(object->type, identifier(member_name));
+        const auto member = find_member(object->type, identifier(member_name));
         if (!member || member->offset > max_offset - object->offset)
             return {};
         object->offset += static_cast<std::int64_t>(member->offset);
-        object->type = qualified_member_type(object->type, *member);
+        object->type = member->type;
         return object;
     };
 
-    auto storage = subobject(subobject, expression, address_of);
+    // Support a single ICE addend from a literal's decay, as well as the
+    // equivalent &literal[i] form handled in subobject.
+    Node *literal = nullptr, *index = nullptr;
+    bool subtract = false;
+    if (!address_of && expression->getKind() == cparser::NK_PLUS_EXPR) {
+        auto *plus = static_cast<cparser::PlusExprASTNode *>(expression);
+        literal = plus->getLhs();
+        index = plus->getRhs();
+        if (literal->getKind() != cparser::NK_STRING_CONST)
+            std::swap(literal, index);
+    } else if (!address_of && expression->getKind() == cparser::NK_MINUS_EXPR) {
+        auto *minus = static_cast<cparser::MinusExprASTNode *>(expression);
+        if (!minus->isUnary()) {
+            literal = minus->getLhs();
+            index = minus->getRhs();
+            subtract = true;
+        }
+    }
+    auto storage = subobject(subobject, literal && literal->getKind() == cparser::NK_STRING_CONST ?
+                                     literal : expression, address_of);
+    if (storage && literal && literal->getKind() == cparser::NK_STRING_CONST) {
+        storage = array_element(std::move(*storage), index, true, subtract);
+        address_of = true; // The resulting relocation points at the selected element.
+    }
     if (!storage)
         return {};
     auto &type = storage->type;
@@ -350,8 +383,8 @@ std::optional<Relocation> symbol_relocation(Unit &unit, const CType &destination
     return Relocation{std::move(storage->name), storage->offset};
 }
 
-bool initialize_integer(Unit &unit, const CType &type, Node *initializer,
-                        Image &image, std::uint64_t offset, const Function *scope) {
+bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
+                           Image &image, std::uint64_t offset, const Function *scope) {
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
@@ -360,22 +393,29 @@ bool initialize_integer(Unit &unit, const CType &type, Node *initializer,
         return false;
     }
     const auto errors = unit.diagnostics.error_count();
-    auto value = integer_constant(initializer, TypeContext(unit, scope));
+    auto value = arithmetic_initializer_constant(initializer, type, TypeContext(unit, scope));
     if (!value) {
         if (errors == unit.diagnostics.error_count())
             unit.error(
                 initializer,
-                "file-scope integer initializer is not an integer constant expression",
+                 "static initializer is not a supported arithmetic constant expression",
                 "cephyr.global.initializer");
         return false;
     }
     const auto width = size_of(type);
+    if (type.extended_real()) {
+        // SysV AMD64 stores the 10-byte x87 payload at the beginning of a
+        // 16-byte object. The zero-filled image supplies its trailing padding.
+        write_integer(image, offset, value->value, 8);
+        write_integer(image, offset + 8, value->x87_sign_exponent, 2);
+        return true;
+    }
     if (!width || *width > 8 || !type.bits || type.bits > 64) {
-        unit.error(initializer, "integer object width is not supported",
+        unit.error(initializer, "arithmetic object width is not supported",
                    "cephyr.global.type");
         return false;
     }
-    write_integer(image, offset, normalize(value->value, type), *width);
+    write_integer(image, offset, value->value, *width);
     return true;
 }
 
@@ -392,19 +432,6 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
         initializer = select_generic(initializer, TypeContext(unit, scope));
         if (!initializer)
             return false;
-    }
-
-    if (initializer->getKind() == cparser::NK_STRING_CONST &&
-        string_pointer_compatible(type, unit.source)) {
-        const auto errors = unit.diagnostics.error_count();
-        auto bytes = string_constant(initializer, unit.source, unit.diagnostics);
-        if (!bytes && errors == unit.diagnostics.error_count())
-            unit.error(initializer, "invalid string literal in pointer initializer",
-                       "cephyr.global.string");
-        if (!bytes)
-            return false;
-        image.relocations.emplace(offset, Relocation{unit.add_string(std::move(*bytes)), 0});
-        return true;
     }
 
     const auto before_relocation = unit.diagnostics.error_count();
@@ -444,68 +471,10 @@ bool initialize_pointer(Unit &unit, const CType &type, Node *initializer,
     return false;
 }
 
-bool initialize_real(Unit &unit, const CType &type, Node *initializer,
-                     Image &image, std::uint64_t offset, const Function *scope) {
-    bool valid = false;
-    initializer = scalar_initializer(initializer, valid);
-    if (!valid) {
-        unit.error(initializer, "scalar initializer has more than one value",
-                   "cephyr.global.initializer");
-        return false;
-    }
-    const TypeContext context(unit, scope);
-    Node *leaf = initializer;
-    bool negative = false;
-    while (present(leaf)) {
-        if (leaf->getKind() == cparser::NK_UNARY_PLUS_EXPR) {
-            leaf = static_cast<cparser::UnaryPlusASTNode *>(leaf)->getExpr();
-        } else if (leaf->getKind() == cparser::NK_MINUS_EXPR) {
-            auto *minus = static_cast<cparser::MinusExprASTNode *>(leaf);
-            if (!minus->isUnary())
-                break;
-            negative = !negative;
-            leaf = minus->getRhs();
-        } else {
-            break;
-        }
-    }
-
-    FloatingLiteral converted;
-    if (present(leaf) && leaf->getKind() == cparser::NK_REAL_CONST) {
-        const auto value = real_constant(leaf, context);
-        if (!value)
-            return false;
-        const auto sign = std::uint64_t(negative) << (value->type.bits - 1);
-        converted = convert_floating_literal(
-            {FloatingLiteralStatus::ok, value->type.bits, value->value ^ sign}, type.bits);
-    } else {
-        const auto errors = unit.diagnostics.error_count();
-        const auto value = integer_constant(initializer, context);
-        if (!value) {
-            if (errors == unit.diagnostics.error_count())
-                unit.error(initializer,
-                    "static floating-point initializer requires a signed floating literal "
-                    "or an integer constant expression", "cephyr.global.initializer");
-            return false;
-        }
-        converted = integer_to_floating_literal(normalize(value->value, value->type),
-                                                 value->type.is_signed, type.bits);
-    }
-    if (!converted) {
-        unit.error(initializer, "static initializer is out of range for the floating-point object",
-                   "cephyr.global.initializer");
-        return false;
-    }
-    write_integer(image, offset, converted.bits, type.bits / 8);
-    return true;
-}
-
 bool initialize_scalar(Unit &unit, const CType &type, Node *initializer,
-                         Image &image, std::uint64_t offset, const Function *scope) {
-    if (type.integer())
-        return initialize_integer(unit, type, initializer, image, offset, scope);
-    if (type.real())
-        return initialize_real(unit, type, initializer, image, offset, scope);
+                          Image &image, std::uint64_t offset, const Function *scope) {
+    if (type.arithmetic())
+        return initialize_arithmetic(unit, type, initializer, image, offset, scope);
     if (type.pointer())
         return initialize_pointer(unit, type, initializer, image, offset, scope);
     unit.error(initializer, "static structure or union initializers must use braces",
@@ -585,20 +554,21 @@ bool global_name_available(Unit &unit, std::string_view name, Node *at) {
 
 } // namespace
 
-std::string Unit::add_string(std::string bytes) {
-    // The semantic string value already includes the implicit terminator.
-    if (const auto found = strings.find(bytes); found != strings.end())
+std::string Unit::add_string(Node *literal, const CType &type) {
+    // Do not share a byte-identical object with an insufficient alignment.
+    auto key = std::pair{align_of(type), string_constant_bytes(literal)};
+    if (const auto found = strings.find(key); found != strings.end())
         return found->second;
 
     auto name = generated_name(*this, "string");
 
     Image image;
-    image.bytes.assign(bytes.begin(), bytes.end());
+    image.bytes.assign(key.second.begin(), key.second.end());
     image.size = image.bytes.size();
 
     globals.push_back(Global{name, 0, {}});
-    data_assembly += object_assembly(name, true, true, 1, image);
-    strings.emplace(std::move(bytes), name);
+    data_assembly += object_assembly(name, true, true, key.first, image);
+    strings.emplace(std::move(key), name);
     return name;
 }
 

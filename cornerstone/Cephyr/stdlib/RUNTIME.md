@@ -55,7 +55,49 @@ hardware or compiler shadow stacks, authenticated jump buffers, or POSIX
 signal-mask management. Cephyr-generated code cannot call `setjmp` correctly
 until native MIR can represent calls that return twice.
 
-Current boundaries:
+## Signals
+
+`src/runtime.c` implements ISO C `signal` and `raise` using Linux
+`rt_sigaction`, `rt_sigprocmask`, and `tgkill`. `sig_atomic_t` is a signed
+32-bit `int`; use `volatile sig_atomic_t` for flags shared with a handler. The runtime
+accepts `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGINT`, `SIGSEGV`, and `SIGTERM`;
+other numbers produce `EINVAL`. The six signals default to Linux termination,
+with core dumps subject to Linux policy for `SIGABRT`, `SIGFPE`, `SIGILL`,
+and `SIGSEGV`. Ignored dispositions may be inherited across Linux `exec`.
+
+Handlers remain installed after delivery; the kernel blocks the delivered
+signal while its handler runs and restarts eligible syscalls. `raise` sends to
+the calling thread and temporarily unblocks the requested signal if it was
+blocked, then restores that bit in the mask. On AMD64 the assembly restorer
+issues `rt_sigreturn`; AArch64 and RV64 use the kernel-provided trampoline.
+`abort` allows an installed `SIGABRT` handler to run, but still terminates if
+the handler returns or the signal is ignored. It does not run exit handlers
+or flush streams.
+
+Handlers remain subject to C11's restrictions, including on library calls
+from asynchronous handlers and returning from handlers for computational
+exceptions. No POSIX `sigaction`, public signal-mask API, alternate signal
+stack, or threaded signal semantics are provided.
+
+## Floating text conversion
+
+`src/strtofp.c` converts directly to IEEE binary32 or binary64 using only
+integer operations and fixed-size stack storage. It recognizes the ASCII `C`
+locale (`POSIX` is an alias), including `.` as the radix character. The
+optional `nan(...)` payload is consumed when syntactically valid but does not
+affect the quiet NaN representation. End pointers refer to the original
+narrow or wide string. `atof` uses the same conversion as `strtod`.
+
+The parser rounds to nearest, ties to even by default, and honors the AMD64
+SSE rounding direction and the AArch64 FPCR direction. The soft-float RV64IM
+profile only supports nearest-even. The parser does not raise floating-point
+exceptions or provide a public `fenv.h`. It sets `ERANGE` on overflow and on
+inexact results rounded to a subnormal or zero, but not for exact subnormals,
+literal infinities, or a failed match. The runtime neither declares nor
+implements `strtold` or `wcstold`; all three supported ABIs have distinct
+`long double` formats.
+
+## Other boundaries
 
 - `errno` is process-global, not thread-local.
 - Stream state and exit-handler lists have no synchronization and are intended

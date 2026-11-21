@@ -6,6 +6,18 @@
 #include <sys/_wide_types.h>
 
 struct __cephyr_FILE;
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_VARIADIC_CALLS)
+int fwprintf(struct __cephyr_FILE *restrict, const wchar_t *restrict, ...);
+int swprintf(wchar_t *restrict, size_t, const wchar_t *restrict, ...);
+int wprintf(const wchar_t *restrict, ...);
+#endif
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG)
+#include <stdarg.h>
+int vfwprintf(struct __cephyr_FILE *restrict, const wchar_t *restrict, va_list);
+int vswprintf(wchar_t *restrict, size_t, const wchar_t *restrict, va_list);
+int vwprintf(const wchar_t *restrict, va_list);
+#endif
+
 wint_t fgetwc(struct __cephyr_FILE *);
 wchar_t *fgetws(wchar_t *restrict, int, struct __cephyr_FILE *restrict);
 wint_t fputwc(wchar_t, struct __cephyr_FILE *);
@@ -45,6 +57,12 @@ long wcstol(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
 long long wcstoll(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
 unsigned long wcstoul(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
 unsigned long long wcstoull(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
+
+/* The bundled runtime does not implement the distinct long double formats. */
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_SCALAR_FP)
+float wcstof(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict);
+double wcstod(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict);
+#endif
 
 struct tm;
 size_t wcsftime(wchar_t *, size_t, const wchar_t *, const struct tm *);

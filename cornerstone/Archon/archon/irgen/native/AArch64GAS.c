@@ -60,6 +60,35 @@ void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offs
     an_gas_stack_store(gas, an_gas_a, offset);
 }
 
+/* Save the incoming anonymous GP registers and full 128-bit SIMD registers
+ * before executing any C code. Each save area ends on a 16-byte boundary. */
+void an_aarch64_save_varargs(ANGas *gas, unsigned save, unsigned gp, unsigned fp)
+{
+    unsigned i;
+    for (i = gp; i < an_gas_abi.argc; ++i)
+        an_gas_stack_store(gas, an_gas_abi.args[i], save + 8 * i);
+    for (i = fp; i < an_gas_abi.fp_argc; ++i) {
+        const char name[] = { 'q', (char)('0' + i), '\0' };
+        stack_move(gas, "str", name, save + AN_AARCH64_VA_GP_BYTES + 16 * i, 16);
+    }
+}
+
+void an_aarch64_va_start(ANGas *gas, unsigned save, unsigned overflow, unsigned gp, unsigned fp)
+{
+    /* AAPCS64 va_list: caller stack cursor, each register area's top,
+     * and signed offsets from those tops to the first anonymous register. */
+    stack_address(gas, "x10", overflow);
+    an_gas_print(gas, "\tstr x10, [x9]\n");
+    stack_address(gas, "x10", save + AN_AARCH64_VA_GP_BYTES);
+    an_gas_print(gas, "\tstr x10, [x9, #8]\n");
+    stack_address(gas, "x10", save + AN_AARCH64_VA_SAVE_BYTES);
+    an_gas_print(gas, "\tstr x10, [x9, #16]\n");
+    an_gas_print(gas, "\tmov w10, #%d\n\tstr w10, [x9, #24]\n",
+        -8 * (int)(an_gas_abi.argc - gp));
+    an_gas_print(gas, "\tmov w10, #%d\n\tstr w10, [x9, #28]\n",
+        -16 * (int)(an_gas_abi.fp_argc - fp));
+}
+
 void an_gas_enter(ANGas *gas, unsigned size, int frame_record)
 {
     while (size >= 4096u) {

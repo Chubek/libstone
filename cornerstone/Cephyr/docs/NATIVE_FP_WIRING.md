@@ -3,8 +3,19 @@
 Cephyr lowers the scalar `float`/`double` subset described below to typed
 native MachineIR on the reviewed AMD64/SysVAMD64 and little-endian
 AArch64/AAPCS64 providers. There is no host C code generation fallback.
-RV64I and RV64IM LP64 are soft-float and do not accept FP MIR. Bootstrapping
-and regression details are included below.
+The bundled RV64IM LP64 route uses integer MachineIR for its soft-float
+subset; it does not emit hardware FP instructions. Bootstrapping and
+regression details are included below.
+
+Since the initial slice documented below, both supported providers also fold
+`float` and `double` arithmetic in static initializers using target-width
+round-to-nearest-even evaluation. Both also support direct scalar variadic
+calls with default promotions and scalar variadic definitions. RV64IM
+supports storage, fixed-prototype transport, negation, and comparisons for
+`float` and `double`, but not general evaluated arithmetic or conversions.
+AMD64 supports x87 `long double` objects and constant initialization, not
+evaluated runtime scalar operations or value transport. Annex F remains
+unsupported.
 
 ## Slice 1: capability, source types, and literal spelling
 
@@ -137,6 +148,6 @@ All changes here fit in **`src/lower_expr.cpp`** after the type changes.
   by `__CEPHYR_HAS_SCALAR_FP`; the bundled runtime smoke test calls it when
   that gate is enabled.
 
-Not in this slice: long double, complex/imaginary arithmetic, general
+Not in the initial slice: long double, complex/imaginary arithmetic, general
 static FP constant expression evaluation, FP variadics, a source fenv mode,
 Annex F guarantees, or a RISC-V FP/soft-float implementation.

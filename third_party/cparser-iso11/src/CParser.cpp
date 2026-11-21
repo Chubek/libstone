@@ -9,6 +9,7 @@
 #include "../include/CParser.h"
 #include "../include/AbstractSyntaxTree.h"
 #include "../include/Lexer.h"
+#include "../../c11_source_chars.h"
 #include <cassert>
 #include <iostream>
 #include <limits>
@@ -262,7 +263,8 @@ ASTNode *CParser::PrimaryExpression()
     else if (_sym == TK_CHAR_LIT)
     {
         getTok();
-        res = new CharConstASTNode(_tok->info.ival, _tok->spelling);
+        res = new CharConstASTNode(static_cast<std::uint32_t>(_tok->info.uval),
+                                   _tok->spelling, _tok->singleByteCharacter);
         res->setLineNum(_tok->line);
     }
     else if (_sym == TK_STRING_LIT)
@@ -292,17 +294,61 @@ StringConstASTNode *CParser::StringLiteral()
 {
     check(TK_STRING_LIT);
     const int line = _tok->line;
-    std::string bytes = _tok->sval, spelling = _tok->spelling;
-    // Translation phase 6: concatenate tokens even when their prefixes or
-    // intervening whitespace differ. Retain each token's own spelling.
+    std::string spelling = std::move(_tok->spelling);
+    auto encoding = _tok->stringEncoding;
+    auto elements = std::move(_tok->stringElements);
+    // Phase 5 decoded each token's escapes separately. In phase 6, ordinary
+    // tokens acquire the sequence's prefix, without re-lexing their escapes.
     while (_sym == TK_STRING_LIT)
     {
+        const auto next = getLookahead().stringEncoding;
+        if (next != StringEncoding::ordinary)
+        {
+            if (encoding != StringEncoding::ordinary && encoding != next)
+                parsingError(wideStringEncoding(encoding) && wideStringEncoding(next)
+                    ? "adjacent string literals cannot mix different wide prefixes"
+                    : "adjacent string literals cannot mix a UTF-8 prefix with a wide prefix");
+            encoding = next;
+        }
         getTok();
-        bytes += _tok->sval;
+        elements.insert(elements.end(), _tok->stringElements.begin(), _tok->stringElements.end());
         spelling += ' ';
         spelling += _tok->spelling;
     }
-    auto *result = new StringConstASTNode(std::move(bytes), std::move(spelling));
+    std::string bytes;
+    std::vector<uint32_t> wideUnits;
+    if (wideStringEncoding(encoding))
+    {
+        wideUnits.reserve(elements.size());
+        for (auto element : elements)
+        {
+            if (encoding == StringEncoding::utf16 && !element.numeric && element.value > 0xffff)
+            {
+                const auto supplemental = element.value - 0x10000u;
+                wideUnits.push_back(0xd800u + (supplemental >> 10));
+                wideUnits.push_back(0xdc00u + (supplemental & 0x3ffu));
+            }
+            else
+                wideUnits.push_back(element.value);
+        }
+    }
+    else
+    {
+        bytes.reserve(elements.size());
+        for (auto element : elements)
+        {
+            if (element.numeric)
+                bytes.push_back(static_cast<char>(element.value));
+            else
+            {
+                char encoded[4];
+                const auto count = c11_encode_utf8(element.value, encoded);
+                bytes.append(encoded, count);
+            }
+        }
+    }
+    auto *result = new StringConstASTNode(std::move(bytes), std::move(spelling),
+                                          encoding, std::move(wideUnits));
     result->setLineNum(line);
     return result;
 }
@@ -1060,7 +1106,7 @@ static bool supportsRestrict(ASTNode *type)
            static_cast<PointerTypeASTNode *>(type)->getBaseType()->getKind() != NK_FUNCTION_TYPE;
 }
 
-ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments)
+ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments, bool *taglessRecord)
 {
     ParseDepth depth(*this);
     ASTNode *declSpec = NULL_AST_NODE;
@@ -1123,10 +1169,19 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments)
                 case TK__IMAGINARY:
                     parsingError("complex and imaginary types are unsupported");
                 default:
+                {
                     if (sawScalar || declSpec != NULL_AST_NODE)
                         parsingError("conflicting type specifiers");
+                    // A typedef of a tagless record is not itself a record specifier.
+                    const bool structure = _sym == TK_STRUCT;
+                    const bool record = structure || _sym == TK_UNION;
                     declSpec = TypeSpecifier();
-                     break;
+                    if (taglessRecord && record)
+                        *taglessRecord = (structure
+                            ? static_cast<StructTypeASTNode *>(declSpec)->getName()
+                            : static_cast<UnionTypeASTNode *>(declSpec)->getName()) == NULL_AST_NODE;
+                    break;
+                }
             }
         }
         // else if (isTypeSpecifier(_sym, 1))
@@ -1331,7 +1386,13 @@ ASTNode *CParser::InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
                                          ASTNode *name, STScope *parameterScope,
                                          ASTNode *alignments, bool allowDefinition)
 {
-    const unsigned flags = typeSpec->getFlags();
+    unsigned flags = typeSpec->getFlags();
+    if (_stb.getLevel() != 0 && ((flags & SCS_EXTERN) || type->getKind() == NK_FUNCTION_TYPE))
+    {
+        const auto *prior = _stb.find(AST_IDENT_VALUE(name));
+        if (prior->kind == STOK_TYPE || prior->kind == STOK_CON)
+            flags |= DS_HIDES_NONLINKAGE;
+    }
     if (type->getKind() == NK_FUNCTION_TYPE)
     {
         if (alignments != NULL_AST_NODE)
@@ -1345,7 +1406,7 @@ ASTNode *CParser::InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
     if (flags & (FS_INLINE | FS_NORETURN))
         parsingError("function specifier used on a non-function declaration");
     VarDeclASTNode *declr = new VarDeclASTNode(type, name);
-    declr->setFlags(typeSpec->getFlags());
+    declr->setFlags(flags);
     declr->setAlignments(alignments);
     declr->declare(_ast);
 
@@ -1589,6 +1650,8 @@ ASTNode *CParser::StructOrUnionSpecifier()
         STObject **tail = &recordType->fields;
         for (auto *member : static_cast<SequenceASTNode *>(typeBody)->getElements())
         {
+            if (member->getKind() == NK_STATIC_ASSERT)
+                continue;
             auto *field = static_cast<FieldDeclASTNode *>(member);
             auto *name = field->getName();
             if (field->getType()->getKind() == NK_VOID_TYPE ||
@@ -1597,12 +1660,15 @@ ASTNode *CParser::StructOrUnionSpecifier()
             auto *type = _ast->getStbType(field->getType());
             if (!type)
                 type = _stb.noType;
-            const char *spelling = AST_IDENT_VALUE(name);
-            if (!members.emplace(spelling).second)
-                _ast->error(name->getLineNum(), "field '%s' is already declared", spelling);
-            auto *object = _stb.allocObject(spelling, STOK_VAR, type);
-            *tail = object;
-            tail = &object->next;
+            if (name != NULL_AST_NODE)
+            {
+                const char *spelling = AST_IDENT_VALUE(name);
+                if (!members.emplace(spelling).second)
+                    _ast->error(name->getLineNum(), "field '%s' is already declared", spelling);
+                auto *object = _stb.allocObject(spelling, STOK_VAR, type);
+                *tail = object;
+                tail = &object->next;
+            }
             if (typeKind == NK_STRUCT_TYPE)
                 recordType->size += type->size;
             else if (recordType->size < type->size)
@@ -1660,9 +1726,24 @@ SequenceASTNode *CParser::StructDeclarationList()
 
 ASTNode *CParser::StructDeclaration()
 {
+    // Assertions participate in declaration order, but not in the member
+    // namespace or layout (6.7.2.1 and 6.7.10).
+    if (_sym == TK__STATIC_ASSERT)
+        return StaticAssertDeclaration();
     // 6.7.5 describes member alignment; DR 444 adds the omitted grammar.
     ASTNode *alignments = NULL_AST_NODE;
-    ASTNode *typeSpec = DeclarationSpecifiers(true, &alignments);
+    bool taglessRecord = false;
+    const int line = getLookahead().line;
+    ASTNode *typeSpec = DeclarationSpecifiers(true, &alignments, &taglessRecord);
+    if (_sym == TK_SEMICOLON)
+    {
+        if (!taglessRecord)
+            parsingError("member without a declarator must be a tagless struct or union definition");
+        auto *field = new FieldDeclASTNode(typeSpec, NULL_AST_NODE, alignments);
+        field->setLineNum(line);
+        check(TK_SEMICOLON);
+        return field;
+    }
     SequenceASTNode *declaratorList = StructDeclaratorList(typeSpec, alignments);
     check(TK_SEMICOLON);
 
@@ -1689,11 +1770,13 @@ SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec, ASTNode *align
 
 ASTNode *CParser::StructDeclarator(ASTNode *typeSpec, ASTNode *alignments)
 {
-    if (_sym == TK_COLON && alignments != NULL_AST_NODE)
-        parsingError("_Alignas is not allowed on a bit-field");
+    if (_sym == TK_COLON)
+        parsingError(alignments != NULL_AST_NODE ? "_Alignas is not allowed on a bit-field" :
+                                                 "bit-fields are not supported");
     ASTNode *name = Declarator(typeSpec);
-    if (_sym == TK_COLON && alignments != NULL_AST_NODE)
-        parsingError("_Alignas is not allowed on a bit-field");
+    if (_sym == TK_COLON)
+        parsingError(alignments != NULL_AST_NODE ? "_Alignas is not allowed on a bit-field" :
+                                                 "bit-fields are not supported");
     return new FieldDeclASTNode(typeSpec, name, alignments);
 }
 
@@ -2705,8 +2788,6 @@ ASTNode *CParser::FunctionDeclaration(FunctionTypeASTNode *type, ASTNode *name,
             parsingError("function definition is not allowed here");
         if (!parameterScope)
             parsingError("function definition requires an explicit function declarator");
-        if ((flags & FS_INLINE) && !(flags & SCS_STATIC))
-            parsingError("inline functions with external linkage are unsupported");
         if (type->hasPrototype())
             for (auto *node : static_cast<SequenceASTNode *>(type->getPrms())->getElements())
             {

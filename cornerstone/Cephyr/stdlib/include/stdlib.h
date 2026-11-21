@@ -57,10 +57,23 @@ long long strtoll(const char *, char **, int);
 unsigned long long strtoull(const char *, char **, int);
 #endif
 
+/* The bundled runtime does not implement the distinct long double formats. */
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_SCALAR_FP)
+double atof(const char *);
+#if defined(__CEPHYR__)
+float strtof(const char *restrict, __cephyr_end_pointer restrict);
+double strtod(const char *restrict, __cephyr_end_pointer restrict);
+#else
+float strtof(const char *restrict, char **restrict);
+double strtod(const char *restrict, char **restrict);
+#endif
+#endif
+
 int abs(int);
 long labs(long);
 long long llabs(long long);
-#if defined(__CEPHYR__) && !defined(__CEPHYR_HAS_STRUCT_VALUE_ABI)
+#if defined(__CEPHYR__) && !defined(__CEPHYR_HAS_STRUCT_VALUE_ABI) && \
+    !defined(__CEPHYR_HAS_NATIVE_DIVISION_API)
 #define __CEPHYR_STRUCT_VALUE_API_UNAVAILABLE 1
 #else
 div_t div(int, int);

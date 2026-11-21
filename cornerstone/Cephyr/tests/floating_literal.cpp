@@ -1,16 +1,65 @@
-#include "../src/floating_literal.hpp"
+#include "../src/floating_arithmetic.hpp"
 
 #include <array>
 #include <cfenv>
+#include <cmath>
 #include <cstdio>
 #include <random>
 #include <string>
 
+using cephyr::detail::FloatingLiteral;
 using cephyr::detail::FloatingLiteralStatus;
+using cephyr::detail::FloatingOperation;
 using cephyr::detail::convert_floating_literal;
+using cephyr::detail::floating_arithmetic;
 using cephyr::detail::floating_literal_to_integer;
 using cephyr::detail::integer_to_floating_literal;
 using cephyr::detail::parse_floating_literal;
+
+template<class Real, class UInt, unsigned Fraction, UInt ExponentMask>
+bool check_arithmetic(std::mt19937_64 &rng) {
+    constexpr unsigned width = sizeof(UInt) * 8;
+    constexpr UInt sign = UInt{1} << (width - 1);
+    constexpr UInt fraction_mask = (UInt{1} << Fraction) - 1;
+    for (unsigned sample = 0; sample < 32768; ++sample) {
+        const UInt a = rng();
+        // Pairs with close exponents exercise cancellation and low-bit
+        // rounding as well as the independently distributed exponents.
+        UInt b = rng();
+        if (sample & 1) {
+            const UInt exponent = (a >> Fraction) & ExponentMask;
+            const UInt near = (exponent + (rng() % 9) - 4) & ExponentMask;
+            b = (b & (sign | fraction_mask)) | (near << Fraction);
+        }
+        if (((a >> Fraction) & ExponentMask) == ExponentMask ||
+            ((b >> Fraction) & ExponentMask) == ExponentMask)
+            continue;
+        const volatile Real lhs = std::bit_cast<Real>(a), rhs = std::bit_cast<Real>(b);
+        for (const auto operation : {FloatingOperation::add, FloatingOperation::subtract,
+                                     FloatingOperation::multiply, FloatingOperation::divide}) {
+            if (operation == FloatingOperation::divide && rhs == 0)
+                continue;
+            Real expected{};
+            switch (operation) {
+            case FloatingOperation::add: expected = lhs + rhs; break;
+            case FloatingOperation::subtract: expected = lhs - rhs; break;
+            case FloatingOperation::multiply: expected = lhs * rhs; break;
+            case FloatingOperation::divide: expected = lhs / rhs; break;
+            }
+            const auto result = floating_arithmetic(operation,
+                {FloatingLiteralStatus::ok, width, a}, {FloatingLiteralStatus::ok, width, b});
+            if (std::isinf(expected) ? result.status != FloatingLiteralStatus::overflow
+                                     : (!result || result.bits != std::bit_cast<UInt>(expected))) {
+                std::fprintf(stderr, "binary%u op %d: %llx %llx gave %llx, expected %llx\n", width,
+                    static_cast<int>(operation), static_cast<unsigned long long>(a),
+                    static_cast<unsigned long long>(b), static_cast<unsigned long long>(result.bits),
+                    static_cast<unsigned long long>(std::bit_cast<UInt>(expected)));
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 int main() {
     struct Case {
@@ -94,8 +143,12 @@ int main() {
     if (previous_rounding != -1 && std::fesetround(FE_UPWARD) == 0) {
         const auto tie = parse_floating_literal("1.000000059604644775390625f");
         const auto decimal = parse_floating_literal("0.1");
+        const auto sum = floating_arithmetic(FloatingOperation::add,
+            FloatingLiteral{FloatingLiteralStatus::ok, 32, 0x3f800000},
+            FloatingLiteral{FloatingLiteralStatus::ok, 32, 0x33800000});
         std::fesetround(previous_rounding);
-        if (tie.bits != 0x3f800000 || decimal.bits != UINT64_C(0x3fb999999999999a))
+        if (tie.bits != 0x3f800000 || decimal.bits != UINT64_C(0x3fb999999999999a) ||
+            !sum || sum.bits != 0x3f800000)
             return 6;
     }
     const auto negative_zero = cephyr::detail::FloatingLiteral{FloatingLiteralStatus::ok, 32, 0x80000000};
@@ -142,4 +195,7 @@ int main() {
                 return 11;
         }
     }
+    if (!check_arithmetic<float, std::uint32_t, 23, 0xff>(rng) ||
+        !check_arithmetic<double, std::uint64_t, 52, 0x7ff>(rng))
+        return 12;
 }

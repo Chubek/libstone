@@ -63,7 +63,10 @@ void PrintTreeVisitor::visit(StringConstASTNode *n)
     printTab(_level);
     std::cout << "NK_STRING_CONST" << std::endl;
     printTab(_level);
-    std::cout << "Value: " << n->getValue() << std::endl;
+    if (*n->getSpelling())
+        std::cout << "Spelling: " << n->getSpelling() << std::endl;
+    else
+        std::cout << "Value: " << n->getValue() << std::endl;
     _level--;
 }
 

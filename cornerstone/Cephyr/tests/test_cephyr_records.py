@@ -51,8 +51,9 @@ NEGATIVE = [
      r"modifiable|const-qualified"),
     ("nested-const", "struct Q { const int n; }; struct R { struct Q q[2]; };"
      "void f(struct R *p) { *p = *p; }", r"const-qualified"),
-    ("volatile", "struct R { int n; }; int f(volatile struct R *p) { return p->n; }",
-     r"volatile object"),
+    ("volatile-union-members", "union U { volatile int n; long w; }; "
+     "void f(union U *p, union U *q) { *q = *p; }",
+     r"whole-object copy of a union with volatile members"),
     ("too-many", "union U { int a; int b; }; union U x = {1, 2};", r"too many elements"),
     ("global-copy", "struct R { int n; }; struct R a = {1}, b = a;", r"must use braces"),
     ("register", "struct R { int n; }; int f(void) { register struct R r; return &r.n != 0; }",
@@ -61,7 +62,8 @@ NEGATIVE = [
      r"not an lvalue"),
     ("distinct-tags", "struct R { int n; }; void f(struct R *p) {"
      "struct R { int n; } r; r = *p; }", r"compatible complete"),
-    ("by-value", "struct R { int n; }; void f(struct R r) {}", r"by-value aggregate"),
+    ("by-value-overaligned", "struct R { _Alignas(16) long n; }; void f(struct R r) {}",
+     r"by-value aggregate"),
     ("bit-field", "struct R { unsigned n : 3; };", r"bit.field|expected"),
     ("negative-index", "int a[] = {[-1] = 3};", r"nonnegative"),
     ("nonconstant-index", "int f(int n) { int a[2] = {[n] = 3}; return a[0]; }",

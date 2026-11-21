@@ -417,9 +417,9 @@ void VarDeclASTNode::declare(AbstractSyntaxTree *ast)
     SymbolTable *stb = ast->getSymbolTable();
     const char *name = AST_IDENT_VALUE(_name);
     const STObject *existing = stb->findLocal(name);
-    // The Cephyr lowerer reconciles file-scope tentative definitions,
-    // declarations with linkage and their types.
-    if (stb->getLevel() == 0 && existing != stb->noObj &&
+    // The Cephyr lowerer reconciles compatible redeclarations with linkage.
+    // At block scope only an extern declaration can be such a redeclaration.
+    if ((stb->getLevel() == 0 || (getFlags() & SCS_EXTERN)) && existing != stb->noObj &&
         existing->kind == STOK_VAR)
         return;
     STType *type = ast->getStbType(_type);

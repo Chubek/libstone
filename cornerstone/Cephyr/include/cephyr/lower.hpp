@@ -71,6 +71,7 @@ struct CType {
     bool valid() const { return kind != Kind::invalid; }
     bool integer() const { return kind == Kind::integer; }
     bool real() const { return kind == Kind::real; }
+    bool extended_real() const { return real() && bits == 80; }
     bool arithmetic() const { return integer() || real(); }
     bool pointer() const { return kind == Kind::pointer; }
     bool aggregate() const { return kind == Kind::record || kind == Kind::array; }
@@ -79,7 +80,7 @@ struct CType {
 };
 
 struct RecordMember {
-    std::string name;
+    std::string name; // empty for a physical anonymous structure or union
     CType type;
     std::uint64_t offset;
 
@@ -93,18 +94,31 @@ struct RecordLayout {
     bool has_volatile_member = false;
     // C11 6.7.2.1p3 also restricts unions that recursively contain such a structure.
     bool contains_flexible_array = false;
+    bool contains_anonymous_member = false; // recursively through value members, not pointers
     std::uint64_t size = 0; // zero while the type is incomplete
     unsigned alignment = 0;
     std::vector<RecordMember> members;
+    // Visible names map to physical paths through (possibly nested) anonymous
+    // records. Storage traversal must still use 'members', not these aliases.
+    std::map<std::string, std::vector<std::uint64_t>, std::less<>> member_paths;
+};
+
+struct MemberAccess {
+    CType type;
+    std::uint64_t offset;
 };
 
 struct Constant {
     CType type;
     std::uint64_t value = 0;
+    // The upper 16 value bits of an x87 extended constant. All other
+    // constants are fully represented in value.
+    std::uint16_t x87_sign_exponent = 0;
 };
 
 struct Unit;
 struct Function;
+struct Symbol;
 struct TypeBinding {
     CType type;
     bool register_object = false;
@@ -124,7 +138,7 @@ struct TypeContext {
 
     TypeContext(Unit &, const Function * = nullptr);
     TypeContext with_probe(Diagnostics &) const;
-    TypeBinding lookup(std::string_view) const;
+    TypeBinding lookup(std::string_view, Node *reference = nullptr) const;
 
 private:
     TypeContext(Unit &u, const Preprocessed &s, Diagnostics &d, const Function *f,
@@ -142,7 +156,7 @@ CType plain_char_type(const Preprocessed &);
 CType pointer_type(const CType &);
 CType read_type(Node *, const TypeContext &, bool allow_incomplete = false);
 CType read_record_type(Node *, const TypeContext &);
-const RecordMember *find_member(const CType &, std::string_view);
+std::optional<MemberAccess> find_member(const CType &, std::string_view);
 CType qualified_member_type(const CType &, const RecordMember &);
 bool object_has_qualifier(const CType &, bool CType::*qualifier);
 void bind_typedef_bounds(Node *, const TypeContext &);
@@ -164,9 +178,11 @@ bool check_object_alignment(unsigned requested, unsigned natural, Node *, const 
 std::string_view mir_type(const CType &);
 std::uint64_t normalize(std::uint64_t, const CType &);
 std::optional<Constant> integer_constant(Node *, const TypeContext &);
+std::optional<Constant> arithmetic_initializer_constant(Node *, const CType &, const TypeContext &);
 std::optional<Constant> real_constant(Node *, const TypeContext &, bool require_native = true);
 std::optional<Constant> layout_constant(Node *, const TypeContext &);
-std::optional<std::string> string_constant(Node *, const Preprocessed &, Diagnostics &);
+CType string_constant_type(Node *, const Preprocessed &);
+std::string string_constant_bytes(Node *); // target representation, including terminator
 
 struct Expr {
     CType type;
@@ -180,6 +196,7 @@ struct LValue {
     Id address = no_value;
     std::string static_name = {}; // assembly name for a block-scope static object
     bool register_object = false;
+    Symbol *linked = nullptr; // block-scope declaration of a linked entity
 };
 
 struct Edge {
@@ -218,6 +235,12 @@ struct Symbol {
     // from other declarations. A present zero is distinct from no specifier.
     std::optional<unsigned> definition_alignment = std::nullopt;
     std::vector<std::pair<unsigned, Node *>> alignment_declarations = {};
+    // A block-only declaration contributes linkage but not file-scope visibility.
+    bool file_scope = false;
+    CType linkage_type = {}; // reconcile otherwise hidden declarations
+    bool inline_only = false;
+    Node *inline_declaration = nullptr;
+    Node *inline_internal_reference = nullptr;
 };
 
 struct Global {
@@ -232,11 +255,12 @@ struct Unit {
     bool hosted = true;
     std::map<std::string, Symbol> symbols;
     std::vector<std::pair<std::string, CType>> signatures;
+    std::map<std::size_t, std::string> record_pair_calls;
     std::map<std::string, std::vector<std::size_t>> variadic_signatures;
     std::vector<Global> globals;
     std::vector<std::string> locals;
     std::string data_assembly;
-    std::map<std::string, std::string> strings; // literal bytes -> assembler name
+    std::map<std::pair<unsigned, std::string>, std::string> strings; // alignment, bytes -> name
     // The parser shares bound expression nodes when it clones typedef types.
     // Resolve each bound where the declarator first appears, not at a later use.
     std::map<const Node *, std::optional<std::uint64_t>> array_bounds;
@@ -248,19 +272,23 @@ struct Unit {
     std::size_t function_names = 0;
 
     Unit(const Preprocessed &s, Diagnostics &d, bool h) : source(s), diagnostics(d), hosted(h) {}
+    Symbol *find_file_symbol(std::string_view);
     void error(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     void warn(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
-    std::string add_string(std::string bytes);
+    std::string add_string(Node *literal, const CType &type);
     void require_function_name(const std::string &symbol, std::string_view spelling);
     std::string require_signature(const CType &);
     std::string require_variadic_call(const Symbol &, const std::vector<CType> &);
+    std::string require_record_pair_call(const CType &);
+    std::string add_record_pair_definition(const Symbol &);
 };
 
 bool define_global(Unit &, Symbol &, const Function *scope = nullptr);
 void check_static_assert(const TypeContext &, Node *);
 
-// Explicit subobject initializers; the object starts zero-filled. String
-// entries contain the exact bytes to copy, including any required terminator.
+// Subobject initializers. Ordinary plans assume zero-filled storage; a
+// volatile automatic plan explicitly lists the omitted subobjects to zero.
+// String entries carry the exact bytes, including any required terminator.
 struct ObjectInitEntry {
     std::uint64_t offset;
     CType type;
@@ -270,7 +298,7 @@ struct ObjectInitEntry {
 };
 
 std::optional<std::vector<ObjectInitEntry>> plan_object_initializer(
-    const TypeContext &, CType &, Node *);
+    const TypeContext &, CType &, Node *, bool direct = false);
 
 struct Function {
     struct Label {
@@ -292,6 +320,8 @@ struct Function {
     // Labels have their own function-wide namespace (C11 6.2.1, 6.2.3).
     std::map<std::string, Label> labels;
     Id current = 0;
+    Id va_start_parameter = no_value; // rightmost eligible named parameter's C local
+    Id record_result_address = no_value;
     unsigned expression_depth = 0, statement_depth = 0;
 
     Function(Unit &u, Symbol &s, std::string name) : unit(u), symbol(s), source_name(std::move(name)) {}
@@ -310,11 +340,15 @@ struct Function {
     Id constant(std::uint64_t, const CType & = integer_type());
     LValue local(const CType &, Node *at, unsigned requested_alignment = 0);
     std::optional<LValue> find_local(std::string_view) const;
+    std::optional<LValue> find_linked(std::string_view, Node *reference = nullptr) const;
     bool declare_local(std::string name, LValue, Node *);
     void require_static(const LValue &) const;
     void error(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
     void warn(Node *, std::string_view message, std::string_view code = "cephyr.semantic");
 };
+
+void declare_block_linkage(Function &, Node *declaration, Node *name, CType, unsigned flags,
+                           std::optional<unsigned> alignment = std::nullopt);
 
 // Function lowering and semantic conversions implemented across the frontend.
 void lower_function_body(Function &, Node *parameters, Node *body);
@@ -325,10 +359,22 @@ void store(Function &, LValue, Expr, Node *);
 bool copy_record(Function &, LValue, Expr, Node *, bool initializing = false);
 Id offset_address(Function &, Id, std::uint64_t, const CType &);
 void zero_object(Function &, Id, std::uint64_t size, unsigned alignment);
+void zero_initialized_subobject(Function &, Id, const CType &);
 Expr convert(Function &, Expr, const CType &, Node *, bool explicit_cast = false);
 Id truth(Function &, Expr, Node *);
 // Canonical scalar argument word; includes the RV64 psABI's required extension.
 Id abi_value(Function &, Expr);
+// Keep the C signature intact for type checking; classify and marshal only
+// at a native call boundary. Record values themselves remain address-backed.
+std::string_view record_abi_error(const Preprocessed &, const CType &function_type);
+enum class RecordABI { scalar, word, pair, indirect };
+RecordABI record_abi(const CType &);
+CType abi_result_type(const CType &);
+std::vector<CType> abi_parameter_types(const CType &signature, bool pair_body = false);
+Id pack_record_abi(Function &, Expr, unsigned word = 0);
+void unpack_record_abi(Function &, LValue, Id value, unsigned word = 0);
+CType record_pair_buffer_type();
+bool append_abi_argument(Function &, Expr, Node *, std::vector<Id> &);
 std::vector<bool> reachable_blocks(const std::vector<Block> &);
 
 } // namespace detail

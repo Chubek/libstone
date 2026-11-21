@@ -269,6 +269,31 @@ void check_namespaces() {
            "tag declared within a member declaration was not visible in file scope");
 }
 
+void check_record_assertions() {
+    auto unit = parses(R"(
+        struct S {
+            _Static_assert(1, "before");
+            enum { S_COUNT = 3 } count;
+            _Static_assert(S_COUNT == 3, "between");
+            int values[S_COUNT];
+            _Static_assert(1, "after");
+        };
+        union U { _Static_assert(1, "union"); int item; };
+    )");
+    const auto &top = items(unit.root());
+    auto *structure = as<StructTypeASTNode>(top[0], NK_STRUCT_TYPE);
+    const auto &fields = items(structure->getBody());
+    expect(fields.size() == 5 && fields[0]->getKind() == NK_STATIC_ASSERT &&
+               fields[1]->getKind() == NK_FIELD_DECL && fields[2]->getKind() == NK_STATIC_ASSERT &&
+               fields[3]->getKind() == NK_FIELD_DECL && fields[4]->getKind() == NK_STATIC_ASSERT,
+           "structure assertion declaration order was lost");
+    auto *union_type = as<UnionTypeASTNode>(top[1], NK_UNION_TYPE);
+    const auto &members = items(union_type->getBody());
+    expect(members.size() == 2 && members[0]->getKind() == NK_STATIC_ASSERT &&
+               members[1]->getKind() == NK_FIELD_DECL,
+           "union assertion declaration order was lost");
+}
+
 void check_tokens() {
     parses("int asm; int NOTYPE; int a<:2:> = <%1, 2%>; int f(void) <% return a<:1:>; %>");
     parses("int a = 072; int b = 0xabcde; double c = 0x1.afp+3; char d = '\\377';");
@@ -294,8 +319,50 @@ void check_tokens() {
     fails(source(R"(char *s = "\u0041";)"), "invalid code point");
     fails(source(R"(char *s = "\ud800";)"), "invalid code point");
     fails(source(R"(int c = '\U00110000';)"), "invalid code point");
-    fails(source(R"(void *s = u"text";)"), "wide string literals are not supported");
-    fails(source(R"(int c = L'a';)"), "wide character constants are not supported");
+    auto wide_unit = parses(R"(void *s = "é" u"\U0001f642\0\xffff" "F";)");
+    auto *wide = as<StringConstASTNode>(
+        as<VarDeclASTNode>(items(wide_unit.root()).front(), NK_VAR_DECL)->getInit(),
+        NK_STRING_CONST);
+    expect(wide->getEncoding() == StringEncoding::utf16 &&
+               wide->getWideUnits() == std::vector<std::uint32_t>{0xe9, 0xd83d, 0xde42, 0, 0xffff, 'F'} &&
+               std::string_view(wide->getSpelling()) == R"("é" u"\U0001f642\0\xffff" "F")",
+           "UTF-16 string decoding or concatenation lost code units");
+    fails(source(R"(void *s = L"x" "" u"y";)"), "cannot mix different wide prefixes");
+    fails(source(R"(void *s = u8"x" "" U"y";)"), "cannot mix a UTF-8 prefix with a wide prefix");
+    fails(source(R"(void *s = u"\x10000";)"), "hex escape exceeds 16 bits");
+    fails(source(R"(int c = u'\x10000';)"), "hex escape exceeds 16 bits");
+    fails(source(R"(int c = U'\x100000000';)"), "hex escape exceeds 32 bits");
+    fails(source(R"(int c = L'\x';)"), "hex character escape requires a digit");
+    fails(source(R"(int c = U'';)"), "empty character constant");
+    fails(source("int c = u'a\n;"), "unterminated character constant");
+
+    auto char_unit = parses(R"(
+        int a = 'abcde', b = '\0\xff', c = '\xff', d = 'é';
+        int e = u'\xffff', f = U'\xFFFFFFFF', g = L'\777',
+            h = u'\U0001f642', i = U'🙂', j = L'ab';
+    )");
+    const auto &chars = items(char_unit.root());
+    struct Character {
+        const char *spelling;
+        std::uint32_t bits;
+        bool single_byte;
+    } expected[] = {
+        {"'abcde'", 0x62636465, false}, {R"('\0\xff')", 255, false},
+        {R"('\xff')", 255, true}, {"'é'", 0xc3a9, false},
+        {R"(u'\xffff')", 65535, false}, {R"(U'\xFFFFFFFF')", 0xffffffff, false},
+        {R"(L'\777')", 511, false}, {R"(u'\U0001f642')", 0xde42, false},
+        {"U'🙂'", 0x1f642, false}, {"L'ab'", 'b', false},
+    };
+    expect(chars.size() == sizeof(expected) / sizeof(*expected),
+           "unexpected character constant declaration count");
+    for (std::size_t index = 0; index < chars.size(); ++index) {
+        auto *declaration = as<VarDeclASTNode>(chars[index], NK_VAR_DECL);
+        auto *constant = as<CharConstASTNode>(declaration->getInit(), NK_CHAR_CONST);
+        expect(std::string_view(constant->getSpelling()) == expected[index].spelling &&
+                   constant->getValue() == expected[index].bits &&
+                   constant->isSingleByte() == expected[index].single_byte,
+               "character constant spelling or interpretation was lost");
+    }
 }
 
 void check_extended_identifiers() {
@@ -413,6 +480,7 @@ int main() {
     check_statement_scopes();
     check_namespaces();
     check_tokens();
+    check_record_assertions();
     check_extended_identifiers();
     check_predefined_function_name();
     check_generic_ast();

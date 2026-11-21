@@ -241,7 +241,9 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"fmul", ARCHON_MIR_FMUL}, {"fdiv", ARCHON_MIR_FDIV}, {"feq", ARCHON_MIR_FEQ},
         {"flt", ARCHON_MIR_FLT}, {"fle", ARCHON_MIR_FLE}, {"fcast", ARCHON_MIR_FCAST},
         {"sitofp", ARCHON_MIR_SITOFP}, {"uitofp", ARCHON_MIR_UITOFP},
-        {"fptosi", ARCHON_MIR_FPTOSI}, {"fptoui", ARCHON_MIR_FPTOUI}
+        {"fptosi", ARCHON_MIR_FPTOSI}, {"fptoui", ARCHON_MIR_FPTOUI},
+        {"amd64_va_start", ARCHON_MIR_AMD64_VA_START},
+        {"aarch64_va_start", ARCHON_MIR_AARCH64_VA_START}
     };
     size_t i;
     unsigned shape;

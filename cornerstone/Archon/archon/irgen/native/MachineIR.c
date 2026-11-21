@@ -1,4 +1,5 @@
 #include "NativeInternal.h"
+#include "TargetNative.h"
 
 #include <stdlib.h>
 
@@ -35,19 +36,90 @@ static ANOpcode store_opcode(ArchonMIROpcode op)
     }
 }
 
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+static void lower_fcompare(ANOut *out, ArchonMIROpcode op, ArchonMIRType type,
+    size_t fn, unsigned *next_label)
+{
+    const unsigned no = (*next_label)++;
+    const unsigned done = (*next_label)++;
+    const unsigned equal = op == ARCHON_MIR_FLT ? no : (*next_label)++;
+    /* LP64 gives no meaning to the upper 32 bits of an incoming f32.
+     * Align its sign with f64's and discard those bits before comparing. */
+    if (type == ARCHON_MIR_F32) {
+        an_emit(out, AN_SLLI, AN_T0, AN_T0, 0, 32);
+        an_emit(out, AN_SLLI, AN_T1, AN_T1, 0, 32);
+    }
+
+    /* One left shift removes the sign: magnitudes above infinity are NaNs.
+     * MIR comparisons are ordered, so an unordered pair returns false. */
+    an_li(out, AN_T2, type == ARCHON_MIR_F32 ? UINT64_C(0xff00000000000000) :
+                                             UINT64_C(0xffe0000000000000));
+    an_emit(out, AN_SLLI, AN_T3, AN_T0, 0, 1);
+    an_emit(out, AN_SLTU, AN_T3, AN_T2, AN_T3, 0);
+    an_branch(out, 1, AN_T3, AN_ZERO, fn, no);
+    an_emit(out, AN_SLLI, AN_T3, AN_T1, 0, 1);
+    an_emit(out, AN_SLTU, AN_T3, AN_T2, AN_T3, 0);
+    an_branch(out, 1, AN_T3, AN_ZERO, fn, no);
+
+    an_branch(out, 0, AN_T0, AN_T1, fn, equal);
+    an_emit(out, AN_OR, AN_T3, AN_T0, AN_T1, 0);
+    an_emit(out, AN_SLLI, AN_T3, AN_T3, 0, 1);
+    an_branch(out, 0, AN_T3, AN_ZERO, fn, equal); /* Opposite signed zeros. */
+    if (op != ARCHON_MIR_FEQ) {
+        /* Unequal, ordered operands: unsigned bit ordering is backwards
+         * when either operand has its sign bit set. */
+        an_emit(out, AN_OR, AN_T3, AN_T0, AN_T1, 0);
+        an_emit(out, AN_SLT, AN_T3, AN_T3, AN_ZERO, 0);
+        an_emit(out, AN_SLTU, AN_T2, AN_T0, AN_T1, 0);
+        an_emit(out, AN_XOR, AN_T2, AN_T2, AN_T3, 0);
+        an_jump(out, fn, done);
+    }
+    an_label(out, fn, no);
+    an_emit(out, AN_ADDI, AN_T2, AN_ZERO, 0, 0);
+    if (equal != no) {
+        an_jump(out, fn, done);
+        an_label(out, fn, equal);
+        an_emit(out, AN_ADDI, AN_T2, AN_ZERO, 0, 1);
+    }
+    an_label(out, fn, done);
+}
+#endif
+
 /* The verifier establishes the generic SSA contract. Lowering visits blocks
  * in layout order, using the same instruction order that allocation checked.
  * Reserved scratch registers are never assigned as value homes. */
-static int lower_inst(ANContext *ctx, ANOut *out, const ANFrame *frame,
+static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, const ANFrame *frame,
     const ANHome *homes, const ArchonMIRInst *ins, unsigned *next_label)
 {
     unsigned shape = an_shape(ins->op);
     ANOpcode memory;
     int disp;
+#ifndef AN_RV64_SOFT_FP_TRANSPORT
+    (void)fn;
+#endif
     switch (ins->op) {
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+    case ARCHON_MIR_FCONST:
+#endif
     case ARCHON_MIR_CONST:
         an_li(out, AN_T2, ins->imm);
         break;
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+    case ARCHON_MIR_FNEG:
+        an_read(out, frame, homes, ins->a, AN_T0);
+        an_emit(out, AN_ADDI, AN_T1, AN_ZERO, 0, 1);
+        an_emit(out, AN_SLLI, AN_T1, AN_T1, 0,
+                fn->types[ins->dst] == ARCHON_MIR_F32 ? 31 : 63);
+        an_emit(out, AN_XOR, AN_T2, AN_T0, AN_T1, 0);
+        break;
+    case ARCHON_MIR_FEQ:
+    case ARCHON_MIR_FLT:
+    case ARCHON_MIR_FLE:
+        an_read(out, frame, homes, ins->a, AN_T0);
+        an_read(out, frame, homes, ins->b, AN_T1);
+        lower_fcompare(out, ins->op, fn->types[ins->a], ctx->function, next_label);
+        break;
+#endif
     case ARCHON_MIR_COPY:
     case ARCHON_MIR_PTR_TO_INT:
     case ARCHON_MIR_INT_TO_PTR:
@@ -60,6 +132,10 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ANFrame *frame,
         an_read(out, frame, homes, ins->b, AN_T1);
         an_emit(out, AN_ADD, AN_T2, AN_T0, AN_T1, 0);
         break;
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+    case ARCHON_MIR_FLOAD:
+    case ARCHON_MIR_FSTORE:
+#endif
     case ARCHON_MIR_LOAD:
     case ARCHON_MIR_LOAD_S8:
     case ARCHON_MIR_LOAD_U8:
@@ -79,9 +155,19 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ANFrame *frame,
         disp = ins->imm <= INT32_MAX ? (int)ins->imm :
             -1 - (int)(UINT64_MAX - ins->imm);
         an_read(out, frame, homes, ins->a, AN_T0);
-        memory = load_opcode(ins->op);
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+        if (ins->op == ARCHON_MIR_FLOAD)
+            memory = fn->types[ins->dst] == ARCHON_MIR_F32 ? AN_LWU : AN_LD;
+        else
+#endif
+            memory = load_opcode(ins->op);
         if (memory == AN_OPCODE_COUNT) {
-            memory = store_opcode(ins->op);
+#ifdef AN_RV64_SOFT_FP_TRANSPORT
+            if (ins->op == ARCHON_MIR_FSTORE)
+                memory = fn->types[ins->b] == ARCHON_MIR_F32 ? AN_SW : AN_SD;
+            else
+#endif
+                memory = store_opcode(ins->op);
             an_read(out, frame, homes, ins->b, AN_T1);
             an_emit(out, memory, AN_T1, AN_T0, 0, disp);
         } else {
@@ -229,7 +315,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
         for (i = 0; i < block->inst_count; ++i) {
             ctx->instruction = i;
             if (!an_continue(ctx) ||
-                !lower_inst(ctx, out, &frame, homes, &block->insts[i], &next_label) ||
+                !lower_inst(ctx, out, fn, &frame, homes, &block->insts[i], &next_label) ||
                 !emission_ok(ctx, out))
                 goto done;
         }

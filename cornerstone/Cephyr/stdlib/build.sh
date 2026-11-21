@@ -41,7 +41,7 @@ compile() {
 }
 
 set --
-for source in string ctype stdlib stdio scanf stream assert allocator runtime time multibyte; do
+for source in string ctype stdlib strtofp stdio scanf stream assert allocator runtime time multibyte wideprintf; do
     object="$build/$source.o"
     compile -std=c11 -O2 \
         -c "$root/src/$source.c" -o "$object"

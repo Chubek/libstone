@@ -521,7 +521,8 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
 
 PreprocessOptions preprocessor_options(const Options &opts, const Config &config,
                                           const Target &target, const NativeLoweringProvider *provider,
-                                          bool custom_model, bool native_scalar_fp, bool assembler)
+                                          bool custom_model, bool native_scalar_fp,
+                                          bool native_rv64_record_abi, bool assembler)
 {
     auto result = config.preprocess;
     result.assembler = assembler;
@@ -531,6 +532,12 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
     };
     if (native_scalar_fp && !assembler)
         builtins.emplace_back(true, "__CEPHYR_HAS_SCALAR_FP=1");
+    if (native_rv64_record_abi && !assembler)
+        builtins.emplace_back(true, "__CEPHYR_HAS_NATIVE_DIVISION_API=1");
+    if (native_scalar_fp && provider->architecture == "AMD64" && !assembler)
+        builtins.emplace_back(true, "__CEPHYR_HAS_AMD64_STDARG=1");
+    if (native_scalar_fp && provider->architecture == "AArch64" && !assembler)
+        builtins.emplace_back(true, "__CEPHYR_HAS_AARCH64_STDARG=1");
     if (provider && provider->architecture == "RISCV64IM")
         for (const auto *macro : {"__riscv=1", "__riscv_xlen=64", "__riscv_mul=1", "__riscv_div=1",
                                   "__riscv_float_abi_soft=1", "__CHAR_UNSIGNED__=1"})
@@ -982,7 +989,7 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
                                    amd64 ? "setjmp-amd64.S" : aarch64 ? "setjmp-aarch64.S" : "setjmp.S",
                                    "runtime.c", "allocator.c", "assert.c",
                                     "ctype.c", "stdlib.c", "stdio.c", "scanf.c", "stream.c", "string.c",
-                                   "time.c", "multibyte.c"}) {
+                                    "time.c", "multibyte.c", "strtofp.c", "wideprintf.c"}) {
             const auto object = workspace / ("libc-" + fs::path(source).stem().string() + ".o");
             if (!compile(source, object))
                 return std::nullopt;
@@ -1115,6 +1122,8 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             provider = nullptr;
     }
     const bool sdk_backend = sdk.has_backend(*target);
+    const bool native_rv64_record_abi = provider && !sdk_backend &&
+        provider->architecture == "RISCV64IM" && provider->abi == "LP64";
     const bool native_scalar_fp = provider && !sdk_backend &&
         (provider->architecture == "AMD64" || provider->architecture == "AArch64");
     // An exact SDK backend for an explicitly selected target may opt into
@@ -1162,9 +1171,9 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     };
     std::optional<Backend> backend;
     const auto preprocessor = preprocessor_options(opts, config, *target, provider,
-                                                  custom_model, native_scalar_fp, false);
+                                                  custom_model, native_scalar_fp, native_rv64_record_abi, false);
     const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider,
-                                                            custom_model, native_scalar_fp, true);
+                                                            custom_model, native_scalar_fp, native_rv64_record_abi, true);
     Command link_inputs;
     std::string preprocessed_output;
     std::size_t ordinal = 0;
@@ -1256,7 +1265,14 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
                 return false;
             }
             prep->plain_char_signed = provider && provider->plain_char_signed;
+            prep->wchar_signed = !provider || provider->wchar_signed;
             prep->native_scalar_fp = native_scalar_fp;
+            prep->native_rv64_soft_fp = provider && !sdk_backend &&
+                provider->architecture == "RISCV64IM" && provider->abi == "LP64";
+            prep->native_amd64_stdarg = native_scalar_fp && provider->architecture == "AMD64";
+            prep->native_amd64_x87 = native_scalar_fp && provider->architecture == "AMD64";
+            prep->native_aarch64_stdarg = native_scalar_fp && provider->architecture == "AArch64";
+            prep->native_rv64_record_abi = native_rv64_record_abi;
             auto parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
             if (!parsed || diag.error_count())
                 return false;

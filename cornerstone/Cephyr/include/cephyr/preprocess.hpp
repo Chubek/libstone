@@ -41,6 +41,18 @@ struct Preprocessed {
     bool plain_char_signed = false;
     // Set by the driver only for reviewed hardware floating-point ABI routes.
     bool native_scalar_fp = false;
+    // RV64IM LP64 storage, transport, sign negation and ordered comparisons.
+    bool native_rv64_soft_fp = false;
+    bool native_fp_types() const { return native_scalar_fp || native_rv64_soft_fp; }
+    bool native_amd64_stdarg = false;
+    // The bundled AMD64 SysV frontend knows the x87 extended object format.
+    bool native_amd64_x87 = false;
+    bool native_aarch64_stdarg = false;
+    bool native_scalar_stdarg() const { return native_amd64_stdarg || native_aarch64_stdarg; }
+    // Signedness of the target's 32-bit wchar_t, not a preprocessor macro.
+    bool wchar_signed = true;
+    // Only the bundled RV64IM LP64 backend has a reviewed record ABI here.
+    bool native_rv64_record_abi = false;
 
     Location locate(unsigned line, unsigned column = 0) const;
 };

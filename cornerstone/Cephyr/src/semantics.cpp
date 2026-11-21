@@ -1,6 +1,6 @@
 #include <cephyr/lower.hpp>
 
-#include "floating_literal.hpp"
+#include "floating_arithmetic.hpp"
 
 #include <cephyr/preprocess.hpp>
 
@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -119,12 +118,16 @@ Constant converted(Constant value, CType type) {
     return value;
 }
 
-struct IceAnalysis {
+struct ConstantAnalysis {
     std::map<Node *, Constant> sizes;
     std::map<Node *, Node *> selections;
+    // Populated only for §6.6p7–8 initializer evaluation. Do not use these
+    // forms to recognize an ICE (or indirectly a null pointer constant).
+    std::map<Node *, Constant> real_literals;
+    std::map<Node *, CType> initializer_types;
 };
-std::optional<CType> infer_integer_type(Node *, const TypeContext &, const IceAnalysis &);
-std::optional<Constant> evaluate_ice(Node *, const TypeContext &, const IceAnalysis &);
+std::optional<CType> infer_integer_type(Node *, const TypeContext &, const ConstantAnalysis &);
+std::optional<Constant> evaluate_constant(Node *, const TypeContext &, const ConstantAnalysis &);
 
 thread_local unsigned semantic_depth = 0;
 
@@ -375,236 +378,29 @@ bool evaluate_enumerators(Node *body, const TypeContext &context) {
     return true;
 }
 
-bool append_utf8(std::string &output, std::uint32_t value) {
-    if (value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
-        return false;
-    if (value <= 0x7f) {
-        output.push_back(static_cast<char>(value));
-    } else if (value <= 0x7ff) {
-        output.push_back(static_cast<char>(0xc0 | (value >> 6)));
-        output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
-    } else if (value <= 0xffff) {
-        output.push_back(static_cast<char>(0xe0 | (value >> 12)));
-        output.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
-    } else {
-        output.push_back(static_cast<char>(0xf0 | (value >> 18)));
-        output.push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+CType character_literal_type(const cparser::CharConstASTNode *literal,
+                             const Preprocessed &source) {
+    const auto text = spelling(literal);
+    if (!text.empty()) {
+        switch (text.front()) {
+        case 'L': return integer_type(32, source.wchar_signed);
+        case 'u': return integer_type(16, false);
+        case 'U': return integer_type(32, false);
+        default: break;
+        }
     }
-    return true;
+    return integer_type();
 }
 
-bool decode_escape(std::string_view input, std::size_t &index, std::string &output,
-                   std::string &error) {
-    if (index >= input.size()) {
-        error = "unterminated escape sequence";
-        return false;
-    }
-    const char escaped = input[index++];
-    switch (escaped) {
-    case '\'':
-    case '"':
-    case '?':
-    case '\\':
-        output.push_back(escaped);
-        return true;
-    case 'a':
-        output.push_back('\a');
-        return true;
-    case 'b':
-        output.push_back('\b');
-        return true;
-    case 'f':
-        output.push_back('\f');
-        return true;
-    case 'n':
-        output.push_back('\n');
-        return true;
-    case 'r':
-        output.push_back('\r');
-        return true;
-    case 't':
-        output.push_back('\t');
-        return true;
-    case 'v':
-        output.push_back('\v');
-        return true;
-    default:
-        break;
-    }
-
-    if (escaped >= '0' && escaped <= '7') {
-        unsigned value = static_cast<unsigned>(escaped - '0');
-        unsigned count = 1;
-        while (count < 3 && index < input.size() && input[index] >= '0' &&
-               input[index] <= '7') {
-            value = value * 8 + static_cast<unsigned>(input[index++] - '0');
-            ++count;
-        }
-        if (value > 255) {
-            error = "octal escape does not fit in an ordinary character";
-            return false;
-        }
-        output.push_back(static_cast<char>(value));
-        return true;
-    }
-
-    if (escaped == 'x') {
-        std::uint32_t value = 0;
-        bool any = false;
-        while (index < input.size()) {
-            unsigned digit = 0;
-            if (!digit_value(input[index], digit))
-                break;
-            any = true;
-            if (value > (255u - digit) / 16u) {
-                error = "hexadecimal escape does not fit in an ordinary character";
-                return false;
-            }
-            value = value * 16u + digit;
-            ++index;
-        }
-        if (!any) {
-            error = "hexadecimal escape has no digits";
-            return false;
-        }
-        output.push_back(static_cast<char>(value));
-        return true;
-    }
-
-    if (escaped == 'u' || escaped == 'U') {
-        const unsigned digits = escaped == 'u' ? 4 : 8;
-        std::uint32_t value = 0;
-        for (unsigned count = 0; count < digits; ++count) {
-            if (index >= input.size()) {
-                error = "incomplete universal character name";
-                return false;
-            }
-            unsigned digit = 0;
-            if (!digit_value(input[index++], digit)) {
-                error = "invalid universal character name";
-                return false;
-            }
-            value = value * 16u + digit;
-        }
-        if ((value < 0xa0 && value != '$' && value != '@' && value != '`') ||
-            !append_utf8(output, value)) {
-            error = "invalid code point in universal character name";
-            return false;
-        }
-        return true;
-    }
-
-    error = "unknown escape sequence";
-    return false;
-}
-
-bool decode_characters(std::string_view input, std::string &output,
-                       std::string &error) {
-    for (std::size_t index = 0; index < input.size();) {
-        const char character = input[index++];
-        if (character != '\\') {
-            output.push_back(character);
-            continue;
-        }
-        if (!decode_escape(input, index, output, error))
-            return false;
-    }
-    return true;
-}
-
-bool decode_quoted_strings(std::string_view spelling_text, std::string &output,
-                           std::string &error) {
-    std::size_t index = 0;
-    bool found = false;
-    while (index < spelling_text.size()) {
-        while (index < spelling_text.size() &&
-               std::isspace(static_cast<unsigned char>(spelling_text[index])))
-            ++index;
-        if (index == spelling_text.size())
-            break;
-
-        if (spelling_text.substr(index, 2) == "u8")
-            index += 2;
-        else if (spelling_text[index] == 'L' || spelling_text[index] == 'u' ||
-                 spelling_text[index] == 'U') {
-            error = "wide string literals are not supported";
-            return false;
-        }
-        if (index >= spelling_text.size() || spelling_text[index] != '"') {
-            error = "malformed string literal spelling";
-            return false;
-        }
-        found = true;
-        ++index;
-        std::string piece;
-        bool closed = false;
-        while (index < spelling_text.size()) {
-            const char character = spelling_text[index++];
-            if (character == '"') {
-                closed = true;
-                break;
-            }
-            if (character == '\\') {
-                if (!decode_escape(spelling_text, index, piece, error))
-                    return false;
-            } else {
-                piece.push_back(character);
-            }
-        }
-        if (!closed) {
-            error = "unterminated string literal";
-            return false;
-        }
-        output += piece;
-    }
-    if (!found) {
-        error = "malformed string literal spelling";
-        return false;
-    }
-    return true;
-}
-
-std::optional<Constant> parse_character_literal(Node *node,
-                                                const Preprocessed &source,
-                                                Diagnostics &diagnostics) {
-    if (!present(node) || node->getKind() != cparser::NK_CHAR_CONST)
-        return std::nullopt;
-    auto *literal = static_cast<cparser::CharConstASTNode *>(node);
-    std::uint64_t value = 0;
-    if (const auto text = spelling(literal); !text.empty()) {
-        if (!text.empty() &&
-            (text.front() == 'L' || text.front() == 'u' || text.front() == 'U')) {
-            constant_error(node, source, diagnostics,
-                           "wide character constants are not supported");
-            return std::nullopt;
-        }
-        if (text.size() < 2 || text.front() != '\'' || text.back() != '\'') {
-            constant_error(node, source, diagnostics,
-                           "malformed character constant spelling");
-            return std::nullopt;
-        }
-        std::string decoded;
-        std::string error;
-        if (!decode_characters(text.substr(1, text.size() - 2), decoded, error)) {
-            constant_error(node, source, diagnostics, error);
-            return std::nullopt;
-        }
-        if (decoded.size() != 1) {
-            constant_error(node, source, diagnostics,
-                           "multi-character constants are not supported");
-            return std::nullopt;
-        }
-        value = static_cast<unsigned char>(decoded.front());
-        if (source.plain_char_signed && value >= 128)
-            value -= 256; // Sign extension in unsigned arithmetic.
-    } else {
-        value = static_cast<std::uint64_t>(literal->getValue());
-    }
-    CType type = integer_type();
-    return Constant{type, normalize(value, type)};
+Constant character_literal(Node *node, const Preprocessed &source) {
+    const auto *literal = static_cast<cparser::CharConstASTNode *>(node);
+    const auto type = character_literal_type(literal, source);
+    std::uint64_t bits = literal->getValue();
+    // 6.4.4.4p10: only an ordinary single-byte constant converts from char
+    // to int; a packed multibyte value is interpreted directly as int.
+    if (literal->isSingleByte() && source.plain_char_signed && bits >= 128)
+        bits -= 256;
+    return Constant{type, normalize(bits, type)};
 }
 
 std::optional<std::pair<Node *, Node *>> binary_operands(Node *node) {
@@ -643,7 +439,7 @@ std::optional<std::pair<Node *, Node *>> binary_operands(Node *node) {
 // Check the form separately from computing its value. A skipped operand may
 // contain an otherwise undefined arithmetic operation, but a variable or call
 // there still prevents the expression from being an integer constant expression.
-bool has_ice_form(Node *node, const TypeContext &context, IceAnalysis &analysis) {
+bool has_ice_form(Node *node, const TypeContext &context, ConstantAnalysis &analysis) {
     const AnalysisDepth depth(semantic_depth);
     if (!present(node))
         return false;
@@ -706,7 +502,8 @@ bool has_ice_form(Node *node, const TypeContext &context, IceAnalysis &analysis)
 }
 
 FloatingLiteral decode_real_literal(Node *node, const Preprocessed &source, Diagnostics &diagnostics) {
-    const auto literal = parse_floating_literal(spelling(static_cast<cparser::RealConstASTNode *>(node)));
+    const auto literal = parse_floating_literal(
+        spelling(static_cast<cparser::RealConstASTNode *>(node)), source.native_amd64_x87);
     std::string_view error;
     switch (literal.status) {
     case FloatingLiteralStatus::ok:
@@ -716,6 +513,9 @@ FloatingLiteral decode_real_literal(Node *node, const Preprocessed &source, Diag
         break;
     case FloatingLiteralStatus::unsupported_host:
         error = "floating constant translation requires an IEEE binary32/binary64 compiler host";
+        break;
+    case FloatingLiteralStatus::unsupported_x87_host:
+        error = "decimal long double literal translation requires an x87 extended-precision compiler host";
         break;
     case FloatingLiteralStatus::overflow:
         error = "floating constant is out of range for its nominal format";
@@ -748,8 +548,122 @@ std::optional<Constant> cast_real_literal(Node *node, CType destination,
     return Constant{unqualified(destination), normalize(*bits, destination)};
 }
 
+CType analyze_arithmetic_initializer(Node *node, const TypeContext &context, ConstantAnalysis &analysis) {
+    const AnalysisDepth depth(semantic_depth);
+    if (!present(node))
+        return {};
+    switch (node->getKind()) {
+    case cparser::NK_REAL_CONST: {
+        const auto value = real_constant(node, context);
+        if (!value)
+            return {};
+        analysis.real_literals.emplace(node, *value);
+        return value->type;
+    }
+    case cparser::NK_SIZEOF_EXPR:
+    case cparser::NK_ALIGNOF_EXPR:
+    case cparser::NK_OFFSETOF_EXPR: {
+        const auto value = layout_constant(node, context);
+        if (!value)
+            return {};
+        analysis.sizes.emplace(node, *value);
+        return value->type;
+    }
+    case cparser::NK_GENERIC_EXPR: {
+        auto *selected = select_generic(node, context);
+        if (!selected)
+            return {};
+        analysis.selections.emplace(node, selected);
+        return analyze_arithmetic_initializer(selected, context, analysis);
+    }
+    case cparser::NK_CAST_EXPR: {
+        auto *cast = static_cast<cparser::CastExprASTNode *>(node);
+        const auto target = unqualified(read_type(cast->getType(), context, true));
+        if (!target.arithmetic() || !present(cast->getExpr()))
+            return {};
+        // A direct literal-to-integer cast already works without an FP ABI.
+        if (target.integer() && cast->getExpr()->getKind() == cparser::NK_REAL_CONST) {
+            const auto value = real_constant(cast->getExpr(), context, false);
+            if (!value)
+                return {};
+            analysis.real_literals.emplace(cast->getExpr(), *value);
+        } else if (!analyze_arithmetic_initializer(cast->getExpr(), context, analysis).arithmetic()) {
+            return {};
+        }
+        analysis.initializer_types.emplace(node, target);
+        return target;
+    }
+    case cparser::NK_UNARY_PLUS_EXPR: {
+        const auto type = analyze_arithmetic_initializer(
+            static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(), context, analysis);
+        return type.real() ? type : promote(type);
+    }
+    case cparser::NK_BIT_NOT_EXPR:
+        return promote(analyze_arithmetic_initializer(
+            static_cast<cparser::BitNotExprASTNode *>(node)->getExpr(), context, analysis));
+    case cparser::NK_LOG_NOT_EXPR:
+        return analyze_arithmetic_initializer(
+            static_cast<cparser::LogNotExprASTNode *>(node)->getExpr(), context, analysis).arithmetic()
+            ? integer_type() : CType{};
+    case cparser::NK_MINUS_EXPR: {
+        auto *minus = static_cast<cparser::MinusExprASTNode *>(node);
+        if (!minus->isUnary())
+            break;
+        const auto type = analyze_arithmetic_initializer(minus->getRhs(), context, analysis);
+        if (type.real()) {
+            analysis.initializer_types.emplace(node, type);
+            return type;
+        }
+        return promote(type);
+    }
+    case cparser::NK_COND_EXPR: {
+        auto *cond = static_cast<cparser::CondExprASTNode *>(node);
+        if (!analyze_arithmetic_initializer(cond->getCondition(), context, analysis).arithmetic())
+            return {};
+        const auto yes = analyze_arithmetic_initializer(cond->getThenClause(), context, analysis);
+        const auto no = analyze_arithmetic_initializer(cond->getElseClause(), context, analysis);
+        const auto result = common_arithmetic(yes, no);
+        if (result.valid())
+            analysis.initializer_types.emplace(node, result);
+        return result;
+    }
+    default:
+        break;
+    }
+    const auto operands = binary_operands(node);
+    if (!operands) {
+        // Check types of forms such as calls and comma expressions even in
+        // unselected arms. The evaluator cannot produce a value for them
+        // (§6.6p3); only short-circuit/unevaluated placement can admit them.
+        return expression_type(node, context);
+    }
+    const auto lhs = analyze_arithmetic_initializer(operands->first, context, analysis);
+    const auto rhs = analyze_arithmetic_initializer(operands->second, context, analysis);
+    switch (node->getKind()) {
+    case cparser::NK_LSHIFT_EXPR:
+    case cparser::NK_RSHIFT_EXPR:
+        return rhs.integer() ? promote(lhs) : CType{};
+    case cparser::NK_BIT_IOR_EXPR:
+    case cparser::NK_BIT_XOR_EXPR:
+    case cparser::NK_BIT_AND_EXPR:
+    case cparser::NK_TRUNC_MOD_EXPR:
+        return common_integer(lhs, rhs);
+    case cparser::NK_LOG_AND_EXPR:
+    case cparser::NK_LOG_OR_EXPR:
+    case cparser::NK_LT_EXPR:
+    case cparser::NK_LE_EXPR:
+    case cparser::NK_GT_EXPR:
+    case cparser::NK_GE_EXPR:
+    case cparser::NK_EQ_EXPR:
+    case cparser::NK_NE_EXPR:
+        return lhs.arithmetic() && rhs.arithmetic() ? integer_type() : CType{};
+    default:
+        return common_arithmetic(lhs, rhs);
+    }
+}
+
 std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
-                                        const IceAnalysis &analysis) {
+                                        const ConstantAnalysis &analysis) {
     const AnalysisDepth depth(semantic_depth);
     if (!present(node))
         return std::nullopt;
@@ -759,7 +673,8 @@ std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
         return literal ? std::optional<CType>(literal->type) : std::nullopt;
     }
     case cparser::NK_CHAR_CONST:
-        return integer_type();
+        return character_literal_type(static_cast<cparser::CharConstASTNode *>(node),
+                                      context.source);
     case cparser::NK_GENERIC_EXPR:
         return infer_integer_type(analysis.selections.at(node), context, analysis);
     case cparser::NK_UNARY_PLUS_EXPR: {
@@ -836,18 +751,92 @@ std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
 }
 
 bool true_value(const Constant &constant) {
+    if (constant.type.extended_real())
+        return constant.value != 0;
+    if (constant.type.real())
+        return (constant.value & bit_mask(constant.type.bits - 1)) != 0;
     return normalize(constant.value, constant.type) != 0;
 }
 
+FloatingLiteral real_bits(const Constant &value) {
+    return {FloatingLiteralStatus::ok, value.type.bits, value.value, value.x87_sign_exponent};
+}
+
+std::optional<Constant> convert_arithmetic_constant(
+    Node *node, Constant value, CType type, const TypeContext &context) {
+    if (type.real()) {
+        const auto result = value.type.real()
+            ? (type.extended_real() || value.type.extended_real()
+                ? convert_x87_literal(real_bits(value), type.bits)
+                : convert_floating_literal(real_bits(value), type.bits))
+            : integer_to_floating_literal(normalize(value.value, value.type),
+                                          value.type.is_signed, type.bits);
+        if (result)
+            return Constant{unqualified(type), result.bits, result.x87_sign_exponent};
+    } else if (value.type.real()) {
+        if (const auto bits = floating_literal_to_integer(real_bits(value), type.bits, type.is_signed))
+            return converted(Constant{type, *bits}, type);
+    } else {
+        return converted(value, type);
+    }
+    constant_error(node, context.source, context.diagnostics,
+                   "arithmetic constant conversion is out of range for its destination type");
+    return std::nullopt;
+}
+
+std::optional<Constant> evaluate_floating_binary(
+    Node *node, const Constant &left, const Constant &right, const TypeContext &context) {
+    const CType common = common_arithmetic(left.type, right.type);
+    const auto lhs = convert_arithmetic_constant(node, left, common, context);
+    const auto rhs = convert_arithmetic_constant(node, right, common, context);
+    if (!lhs || !rhs)
+        return std::nullopt;
+    const auto a = real_bits(*lhs);
+    const auto b = real_bits(*rhs);
+    const auto kind = node->getKind();
+    if (kind >= cparser::NK_LT_EXPR && kind <= cparser::NK_NE_EXPR) {
+        const int comparison = compare_finite_floating(a, b);
+        const bool result = kind == cparser::NK_LT_EXPR ? comparison < 0
+                          : kind == cparser::NK_LE_EXPR ? comparison <= 0
+                          : kind == cparser::NK_GT_EXPR ? comparison > 0
+                          : kind == cparser::NK_GE_EXPR ? comparison >= 0
+                          : kind == cparser::NK_EQ_EXPR ? comparison == 0
+                                                       : comparison != 0;
+        return Constant{integer_type(), result};
+    }
+    FloatingOperation operation;
+    switch (kind) {
+    case cparser::NK_PLUS_EXPR: operation = FloatingOperation::add; break;
+    case cparser::NK_MINUS_EXPR: operation = FloatingOperation::subtract; break;
+    case cparser::NK_MULT_EXPR: operation = FloatingOperation::multiply; break;
+    case cparser::NK_TRUNC_DIV_EXPR:
+        if (!true_value(*rhs)) {
+            constant_error(node, context.source, context.diagnostics,
+                           "division by zero in floating-point constant expression");
+            return std::nullopt;
+        }
+        operation = FloatingOperation::divide;
+        break;
+    default:
+        return std::nullopt;
+    }
+    const auto result = floating_arithmetic(operation, a, b);
+    if (result)
+        return Constant{common, result.bits, result.x87_sign_exponent};
+    constant_error(node, context.source, context.diagnostics,
+                   "floating-point constant expression is out of range for its type");
+    return std::nullopt;
+}
+
 std::optional<Constant> evaluate_binary(Node *node, const TypeContext &context,
-                                        const IceAnalysis &analysis) {
+                                        const ConstantAnalysis &analysis) {
     const auto &source = context.source;
     auto &diagnostics = context.diagnostics;
     const auto operands = binary_operands(node);
     if (!operands)
         return std::nullopt;
 
-    auto left = evaluate_ice(operands->first, context, analysis);
+    auto left = evaluate_constant(operands->first, context, analysis);
     if (!left)
         return std::nullopt;
 
@@ -856,17 +845,17 @@ std::optional<Constant> evaluate_binary(Node *node, const TypeContext &context,
     if (node->getKind() == cparser::NK_LOG_OR_EXPR && true_value(*left))
         return Constant{integer_type(), 1};
 
-    auto right = evaluate_ice(operands->second, context, analysis);
+    auto right = evaluate_constant(operands->second, context, analysis);
     if (!right)
         return std::nullopt;
-    if (!left->type.integer() || !right->type.integer())
-        return std::nullopt;
-
     if (node->getKind() == cparser::NK_LOG_AND_EXPR ||
         node->getKind() == cparser::NK_LOG_OR_EXPR) {
         return Constant{integer_type(),
                         static_cast<std::uint64_t>(true_value(*right))};
     }
+
+    if (left->type.real() || right->type.real())
+        return evaluate_floating_binary(node, *left, *right, context);
 
     if (node->getKind() == cparser::NK_LSHIFT_EXPR ||
         node->getKind() == cparser::NK_RSHIFT_EXPR) {
@@ -1051,8 +1040,8 @@ std::optional<Constant> evaluate_binary(Node *node, const TypeContext &context,
     return Constant{common, normalize(result, common)};
 }
 
-std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
-                                     const IceAnalysis &analysis) {
+std::optional<Constant> evaluate_constant(Node *node, const TypeContext &context,
+                                          const ConstantAnalysis &analysis) {
     const AnalysisDepth depth(semantic_depth);
     const auto &source = context.source;
     auto &diagnostics = context.diagnostics;
@@ -1062,30 +1051,41 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     case cparser::NK_INTEGER_CONST:
         return integer_token_value(node, context);
     case cparser::NK_CHAR_CONST:
-        return parse_character_literal(node, source, diagnostics);
+        return character_literal(node, source);
+    case cparser::NK_REAL_CONST: {
+        const auto value = analysis.real_literals.find(node);
+        return value == analysis.real_literals.end() ? std::nullopt : std::optional(value->second);
+    }
     case cparser::NK_GENERIC_EXPR:
-        return evaluate_ice(analysis.selections.at(node), context, analysis);
+        return evaluate_constant(analysis.selections.at(node), context, analysis);
     case cparser::NK_UNARY_PLUS_EXPR: {
-        auto operand = evaluate_ice(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(),
-                                    context, analysis);
+        auto operand = evaluate_constant(static_cast<cparser::UnaryPlusASTNode *>(node)->getExpr(),
+                                         context, analysis);
+        if (operand && operand->type.real())
+            return operand;
         return operand ? std::optional<Constant>(converted(*operand, promote(operand->type)))
                        : std::nullopt;
     }
     case cparser::NK_CAST_EXPR: {
         auto *cast = static_cast<cparser::CastExprASTNode *>(node);
+        if (const auto type = analysis.initializer_types.find(node); type != analysis.initializer_types.end()) {
+            auto operand = evaluate_constant(cast->getExpr(), context, analysis);
+            return operand ? convert_arithmetic_constant(node, *operand, type->second, context)
+                           : std::nullopt;
+        }
         CType destination = read_type(cast->getType(), context);
         if (!destination.integer())
             return std::nullopt;
         if (cast->getExpr()->getKind() == cparser::NK_REAL_CONST)
             return cast_real_literal(cast->getExpr(), std::move(destination), source, diagnostics);
-        auto operand = evaluate_ice(cast->getExpr(), context, analysis);
+        auto operand = evaluate_constant(cast->getExpr(), context, analysis);
         return operand ? std::optional<Constant>(
                              converted(*operand, std::move(destination)))
                        : std::nullopt;
     }
     case cparser::NK_BIT_NOT_EXPR: {
         auto *unary = static_cast<cparser::BitNotExprASTNode *>(node);
-        auto operand = evaluate_ice(unary->getExpr(), context, analysis);
+        auto operand = evaluate_constant(unary->getExpr(), context, analysis);
         if (!operand || !operand->type.integer())
             return std::nullopt;
         const CType type = promote(operand->type);
@@ -1095,8 +1095,8 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     }
     case cparser::NK_LOG_NOT_EXPR: {
         auto *unary = static_cast<cparser::LogNotExprASTNode *>(node);
-        auto operand = evaluate_ice(unary->getExpr(), context, analysis);
-        if (!operand || !operand->type.integer())
+        auto operand = evaluate_constant(unary->getExpr(), context, analysis);
+        if (!operand || !operand->type.arithmetic())
             return std::nullopt;
         return Constant{integer_type(),
                         static_cast<std::uint64_t>(!true_value(*operand))};
@@ -1105,6 +1105,21 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     case cparser::NK_ALIGNOF_EXPR:
     case cparser::NK_OFFSETOF_EXPR:
         return analysis.sizes.at(node);
+    case cparser::NK_MINUS_EXPR: {
+        auto *minus = static_cast<cparser::MinusExprASTNode *>(node);
+        if (analysis.initializer_types.contains(node)) {
+            // 0 - zero is +0, but unary - flips the sign bit of either zero.
+            auto operand = evaluate_constant(minus->getRhs(), context, analysis);
+            if (!operand)
+                return std::nullopt;
+            if (operand->type.extended_real())
+                operand->x87_sign_exponent ^= 0x8000;
+            else
+                operand->value ^= UINT64_C(1) << (operand->type.bits - 1);
+            return operand;
+        }
+        return evaluate_binary(node, context, analysis);
+    }
     case cparser::NK_LSHIFT_EXPR:
     case cparser::NK_RSHIFT_EXPR:
     case cparser::NK_BIT_IOR_EXPR:
@@ -1113,7 +1128,6 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     case cparser::NK_LOG_AND_EXPR:
     case cparser::NK_LOG_OR_EXPR:
     case cparser::NK_PLUS_EXPR:
-    case cparser::NK_MINUS_EXPR:
     case cparser::NK_MULT_EXPR:
     case cparser::NK_TRUNC_DIV_EXPR:
     case cparser::NK_TRUNC_MOD_EXPR:
@@ -1127,19 +1141,18 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     case cparser::NK_COND_EXPR: {
         auto *conditional = static_cast<cparser::CondExprASTNode *>(node);
         auto condition =
-            evaluate_ice(conditional->getCondition(), context, analysis);
+            evaluate_constant(conditional->getCondition(), context, analysis);
         if (!condition)
             return std::nullopt;
-        const auto result_type =
-            infer_integer_type(node, context, analysis);
+        const auto type = analysis.initializer_types.find(node);
+        const auto result_type = type == analysis.initializer_types.end()
+            ? infer_integer_type(node, context, analysis) : std::optional(type->second);
         if (!result_type)
             return std::nullopt;
-        auto result =
-            evaluate_ice(true_value(*condition) ? conditional->getThenClause()
-                                                : conditional->getElseClause(),
-                          context, analysis);
-        return result ? std::optional<Constant>(
-                            converted(*result, *result_type))
+        auto *selected = true_value(*condition) ? conditional->getThenClause()
+                                                : conditional->getElseClause();
+        const auto result = evaluate_constant(selected, context, analysis);
+        return result ? convert_arithmetic_constant(node, *result, *result_type, context)
                       : std::nullopt;
     }
     default:
@@ -1250,7 +1263,7 @@ CType plain_char_type(const Preprocessed &source) {
 
 CType real_type(unsigned bits) {
     CType result;
-    if (bits == 32 || bits == 64) {
+    if (bits == 32 || bits == 64 || bits == 80) {
         result.kind = CType::Kind::real;
         result.bits = bits;
     }
@@ -1388,8 +1401,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         if (!result_type.valid())
             return {};
         if (result_type.kind == CType::Kind::array ||
-            result_type.kind == CType::Kind::function ||
-            result_type.kind == CType::Kind::record) {
+            result_type.kind == CType::Kind::function) {
             type_error(node, source, diagnostics,
                        "function has an unsupported return type");
             return {};
@@ -1433,11 +1445,6 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
                 }
                 break;
             }
-            if (type.kind == CType::Kind::record) {
-                type_error(parameter, source, diagnostics,
-                           "by-value aggregate parameters are not supported");
-                return {};
-            }
             result.params.push_back(adjust_parameter(std::move(type)));
             if (present(name))
                 prototype.parameters.emplace(identifier(name),
@@ -1461,11 +1468,13 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         auto *real = static_cast<cparser::RealTypeASTNode *>(node);
         const auto bytes = real->getAlignment();
         if (real->getIsDouble() ? bytes != 8 : bytes != 4) {
+            if (real->getIsDouble() && bytes == 16 && source.native_amd64_x87)
+                return qualify(real_type(80));
             type_error(node, source, diagnostics, "long double floating-point types are not supported");
             return {};
         }
-        if (!source.native_scalar_fp) {
-            type_error(node, source, diagnostics, "floating-point types require a supported hardware FP ABI");
+        if (!source.native_fp_types()) {
+            type_error(node, source, diagnostics, "floating-point types require a supported native FP ABI");
             return {};
         }
         return qualify(real_type(bytes * 8));
@@ -1614,7 +1623,7 @@ bool compatible(const CType &left, const CType &right) {
             return false;
         for (const CType &parameter : prototype.params) {
             CType promoted = parameter.integer() ? promote(parameter) :
-                parameter.real() ? real_type(64) : parameter;
+                parameter.real() && parameter.bits == 32 ? real_type(64) : parameter;
             if (!compatible(parameter, promoted))
                 return false;
         }
@@ -1737,7 +1746,7 @@ Node *select_generic(Node *node, const TypeContext &context, CType *result_type)
 std::optional<std::uint64_t> size_of(const CType &type) {
     switch (type.kind) {
     case CType::Kind::real:
-        return type.bits / 8;
+        return type.extended_real() ? 16 : type.bits / 8;
     case CType::Kind::integer:
         if (type.bits == 0 || type.bits > 64)
             return std::nullopt;
@@ -1765,6 +1774,8 @@ std::optional<std::uint64_t> size_of(const CType &type) {
 }
 
 unsigned align_of(const CType &type) {
+    if (type.extended_real())
+        return 16;
     switch (type.kind) {
     case CType::Kind::real:
     case CType::Kind::integer: {
@@ -1792,7 +1803,7 @@ std::string_view mir_type(const CType &type) {
     case CType::Kind::integer:
         return "i64";
     case CType::Kind::real:
-        return type.bits == 32 ? "f32" : "f64";
+        return type.bits == 32 ? "f32" : type.bits == 64 ? "f64" : "";
     case CType::Kind::pointer:
         return type.function_pointer() ? "func_ptr" : "ptr";
     case CType::Kind::invalid:
@@ -1833,7 +1844,7 @@ static std::optional<Constant> member_offset(Node *node, const TypeContext &cont
     std::uint64_t bytes = 0;
     for (Node *part : elements(offset->getDesignators())) {
         if (part->getKind() == cparser::NK_IDENT_NODE) {
-            const auto *member = find_member(type, identifier(part));
+            const auto member = find_member(type, identifier(part));
             if (!member)
                 return error(part, "offsetof designator names no such record member");
             bytes += member->offset;
@@ -1893,9 +1904,18 @@ std::optional<Constant> layout_constant(Node *node, const TypeContext &context) 
 }
 
 std::optional<Constant> integer_constant(Node *node, const TypeContext &context) {
-    IceAnalysis analysis;
-    return has_ice_form(node, context, analysis) ? evaluate_ice(node, context, analysis)
+    ConstantAnalysis analysis;
+    return has_ice_form(node, context, analysis) ? evaluate_constant(node, context, analysis)
                                                  : std::nullopt;
+}
+
+std::optional<Constant> arithmetic_initializer_constant(Node *node, const CType &destination,
+                                                        const TypeContext &context) {
+    ConstantAnalysis analysis;
+    if (!analyze_arithmetic_initializer(node, context, analysis).arithmetic())
+        return std::nullopt;
+    const auto value = evaluate_constant(node, context, analysis);
+    return value ? convert_arithmetic_constant(node, *value, destination, context) : std::nullopt;
 }
 
 std::optional<unsigned> alignment_specifiers(Node *specifiers, const TypeContext &context) {
@@ -1944,37 +1964,53 @@ bool check_object_alignment(unsigned requested, unsigned natural, Node *node,
 std::optional<Constant> real_constant(Node *node, const TypeContext &context, bool require_native) {
     if (!present(node) || node->getKind() != cparser::NK_REAL_CONST)
         return std::nullopt;
-    if (require_native && !context.source.native_scalar_fp) {
+    if (require_native && !context.source.native_fp_types()) {
         type_error(node, context.source, context.diagnostics,
-                   "floating-point expressions require a supported hardware FP ABI");
+                   "floating-point expressions require a supported native FP ABI");
         return std::nullopt;
     }
     const auto literal = decode_real_literal(node, context.source, context.diagnostics);
-    return literal ? std::optional<Constant>(Constant{real_type(literal.width), literal.bits}) :
+    return literal ? std::optional<Constant>(Constant{real_type(literal.width), literal.bits,
+                                                       literal.x87_sign_exponent}) :
                      std::nullopt;
 }
 
-std::optional<std::string> string_constant(Node *node,
-                                           const Preprocessed &source,
-                                           Diagnostics &diagnostics) {
-    if (!present(node) || node->getKind() != cparser::NK_STRING_CONST)
-        return std::nullopt;
-    auto *literal = static_cast<cparser::StringConstASTNode *>(node);
-
-    std::string result;
-    std::string error;
-    if (const auto original = spelling(literal); !original.empty()) {
-        if (!decode_quoted_strings(original, result, error)) {
-            diagnostics.error("cephyr.literal", error, location(source, node));
-            return std::nullopt;
-        }
-    } else {
-        // The parser stores already-decoded bytes separately from the original
-        // spelling. Copy the byte string rather than getValue() so embedded
-        // nulls survive and escapes are not interpreted a second time.
-        result = literal->getBytes();
+CType string_constant_type(Node *node, const Preprocessed &source) {
+    const auto *literal = static_cast<cparser::StringConstASTNode *>(node);
+    using cparser::StringEncoding;
+    CType element;
+    switch (literal->getEncoding()) {
+    case StringEncoding::ordinary:
+    case StringEncoding::utf8:
+        element = plain_char_type(source);
+        break;
+    case StringEncoding::wide: element = integer_type(32, source.wchar_signed); break;
+    case StringEncoding::utf16: element = integer_type(16, false); break;
+    case StringEncoding::utf32: element = integer_type(32, false); break;
     }
-    result.push_back('\0');
+    CType result;
+    result.kind = CType::Kind::array;
+    result.element = std::make_shared<CType>(element);
+    result.count = 1 + (element.is_plain_char ? literal->getBytes().size() :
+                                                literal->getWideUnits().size());
+    return result;
+}
+
+std::string string_constant_bytes(Node *node) {
+    const auto *literal = static_cast<cparser::StringConstASTNode *>(node);
+    const auto encoding = literal->getEncoding();
+    if (!cparser::wideStringEncoding(encoding))
+        return literal->getBytes() + '\0';
+
+    // All bundled targets are little-endian. Preserve the bit pattern even
+    // for numeric escapes above the signed maximum of wchar_t.
+    const auto width = encoding == cparser::StringEncoding::utf16 ? 2u : 4u;
+    std::string result;
+    result.reserve((literal->getWideUnits().size() + 1) * width);
+    for (const auto unit : literal->getWideUnits())
+        for (unsigned byte = 0; byte < width; ++byte)
+            result.push_back(static_cast<char>((unit >> (8 * byte)) & 0xffu));
+    result.append(width, '\0');
     return result;
 }
 

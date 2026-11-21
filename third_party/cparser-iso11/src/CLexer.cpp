@@ -87,12 +87,18 @@ void CLexer::readName(Token *t)
         }
     }
 
-    if (t->sval == "u8" && _ch == '"')
-        readStringLit(t, true);
-    else if ((t->sval == "L" || t->sval == "u" || t->sval == "U") &&
+    if (t->spelling == "u8" && _ch == '"')
+        readStringLit(t, StringEncoding::utf8);
+    else if ((t->spelling == "L" || t->spelling == "u" || t->spelling == "U") &&
              (_ch == '"' || _ch == '\''))
-        error(t->line, t->col, _ch == '"' ? "wide string literals are not supported"
-                                         : "wide character constants are not supported");
+    {
+        if (_ch == '"')
+            readStringLit(t, t->spelling.front() == 'L' ? StringEncoding::wide :
+                             t->spelling.front() == 'u' ? StringEncoding::utf16 :
+                                                          StringEncoding::utf32);
+        else
+            readCharLit(t, t->spelling.front());
+    }
     else
         t->kind = keyword(t->sval.c_str());
 }
@@ -272,237 +278,199 @@ unsigned CLexer::readUTF8Character(Token *t, std::string &spelling)
     return static_cast<unsigned>(state.value);
 }
 
-void CLexer::readStringLit(Token *t, bool utf8)
+void CLexer::readStringLit(Token *t, StringEncoding encoding)
 {
     t->kind = TK_STRING_LIT;
     t->sval.clear();
-    t->spelling = utf8 ? "u8" : "";
-
-    const auto hexValue = [](int ch) {
-        if (ch >= '0' && ch <= '9') return ch - '0';
-        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
-        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
-        return -1;
-    };
-    const auto appendEscape = [&](std::string &value, std::string &raw) {
-        raw.push_back('\\');
+    t->stringEncoding = encoding;
+    t->stringElements.clear();
+    const uint32_t maximum = encoding == StringEncoding::utf16 ? 0xffffu :
+                             wideStringEncoding(encoding) ? 0xffffffffu : 0xffu;
+    const char *width = encoding == StringEncoding::utf16 ? "16 bits" :
+                        wideStringEncoding(encoding) ? "32 bits" : "one byte";
+    const auto take = [&] {
+        const int ch = _ch;
+        t->spelling.push_back(static_cast<char>(ch));
         nextCh();
-        if (_ch == EOF)
+        return ch;
+    };
+    const auto escape = [&]() -> StringElement {
+        take();
+        if (_ch == EOF || _ch == '\n')
             error(t->line, t->col, "unterminated escape sequence");
-        raw.push_back(static_cast<char>(_ch));
-        switch (_ch)
+        if (_ch == 'u' || _ch == 'U')
         {
-            case '\'': value.push_back('\''); nextCh(); return;
-            case '"': value.push_back('"'); nextCh(); return;
-            case '?': value.push_back('?'); nextCh(); return;
-            case '\\': value.push_back('\\'); nextCh(); return;
-            case 'a': value.push_back('\a'); nextCh(); return;
-            case 'b': value.push_back('\b'); nextCh(); return;
-            case 'f': value.push_back('\f'); nextCh(); return;
-            case 'n': value.push_back('\n'); nextCh(); return;
-            case 'r': value.push_back('\r'); nextCh(); return;
-            case 't': value.push_back('\t'); nextCh(); return;
-            case 'v': value.push_back('\v'); nextCh(); return;
-            case 'u':
-            case 'U':
-                appendUTF8(value, readUniversalCharacter(t, raw));
-                return;
-            case 'x':
+            t->spelling.push_back(static_cast<char>(_ch));
+            return {readUniversalCharacter(t, t->spelling), false};
+        }
+        if (_ch == 'x' || (_ch >= '0' && _ch <= '7'))
+        {
+            const bool hex = _ch == 'x';
+            const unsigned base = hex ? 16 : 8;
+            if (hex)
             {
-                nextCh();
-                int decoded = 0, count = 0;
-                while (_ch != EOF && hexValue(_ch) >= 0)
-                {
-                    raw.push_back(static_cast<char>(_ch));
-                    decoded = (decoded << 4) | hexValue(_ch);
-                    if (decoded > 255)
-                        error(t->line, t->col, "hex escape exceeds one byte");
-                    ++count;
-                    nextCh();
-                }
-                if (!count)
+                take();
+                if (c11_hex_value(_ch) < 0)
                     error(t->line, t->col, "hex escape requires a digit");
-                value.push_back(static_cast<char>(decoded));
-                return;
             }
-            default:
-                if (_ch >= '0' && _ch <= '7')
-                {
-                    int decoded = 0, count = 0;
-                    while (count < 3 && _ch >= '0' && _ch <= '7')
-                    {
-                        if (count)
-                            raw.push_back(static_cast<char>(_ch));
-                        decoded = (decoded << 3) | (_ch - '0');
-                        ++count;
-                        nextCh();
-                    }
-                    if (decoded > 255)
-                        error(t->line, t->col, "octal escape exceeds one byte");
-                    value.push_back(static_cast<char>(decoded));
-                    return;
-                }
-                error(t->line, t->col, "unsupported escape sequence");
+            uint32_t value = 0;
+            for (unsigned count = 0; hex || count < 3; count += !hex)
+            {
+                const int digit = c11_hex_value(_ch);
+                if (digit < 0 || static_cast<unsigned>(digit) >= base)
+                    break;
+                if (value > (maximum - static_cast<unsigned>(digit)) / base)
+                    error(t->line, t->col, "%s escape exceeds %s", hex ? "hex" : "octal", width);
+                value = value * base + static_cast<unsigned>(digit);
+                take();
+            }
+            return {value, true};
+        }
+        switch (take())
+        {
+            case '\'': return {'\'', false};
+            case '"': return {'"', false};
+            case '?': return {'?', false};
+            case '\\': return {'\\', false};
+            case 'a': return {'\a', false};
+            case 'b': return {'\b', false};
+            case 'f': return {'\f', false};
+            case 'n': return {'\n', false};
+            case 'r': return {'\r', false};
+            case 't': return {'\t', false};
+            case 'v': return {'\v', false};
+            default: error(t->line, t->col, "unsupported escape sequence");
         }
     };
 
-    t->spelling.push_back('"');
-    nextCh();
+    take();
     while (_ch != '"' && _ch != EOF && _ch != '\n')
     {
         if (_ch == '\\')
-            appendEscape(t->sval, t->spelling);
+            t->stringElements.push_back(escape());
         else if (_ch >= 0x80)
-            appendUTF8(t->sval, readUTF8Character(t, t->spelling));
+            t->stringElements.push_back({readUTF8Character(t, t->spelling), false});
         else
-        {
-            t->sval.push_back(static_cast<char>(_ch));
-            t->spelling.push_back(static_cast<char>(_ch));
-            nextCh();
-        }
+            t->stringElements.push_back({static_cast<uint32_t>(take()), false});
     }
     if (_ch != '"')
         error(t->line, t->col, "unterminated string literal");
-    t->spelling.push_back('"');
-    nextCh();
+    take();
 }
 
-void CLexer::readCharLit(Token *t)
+void CLexer::readCharLit(Token *t, char prefix)
 {
-    t->spelling.clear();
+    t->sval.clear();
     t->spelling.push_back('\'');
     nextCh();
     t->kind = TK_CHAR_LIT;
     if (_ch == '\'')
         error(t->line, t->col, "empty character constant");
-    if (_ch == EOF || _ch == '\n')
-        error(t->line, t->col, "unterminated character constant");
 
-    if (_ch == '\\')
-    {
-        t->spelling.push_back('\\');
+    // 6.4.4.4p9: numeric escapes designate code units, not Unicode scalars.
+    const std::uint32_t maximum = !prefix ? 0xffu : prefix == 'u' ? 0xffffu : 0xffffffffu;
+    std::uint32_t packed = 0;
+    unsigned byteCount = 0; // saturate at 2; the single-byte case can be sign-extended
+    const auto take = [&] {
+        const int ch = _ch;
+        t->spelling.push_back(static_cast<char>(ch));
         nextCh();
-        t->spelling.push_back(static_cast<char>(_ch));
-        const auto hexValue = [](int ch) {
-            if (ch >= '0' && ch <= '9') return ch - '0';
-            if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
-            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
-            return -1;
-        };
-        bool consumed = false;
-        switch (_ch)
+        return ch;
+    };
+    const auto appendByte = [&](unsigned byte) {
+        packed = (packed << 8) | byte;
+        if (byteCount < 2)
+            ++byteCount;
+    };
+    while (_ch != '\'')
+    {
+        if (_ch == EOF || _ch == '\n')
+            error(t->line, t->col, "unterminated character constant");
+        std::uint32_t value = 0;
+        bool numeric = false;
+        if (_ch == '\\')
         {
-            case '0':
+            take();
+            if (_ch == EOF || _ch == '\n')
+                error(t->line, t->col, "unterminated character escape");
+            if (_ch == 'u' || _ch == 'U')
             {
-                int value = 0, digits = 0;
-                while (digits < 3 && _ch >= '0' && _ch <= '7')
-                {
-                    if (digits)
-                        t->spelling.push_back(static_cast<char>(_ch));
-                    value = (value << 3) | (_ch - '0');
-                    ++digits;
-                    nextCh();
-                }
-                consumed = true;
-                t->info.ival = value;
-                break;
+                t->spelling.push_back(static_cast<char>(_ch));
+                value = readUniversalCharacter(t, t->spelling);
             }
-            case 'b':
-                t->info.ival = 8;
-                break; // Backspace
-            case 'a':
-                t->info.ival = 7;
-                break;
-            case '?':
-                t->info.ival = '?';
-                break;
-            case 't':
-                t->info.ival = 9;
-                break; // Horizontal tab
-            case 'n':
-                t->info.ival = 10;
-                break; // New line
-            case 'v':
-                t->info.ival = 11;
-                break; // Vertical tab
-            case 'f':
-                t->info.ival = 12;
-                break; // Form feed
-            case 'r':
-                t->info.ival = 13;
-                break; // Carriage return
-            case '\'':
-                t->info.ival = 39;
-                break; // Single quote
-            case '\\':
-                t->info.ival = 92;
-                break; // Backslash
-            case '"':
-                t->info.ival = 34;
-                break;
-            case 'u':
-            case 'U':
-                t->info.ival = static_cast<int>(readUniversalCharacter(t, t->spelling));
-                consumed = true;
-                break;
-            case 'x':
+            else if (_ch == 'x' || (_ch >= '0' && _ch <= '7'))
             {
-                nextCh();
-                consumed = true;
-                int value = 0, digits = 0;
-                while (_ch != EOF && hexValue(_ch) >= 0)
+                numeric = true;
+                const bool hex = _ch == 'x';
+                const unsigned base = hex ? 16 : 8;
+                if (hex)
                 {
-                    t->spelling.push_back(static_cast<char>(_ch));
-                    value = (value << 4) | hexValue(_ch);
-                    if (value > 255)
-                        error(t->line, t->col, "hex escape exceeds one byte");
-                    ++digits;
-                    nextCh();
+                    take();
+                    if (c11_hex_value(_ch) < 0)
+                        error(t->line, t->col, "hex character escape requires a digit");
                 }
-                if (!digits || value > 255)
-                    error(t->line, t->col, "invalid hex character escape");
-                t->info.ival = value;
-                break;
+                unsigned count = 0;
+                while (hex || count < 3)
+                {
+                    const int digit = c11_hex_value(_ch);
+                    if (digit < 0 || static_cast<unsigned>(digit) >= base)
+                        break;
+                    if (value > (maximum - static_cast<unsigned>(digit)) / base)
+                        error(t->line, t->col, "%s escape exceeds %s",
+                              hex ? "hex" : "octal", !prefix ? "one byte" :
+                              prefix == 'u' ? "16 bits" : "32 bits");
+                    value = value * base + static_cast<unsigned>(digit);
+                    take();
+                    if (!hex)
+                        ++count;
+                }
             }
-            default:
-                if (_ch >= '1' && _ch <= '7')
+            else
+            {
+                switch (take())
                 {
-                    int value = 0, digits = 0;
-                    while (digits < 3 && _ch >= '0' && _ch <= '7')
-                    {
-                        if (digits)
-                            t->spelling.push_back(static_cast<char>(_ch));
-                        value = (value << 3) | (_ch - '0');
-                        ++digits;
-                        nextCh();
-                    }
-                    if (value > 255)
-                        error(t->line, t->col, "octal escape exceeds one byte");
-                    consumed = true;
-                    t->info.ival = value;
-                    break;
+                    case 'a': value = '\a'; break;
+                    case 'b': value = '\b'; break;
+                    case 'f': value = '\f'; break;
+                    case 'n': value = '\n'; break;
+                    case 'r': value = '\r'; break;
+                    case 't': value = '\t'; break;
+                    case 'v': value = '\v'; break;
+                    case '\'': value = '\''; break;
+                    case '"': value = '"'; break;
+                    case '?': value = '?'; break;
+                    case '\\': value = '\\'; break;
+                    default: error(t->line, t->col, "unsupported character escape");
                 }
-                error(t->line, t->col, "unsupported character escape");
+            }
         }
-        if (!consumed)
-            nextCh();
-    }
-    else if (_ch >= 0x80)
-        t->info.ival = static_cast<int>(readUTF8Character(t, t->spelling));
-    else
-    {
-        t->info.ival = _ch;
-        t->spelling.push_back(static_cast<char>(_ch));
-        nextCh();
-    }
+        else if (_ch >= 0x80)
+            value = readUTF8Character(t, t->spelling);
+        else
+            value = static_cast<unsigned>(take());
 
-    if (_ch != '\'')
-    {
-        error(t->line, t->col, "unterminated or multi-character constant");
+        // Implementation-defined (6.4.4.4p10–11): narrow constants pack
+        // execution UTF-8 bytes, keeping the last four. Wide constants keep
+        // the last code unit, including the low surrogate for non-BMP u'…'.
+        if (!prefix)
+        {
+            if (numeric)
+                appendByte(value);
+            else
+            {
+                char encoded[4];
+                const auto count = c11_encode_utf8(value, encoded);
+                for (unsigned i = 0; i < count; ++i)
+                    appendByte(static_cast<unsigned char>(encoded[i]));
+            }
+        }
+        else
+            packed = prefix == 'u' && !numeric && value > 0xffff
+                ? 0xdc00u + ((value - 0x10000u) & 0x3ffu) : value;
     }
-
-    t->spelling.push_back('\'');
-    nextCh();
+    t->info.uval = packed;
+    t->singleByteCharacter = byteCount == 1;
+    take();
 }
 
 void CLexer::comment(int line, int column)

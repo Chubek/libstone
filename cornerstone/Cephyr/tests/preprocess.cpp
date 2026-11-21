@@ -352,6 +352,71 @@ void check_conditional_expressions() {
     }
 }
 
+void check_expanded_literals(const std::filesystem::path &directory) {
+    const auto source = (directory / "expanded-literals.c").string();
+    write(directory / "expanded-literals.h",
+          "#line 40 \"literals-mapped.h\"\n"
+          "#define WIDE U\"wide\"\n"
+          "void *s = u8\"UTF-8\" \"ordinary\"\n"
+          "/* still adjacent */ WIDE;\n");
+
+    cephyr::Diagnostics mixed;
+    assert(!cephyr::preprocess("#include \"expanded-literals.h\"\n",
+                               source, {}, mixed));
+    assert(mixed.error_count() == 1);
+    assert(rendered(mixed).find("literals-mapped.h:42: error") != std::string::npos);
+    assert(rendered(mixed).find("cannot mix a UTF-8 prefix with a wide prefix") !=
+           std::string::npos);
+
+    for (const auto &[text, message] : {
+             std::pair{R"(void *p = L"wide" u8"utf8";)", "cannot mix a UTF-8 prefix"},
+             std::pair{R"(void *p = u"wide" "" u8"utf8";)", "cannot mix a UTF-8 prefix"},
+             std::pair{R"(void *p = u8"utf8" "" u"wide";)", "cannot mix a UTF-8 prefix"},
+             std::pair{R"(char *s = "\q";)", "invalid escape sequence"},
+             std::pair{R"(char *s = "\x";)", "hexadecimal escape requires a digit"},
+             std::pair{R"(char *s = "\400";)", "numeric escape out of range"},
+             std::pair{R"(char *s = u8"\x100";)", "numeric escape out of range"},
+             std::pair{R"(void *s = u"\x10000";)", "numeric escape out of range"},
+             std::pair{R"(void *s = U"\x100000000";)", "numeric escape out of range"},
+             std::pair{R"(int c = L'\x100000000';)", "numeric escape out of range"},
+             std::pair{R"(int c = '\8';)", "invalid escape sequence"},
+             std::pair{R"(int c = '';)", "empty character constant"},
+             std::pair{R"(char *s = "\u12x4";)", "malformed universal character name"},
+             std::pair{R"(char *s = "\u0041";)", "invalid code point"},
+             std::pair{R"(char *s = "\U00110000";)", "invalid code point"}}) {
+        cephyr::Diagnostics rejected;
+        assert(!cephyr::preprocess(std::string(text) + '\n', source, {}, rejected));
+        assert(rejected.error_count() == 1);
+        assert(rendered(rejected).find(message) != std::string::npos);
+    }
+
+    cephyr::Diagnostics valid;
+    cephyr::PreprocessOptions comments;
+    comments.keep_comments = true;
+    auto result = cephyr::preprocess(
+        "#define TWICE(x) x x\n"
+        "#if 0\nchar *skipped = \"\\q\";\n#endif\n"
+        "// \"\\x100\" u8\"utf8\" L\"wide\" is a comment\n"
+        R"(char *s = u8"\377\x000ff\u0040\\u0041" /* "\q" */ "tail";)" "\n"
+        R"(char *hex_boundary = "\x12" "3";)" "\n"
+        R"(void *w = TWICE(u"\xffff") "ordinary";)" "\n"
+        R"(void *v = U"\xffffffff";)" "\n"
+        R"(int wch = L'\xffffffff';)" "\n",
+        source, comments, valid);
+    assert(result && rendered(valid).empty());
+    assert(result->text.find(R"("\x12" "3")") != std::string::npos);
+    assert(result->text.find(R"(U"\xffffffff")") != std::string::npos);
+
+    cephyr::Diagnostics preprocessed;
+    assert(!cephyr::read_preprocessed(
+        "# 70 \"literals-input.c\" 1\r\n"
+        "void *w = u8\"utf8\" /* ordinary comment */\r\n"
+        "L\"wide\";\r\n", "literals.i", preprocessed));
+    assert(preprocessed.error_count() == 1);
+    assert(rendered(preprocessed).find("literals-input.c:71: error") !=
+           std::string::npos);
+}
+
 void check_pragmas() {
     cephyr::Diagnostics diagnostics;
     const auto result = cephyr::preprocess(
@@ -396,6 +461,7 @@ int main() {
     check_extended_source(temporary.path);
     check_directives(temporary.path);
     check_conditional_expressions();
+    check_expanded_literals(temporary.path);
     check_pragmas();
     write(temporary.path / "local.h", "int from_header = VALUE;\n");
     write(temporary.path / "forced.h", "#define FORCED 9\n");
@@ -426,7 +492,10 @@ int main() {
         "__STDC_NO_THREADS__ != 1 || __STDC_NO_VLA__ != 1\n"
         "#error wrong C11 feature indicators\n"
         "#endif\n"
-        "#if defined(__STDC_IEC_559__) || defined(__STDC_UTF_32__)\n"
+        "#if __STDC_UTF_16__ != 1 || __STDC_UTF_32__ != 1\n"
+        "#error wrong Unicode encoding indicators\n"
+        "#endif\n"
+        "#if defined(__STDC_IEC_559__)\n"
         "#error unsupported optional feature was advertised\n"
         "#endif\n",
         primary.string(), options, diagnostics);

@@ -48,6 +48,8 @@ constexpr unsigned direct_call = 4;
 constexpr unsigned indirect_call = 5;
 constexpr Opcode opaque_opcodes[] = {
     {"call", Op::opaque, direct_call}, {"call_indirect", Op::opaque, indirect_call},
+    {"amd64_va_start", Op::opaque, 1},
+    {"aarch64_va_start", Op::opaque, 1},
     {"fconst", Op::opaque, 2}, {"frame_addr", Op::opaque, 2}, {"global_addr", Op::opaque, 2},
     {"func_addr", Op::opaque, 2}, {"ptr_to_int", Op::opaque, 2}, {"int_to_ptr", Op::opaque, 2},
     {"func_ptr_to_int", Op::opaque, 2}, {"int_to_func_ptr", Op::opaque, 2},

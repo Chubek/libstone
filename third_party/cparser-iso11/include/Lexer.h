@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "common.h"
 #include <map>
@@ -33,6 +34,9 @@ struct Token
     } info;
     std::string sval;
     std::string spelling;
+    StringEncoding stringEncoding = StringEncoding::ordinary;
+    std::vector<StringElement> stringElements;
+    bool singleByteCharacter = false;
     int line, col;
 };
 

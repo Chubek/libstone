@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,10 @@
 #endif
 extern "C" {
 #include "cpp.h"
+// The raw scanner, unlike cpp()/lex(), does not execute directives or
+// expand macros. These are the internal entry points in ucpp/ucppi.h.
+void ucpp_init_cppm(void);
+int ucpp_next_token(struct lexer_state *);
 }
 
 namespace {
@@ -29,6 +34,7 @@ struct UcppDiagnosticContext {
     Diagnostics *diagnostics = nullptr;
     std::string root_file;
     unsigned errors = 0;
+    const Preprocessed *output_map = nullptr;
 };
 
 thread_local UcppDiagnosticContext *active_diagnostics = nullptr;
@@ -63,6 +69,8 @@ unsigned line_number(long line) {
 }
 
 Location ucpp_location(long line) {
+    if (active_diagnostics && active_diagnostics->output_map)
+        return active_diagnostics->output_map->locate(line_number(line));
     std::string filename;
     if (current_filename)
         filename = current_filename;
@@ -508,6 +516,122 @@ struct ActiveDiagnosticScope {
     UcppDiagnosticContext *previous;
 };
 
+const char *literal_error(std::string_view body, std::uint32_t escape_max) {
+    for (std::size_t offset = 0; offset < body.size();) {
+        if (body[offset++] != '\\')
+            continue;
+        if (offset == body.size())
+            return "unterminated escape sequence";
+
+        const char escape = body[offset++];
+        if (std::string_view("'\"?\\abfnrtv").find(escape) != std::string_view::npos)
+            continue;
+        if (escape == 'u' || escape == 'U') {
+            std::uint32_t code_point = 0;
+            const unsigned digits = escape == 'u' ? 4 : 8;
+            for (unsigned i = 0; i < digits; ++i) {
+                const int digit = offset < body.size() ? c11_hex_value(body[offset++]) : -1;
+                if (digit < 0)
+                    return "malformed universal character name in literal";
+                code_point = code_point * 16 + static_cast<unsigned>(digit);
+            }
+            if (!c11_valid_ucn(code_point))
+                return "invalid code point in universal character name in literal";
+            continue;
+        }
+        if (escape == 'x') {
+            const auto start = offset;
+            std::uint32_t value = 0;
+            while (offset < body.size()) {
+                const int hex = c11_hex_value(body[offset]);
+                if (hex < 0)
+                    break;
+                const auto digit = static_cast<unsigned>(hex);
+                if (value > (escape_max - digit) / 16)
+                    return "numeric escape out of range for literal prefix";
+                value = value * 16 + digit;
+                ++offset;
+            }
+            if (offset == start)
+                return "hexadecimal escape requires a digit";
+        } else if (escape >= '0' && escape <= '7') {
+            unsigned value = static_cast<unsigned>(escape - '0');
+            for (unsigned i = 1; i < 3 && offset < body.size() &&
+                                 body[offset] >= '0' && body[offset] <= '7'; ++i)
+                value = value * 8 + static_cast<unsigned>(body[offset++] - '0');
+            if (value > escape_max)
+                return "numeric escape out of range for literal prefix";
+        } else {
+            return "invalid escape sequence in literal";
+        }
+    }
+    return nullptr;
+}
+
+// Check C11 lexical constraints on the surviving, expanded tokens without
+// changing their spellings (-E), execution values, or token boundaries.
+// This must run under ucpp_mutex with the raw lexer tables initialized.
+bool check_literals(Preprocessed &result, Diagnostics &diagnostics) {
+    UcppDiagnosticContext context{&diagnostics, result.file, 0, &result};
+    ActiveDiagnosticScope scope(context);
+    struct lexer_state lexer {};
+    init_lexer_state(&lexer);
+    lexer.flags = LEXER | PHASE3_INPUT | CPLUSPLUS_COMMENTS | UTF8_SOURCE;
+    lexer.input_string = reinterpret_cast<unsigned char *>(result.text.data());
+    lexer.ebuf = result.text.size();
+
+    std::string_view previous_prefix;
+    int status;
+    while ((status = ucpp_next_token(&lexer)) == 0 && context.errors == 0) {
+        const auto &token = *lexer.ctok;
+        if (token.type == NONE || token.type == COMMENT ||
+            token.type == NEWLINE || token.type == OPT_NONE)
+            continue;
+        if (token.type != STRING && token.type != CHAR) {
+            previous_prefix = {};
+            continue;
+        }
+
+        const bool string = token.type == STRING;
+        const std::string_view spelling(token.name);
+        const char delimiter = string ? '"' : '\'';
+        const auto quote = spelling.find(delimiter);
+        if (quote == std::string_view::npos || quote + 1 >= spelling.size() ||
+            spelling.back() != delimiter) {
+            diagnostics.error("cephyr.preprocessor.literal", "malformed literal spelling",
+                              result.locate(line_number(token.line)));
+            ++context.errors;
+            break;
+        }
+        const auto prefix = spelling.substr(0, quote);
+        const auto body = spelling.substr(quote + 1, spelling.size() - quote - 2);
+        const bool wide = !prefix.empty() && prefix != "u8";
+        // All built-in targets have 8-bit char, 16-bit char16_t, and
+        // 32-bit wchar_t/char32_t (use the unsigned range for wchar_t).
+        const std::uint32_t escape_max = prefix == "u" ? 0xffffu :
+            wide ? 0xffffffffu : 0xffu;
+        const char *message = literal_error(body, escape_max);
+        if (!message && !string && body.empty())
+            message = "empty character constant";
+        if (!message && string && !prefix.empty() &&
+            !previous_prefix.empty() && prefix != previous_prefix)
+            message = wide && previous_prefix != "u8" ?
+                "adjacent string literals cannot mix different wide prefixes" :
+                "adjacent string literals cannot mix a UTF-8 prefix with a wide prefix";
+        if (message) {
+            diagnostics.error("cephyr.preprocessor.literal", message,
+                              result.locate(line_number(token.line)));
+            ++context.errors;
+        }
+        if (!string || !prefix.empty())
+            // The raw lexer may reuse token.name on the next iteration.
+            previous_prefix = !string ? "" : !wide ? "u8" :
+                              prefix == "L" ? "L" : prefix == "u" ? "u" : "U";
+    }
+    free_lexer_state(&lexer);
+    return status == 2 && context.errors == 0; // Raw lexer EOF, not CPPERR_EOF.
+}
+
 } // namespace
 
 extern "C" void ucpp_error(long line, char *format, ...) {
@@ -666,6 +790,9 @@ std::optional<Preprocessed> preprocess(const std::string &source,
         return std::nullopt;
 
     auto result = strip_generated_markers(std::move(*captured), file, markers);
+    if (!options.assembler && result.text.find_first_of("\"'") != std::string::npos &&
+        !check_literals(result, diagnostics))
+        return std::nullopt;
     if (!options.line_markers)
         result.output = result.text;
     return result;
@@ -673,8 +800,13 @@ std::optional<Preprocessed> preprocess(const std::string &source,
 
 std::optional<Preprocessed> read_preprocessed(const std::string &source,
                                               const std::string &file,
-                                              Diagnostics &) {
-    return strip_line_markers(source, file);
+                                              Diagnostics &diagnostics) {
+    auto result = strip_line_markers(source, file);
+    std::lock_guard lock(ucpp_mutex());
+    ucpp_init_cppm();
+    if (!check_literals(result, diagnostics))
+        return std::nullopt;
+    return result;
 }
 
 } // namespace cephyr

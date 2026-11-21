@@ -16,7 +16,8 @@ namespace {
 
 constexpr NativeLoweringProvider rv64im{"RISCV64IM", "LP64", "stdspec/riscv/rv64im.arch"};
 constexpr NativeLoweringProvider amd64{"AMD64", "SysVAMD64", "stdspec/amd64/root.arch", true};
-constexpr NativeLoweringProvider aarch64{"AArch64", "AAPCS64", "stdspec/aarch64/root.arch"};
+constexpr NativeLoweringProvider aarch64{"AArch64", "AAPCS64", "stdspec/aarch64/root.arch",
+                                         /* plain_char_signed */ false, /* wchar_signed */ false};
 constexpr HostTargetMapping native_hosts[] = {
     {"riscv64", "linux", "gnu", "lp64", true, "riscv64-linux-gnu", rv64im},
     {"x86_64", "linux", "gnu", "lp64", false, "x86_64-linux-gnu", amd64},

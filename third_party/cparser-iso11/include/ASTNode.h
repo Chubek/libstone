@@ -354,16 +354,24 @@ class StringConstASTNode : public ASTNode
 {
     std::string _value;
     std::string _spelling;
+    StringEncoding _encoding;
+    std::vector<uint32_t> _wideUnits;
 public:
-    StringConstASTNode(std::string val, std::string spelling = {})
+    StringConstASTNode(std::string val, std::string spelling = {},
+                       StringEncoding encoding = StringEncoding::ordinary,
+                       std::vector<uint32_t> wideUnits = {})
+        : _value(std::move(val)), _spelling(std::move(spelling)),
+          _encoding(encoding), _wideUnits(std::move(wideUnits))
     {
-        _value = std::move(val);
-        _spelling = std::move(spelling);
         kind = NK_STRING_CONST;
     }
 
     const char *getValue() { return _value.c_str(); }
+    // Both sequences exclude the implicit terminator. Only one is populated,
+    // according to the encoding. Wide code units are in host-independent order.
     const std::string &getBytes() const { return _value; }
+    const std::vector<uint32_t> &getWideUnits() const { return _wideUnits; }
+    StringEncoding getEncoding() const { return _encoding; }
     const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);
@@ -372,18 +380,22 @@ public:
 
 class CharConstASTNode : public ASTNode
 {
-    int _value;
+    std::uint32_t _value;
     std::string _spelling;
+    bool _singleByte;
 
 public:
-    CharConstASTNode(int VALUE, std::string Spelling = {})
+    CharConstASTNode(std::uint32_t VALUE, std::string Spelling = {},
+                     bool SingleByte = false)
     {
         _value = VALUE;
         _spelling = std::move(Spelling);
+        _singleByte = SingleByte;
         kind = NK_CHAR_CONST;
     }
 
-    int getValue() { return _value; }
+    std::uint32_t getValue() const { return _value; }
+    bool isSingleByte() const { return _singleByte; }
     const char *getSpelling() const { return _spelling.c_str(); }
 
     //STType *checkType(AbstractSyntaxTree *ast);

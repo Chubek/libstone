@@ -30,12 +30,27 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL lseek, 8
     CEPHYR_SYSCALL mmap, 9
     CEPHYR_SYSCALL munmap, 11
+    CEPHYR_SYSCALL __cephyr_rt_sigaction, 13
+    CEPHYR_SYSCALL __cephyr_rt_sigprocmask, 14
     CEPHYR_SYSCALL __cephyr_ioctl, 16
+    CEPHYR_SYSCALL __cephyr_getpid, 39
+    CEPHYR_SYSCALL __cephyr_gettid, 186
     CEPHYR_SYSCALL __cephyr_clock_gettime, 228
+    CEPHYR_SYSCALL __cephyr_tgkill, 234
     CEPHYR_SYSCALL openat, 257
     CEPHYR_SYSCALL __cephyr_unlinkat, 263
     CEPHYR_SYSCALL __cephyr_renameat, 264
     CEPHYR_SYSCALL __cephyr_getrandom, 318
+
+    /* The signal frame is on the stack. Do not call or adjust the stack. */
+    .globl __cephyr_rt_sigreturn
+    .hidden __cephyr_rt_sigreturn
+    .type __cephyr_rt_sigreturn,@function
+__cephyr_rt_sigreturn:
+    movl $15, %eax
+    syscall
+    ud2
+    .size __cephyr_rt_sigreturn, .-__cephyr_rt_sigreturn
 
     .globl _exit
     .type _exit,@function

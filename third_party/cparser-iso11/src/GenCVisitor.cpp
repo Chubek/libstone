@@ -50,12 +50,17 @@ void GenCVisitor::visit(EnumeratorDeclASTNode *n)
 
 void GenCVisitor::visit(StringConstASTNode *n)
 {
-    std::cout << "\"" << n->getValue() << "\"";
+    if (*n->getSpelling())
+        std::cout << n->getSpelling();
+    else
+        std::cout << "\"" << n->getValue() << "\"";
 }
 
 void GenCVisitor::visit(CharConstASTNode *n)
 {
-    if (n->getValue() == '\n')
+    if (*n->getSpelling())
+        std::cout << n->getSpelling();
+    else if (n->getValue() == '\n')
         std::cout << "'\\n'";
     else
         std::cout << "'" << (char) n->getValue() << "'";

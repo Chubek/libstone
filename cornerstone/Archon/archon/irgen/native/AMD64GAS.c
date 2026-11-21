@@ -53,6 +53,31 @@ void an_gas_local_addr(ANGas *gas, unsigned offset)
     an_gas_print(gas, "\tleaq %u(%s), %%rax\n", offset, an_gas_abi.sp);
 }
 
+void an_amd64_save_varargs(ANGas *gas, unsigned save, unsigned gp, unsigned fp)
+{
+    unsigned i, skip;
+    for (i = gp; i < an_gas_abi.argc; ++i)
+        an_gas_stack_store(gas, an_gas_abi.args[i], save + i * 8);
+    if (fp == an_gas_abi.fp_argc)
+        return;
+    /* AL is still the incoming vector-register count upper bound. */
+    skip = gas->next_label++;
+    an_gas_print(gas, "\ttestb %%al, %%al\n\tjz .Larchon_%zu_%u\n", gas->function, skip);
+    for (i = fp; i < an_gas_abi.fp_argc; ++i)
+        an_gas_print(gas, "\tmovaps %%xmm%u, %u(%%rsp)\n", i, save + 48 + i * 16);
+    an_gas_label(gas, skip);
+}
+
+void an_amd64_va_start(ANGas *gas, unsigned save, unsigned overflow, unsigned gp, unsigned fp)
+{
+    /* RAX contains the destination va_list address. Its pointers refer to
+     * the initial caller stack and to our entry-time register save area. */
+    an_gas_print(gas, "\tmovl $%u, 0(%%rax)\n\tmovl $%u, 4(%%rax)\n"
+        "\tleaq %u(%%rsp), %%rcx\n\tmovq %%rcx, 8(%%rax)\n"
+        "\tleaq %u(%%rsp), %%rcx\n\tmovq %%rcx, 16(%%rax)\n",
+        gp * 8, 48 + fp * 16, overflow, save);
+}
+
 void an_gas_symbol_addr(ANGas *gas, const char *symbol)
 {
     if (gas->out->pic)

@@ -69,9 +69,8 @@ int main(void)
     assert(snprintf(text, sizeof(text), "x%*d", INT_MAX, 1) == -1 &&
            errno == EOVERFLOW);
     assert(strcmp(text, "x") == 0);
-    errno = 0;
-    assert(snprintf(text, sizeof(text), "wide: %ls", L"text") == -1 &&
-           errno == EINVAL);
+    assert(snprintf(text, sizeof(text), "wide: %ls", L"text") == 10 &&
+           strcmp(text, "wide: text") == 0);
 
     heap = (char *)calloc(16, 1);
     assert(heap != NULL && heap[0] == '\0' && heap[15] == '\0');

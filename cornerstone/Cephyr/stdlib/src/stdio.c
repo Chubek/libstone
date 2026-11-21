@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "stream.h"
 
@@ -149,6 +150,58 @@ static void sink_repeat(struct output_sink *sink, char ch, size_t count)
         }
         sink->count += count;
     }
+}
+
+static size_t field_padding(size_t length, int width)
+{
+    return width > 0 && (size_t)width > length ? (size_t)width - length : 0;
+}
+
+static void emit_text(struct output_sink *sink, const char *text, size_t length,
+                      int width, int left)
+{
+    size_t padding = field_padding(length, width);
+    if (!sink_accepts(sink, length + padding))
+        return;
+    if (!left)
+        sink_repeat(sink, ' ', padding);
+    sink_write(sink, text, length);
+    if (left)
+        sink_repeat(sink, ' ', padding);
+}
+
+static void emit_wide_text(struct output_sink *sink, const wchar_t *text,
+                           int width, int precision, int left)
+{
+    /* In the bundled ASCII C locale, wcrtomb emits exactly one byte per
+       representable character with no shift sequences. Measure and validate
+       that byte count before padding, without reading past the precision. */
+    size_t length = 0;
+    size_t limit = precision < 0 ? (size_t)INT_MAX + 1 : (size_t)precision;
+    while (length < limit && text[length] != 0) {
+        if (wctob((wint_t)text[length]) == EOF) {
+            errno = EILSEQ;
+            sink->failed = 1;
+            return;
+        }
+        ++length;
+    }
+
+    size_t padding = field_padding(length, width);
+    if (!sink_accepts(sink, length + padding))
+        return;
+    if (!left)
+        sink_repeat(sink, ' ', padding);
+    for (size_t pos = 0; pos < length && !sink->failed;) {
+        char bytes[64];
+        size_t n = length - pos < sizeof(bytes) ? length - pos : sizeof(bytes);
+        for (size_t i = 0; i < n; ++i)
+            bytes[i] = (char)text[pos + i];
+        sink_write(sink, bytes, n);
+        pos += n;
+    }
+    if (left)
+        sink_repeat(sink, ' ', padding);
 }
 
 static unsigned long long signed_magnitude(long long value)
@@ -412,33 +465,22 @@ static int format_to_sink(struct output_sink *sink, const char *format,
             emit_integer(sink, pointer, 0, 16, 0, 2, 0, 0, left, zero, width,
                          precision < 0 ? 1 : precision);
         } else if (conversion == 'c' && length == LENGTH_DEFAULT) {
-            char ch = (char)va_arg(args, int);
-            size_t padding = width > 1 ? (size_t)width - 1 : 0;
-            if (!sink_accepts(sink, 1 + padding))
-                break;
-            if (!left)
-                sink_repeat(sink, ' ', padding);
-            sink_write(sink, &ch, 1);
-            if (left)
-                sink_repeat(sink, ' ', padding);
+            unsigned char ch = (unsigned char)va_arg(args, int);
+            emit_text(sink, (const char *)&ch, 1, width, left);
+        } else if (conversion == 'c' && length == LENGTH_L) {
+            /* C11 specifies lc as ls applied to this two-element array. */
+            wchar_t text[2] = { (wchar_t)va_arg(args, wint_t), 0 };
+            emit_wide_text(sink, text, width, -1, left);
         } else if (conversion == 's' && length == LENGTH_DEFAULT) {
             const char *str = va_arg(args, void *);
-            size_t length_value;
-            size_t padding;
             if (str == NULL)
                 str = "(null)";
-            length_value =
+            size_t length_value =
                 precision >= 0 ? strnlen(str, (size_t)precision) : strlen(str);
-            padding = width > 0 && (size_t)width > length_value
-                          ? (size_t)width - length_value
-                          : 0;
-            if (!sink_accepts(sink, length_value + padding))
-                break;
-            if (!left)
-                sink_repeat(sink, ' ', padding);
-            sink_write(sink, str, length_value);
-            if (left)
-                sink_repeat(sink, ' ', padding);
+            emit_text(sink, str, length_value, width, left);
+        } else if (conversion == 's' && length == LENGTH_L) {
+            const wchar_t *text = va_arg(args, wchar_t *);
+            emit_wide_text(sink, text, width, precision, left);
         } else if (conversion == '%' && length == LENGTH_DEFAULT) {
             sink_write(sink, "%", 1);
         } else if (conversion == 'n') {

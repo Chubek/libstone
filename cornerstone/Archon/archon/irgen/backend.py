@@ -190,7 +190,12 @@ def _emit_rv64(facts, archdb_version):
             "physical instruction inspection text v1",
             f"raw {isa} machine code (one function, no imports or globals)",
         ],
-        "floating_point": {"formats": [], "abi": "LP64 soft-float; FP MIR is unsupported"},
+        "floating_point": ({
+            "formats": ["binary32", "binary64"],
+            "abi": "LP64 soft-float: integer registers and stack",
+            "mir": ["fconst", "fload", "fstore", "fneg", "feq", "flt", "fle"],
+            "limits": "no runtime arithmetic other than negation, conversions, or FP environment",
+        } if has_m else {"formats": [], "abi": "LP64 soft-float; FP MIR is unsupported"}),
         "address_width": 64,
         "endian": "little",
         "schedule": ["input order (default)", "verified pure-region ordering; no latency model"],
@@ -212,6 +217,7 @@ def _emit_rv64(facts, archdb_version):
         f'#define AN_TARGET_NAME "{target}/{abi}"\n'
         f'#define AN_TARGET_SHA256 "{fingerprint}"\n'
         f"#define AN_RV64_HAS_M {int(has_m)}\n"
+        + ("#define AN_RV64_SOFT_FP_TRANSPORT 1\n" if has_m else "")
         + "\n".join(definitions) + "\n#endif\n"
     )
     files["CMakeLists.txt"] = _render_backend_cmake(
@@ -236,7 +242,9 @@ def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
         "#define AN_SCALAR_GAS 1\n"
         "#define AN_SCALAR_GAS_PIC 1\n"
         "#define AN_SCALAR_GAS_FP 1\n"
-        "#endif\n"
+        + ("#define AN_SYSV_AMD64 1\n" if emitter == "AMD64GAS.c" else "")
+        + ("#define AN_AAPCS64 1\n" if emitter == "AArch64GAS.c" else "")
+        + "#endif\n"
     )
     stack_reg = registers[stack["index"]] if stack["kind"] == "register" else "sp"
     link = f'"{registers[ret["index"]]}"' if ret["kind"] == "register" else "NULL"

@@ -25,6 +25,20 @@ typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
 
+enum class StringEncoding { ordinary, utf8, wide, utf16, utf32 };
+
+inline bool wideStringEncoding(StringEncoding encoding)
+{
+    return encoding != StringEncoding::ordinary && encoding != StringEncoding::utf8;
+}
+
+// Numeric escapes specify a code unit, not a Unicode scalar to be encoded.
+struct StringElement
+{
+    uint32_t value;
+    bool numeric;
+};
+
 enum class DiagnosticKind { LexError, ParseError, SemanticError, Warning };
 using DiagnosticHandler =
     std::function<void(DiagnosticKind, int, int, const char *)>;

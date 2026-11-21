@@ -1,8 +1,12 @@
+#ifndef __CEPHYR__
 #define __CEPHYR__ 1
+#endif
 
 #include <assert.h>
 #include <ctype.h>
+#include <float.h>
 #include <inttypes.h>
+#include <iso646.h>
 #include <limits.h>
 #include <stdalign.h>
 #include <stdbool.h>
@@ -29,6 +33,9 @@ _Static_assert(sizeof(max_align_t) % alignof(max_align_t) == 0,
 #if CHAR_BIT != 8 || MB_LEN_MAX != 1 || UINT64_C(0xffffffffffffffff) != UINTMAX_MAX
 #error "unexpected bundled LP64 limits"
 #endif
+#if FLT_RADIX != 2 || FLT_MANT_DIG != 24 || DBL_MANT_DIG != 53
+#error "unexpected bundled floating formats"
+#endif
 _Static_assert(_Generic(UCHAR_MAX, int: 1, default: 0), "UCHAR_MAX is promoted");
 _Static_assert(_Generic(UINT8_C(255), int: 1, default: 0), "UINT8_C is promoted");
 _Static_assert(_Generic(UINT16_C(65535), int: 1, default: 0), "UINT16_C is promoted");
@@ -37,12 +44,14 @@ _Static_assert(_Generic(UINT32_C(4294967295), unsigned int: 1, default: 0),
 _Static_assert(_Generic(UINT64_C(0xffffffffffffffff), unsigned long: 1, default: 0),
                "UINT64_C preserves the unsigned long type");
 
+noreturn void cephyr_header_exit(int status);
+
 int cephyr_header_exercise(int value)
 {
     char text[4];
     bool positive = value > 0;
     memset(text, 0, sizeof(text));
     text[0] = positive ? (char)toupper('a') : (char)tolower('Z');
-    assert(text[0] != '\0');
+    assert(not (text[0] == '\0'));
     return putchar(text[0]);
 }

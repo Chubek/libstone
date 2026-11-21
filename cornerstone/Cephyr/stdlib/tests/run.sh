@@ -25,7 +25,7 @@ for arch in x86_64 aarch64 riscv64; do
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    for source in smoke io files general time multibyte nonlocal scanf wide-stream wide-string; do
+    for source in smoke io files general time multibyte nonlocal scanf wide-stream wide-string wide-printf-cephyr variadic-cephyr signals-cephyr strtofp-cephyr; do
         "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
@@ -62,6 +62,12 @@ for arch in x86_64 aarch64 riscv64; do
     run "$output/test-time"
     run "$output/test-multibyte"
     run "$output/test-wide-string"
+    run "$output/test-signals-cephyr"
+    run "$output/test-strtofp-cephyr"
+    text=$(run "$output/test-wide-printf-cephyr")
+    test "$text" = "wide:-7!"
+    text=$(run "$output/test-variadic-cephyr")
+    test "$text" = "-7 65535 -9000000000 4 5 6 7 stack 12345678901234"
     text=$(printf 'Z!' | run "$output/test-wide-stream" 2>"$output/test-wide-stream.stderr")
     test "$text" = Q
     test "$(cat "$output/test-wide-stream.stderr")" = "wide stream test: Invalid argument
