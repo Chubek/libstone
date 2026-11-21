@@ -1,0 +1,6 @@
+# Cephyr QML / optimize — local strength reduction on pure scalar MIR.
+# Reassociation and duplication need explicit effect/overflow proofs for general C IR.
+rewrite optimize multiply_by_two : mul(?x, 2) => add(?x, ?x);
+rewrite optimize multiply_by_four : mul(?x, 4) => add(add(?x, ?x), add(?x, ?x));
+rewrite optimize redundant_select : if(true, ?x, ?y) => ?x;
+rewrite optimize inverted_select : if(false, ?x, ?y) => ?y;

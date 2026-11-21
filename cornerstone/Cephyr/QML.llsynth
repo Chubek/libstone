@@ -1,56 +1,23 @@
-# QML 1.0 -- a mid-level transformation META-LANGUAGE, hosted by LLSynth.
-#
-# QML is not an ML evaluator.  A QML program specifies an ordered compiler
-# pipeline and rewrite rules over an explicit, language-neutral expression IR.
-# The generator's action-language implements the meta-compiler itself.
-#
-# Compile from the libstone repository root (the latest generator is required):
-#   perl cornerstone/LLSynth/scripts/llsynth.pl --check --mode=interpret -T python3 QML.llsynth
-#   perl cornerstone/LLSynth/scripts/llsynth.pl --mode=interpret -T python3 -o qml.py QML.llsynth
-#
-# A QML input program (e.g. save to example.qml):
-#
-#   rewrite desugar inc : inc(?x) => add(?x, 1);
-#   rewrite canonicalize erase_zero : add(?x, 0) => ?x;
-#   reject sema forbid_variable_y : var(y);
-#   pass desugar;
-#   pass canonicalize;
-#   pass optimize;
-#   pass sema;
-#   run let(x, 40, add(inc(var(x)), 0));
-#
-# The result is a normalized, semantically checked mid-level tree.
-# There is no host-code eval: rule bodies are AST templates, never Perl/Python.
-# `reject PHASE NAME : PATTERN;` declares a forbidden MIR shape. The
-# compiled pattern is checked at every node after PHASE (and final sema).
-# Rewrites are BOTTOM-UP, FIRST MATCH in source order, and iterated to a
-# bounded fixed point. ?metavariables bind subtrees; repeated names compare
-# structurally; '_' is a wildcard only on the pattern side. Every left-hand
-# pattern is compiled to a TEST/BIND/LEAF/FAIL decision tree, not interpreted
-# as an AST pattern at rewriting time. Replacement metavariables are checked.
-#
-# Supported MIR constructors (as source terms):
-#   add(a,b) sub(a,b) mul(a,b) div(a,b) neg(a)
-#   eq(a,b) lt(a,b) gt(a,b) not(a) and(a,b) or(a,b)
-#   if(cond,yes,no) seq(a,b) let(symbol,value,body) var(symbol)
-# Primitive terms are integers, true, false, and symbols (e.g. x).
-# Pass declarations can name user-defined phases. Default order is desugar,
-# sema, canonicalize, optimize; a final semantic check always runs.
-#
-# Built-in desugaring: sub -> add/neg, and/or/not -> if forms.
-# Built-in canonicalization: neutral arithmetic and constant conditionals.
-# Built-in optimization: checked integer constant folding and Boolean folding.
-# Sema: lexical symbol resolution, arity, operator types, branch agreement,
-# divide-by-zero literals, and unknown MIR constructors. No side effects.
-#
-# NOTE: the source DSL has no general control flow or user-defined functions.
-# Its job is to describe and APPLY transformations to mid-level IR.
+# Cephyr QML 1.1 — LLSynth-generated expression-MIR transformation frontend.
+# Source grammar: rewrite PHASE NAME : TREE => TREE;
+#                 reject PHASE NAME : TREE;
+#                 pass PHASE;
+#                 run TREE;
+# The .qpass files in qml/ are fragments; combine them with qml/bundle.py.
+# This is deliberately not a full Cephyr/Archon MachineIR adapter.
+# Execute with an LLSynth-generated Python tool, or use qml/runtime.py
+# as the independently tested reference implementation.
+# Compatible with current LLSynth .end and nominal type syntax.
+# All source is trusted; rewrite rules are pure AST templates.
 
 .language "QML"
-.version "1.0"
-.summary "Typed pass declarations, compiled rewrite decisions, mid-level IR sema/desugar/canonicalization/optimization"
+.version "1.1"
+.summary "Cephyr QML expression-MIR pass compiler, bootstrapped on LLSynth"
 .start Program
 .option parser = lalr1
+
+.import "LLSynth/stdlib/QMLCore.llsynth"
+.import "LLSynth/stdlib/QMLPhases.llsynth"
 
 .skip /[ \t\r\n]+/
 .skip /#[^\n]*/
@@ -81,51 +48,16 @@
 
 # All source and decision nodes are tagged vectors of Any. The nominal types
 # above keep QML's own directive metadata distinct from tree operands.
-.function box(value: Any) -> Any
-return value;
-.end
 
-.function int_term(value: Int) -> Vec<Any>
-return [box("int"), box(value)];
-.end
 
-.function bool_term(value: Bool) -> Vec<Any>
-return [box("bool"), box(value)];
-.end
 
-.function sym_term(value: String) -> Vec<Any>
-return [box("sym"), box(value)];
-.end
 
-.function meta_term(value: String) -> Vec<Any>
-return [box("meta"), box(value)];
-.end
 
-.function wild_term() -> Vec<Any>
-return [box("wild")];
-.end
 
-.function node_term(name: String, args: Vec<Any>) -> Vec<Any>
-return [box("node"), box(name), box(args)];
-.end
 
-.function unary(name: String, a: Vec<Any>) -> Vec<Any>
-return node_term(name, [box(a)]);
-.end
 
-.function binary(name: String, a: Vec<Any>, b: Vec<Any>) -> Vec<Any>
-return node_term(name, [box(a), box(b)]);
-.end
 
-.function ternary(name: String, a: Vec<Any>, b: Vec<Any>, c: Vec<Any>) -> Vec<Any>
-return node_term(name, [box(a), box(b), box(c)]);
-.end
 
-.function prepend(first: Vec<Any>, tail: Vec<Any>) -> Vec<Any>
-let values: Vec<Any> = [box(first)];
-for item in tail { push(values, item); }
-return values;
-.end
 
 # A pattern may bind a metavariable multiple times; later uses must match.
 # This collector is also used to reject unbound variables in replacements.
@@ -498,14 +430,11 @@ for d in decls {
 let builtin: Vec<%Rewrite> = builtin_rules();
 for rule in builtin { push(rules, rule); }
 if len(passes) == 0 {
-    push(passes, "desugar");
-    push(passes, "sema");
-    push(passes, "canonicalize");
-    push(passes, "optimize");
+    passes = default_phases();
 }
 let tree: Vec<Any> = input;
 for p in passes {
-    if p == "sema" {
+    if is_sema_phase(p) {
         check_rejections(tree, checks, p);
         discard infer(tree, []);
     } else {

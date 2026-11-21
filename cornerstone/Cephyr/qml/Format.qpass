@@ -1,0 +1,4 @@
+# Cephyr QML / format — remove formatting wrappers from expression MIR.
+# Text formatting happens in the host adapter, not through IR substitution.
+rewrite format flatten_group : group(?value) => ?value;
+rewrite format normalize_format : format(?value) => ?value;

@@ -1,0 +1,7 @@
+# Cephyr QML / canonicalize — shape normalization.
+rewrite canonicalize remove_paren : paren(?x) => ?x;
+rewrite canonicalize simplify_sub_zero : sub(?x, 0) => ?x;
+rewrite canonicalize simplify_div_one : div(?x, 1) => ?x;
+rewrite canonicalize double_boolean_negation : not(not(?x)) => ?x;
+rewrite canonicalize redundant_selection : if(?cond, ?same, ?same) => ?same;
+rewrite canonicalize if_not : if(not(?cond), ?yes, ?no) => if(?cond, ?no, ?yes);

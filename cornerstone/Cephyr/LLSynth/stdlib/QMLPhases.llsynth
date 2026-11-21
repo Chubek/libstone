@@ -1,0 +1,12 @@
+# Default QML pipeline policy: pass names themselves remain user-extensible.
+.library "Cephyr.QML.Phases"
+.summary "QML default pass ordering and analysis-pass classifier"
+.export default_phases, is_sema_phase
+
+.function default_phases() -> Vec<String>
+return ["desugar", "sema", "canonicalize", "optimize"];
+.end
+
+.function is_sema_phase(phase: String) -> Bool
+return phase == "sema";
+.end

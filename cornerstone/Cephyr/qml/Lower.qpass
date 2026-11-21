@@ -1,0 +1,7 @@
+# Cephyr QML / lower — legalize host-independent scalar intrinsics.
+rewrite lower select_to_if : select(?c, ?yes, ?no) => if(?c, ?yes, ?no);
+rewrite lower maximum_to_if : max(?a, ?b) => if(gt(?a, ?b), ?a, ?b);
+rewrite lower minimum_to_if : min(?a, ?b) => if(lt(?a, ?b), ?a, ?b);
+rewrite lower absolute_to_if : abs(?a) => if(lt(?a, 0), neg(?a), ?a);
+rewrite lower nonzero_test : nonzero(?a) => not(eq(?a, 0));
+rewrite lower bool_to_int : boolint(?b) => if(?b, 1, 0);

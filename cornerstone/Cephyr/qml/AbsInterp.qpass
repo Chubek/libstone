@@ -1,0 +1,6 @@
+# Cephyr QML / absinterp — first bounded interval-domain simplifications.
+# This is NOT whole-program abstract interpretation. It only collapses
+# structurally obvious facts before the full semantic validation pass.
+rewrite absinterp singleton_interval_membership : contains(interval(?x, ?x), ?x) => true;
+rewrite absinterp reflexive_interval_equivalence : interval_eq(interval(?lo, ?hi), interval(?lo, ?hi)) => true;
+rewrite absinterp singleton_nonempty : interval_nonempty(interval(?x, ?x)) => true;

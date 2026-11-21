@@ -1,0 +1,6 @@
+# Cephyr QML / sema — declarative hard errors.
+# General type checking, arity checking and unbound variables are built into QML.
+reject sema poison_ir : poison();
+reject sema opaque_pointer_access : unsafe_ptr(_);
+reject sema unlowered_inline_asm : inline_asm(_);
+reject sema unlowered_intrinsic : intrin(_, _);

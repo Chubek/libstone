@@ -1,0 +1,11 @@
+# Cephyr QML / desugar — normalize surface scalar constructs.
+# These rules apply to pure, checked integer/Boolean expression MIR.
+rewrite desugar inc_to_add : inc(?x) => add(?x, 1);
+rewrite desugar dec_to_sub : dec(?x) => sub(?x, 1);
+rewrite desugar square_to_mul : square(?x) => mul(?x, ?x);
+rewrite desugar twice_to_add : twice(?x) => add(?x, ?x);
+rewrite desugar greater_equal : ge(?a, ?b) => not(lt(?a, ?b));
+rewrite desugar less_equal : le(?a, ?b) => not(gt(?a, ?b));
+rewrite desugar not_equal : ne(?a, ?b) => not(eq(?a, ?b));
+rewrite desugar implication : implies(?a, ?b) => or(not(?a), ?b);
+rewrite desugar boolean_xor : xor(?a, ?b) => or(and(?a, not(?b)), and(not(?a), ?b));

@@ -1,0 +1,4 @@
+# Cephyr QML / prettyprint — explicit print-boundary wrappers.
+# qml/runtime.py renders the final typed MIR as QML or JSON.
+rewrite prettyprint unwrap_pretty : pretty(?value) => ?value;
+rewrite prettyprint unwrap_render : render(?value) => ?value;

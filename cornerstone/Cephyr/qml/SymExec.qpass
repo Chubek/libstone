@@ -1,0 +1,8 @@
+# Cephyr QML / symexec — path-constraint simplifications.
+# This is NOT a general SMT-backed symbolic executor.
+rewrite symexec proven_assumption : assume(true, ?body) => ?body;
+rewrite symexec true_path : path(true, ?body) => ?body;
+rewrite symexec false_path : path(false, ?body) => unreachable();
+rewrite symexec identical_choices : choose(?cond, ?a, ?a) => ?a;
+rewrite symexec true_choice : choose(true, ?a, ?b) => ?a;
+rewrite symexec false_choice : choose(false, ?a, ?b) => ?b;

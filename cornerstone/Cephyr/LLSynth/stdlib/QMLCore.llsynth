@@ -1,0 +1,51 @@
+# QML core expression IR constructors shared by the Cephyr QML frontend.
+# A declaration library, not an independently executable program.
+.library "Cephyr.QML.Core"
+.summary "Tag-based QML IR constructors and traversal helpers"
+.export box, int_term, bool_term, sym_term, meta_term, wild_term, node_term, unary, binary, ternary, prepend
+
+.function box(value: Any) -> Any
+return value;
+.end
+
+.function int_term(value: Int) -> Vec<Any>
+return [box("int"), box(value)];
+.end
+
+.function bool_term(value: Bool) -> Vec<Any>
+return [box("bool"), box(value)];
+.end
+
+.function sym_term(value: String) -> Vec<Any>
+return [box("sym"), box(value)];
+.end
+
+.function meta_term(value: String) -> Vec<Any>
+return [box("meta"), box(value)];
+.end
+
+.function wild_term() -> Vec<Any>
+return [box("wild")];
+.end
+
+.function node_term(name: String, args: Vec<Any>) -> Vec<Any>
+return [box("node"), box(name), box(args)];
+.end
+
+.function unary(name: String, a: Vec<Any>) -> Vec<Any>
+return node_term(name, [box(a)]);
+.end
+
+.function binary(name: String, a: Vec<Any>, b: Vec<Any>) -> Vec<Any>
+return node_term(name, [box(a), box(b)]);
+.end
+
+.function ternary(name: String, a: Vec<Any>, b: Vec<Any>, c: Vec<Any>) -> Vec<Any>
+return node_term(name, [box(a), box(b), box(c)]);
+.end
+
+.function prepend(first: Vec<Any>, tail: Vec<Any>) -> Vec<Any>
+let values: Vec<Any> = [box(first)];
+for item in tail { push(values, item); }
+return values;
+.end
