@@ -369,3 +369,19 @@ The build directories were placed on the NVMe volume because `/tmp` filled.
 This checkpoint does not add match expressions within yielders, richer scalar
 or built-in collection types, a general type system, objects, modules, cleanup
 handlers, algebraic effects, tasks or concurrency. See [BACKENDS.md](BACKENDS.md).
+
+## Feature synchronization and rewrite checkpoint — 2026-11-21
+
+Starting revision: `248ad1777`. Before changes, a fresh GCC Debug build passed
+all **49/49** Novostone CTests, including the four generated executable backends
+and LaTeX. Build directories for this checkpoint are
+`/mnt/nvme/acsem-rewrite-build/{debug,release,sanitize}`; test logs are under
+`Testing/Temporary/LastTest.log` in each build directory.
+
+Implementation and final verification are in progress; the baseline result
+above does not establish coverage of the new facilities.
+
+The reference `scripts/acsem/acsem.t` passes. Its combined
+`prove acsem.t backends.t` invocation cannot complete in this environment:
+the backend harness attempts an empty Java compiler command when `javac` is
+unavailable, after eight passing backend subtests.

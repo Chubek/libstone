@@ -15,7 +15,13 @@ enum ActionOp { Complete, Fail, Give, Check, Escape, Bind, Store, Allocate, Eval
                 Unfolding = 100, Unfold = 101, Put = 102,
                 If = 103, While = 104, Break = 105, Continue = 106, TailUnfold = 107,
                 CreateGenerator = 110, YieldValue = 111, Next = 112, Close = 113,
-                Construct = 114, Match = 115, Deconstruct = 116 };
+                 Construct = 114, Match = 115, Deconstruct = 116,
+                 Rewrite = 117, RewriteVisit = 118 };
+// Rewrite (117): a subject yielder, b internal visitor, value strategy.
+// RewriteVisit (118): b traversal order, pool/count match-arm triples.
+// Returns an internal [datum, changed integer] tuple; never exposed directly.
+// No new value tags: rebuilt terms remain immutable variants (tag 6).
+enum RewriteStrategy { Reduce, TopDown, BottomUp, Once, Saturate, FixedPoint, Worklist, Merge };
 enum PatternOp { AnyPattern, BindPattern, IntPattern, TokenPattern, ConstructorPattern,
                  AsPattern, OrPattern };
 // Match operands: subject expression (a), optional data sort (b, -1 absent),

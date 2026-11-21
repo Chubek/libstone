@@ -61,6 +61,20 @@ std::string pattern(const detail::Model& m, int id) {
 std::string action(const detail::Model& m, const detail::Constructor& c, int id) {
   using namespace detail;
   const auto& i = m.actions.at(static_cast<std::size_t>(id));
+  if (i.op == Rewrite) {
+    static constexpr const char* names[] = {"reduce", "traverse topdown", "traverse bottomup",
+      "traverse once", "saturate", "fixedpoint", "worklist", "merge"};
+    const auto& visit = m.actions.at(static_cast<std::size_t>(i.b));
+    auto out = std::string("rewrite ") + names[i.value] + " " + expression(m, c, i.a) + " using { ";
+    for (int j = 0; j < visit.count; ++j) {
+      if (j) out += ", ";
+      auto base = static_cast<std::size_t>(visit.pool + 3 * j);
+      out += pattern(m, m.pool.at(base));
+      if (m.pool.at(base + 1) >= 0) out += " when " + expression(m, c, m.pool.at(base + 1));
+      out += " => " + action(m, c, m.pool.at(base + 2));
+    }
+    return out + " }";
+  }
   if (i.op == Construct) {
     auto out = "construct " + m.variants.at(static_cast<std::size_t>(i.a)).name + '(';
     for (int j = 0; j < i.count; ++j) {

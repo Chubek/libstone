@@ -23,6 +23,11 @@ class Variant:
         self.tag, self.fields = tag, fields
 
 
+class RewriteMemo:
+    def __init__(self, items=(), next=-1):
+        self.items, self.next, self.used = list(items), next, False
+
+
 class Continuation:
     def __init__(self, count):
         self.count, self.head, self.used = count, -1, False
@@ -47,7 +52,8 @@ def bounded(xs, n):
 
 class Frame:
     __slots__ = ('pc', 'node', 'env', 'data', 'state', 'boundary', 'scratch',
-                 'ldata', 'lbind', 'rstatus', 'rdata', 'renv', 'logical_depth')
+                 'ldata', 'lbind', 'rstatus', 'rdata', 'renv', 'logical_depth',
+                 'memo', 'index')
 
     def __init__(self, pc, node, env, data):
         self.pc, self.node, self.env, self.data = pc, node, env, data
@@ -57,6 +63,7 @@ class Frame:
         self.scratch = self.ldata = self.rdata = self.renv = -1
         self.lbind = -1
         self.rstatus = 0
+        self.memo, self.index = -1, 0
 
 
 class Machine:
@@ -78,7 +85,7 @@ class Machine:
         return {v[1]} if v[0] >= VK_CLOSURE else set()
 
     def frame_roots(self, f):
-        return {i for i in (f.env, f.data, f.ldata, f.lbind, f.rdata, f.renv, f.scratch) if i >= 0}
+        return {i for i in (f.env, f.data, f.ldata, f.lbind, f.rdata, f.renv, f.scratch, f.memo) if i >= 0}
 
     def mark_roots(self):
         roots = {self.empty_data, self.empty_env}
@@ -123,6 +130,10 @@ class Machine:
                 work.add(obj.next)
             elif isinstance(obj, Variant):
                 for v in obj.fields:
+                    work |= self.value_roots(v)
+            elif isinstance(obj, RewriteMemo):
+                work.add(obj.next)
+                for v in obj.items:
                     work |= self.value_roots(v)
             else:
                 work.add(obj[2])
@@ -368,7 +379,33 @@ class Machine:
 
     def dispatch_entry(self, f):
         op, a, b, val, pool, count = ACTIONS[f.pc]
-        if op == 0:
+        if op == 117:
+            f.ldata = self.alloc([])
+            self.objects[f.ldata].append(self.expr(a, f.node, self.objects[f.data], self.objects[f.env], len(self.frames) + 1))
+            f.memo = self.alloc(RewriteMemo())
+            self.push(b, f.node, f.env, f.ldata)
+            self.frames[-1].memo = f.memo
+        elif op == 118:
+            f.ldata = f.data
+            value = self.objects[f.data][0]
+            head = self.objects[f.memo].next
+            if value[0] == VK_VARIANT:
+                while head >= 0:
+                    self.tick(len(self.frames))
+                    entry = self.objects[head]
+                    if entry.items[0] == value:
+                        f.ldata = self.make_data([entry.items[1]])
+                        self.rewrite_finish(f, b, False)
+                        return
+                    head = entry.next
+            if b in (0, 1, 3):
+                if self.rewrite_rule(f):
+                    return
+                if b == 0:
+                    self.rewrite_finish(f, b)
+                    return
+            self.rewrite_children(f)
+        elif op == 0:
             self.finish(0, self.empty_data, self.empty_env)
         elif op == 1:
             self.finish(1, self.empty_data, self.empty_env)
@@ -619,7 +656,47 @@ class Machine:
     def dispatch_resume(self, f):
         op, a, b, val, pool, count = ACTIONS[f.pc]
         st, d, e = f.rstatus, f.rdata, f.renv
-        if op in (9, 10, 11):
+        if op in (117, 118):
+            if st:
+                self.finish(st, d, e)
+                return
+            if op == 117:
+                result = self.objects[d][0]
+                old = self.objects[f.ldata][0]
+                same = self.structural_equal(old, result, len(self.frames) + 1)
+                f.ldata = self.make_data([result])
+                if val in (4, 5) and not same:
+                    f.memo = self.alloc(RewriteMemo())
+                    self.push(b, f.node, f.env, f.ldata)
+                    self.frames[-1].memo = f.memo
+                else:
+                    self.finish(0, f.ldata, self.empty_env)
+            elif f.state == 1:
+                if len(self.objects[d]) != 1 or self.objects[e]:
+                    raise Failure()
+                old, result = self.objects[f.ldata][0], self.objects[d][0]
+                same = self.structural_equal(old, result, len(self.frames) + 1)
+                if not same:
+                    f.ldata = d
+                    self.objects[f.memo].used = True
+                if b == 0 or b in (2, 7) or (b == 6 and same):
+                    self.rewrite_finish(f, b)
+                else:
+                    f.index, f.lbind = 0, -1
+                    self.rewrite_children(f)
+            else:
+                result = self.objects[d][0]
+                parent = self.objects[self.objects[f.ldata][0][1]]
+                old = parent.fields[f.index]
+                if old != result:
+                    if not self.has_type(result, POOL[VARIANTS[parent.tag][2] + f.index]):
+                        raise Failure()
+                    if f.lbind < 0:
+                        f.lbind = self.alloc(Variant(parent.tag, list(parent.fields)))
+                    self.objects[f.lbind].fields[f.index] = result
+                f.index += 1
+                self.rewrite_children(f)
+        elif op in (9, 10, 11):
             if f.state == 1:
                 if st:
                     self.finish(st, d, e)
@@ -673,6 +750,60 @@ class Machine:
                 self.finish(0, result, e)
         else:
             raise Limit()
+
+    def rewrite_rule(self, f):
+        _, _, strategy, _, pool, count = ACTIONS[f.pc]
+        if strategy == 3 and self.objects[f.memo].used:
+            return False
+        data, base = self.objects[f.ldata], self.objects[f.env]
+        for j in range(count):
+            p, guard, body = POOL[pool + 3*j:pool + 3*j + 3]
+            captures = []
+            if not self.matches(p, data[0], captures, len(self.frames) + 1):
+                continue
+            f.scratch = self.alloc(bounded(base | dict(captures), BIND_MAX))
+            if guard >= 0:
+                try:
+                    test = self.expr(guard, f.node, data, self.objects[f.scratch], len(self.frames) + 1)
+                except Failure:
+                    continue
+                if test[0] != VK_INT or not test[1]:
+                    continue
+            f.state = 1
+            self.push(body, f.node, f.scratch, f.ldata)
+            return True
+        return False
+
+    def rewrite_children(self, f):
+        strategy = ACTIONS[f.pc][2]
+        value = self.objects[f.ldata][0]
+        if value[0] == VK_VARIANT and f.index < len(self.objects[value[1]].fields):
+            child = self.objects[value[1]].fields[f.index]
+            f.scratch = self.make_data([child])
+            f.state = 2
+            self.push(f.pc, f.node, f.env, f.scratch)
+            self.frames[-1].memo = f.memo
+            return
+        if f.lbind >= 0:
+            f.ldata = self.make_data([(VK_VARIANT, f.lbind)])
+        if strategy in (2, 6, 7) and self.rewrite_rule(f):
+            return
+        self.rewrite_finish(f, strategy)
+
+    def rewrite_finish(self, f, strategy, remember=True):
+        original, result = self.objects[f.data][0], self.objects[f.ldata][0]
+        memo = self.objects[f.memo]
+        if strategy == 7 and result[0] == VK_VARIANT:
+            head = memo.next
+            while head >= 0:
+                entry = self.objects[head]
+                if self.structural_equal(result, entry.items[1], len(self.frames) + 1):
+                    result = entry.items[1]
+                    break
+                head = entry.next
+        if remember and original[0] == VK_VARIANT:
+            memo.next = self.alloc(RewriteMemo([original, result], memo.next))
+        self.finish(0, self.make_data([result]), self.empty_env)
 
     def run(self, root):
         self.empty_data = self.alloc([])

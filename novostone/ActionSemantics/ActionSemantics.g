@@ -20,12 +20,14 @@ static novo_as_variant_seq as_variants(void *);
 static novo_as_data_type_seq as_data_types(void *);
 static novo_as_arm_seq as_arms(void *);
 static novo_as_pattern_seq as_patterns(void *);
+static novo_as_rewrite_set_seq as_rewrites(void *);
+static novo_as_bank_ref_seq as_banks(void *);
 %}
 %%
 %start novo_as_document
 %skip /([ \t\r\n]+|\/\/[^\r\n]*|#[^\r\n]*)+/
-novo_as_document: /language\b/ identifier '{' /start\b/ identifier ';' sorts data_decls rules '}'
-  { $$ = novo_as_make_document(as_arena, as_string($2), as_string($5), as_sorts($7), as_data_sorts($8), as_rules($9)); };
+novo_as_document: /language\b/ identifier '{' /start\b/ identifier ';' sorts data_decls rewrite_decls rules '}'
+  { $$ = novo_as_make_document(as_arena, as_string($2), as_string($5), as_sorts($7), as_data_sorts($8), as_rewrites($9), as_rules($10)); };
 sorts: sorts sort { $$ = as_push($1, $2); } | sort { $$ = as_push(NULL, $1); };
 sort: /syntax\b/ identifier '=' constructors ';'
   { $$ = novo_as_make_sort(as_arena, as_string($2), as_constructors($4), as_offset(save)); };
@@ -44,6 +46,9 @@ data_fields: data_field_list { $$ = $1; } | %empty { $$ = NULL; };
 data_field_list: data_field_list ',' data_field { $$ = as_push($1, $3); } | data_field { $$ = as_push(NULL, $1); };
 data_field: identifier { $$ = novo_as_make_data_type(as_arena, as_string($1), as_offset(save)); };
 rules: rules rule { $$ = as_push($1, $2); } | rule { $$ = as_push(NULL, $1); };
+rewrite_decls: rewrite_decls rewrite_decl { $$ = as_push($1, $2); } | %empty { $$ = NULL; };
+rewrite_decl: /rewrite\b/ identifier '=' '{' arms '}' ';'
+  { $$ = novo_as_make_rewrite_set(as_arena, as_string($2), as_arms($5), as_offset(save)); };
 rule: /rule\b/ identifier '=' action ';' { $$ = novo_as_make_rule(as_arena, as_string($2), $4, as_offset(save)); };
 action:
     action /and\b/ /then\b/ primitive { $$ = novo_as_Combine(as_arena, as_word("and then"), $1, $4, as_offset(save)); }
@@ -53,7 +58,17 @@ action:
   | action /trapping\b/ primitive { $$ = novo_as_Combine(as_arena, as_word("trapping"), $1, $3, as_offset(save)); }
   | primitive { $$ = $1; };
 primitive:
-    /furthermore\b/ primitive { $$ = novo_as_Furthermore(as_arena, $2, as_offset(save)); }
+    /rewrite\b/ rewrite_strategy expr /from\b/ /bank\b/ '(' bank_names ')'
+      { $$ = novo_as_Rewrite(as_arena, as_string($2), $3, as_banks($7), as_arms(NULL), as_offset(save)); }
+  | rewrite_strategy expr /using\b/ '{' arms '}'
+      { $$ = novo_as_Rewrite(as_arena, as_string($1), $2, as_banks(NULL), as_arms($5), as_offset(save)); }
+  | /rewrite\b/ rewrite_strategy expr /using\b/ '{' arms '}'
+      { $$ = novo_as_Rewrite(as_arena, as_string($2), $3, as_banks(NULL), as_arms($6), as_offset(save)); }
+  | /match\b/ /term\b/ expr match_domain /with\b/ '{' arms '}'
+      { $$ = novo_as_Match(as_arena, $3, $4 ? novo_as_data_type_some($4) : novo_as_data_type_none(), as_arms($7), as_offset(save)); }
+  | /match\b/ /dag\b/ expr match_domain /with\b/ '{' arms '}'
+      { $$ = novo_as_Match(as_arena, $3, $4 ? novo_as_data_type_some($4) : novo_as_data_type_none(), as_arms($7), as_offset(save)); }
+  | /furthermore\b/ primitive { $$ = novo_as_Furthermore(as_arena, $2, as_offset(save)); }
   | /closure\b/ primitive { $$ = novo_as_Closure(as_arena, $2, as_offset(save)); }
   | /give\b/ /closure\b/ primitive { $$ = novo_as_Closure(as_arena, $3, as_offset(save)); }
   | /abstraction\b/ primitive { $$ = novo_as_Closure(as_arena, $2, as_offset(save)); }
@@ -94,6 +109,19 @@ primitive:
 expr: sum '==' sum { $$ = novo_as_Binary(as_arena, as_word("=="), $1, $3, as_offset(save)); }
   | sum '<' sum { $$ = novo_as_Binary(as_arena, as_word("<"), $1, $3, as_offset(save)); }
   | sum { $$ = $1; };
+rewrite_strategy: /reduce\b/ { $$ = as_text($1); }
+  | /combine\b/ { $$ = as_text($1); }
+  | /merge\b/ { $$ = as_text($1); }
+  | /saturate\b/ { $$ = as_text($1); }
+  | /fixedpoint\b/ { $$ = as_text($1); }
+  | /worklist\b/ { $$ = as_text($1); }
+  | /traverse\b/ traversal_order { $$ = $2; };
+traversal_order: /topdown\b/ { $$ = as_text($1); }
+  | /bottomup\b/ { $$ = as_text($1); }
+  | /once\b/ { $$ = as_text($1); };
+bank_names: bank_names ',' bank_name { $$ = as_push($1, $3); } | bank_name { $$ = as_push(NULL, $1); };
+bank_name: identifier { $$ = novo_as_make_bank_ref(as_arena, as_string($1), as_offset(save)); }
+  | quoted { $$ = novo_as_make_bank_ref(as_arena, as_string($1), as_offset(save)); };
 args: '(' ')' { $$ = NULL; } | '(' arglist ')' { $$ = $2; };
 match_domain: /of\b/ data_field { $$ = $2; } | %empty { $$ = NULL; };
 arms: arms ',' arm { $$ = as_push($1, $3); } | arm { $$ = as_push(NULL, $1); };
@@ -171,6 +199,8 @@ AS_SEQUENCE(as_variants, variant)
 AS_SEQUENCE(as_data_types, data_type)
 AS_SEQUENCE(as_arms, arm)
 AS_SEQUENCE(as_patterns, pattern)
+AS_SEQUENCE(as_rewrites, rewrite_set)
+AS_SEQUENCE(as_banks, bank_ref)
 #undef AS_SEQUENCE
 static novo_as_expr_seq as_operands(void *a, void *b) {
     novo_as_expr_seq seq = novo_as_expr_seq_new(as_arena, a ? (b ? 2 : 1) : 0);

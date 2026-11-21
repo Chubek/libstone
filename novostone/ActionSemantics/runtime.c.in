@@ -16,9 +16,9 @@ typedef struct { const char *name; int sort, fields; } Variant;
 /* Value kinds: -1 error sentinel, 0 integer, 1 token, 2 cell reference,
    3 closure, 4 continuation, 5 generator, 6 variant. */
 enum { VK_ERROR = -1, VK_INT, VK_TOKEN, VK_REF, VK_CLOSURE, VK_CONT, VK_GEN, VK_VARIANT };
-enum { HO_DATA = 1, HO_ENV, HO_CLOSURE, HO_CONT, HO_FRAME, HO_GEN, HO_VARIANT };
+enum { HO_DATA = 1, HO_ENV, HO_CLOSURE, HO_CONT, HO_FRAME, HO_GEN, HO_VARIANT, HO_REWRITE };
 typedef struct { int kind; int64_t imm; } Value;
-typedef struct { int pc, node, env, data, state, boundary, scratch, ldata, lbind, rstatus, rdata, renv, logical_depth; } Frame;
+typedef struct { int pc, node, env, data, state, boundary, scratch, ldata, lbind, rstatus, rdata, renv, logical_depth, memo, index; } Frame;
 typedef struct {
     int kind, mark, count, variant;
     Value items[DATA_MAX];
@@ -74,6 +74,7 @@ static void mark_frame(Machine *m, const Frame *f) {
     mark(m, f->env); mark(m, f->data);
     mark(m, f->ldata); mark(m, f->lbind);
     mark(m, f->rdata); mark(m, f->renv); mark(m, f->scratch);
+    mark(m, f->memo);
 }
 static void gc(Machine *m) {
     int i, j;
@@ -90,6 +91,10 @@ static void gc(Machine *m) {
         Object *o = m->objects[m->work[--m->work_top]];
         switch (o->kind) {
         case HO_DATA: case HO_VARIANT:
+            for (j = 0; j < o->count; ++j) mark_value(m, o->items[j]);
+            break;
+        case HO_REWRITE:
+            mark(m, o->next);
             for (j = 0; j < o->count; ++j) mark_value(m, o->items[j]);
             break;
         case HO_ENV: for (j = 0; j < o->count; ++j) mark_value(m, o->values[j]); break;
@@ -352,7 +357,77 @@ static int push_frame(Machine *m, int pc, int node, int env, int data) {
     f->state = 0; f->boundary = 0; f->scratch = -1;
     f->ldata = -1; f->lbind = -1;
     f->rstatus = 0; f->rdata = -1; f->renv = -1;
+    f->memo = -1; f->index = 0;
     return 1;
+}
+static void rewrite_finish(Machine *m, Frame *f, int strategy, int remember) {
+    Value original = m->objects[f->data]->items[0], result = m->objects[f->ldata]->items[0];
+    Object *memo = m->objects[f->memo];
+    int head, out;
+    if (strategy == 7 && result.kind == VK_VARIANT) {
+        for (head = memo->next; head >= 0; head = m->objects[head]->next) {
+            Value same = structural_equal(m, result, m->objects[head]->items[1], m->depth + 1);
+            if (m->error) return;
+            if (same.imm) { result = m->objects[head]->items[1]; break; }
+        }
+    }
+    if (remember && original.kind == VK_VARIANT) {
+        head = obj_alloc(m, HO_REWRITE);
+        if (head < 0) return;
+        m->objects[head]->items[0] = original; m->objects[head]->items[1] = result;
+        m->objects[head]->count = 2; m->objects[head]->next = memo->next; memo->next = head;
+    }
+    out = make_data(m, &result, 1);
+    if (out >= 0) finish(m, 0, out, m->empty_env);
+}
+static int rewrite_rule(Machine *m, Frame *f) {
+    Instruction i = ACTIONS[f->pc];
+    int j, k, t;
+    if (i.b == 3 && m->objects[f->memo]->used) return 0;
+    for (j = 0; j < i.count && !m->error; ++j) {
+        const int *arm = &POOL[i.pool + 3*j];
+        Captures captures;
+        Object *env, *base = m->objects[f->env];
+        captures.count = 0;
+        if (!match_pattern(m, arm[0], m->objects[f->ldata]->items[0], &captures, m->depth + 1)) continue;
+        f->scratch = obj_alloc(m, HO_ENV);
+        if (f->scratch < 0) return 1;
+        env = m->objects[f->scratch]; env->count = base->count;
+        for (k = 0; k < base->count; ++k) { env->keys[k] = base->keys[k]; env->values[k] = base->values[k]; }
+        for (k = 0; k < captures.count; ++k) {
+            for (t = 0; t < env->count && env->keys[t] != captures.keys[k]; ++t) {}
+            if (t == BIND_MAX) { m->error = 1; return 1; }
+            if (t == env->count) ++env->count;
+            env->keys[t] = captures.keys[k]; env->values[t] = captures.values[k];
+        }
+        if (arm[1] >= 0) {
+            Value test = expr(m, arm[1], f->node, m->objects[f->ldata], env, m->depth + 1);
+            if (test.kind != VK_INT || !test.imm) continue;
+        }
+        f->state = 1;
+        push_frame(m, arm[2], f->node, f->scratch, f->ldata);
+        return 1;
+    }
+    return m->error;
+}
+static void rewrite_children(Machine *m, Frame *f) {
+    int strategy = ACTIONS[f->pc].b;
+    Value v = m->objects[f->ldata]->items[0];
+    if (v.kind == VK_VARIANT && f->index < m->objects[v.imm]->count) {
+        Value child = m->objects[v.imm]->items[f->index];
+        f->scratch = make_data(m, &child, 1);
+        if (f->scratch < 0) return;
+        f->state = 2;
+        if (push_frame(m, f->pc, f->node, f->env, f->scratch)) m->frames[m->depth - 1].memo = f->memo;
+        return;
+    }
+    if (f->lbind >= 0) {
+        v = value(VK_VARIANT, f->lbind);
+        f->ldata = make_data(m, &v, 1);
+        if (f->ldata < 0) return;
+    }
+    if ((strategy == 2 || strategy == 6 || strategy == 7) && rewrite_rule(m, f)) return;
+    rewrite_finish(m, f, strategy, 1);
 }
 static Pending run(Machine *m, int root) {
     Pending out;
@@ -389,6 +464,52 @@ static Pending run(Machine *m, int root) {
             if (!LEGACY_MODE) tick(m, m->depth);
             if (m->error) continue;
             switch (i.op) {
+            case 117: case 118: {
+                Value result, old, same;
+                if (f->rstatus) { finish(m, f->rstatus, f->rdata, f->renv); break; }
+                if (i.op == 117) {
+                    result = m->objects[f->rdata]->items[0]; old = m->objects[f->ldata]->items[0];
+                    same = structural_equal(m, old, result, m->depth + 1);
+                    if (m->error) break;
+                    f->ldata = make_data(m, &result, 1);
+                    if (f->ldata < 0) break;
+                    if ((i.value == 4 || i.value == 5) && !same.imm) {
+                        f->memo = obj_alloc(m, HO_REWRITE);
+                        if (f->memo < 0) break;
+                        m->objects[f->memo]->next = -1;
+                        if (push_frame(m, i.b, f->node, f->env, f->ldata)) m->frames[m->depth - 1].memo = f->memo;
+                    } else finish(m, 0, f->ldata, m->empty_env);
+                } else if (f->state == 1) {
+                    if (m->objects[f->rdata]->count != 1 || m->objects[f->renv]->count) {
+                        finish(m, 1, -1, -1); break;
+                    }
+                    result = m->objects[f->rdata]->items[0]; old = m->objects[f->ldata]->items[0];
+                    same = structural_equal(m, old, result, m->depth + 1);
+                    if (m->error) break;
+                    if (!same.imm) { f->ldata = f->rdata; m->objects[f->memo]->used = 1; }
+                    if (i.b == 0 || i.b == 2 || i.b == 7 || (i.b == 6 && same.imm)) rewrite_finish(m, f, i.b, 1);
+                    else { f->index = 0; f->lbind = -1; rewrite_children(m, f); }
+                } else {
+                    Object *parent = m->objects[m->objects[f->ldata]->items[0].imm];
+                    result = m->objects[f->rdata]->items[0]; old = parent->items[f->index];
+                    if (old.kind != result.kind || old.imm != result.imm) {
+                        if (!has_type(m, result, POOL[VARIANTS[parent->variant].fields + f->index])) {
+                            finish(m, 1, -1, -1); break;
+                        }
+                        if (f->lbind < 0) {
+                            int j;
+                            f->lbind = obj_alloc(m, HO_VARIANT);
+                            if (f->lbind < 0) break;
+                            m->objects[f->lbind]->variant = parent->variant;
+                            m->objects[f->lbind]->count = parent->count;
+                            for (j = 0; j < parent->count; ++j) m->objects[f->lbind]->items[j] = parent->items[j];
+                        }
+                        m->objects[f->lbind]->items[f->index] = result;
+                    }
+                    ++f->index; rewrite_children(m, f);
+                }
+                break;
+            }
             case 9: case 10: case 11: /* then, and then, hence */
                 if (f->state == 1) {
                     if (f->rstatus) { finish(m, f->rstatus, f->rdata, f->renv); break; }
@@ -461,6 +582,40 @@ static Pending run(Machine *m, int root) {
             tick(m, m->depth);
             if (m->error) continue;
             switch (i.op) {
+            case 117: {
+                Value v;
+                f->ldata = obj_alloc(m, HO_DATA);
+                if (f->ldata < 0) break;
+                v = expr(m, i.a, f->node, m->objects[f->data], m->objects[f->env], m->depth + 1);
+                if (v.kind < 0) { finish(m, 1, -1, -1); break; }
+                m->objects[f->ldata]->items[0] = v; m->objects[f->ldata]->count = 1;
+                f->memo = obj_alloc(m, HO_REWRITE);
+                if (f->memo < 0) break;
+                m->objects[f->memo]->next = -1;
+                if (push_frame(m, i.b, f->node, f->env, f->ldata)) m->frames[m->depth - 1].memo = f->memo;
+                break;
+            }
+            case 118: {
+                Value v = m->objects[f->data]->items[0];
+                int head = m->objects[f->memo]->next, found = 0;
+                f->ldata = f->data;
+                while (v.kind == VK_VARIANT && head >= 0 && !m->error) {
+                    Object *entry = m->objects[head];
+                    tick(m, m->depth);
+                    if (entry->items[0].kind == v.kind && entry->items[0].imm == v.imm) {
+                        f->ldata = make_data(m, &entry->items[1], 1);
+                        if (f->ldata >= 0) rewrite_finish(m, f, i.b, 0);
+                        found = 1; break;
+                    }
+                    head = entry->next;
+                }
+                if (found || m->error) break;
+                if (i.b == 0 || i.b == 1 || i.b == 3) {
+                    if (rewrite_rule(m, f)) break;
+                    if (i.b == 0) { rewrite_finish(m, f, i.b, 1); break; }
+                }
+                rewrite_children(m, f); break;
+            }
             case 0: finish(m, 0, m->empty_data, m->empty_env); break;
             case 1: finish(m, 1, m->empty_data, m->empty_env); break;
             case 2: case 3: case 4: case 5: case 6: case 102: {
@@ -685,7 +840,7 @@ static Pending run(Machine *m, int root) {
                 if (snapshot < 0) break;
                 memset(&saved, 0, sizeof(saved));
                 saved.pc = i.a; saved.node = f->node; saved.env = f->env; saved.data = f->data;
-                saved.scratch = saved.ldata = saved.lbind = saved.rdata = saved.renv = -1;
+                saved.scratch = saved.ldata = saved.lbind = saved.rdata = saved.renv = saved.memo = -1;
                 saved.boundary = 1;
                 m->objects[snapshot]->frame = saved; m->objects[snapshot]->next = -1;
                 m->objects[gen]->next = snapshot; m->objects[gen]->count = 1;

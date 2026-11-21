@@ -55,6 +55,8 @@ struct Lower {
   std::map<novo_as_expr_t, int> expressions;
   std::map<novo_as_action_t, int> actions;
   std::map<novo_as_expr_t, int> types; // 0 integer, 1 token, 2 cell, 3 dynamic
+  std::map<std::string, novo_as_rewrite_set_t> banks;
+  std::set<std::string> active_banks;
   int field(const std::string& n) const {
     for (std::size_t i = 0; i < ctor.fields.size(); ++i)
       if (ctor.fields[i].name == n) return static_cast<int>(i);
@@ -83,6 +85,7 @@ struct Lower {
             "instruction limit exceeded");
   }
 };
+void lower_rewrite_arm(Lower&, novo_as_arm_t);
 int compile_pattern(Lower& c, novo_as_pattern_t p, int type, std::set<int>& bindings) {
   c.offset = p->offset;
   Instruction i;
@@ -220,6 +223,51 @@ int leave_action(Lower* c, novo_as_action_t a) {
   c->offset = a->offset;
   Instruction i;
   switch (a->kind) {
+    case novo_as_Rewrite_kind: {
+      c->extended = true;
+      const auto& node = a->v.Rewrite;
+      static const std::map<std::string, int> strategies{
+        {"reduce", Reduce}, {"topdown", TopDown}, {"bottomup", BottomUp},
+        {"once", Once}, {"combine", BottomUp}, {"saturate", Saturate},
+        {"fixedpoint", FixedPoint}, {"worklist", Worklist}, {"merge", Merge}};
+      const int strategy = strategies.at(str(node.strategy));
+      std::vector<novo_as_arm_t> source_arms(node.arms.items, node.arms.items + node.arms.length);
+      for (std::size_t j = 0; j < node.banks.length; ++j) {
+        const auto ref = node.banks.items[j];
+        auto n = str(ref->name);
+        if (n.size() >= 2 && n.front() == '"') n = n.substr(1, n.size() - 2);
+        c->offset = ref->offset;
+        require(c->banks.contains(n), "unknown rewrite bank: " + n);
+        require(c->active_banks.insert(n).second, "recursive rewrite bank: " + n);
+        require(c->active_banks.size() <= 64, "rewrite bank nesting limit exceeded");
+        const auto bank = c->banks.at(n);
+        for (std::size_t k = 0; k < bank->arms.length; ++k) {
+          lower_rewrite_arm(*c, bank->arms.items[k]);
+          source_arms.push_back(bank->arms.items[k]);
+        }
+        c->active_banks.erase(n);
+      }
+      require(!source_arms.empty() && source_arms.size() <= 64, "rewrite requires 1..64 arms");
+      std::vector<int> arms;
+      for (auto arm : source_arms) {
+        std::set<int> bindings;
+        const auto& body = arm->v.MatchArm;
+        int p = compile_pattern(*c, body.head, DataAny, bindings);
+        if (body.guard.has_value) c->expect(body.guard.value, 0);
+        arms.insert(arms.end(), {p, body.guard.has_value ? c->expressions.at(body.guard.value) : -1,
+                                c->actions.at(body.body)});
+      }
+      Instruction visit;
+      visit.op = RewriteVisit;
+      visit.b = strategy == Saturate || strategy == FixedPoint ? BottomUp : strategy;
+      visit.pool = static_cast<int>(c->model.pool.size());
+      visit.count = static_cast<int>(source_arms.size());
+      c->model.pool.insert(c->model.pool.end(), arms.begin(), arms.end());
+      i.op = Rewrite; i.a = c->expressions.at(node.subject);
+      i.b = static_cast<int>(c->model.actions.size()); i.value = strategy;
+      c->budget(); c->model.actions.push_back(visit);
+      break;
+    }
     case novo_as_Construct_kind: {
       c->extended = true;
       const auto& node = a->v.Construct;
@@ -418,6 +466,9 @@ int leave_action(Lower* c, novo_as_action_t a) {
 #undef NOVO_AS_LEAVE_expr
 #undef NOVO_AS_LEAVE_action
 #undef NOVO_AS_VISITOR_MAX_DEPTH
+void lower_rewrite_arm(Lower& c, novo_as_arm_t arm) {
+  require(lower_arm(arm, &c) == 0, "rewrite arm exceeds visitor depth limit (128)");
+}
 // Detect tagged stores before type checking any rule: a later rule may create
 // cells read by an earlier rule. Integer-only legacy specifications retain
 // their stronger contents() type validation.
@@ -513,6 +564,15 @@ std::shared_ptr<Model> build_model(novo_as_document_t d, const std::string& sour
             "uninhabited data sort: " + model->data_sorts[j]);
   }
   model->requires_extended = !model->data_sorts.empty();
+  std::map<std::string, novo_as_rewrite_set_t> banks;
+  for (std::size_t j = 0; j < d->rewrites.length; ++j) {
+    auto bank = d->rewrites.items[j]; offset = bank->offset;
+    auto n = str(bank->name); name(n);
+    require(banks.emplace(n, bank).second, "duplicate rewrite bank: " + n);
+    for (std::size_t k = 0; k < bank->arms.length; ++k)
+      require(detect_cells_action(bank->arms.items[k]->v.MatchArm.body, &model->tagged_cells) == 0,
+              "rewrite arm exceeds visitor depth limit (128)");
+  }
   for (std::size_t j = 0; j < d->rules.length; ++j) {
     auto r = d->rules.items[j]; offset = r->offset;
     require(detect_cells_action(r->body, &model->tagged_cells) == 0,
@@ -525,7 +585,7 @@ std::shared_ptr<Model> build_model(novo_as_document_t d, const std::string& sour
     require(seen.count(n), "rule for unknown constructor: " + n);
     auto& ctor = model->constructors[static_cast<std::size_t>(seen.at(n))];
     require(ctor.rule == -1, "duplicate rule: " + n);
-    Lower lowerer{*model, ctor, offset, false, {}, {}, {}};
+    Lower lowerer{*model, ctor, offset, false, {}, {}, {}, banks, {}};
     require(lower_action(r->body, &lowerer) == 0, "action exceeds visitor depth limit (128)");
     ctor.rule = lowerer.actions.at(r->body);
     model->requires_extended |= lowerer.extended;

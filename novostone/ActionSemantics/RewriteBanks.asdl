@@ -1,0 +1,12 @@
+-- Bank container syntax; rewrite source is subsequently parsed by ActionSemantics.
+%prefix novo_rwb
+%option no-builtins
+%%
+document = (string name, entry* entries)
+entry = Source(string path)
+      | Rewrite(string text)
+      | Data(string name, string format, string path)
+      | Contract(string name, string format, string path)
+      | Lua(string name, string phase, string path)
+      | Guard(string rule, string domain, string expression)
+      attributes (usize offset)

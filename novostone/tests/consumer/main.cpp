@@ -12,7 +12,7 @@
 int main() {
   using namespace novostone;
   auto language = action::parse("language Installed { start E; syntax E = N(); rule N = give 42; }");
-  if (action::generate(language, action::Target::C).find("int main(void)") == std::string::npos) return 4;
+  if (action::generate(language, action::Target::C).find("int main(") == std::string::npos) return 4;
   auto module = datalog::parse(".decl E(integer). E(42). .decl R(integer) derived. R(X) :- E(X).");
   ccdb::Database facts(module.program);
   auto transaction = facts.begin(); transaction.insert(module.facts);
