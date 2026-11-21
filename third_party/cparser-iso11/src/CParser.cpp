@@ -223,6 +223,10 @@ void CParser::parse(const char *)
 
 ASTNode *CParser::PrimaryExpression()
 {
+    if (_sym == TK_IDENT && getLookahead().sval == "__builtin_offsetof" &&
+        getLATok(2) == TK_LPAR)
+        return OffsetOfExpression();
+
     ASTNode *res = NULL_AST_NODE;
 
     if (_sym == TK_IDENT)
@@ -234,8 +238,7 @@ ASTNode *CParser::PrimaryExpression()
                           _tok->sval.c_str());
         if (object != _stb.noObj && object->kind == STOK_CON)
         {
-            res = new IntegerConstASTNode(
-                static_cast<std::uint64_t>(object->ival), _tok->sval);
+            res = new IntegerConstASTNode(object->enumerator);
             res->setLineNum(_tok->line);
         }
         else
@@ -314,6 +317,39 @@ ASTNode *CParser::GenericSelection()
     auto *associations = GenericAssocList();
     check(TK_RPAR);
     auto *result = new GenericExprASTNode(control, associations);
+    result->setLineNum(line);
+    return result;
+}
+
+ASTNode *CParser::OffsetOfExpression()
+{
+    getTok();
+    const int line = _tok->line;
+    check(TK_LPAR);
+    auto *type = TypeName();
+    check(TK_COMMA);
+    check(TK_IDENT);
+    auto *designators = new SequenceASTNode(new IdentASTNode(_tok->sval, _tok->line));
+    while (_sym == TK_PERIOD || _sym == TK_LBRACK)
+    {
+        const bool member = _sym == TK_PERIOD;
+        getTok();
+        if (member)
+        {
+            check(TK_IDENT);
+            designators->addElement(new IdentASTNode(_tok->sval, _tok->line));
+        }
+        else
+        {
+            const int indexLine = _tok->line;
+            auto *index = new ArrayDesignatorASTNode(ConstantExpression());
+            index->setLineNum(indexLine);
+            check(TK_RBRACK);
+            designators->addElement(index);
+        }
+    }
+    check(TK_RPAR);
+    auto *result = new OffsetOfExprASTNode(type, designators);
     result->setLineNum(line);
     return result;
 }
@@ -539,11 +575,13 @@ ASTNode *CParser::UnaryExpression(ASTNode *typeName)
     }
     else if (_sym == TK__ALIGNOF)
     {
+        const int line = getLookahead().line;
         getTok();
         check(TK_LPAR);
         expr = TypeName();
         check(TK_RPAR);
         res = new AlignOfExprASTNode(expr);
+        res->setLineNum(line);
     }
     else
     {
@@ -948,10 +986,12 @@ ASTNode *CParser::ConstantExpression() { return ConditionalExpression(); }
 // Declarations
 //
 
-ASTNode *CParser::Declaration(ASTNode *declSpec)
+ASTNode *CParser::Declaration(ASTNode *declSpec, ASTNode *alignments)
 {
     if (_sym == TK_SEMICOLON)
     {
+        if (alignments != NULL_AST_NODE)
+            parsingError("_Alignas requires an object declarator");
         bool declaresName = false;
         switch (declSpec->getKind())
         {
@@ -972,7 +1012,8 @@ ASTNode *CParser::Declaration(ASTNode *declSpec)
         if (declSpec->getFlags() & (FS_INLINE | FS_NORETURN))
             parsingError("function specifier used on a non-function declaration");
     }
-    ASTNode *declaration = _sym == TK_SEMICOLON ? declSpec : InitDeclaratorList(declSpec);
+    ASTNode *declaration = _sym == TK_SEMICOLON ? declSpec :
+        InitDeclaratorList(declSpec, alignments);
     check(TK_SEMICOLON);
     return declaration;
 }
@@ -1019,7 +1060,7 @@ static bool supportsRestrict(ASTNode *type)
            static_cast<PointerTypeASTNode *>(type)->getBaseType()->getKind() != NK_FUNCTION_TYPE;
 }
 
-ASTNode *CParser::DeclarationSpecifiers(bool typeOnly)
+ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments)
 {
     ParseDepth depth(*this);
     ASTNode *declSpec = NULL_AST_NODE;
@@ -1105,7 +1146,23 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly)
         }
         else if (_sym == TK__ALIGNAS)
         {
-            parsingError("_Alignas declarations are unsupported");
+            const int line = getLookahead().line;
+            if (!alignments)
+                parsingError(typeOnly ? "_Alignas is not allowed in a type name" :
+                                         "_Alignas is not allowed on a parameter");
+            getTok();
+            check(TK_LPAR);
+            ASTNode *value;
+            if (isTypeSpecifier(_sym, 1) || isTypeQualifier(_sym))
+                value = new AlignOfExprASTNode(TypeName());
+            else
+                value = ConstantExpression();
+            check(TK_RPAR);
+            value->setLineNum(line);
+            if (*alignments == NULL_AST_NODE)
+                *alignments = new SequenceASTNode(value);
+            else
+                static_cast<SequenceASTNode *>(*alignments)->add(value);
         }
         else
         {
@@ -1150,6 +1207,13 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly)
     }
     if (declSpec == NULL_AST_NODE)
         parsingError("expected declaration type");
+    if (alignments && *alignments != NULL_AST_NODE)
+    {
+        if (flags & SCS_TYPEDEF)
+            parsingError("_Alignas is not allowed on a typedef");
+        if (flags & SCS_REGISTER)
+            parsingError("_Alignas is not allowed on a register object");
+    }
     // Qualifying an array typedef qualifies its element type (6.7.3).
     auto *qualifiedType = declSpec;
     while (qualifiedType->getKind() == NK_ARRAY_TYPE)
@@ -1164,14 +1228,14 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly)
     return declSpec;
 }
 
-SequenceASTNode *CParser::InitDeclaratorList(ASTNode *typeSpec)
+SequenceASTNode *CParser::InitDeclaratorList(ASTNode *typeSpec, ASTNode *alignments)
 {
-    SequenceASTNode *initlist = new SequenceASTNode(InitDeclarator(typeSpec));
+    SequenceASTNode *initlist = new SequenceASTNode(InitDeclarator(typeSpec, alignments));
 
     while (_sym == TK_COMMA)
     {
         getTok();
-        initlist->add(InitDeclarator(typeSpec));
+        initlist->add(InitDeclarator(typeSpec, alignments));
     }
 
     return initlist;
@@ -1254,23 +1318,27 @@ static ASTNode *cloneType(ASTNode *type)
     return copy;
 }
 
-ASTNode *CParser::InitDeclarator(ASTNode *typeSpec)
+ASTNode *CParser::InitDeclarator(ASTNode *typeSpec, ASTNode *alignments)
 {
     ASTNode *declaratorType = typeSpec;
     STScope *parameterScope = nullptr;
     ASTNode *name = Declarator(declaratorType, DeclaratorName::Required,
                                &parameterScope);
-    return InitDeclaratorAfterName(typeSpec, declaratorType, name, parameterScope);
+    return InitDeclaratorAfterName(typeSpec, declaratorType, name, parameterScope, alignments);
 }
 
 ASTNode *CParser::InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
                                          ASTNode *name, STScope *parameterScope,
-                                         bool allowDefinition)
+                                         ASTNode *alignments, bool allowDefinition)
 {
     const unsigned flags = typeSpec->getFlags();
     if (type->getKind() == NK_FUNCTION_TYPE)
+    {
+        if (alignments != NULL_AST_NODE)
+            parsingError("_Alignas is not allowed on a function");
         return FunctionDeclaration(static_cast<FunctionTypeASTNode *>(type),
                                    name, flags, parameterScope, allowDefinition);
+    }
     if (type->getKind() == NK_VOID_TYPE)
         _ast->error(name->getLineNum(), "object cannot have void type");
     ASTNode *init = NULL_AST_NODE;
@@ -1278,6 +1346,7 @@ ASTNode *CParser::InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
         parsingError("function specifier used on a non-function declaration");
     VarDeclASTNode *declr = new VarDeclASTNode(type, name);
     declr->setFlags(typeSpec->getFlags());
+    declr->setAlignments(alignments);
     declr->declare(_ast);
 
     if (_sym == TK_ASSIGN)
@@ -1591,8 +1660,10 @@ SequenceASTNode *CParser::StructDeclarationList()
 
 ASTNode *CParser::StructDeclaration()
 {
-    ASTNode *typeSpec = SpecifierQualifierList();
-    SequenceASTNode *declaratorList = StructDeclaratorList(typeSpec);
+    // 6.7.5 describes member alignment; DR 444 adds the omitted grammar.
+    ASTNode *alignments = NULL_AST_NODE;
+    ASTNode *typeSpec = DeclarationSpecifiers(true, &alignments);
+    SequenceASTNode *declaratorList = StructDeclaratorList(typeSpec, alignments);
     check(TK_SEMICOLON);
 
     return declaratorList;
@@ -1603,23 +1674,27 @@ ASTNode *CParser::SpecifierQualifierList()
     return DeclarationSpecifiers(true);
 }
 
-SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec)
+SequenceASTNode *CParser::StructDeclaratorList(ASTNode *typeSpec, ASTNode *alignments)
 {
-    SequenceASTNode *declist = new SequenceASTNode(StructDeclarator(typeSpec));
+    SequenceASTNode *declist = new SequenceASTNode(StructDeclarator(typeSpec, alignments));
 
     while (_sym == TK_COMMA)
     {
         getTok();
-        declist->add(StructDeclarator(typeSpec));
+        declist->add(StructDeclarator(typeSpec, alignments));
     }
 
     return declist;
 }
 
-ASTNode *CParser::StructDeclarator(ASTNode *typeSpec)
+ASTNode *CParser::StructDeclarator(ASTNode *typeSpec, ASTNode *alignments)
 {
+    if (_sym == TK_COLON && alignments != NULL_AST_NODE)
+        parsingError("_Alignas is not allowed on a bit-field");
     ASTNode *name = Declarator(typeSpec);
-    return new FieldDeclASTNode(typeSpec, name);
+    if (_sym == TK_COLON && alignments != NULL_AST_NODE)
+        parsingError("_Alignas is not allowed on a bit-field");
+    return new FieldDeclASTNode(typeSpec, name, alignments);
 }
 
 ASTNode *CParser::EnumSpecifier()
@@ -1656,51 +1731,26 @@ ASTNode *CParser::EnumSpecifier()
 SequenceASTNode *CParser::EnumeratorList()
 {
     auto *enums = new SequenceASTNode();
-    std::int64_t nextValue = 0;
     for (;;)
     {
         check(TK_IDENT);
         const int line = _tok->line, column = _tok->col;
         const std::string name = _tok->sval;
-        enums->add(new IdentASTNode(name, line));
-        std::int64_t value = nextValue;
+        ASTNode *initializer = NULL_AST_NODE;
         if (_sym == TK_ASSIGN)
         {
             getTok();
-            const bool negative = _sym == TK_MINUS;
-            if (negative)
-                getTok();
-            const bool isEnumerator = _sym == TK_IDENT;
-            ASTNode *expr = ConstantExpression();
-            if (AST_MATCH_INTEGER_CONST(expr))
-            {
-                const auto magnitude = AST_INTEGER_CONST_VALUE(expr);
-                if (isEnumerator)
-                    value = static_cast<std::int32_t>(magnitude);
-                else if (magnitude > std::uint64_t(INT32_MAX) + unsigned(negative))
-                    _ast->errorAt(line, column, "enumerator '%s' exceeds int range",
-                                  name.c_str());
-                else
-                    value = static_cast<std::int64_t>(magnitude);
-            }
-            else if (expr->getKind() == NK_CHAR_CONST)
-                value = static_cast<CharConstASTNode *>(expr)->getValue();
-            else
-                _ast->errorAt(line, column,
-                              "enumerator '%s' requires a literal or previous enumerator",
-                              name.c_str());
-            if (negative)
-                value = -value;
+            initializer = ConstantExpression();
         }
-        if (value < INT32_MIN || value > INT32_MAX)
-            _ast->errorAt(line, column, "enumerator '%s' exceeds int range",
-                          name.c_str());
+        auto *enumerator = new EnumeratorDeclASTNode(name, initializer, line);
+        enums->add(enumerator);
+        // The enumerator's own initializer still sees an enclosing
+        // declaration of the same name (C11 6.2.1p7).
         auto *obj = _stb.insert(name.c_str(), STOK_CON, _stb.intType);
         if (obj == _stb.noObj)
             _ast->errorAt(line, column, "enumerator '%s' is already declared",
                           name.c_str());
-        obj->ival = static_cast<int>(value);
-        nextValue = value + 1;
+        obj->enumerator = enumerator;
 
         if (_sym != TK_COMMA)
             break;
@@ -2028,7 +2078,7 @@ ASTNode *CParser::ParameterList()
 ASTNode *CParser::ParameterDeclaration()
 {
     const int line = getLookahead().line;
-    ASTNode *typeSpec = DeclarationSpecifiers();
+    ASTNode *typeSpec = DeclarationSpecifiers(false);
     const unsigned flags = typeSpec->getFlags();
     if (flags & (DS_STORAGE_MASK & ~SCS_REGISTER))
         _ast->error(line, "register is the only storage class allowed on a parameter");
@@ -2331,11 +2381,12 @@ ASTNode *CParser::StmtOrDeclList()
                 item = StaticAssertDeclaration();
             else
             {
-                ASTNode *declSpec = DeclarationSpecifiers();
+                ASTNode *alignments = NULL_AST_NODE;
+                ASTNode *declSpec = DeclarationSpecifiers(false, &alignments);
                 if (declSpec->getFlags() & SCS_TYPEDEF)
                     item = TypedefDeclaration(declSpec);
                 else
-                    item = Declaration(declSpec);
+                    item = Declaration(declSpec, alignments);
             }
 
             append(decls, item);
@@ -2454,10 +2505,11 @@ ASTNode *CParser::IterationStatement()
         {
             if (_sym == TK__STATIC_ASSERT)
                 parsingError("expected an object declaration in the for initializer");
-            ASTNode *declSpec = DeclarationSpecifiers();
+            ASTNode *alignments = NULL_AST_NODE;
+            ASTNode *declSpec = DeclarationSpecifiers(false, &alignments);
             if (declSpec->getFlags() & (SCS_TYPEDEF | SCS_EXTERN | SCS_STATIC))
                 _ast->error(line, "for initializer can only declare auto or register objects");
-            init = Declaration(declSpec);
+            init = Declaration(declSpec, alignments);
             if (init->getKind() == NK_LIST)
                 for (auto *node : static_cast<SequenceASTNode *>(init)->getElements())
                     if (node->getKind() != NK_VAR_DECL)
@@ -2595,19 +2647,20 @@ ASTNode *CParser::ExternalDeclaration()
 {
     if (_sym == TK__STATIC_ASSERT)
         return StaticAssertDeclaration();
-    ASTNode *declSpec = DeclarationSpecifiers();
+    ASTNode *alignments = NULL_AST_NODE;
+    ASTNode *declSpec = DeclarationSpecifiers(false, &alignments);
     const unsigned flags = declSpec->getFlags();
     if (flags & (SCS_AUTO | SCS_REGISTER))
         parsingError("auto and register are not allowed at file scope");
     if (flags & SCS_TYPEDEF)
         return TypedefDeclaration(declSpec);
     if (_sym == TK_SEMICOLON)
-        return Declaration(declSpec);
+        return Declaration(declSpec, alignments);
 
     ASTNode *type = declSpec;
     STScope *parameterScope = nullptr;
     ASTNode *name = Declarator(type, DeclaratorName::Required, &parameterScope);
-    ASTNode *first = InitDeclaratorAfterName(declSpec, type, name, parameterScope, true);
+    ASTNode *first = InitDeclaratorAfterName(declSpec, type, name, parameterScope, alignments, true);
     if (first->getKind() == NK_FUNCTION_DECL &&
         !static_cast<FunctionDeclASTNode *>(first)->isForwardDeclaration())
         return first;
@@ -2616,7 +2669,7 @@ ASTNode *CParser::ExternalDeclaration()
     while (_sym == TK_COMMA)
     {
         getTok();
-        list->add(InitDeclarator(declSpec));
+        list->add(InitDeclarator(declSpec, alignments));
     }
     check(TK_SEMICOLON);
     return list;

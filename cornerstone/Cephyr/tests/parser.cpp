@@ -449,7 +449,7 @@ int main() {
     fails(source("enum Tag { A }; enum Tag { B };"), "tag 'Tag' is already defined");
     fails(source("struct Tag; enum Tag value;"), "tag 'Tag' refers to a different kind");
     fails(source("enum Missing *value;"), "enum tag 'Missing' needs a prior definition");
-    fails(source("_Alignas(16) int x;"), "_Alignas declarations are unsupported");
+    fails(source("int f(_Alignas(16) int x);"), "_Alignas is not allowed on a parameter");
     fails(source("int f(void) { break; }"), "break statement outside a loop or switch");
     fails(source("void f(void) { switch (0) { default: continue; } }"), "continue statement outside a loop");
     fails(source("void f(void) { switch (0) { default: ; default: ; } }"), "duplicate default");

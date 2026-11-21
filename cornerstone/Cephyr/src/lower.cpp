@@ -79,7 +79,8 @@ bool valid_main(const CType &type, const Preprocessed &source)
 // A declaration is made visible before lowering its initializer or body; a
 // later name must not accidentally satisfy an earlier C use.
 Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
-                unsigned flags, bool is_definition, bool has_initializer)
+                unsigned flags, bool is_definition, bool has_initializer,
+                std::optional<unsigned> alignment = std::nullopt)
 {
     const std::string name = identifier(name_node);
     const bool function = type.kind == CType::Kind::function;
@@ -108,6 +109,10 @@ Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
             std::move(type), std::move(native_name), declaration,
             is_definition ? declaration : nullptr, internal, false, has_initializer,
         };
+        if (alignment)
+            symbol.alignment_declarations.emplace_back(*alignment, name_node);
+        if (is_definition)
+            symbol.definition_alignment = alignment;
         return &unit.symbols.emplace(name, std::move(symbol)).first->second;
     }
     auto &symbol = found->second;
@@ -129,11 +134,43 @@ Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
     if (function ? (!symbol.type.prototype || is_definition) :
         (type.kind == CType::Kind::array && !symbol.type.count && type.count))
         symbol.type = std::move(type);
-    if (is_definition && (!symbol.definition || has_initializer)) {
+    if (alignment)
+        symbol.alignment_declarations.emplace_back(*alignment, name_node);
+    // Without an initialized definition, an explicitly aligned tentative
+    // definition can supply the storage alignment for the tentative group.
+    if (is_definition && (!symbol.definition || has_initializer ||
+                          (!symbol.initialized && !symbol.definition_alignment && alignment))) {
         symbol.definition = declaration;
         symbol.initialized = has_initializer;
+        symbol.definition_alignment = alignment;
     }
     return &symbol;
+}
+
+bool check_linkage_alignment(Unit &unit, const Symbol &symbol) {
+    if (symbol.alignment_declarations.empty())
+        return true;
+    if (symbol.definition && !symbol.definition_alignment) {
+        unit.error(symbol.alignment_declarations.front().second,
+                   "object definition must also specify _Alignas");
+        return false;
+    }
+    const auto natural = align_of(symbol.type);
+    unsigned first = 0;
+    const TypeContext context(unit);
+    for (const auto &[requested, at] : symbol.alignment_declarations) {
+        if (!check_object_alignment(requested, natural, at, context))
+            return false;
+        const auto actual = std::max(requested, natural);
+        if (!actual)
+            continue; // The alignment of an incomplete type may remain unknown.
+        if (first && actual != first) {
+            unit.error(at, "conflicting _Alignas declarations");
+            return false;
+        }
+        first = actual;
+    }
+    return true;
 }
 
 void write_edge(std::ostream &out, const Edge &edge, const std::vector<Id> &blocks,
@@ -620,14 +657,13 @@ CType read_record_type(Node *node, const TypeContext &context)
         // The incomplete array has an aligned offset but contributes no
         // elements to the fixed representation (6.7.2.1p18).
         const auto size = flexible ? std::optional<std::uint64_t>{0} : size_of(member_type);
-        const auto alignment = align_of(member_type);
-        if (!size || (!flexible && !*size) || !alignment)
+        const auto natural = align_of(member_type);
+        if (!size || (!flexible && !*size) || !natural)
             return error(field->getName(), "record member must have a complete object type");
-        // All supported constituents follow the bundled little-endian LP64
-        // targets' natural layout. Bit-fields and explicit alignment must not
-        // fall through to this algorithm.
-        if ((alignment & (alignment - 1)) != 0)
-            return error(field->getName(), "unsupported record member alignment");
+        const auto requested = alignment_specifiers(field->getAlignments(), context);
+        if (!requested || !check_object_alignment(*requested, natural, field->getName(), context))
+            return {};
+        const auto alignment = std::max(natural, *requested);
         const auto offset = structure ? round_up(extent, alignment) : std::optional<std::uint64_t>{0};
         if (!offset || *size > std::numeric_limits<std::uint64_t>::max() - *offset)
             return error(field->getName(), "record layout exceeds the object size limit");
@@ -846,11 +882,12 @@ Id Function::constant(std::uint64_t bits, const CType &type)
     return emit(type, "const", std::to_string(normalize(bits, type)));
 }
 
-LValue Function::local(const CType &type, Node *at)
+LValue Function::local(const CType &type, Node *at, unsigned requested_alignment)
 {
     const auto size = size_of(type);
-    const auto alignment = align_of(type);
-    if (!size || !*size || *size > std::numeric_limits<int>::max() || !alignment || alignment > 16) {
+    const auto alignment = std::max(align_of(type), requested_alignment);
+    if (!size || !*size || *size > std::numeric_limits<int>::max() ||
+        !alignment || alignment > max_object_alignment) {
         error(at, "local object has incomplete or unsupported size or alignment");
         return {};
     }
@@ -1136,7 +1173,13 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     unit.error(decl.getName(), "internal tentative definition has incomplete structure or union type");
                     continue;
                 }
-                auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags, definition, initialized);
+                const auto requested = alignment_specifiers(decl.getAlignments(), TypeContext(unit));
+                if (!requested ||
+                    !check_object_alignment(*requested, align_of(type), decl.getName(), TypeContext(unit)))
+                    continue;
+                const auto alignment = present(decl.getAlignments()) ? requested : std::nullopt;
+                auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags,
+                                       definition, initialized, alignment);
                 // Initializers see exactly the declarations visible here.
                 // This also completes `char s[] = "...";` before any later
                 // use of sizeof(s). Tentative definitions are finalized below.
@@ -1144,18 +1187,19 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     define_global(unit, *symbol);
                 continue;
             }
-            if (node->getKind() == NK_STRUCT_TYPE || node->getKind() == NK_UNION_TYPE) {
+            if (node->getKind() == NK_STRUCT_TYPE || node->getKind() == NK_UNION_TYPE ||
+                node->getKind() == NK_ENUMERAL_TYPE) {
                 (void)read_type(node, TypeContext(unit), true);
                 continue;
             }
-            if (node->getKind() == NK_ENUMERAL_TYPE)
-                continue;
             unit.error(node, "unsupported file-scope C construct");
         }
 
         std::vector<std::pair<std::string, CType>> imports = unit.signatures;
         for (auto &[source_name, symbol] : unit.symbols) {
             at = symbol.declaration;
+            if (!check_linkage_alignment(unit, symbol))
+                continue;
             if (symbol.type.kind == CType::Kind::function) {
                 if (!symbol.definition && symbol.used) {
                     if (symbol.internal)

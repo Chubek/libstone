@@ -55,6 +55,7 @@ struct STType;
 struct STObject;
 struct STScope;
 class ASTNode;
+class EnumeratorDeclASTNode;
 
 struct STType
 {
@@ -86,7 +87,7 @@ struct STObject
     STType *type;
     ASTNode *astType;
 
-    int ival;  // Integer constant value.
+    const EnumeratorDeclASTNode *enumerator = nullptr;
     int level; // Scope level
 
     // Function specific attributes
@@ -99,7 +100,7 @@ struct STObject
     struct STObject *next;
 
     STObject(const char *Name, STObjectKind Kind, STType *Type)
-        : name(Name), astType(nullptr), ival(0), level(0), prmc(0), locals(nullptr),
+        : name(Name), astType(nullptr), level(0), prmc(0), locals(nullptr),
           isConstant(false), next(nullptr)
     {
         kind = Kind;

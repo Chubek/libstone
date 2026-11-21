@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "stream.h"
+
 int fputc(int ch, FILE *stream)
 {
     unsigned char byte = (unsigned char)ch;
@@ -44,6 +46,8 @@ char *fgets(char *str, int count, FILE *stream)
 
     if (str == NULL || count <= 0)
         return NULL;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return NULL;
     if (count == 1) {
         str[0] = '\0';
         return str;
@@ -67,6 +71,8 @@ char *fgets(char *str, int count, FILE *stream)
 
 int fputs(const char *str, FILE *stream)
 {
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return EOF;
     size_t length = strlen(str);
     return fwrite(str, 1, length, stream) == length ? 0 : EOF;
 }
@@ -76,17 +82,6 @@ int puts(const char *str)
     if (fputs(str, stdout) == EOF || fputc('\n', stdout) == EOF)
         return EOF;
     return 0;
-}
-
-void perror(const char *prefix)
-{
-    int saved_errno = errno;
-    if (prefix != NULL && *prefix != '\0') {
-        (void)fputs(prefix, stderr);
-        (void)fputs(": ", stderr);
-    }
-    (void)fputs(strerror(saved_errno), stderr);
-    (void)fputc('\n', stderr);
 }
 
 struct output_sink {
@@ -522,13 +517,13 @@ int sprintf(char *buffer, const char *format, ...)
 int vfprintf(FILE *stream, const char *format, va_list args)
 {
     struct output_sink sink;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return EOF;
     sink.buffer = NULL;
     sink.capacity = 0;
     sink.count = 0;
     sink.stream = stream;
-    sink.failed = stream == NULL;
-    if (stream == NULL)
-        errno = EINVAL;
+    sink.failed = 0;
     return format_to_sink(&sink, format, args);
 }
 

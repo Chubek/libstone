@@ -56,7 +56,8 @@ void branch_on(Function &function, Node *expression, Id yes, Id no) {
 
 bool expression_kind(ASTNodeKind kind) {
     return kind == cparser::NK_IDENT_NODE || kind == cparser::NK_SIZEOF_EXPR ||
-           kind == cparser::NK_ALIGNOF_EXPR || kind == cparser::NK_UNARY_PLUS_EXPR ||
+           kind == cparser::NK_ALIGNOF_EXPR || kind == cparser::NK_OFFSETOF_EXPR ||
+           kind == cparser::NK_UNARY_PLUS_EXPR ||
            kind == cparser::NK_GENERIC_EXPR ||
            (kind >= cparser::NK_INTEGER_CONST && kind <= cparser::NK_PUTI_EXPR);
 }
@@ -173,6 +174,11 @@ void lower_local_declaration(Function &function, Node *node) {
         return;
     }
 
+    const auto context = TypeContext(function.unit, &function);
+    const auto alignment = alignment_specifiers(declaration->getAlignments(), context);
+    if (!alignment || !check_object_alignment(*alignment, align_of(type), at, context))
+        return;
+
     Node *initializer = declaration->getInit();
     if (flags & SCS_STATIC) {
         // The name has block scope and no C linkage, even though the object
@@ -182,6 +188,8 @@ void lower_local_declaration(Function &function, Node *node) {
             return;
         Symbol storage{std::move(type), native_name, node, node, true, false,
                        present(initializer)};
+        if (present(declaration->getAlignments()))
+            storage.definition_alignment = alignment;
         if (define_global(function.unit, storage, &function))
             function.scopes.back().at(name).type = std::move(storage.type);
         return;
@@ -206,7 +214,7 @@ void lower_local_declaration(Function &function, Node *node) {
     if (!size)
         return;
 
-    LValue slot = function.local(type, at);
+    LValue slot = function.local(type, at, *alignment);
     if (slot.address == no_value)
         return;
     // The slot has its final size, but an inferred bound is not visible
@@ -344,16 +352,18 @@ void lower_for(Function &function, cparser::ForStmtASTNode *statement,
     else
         function.jump(body_block);
 
+    // Analyze the third clause before the body, where enumerators from its
+    // type names are already in scope. The CFG still runs the body first.
+    function.select(step_block);
+    if (present(statement->getStep()))
+        (void)lower_expr(function, statement->getStep());
+    function.jump(condition_block);
+
     function.loops.emplace_back(exit_block, step_block);
     function.select(body_block);
     lower_statement(function, statement->getBody(), cases);
     function.jump(step_block);
     function.loops.pop_back();
-
-    function.select(step_block);
-    if (present(statement->getStep()))
-        (void)lower_expr(function, statement->getStep());
-    function.jump(condition_block);
 
     function.select(exit_block);
     function.scopes.pop_back();
@@ -589,7 +599,8 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
         return;
     if (statement->isType()) {
         const CType type = read_type(statement, TypeContext(function.unit, &function), true);
-        if (type.valid() && type.kind != CType::Kind::record)
+        if (type.valid() && type.kind != CType::Kind::record &&
+            statement->getKind() != cparser::NK_ENUMERAL_TYPE)
             function.error(statement, "block-scope declaration declares no object",
                            "cephyr.local.declaration");
         return;

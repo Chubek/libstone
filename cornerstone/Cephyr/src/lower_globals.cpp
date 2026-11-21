@@ -653,7 +653,7 @@ bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
     }
 
     const auto size = size_of(type);
-    const auto alignment = align_of(type);
+    const auto alignment = std::max(align_of(type), symbol.definition_alignment.value_or(0));
     if (!size || !*size || *size > max_object_bytes || !alignment ||
         (alignment & (alignment - 1)) != 0) {
         unit.error(definition, "global object has an unsupported size or alignment",

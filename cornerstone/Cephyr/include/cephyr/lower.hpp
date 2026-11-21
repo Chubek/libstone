@@ -66,6 +66,7 @@ struct CType {
     std::vector<CType> params;           // adjusted function parameter types
     bool prototype = true, variadic = false;
     const RecordLayout *record = nullptr; // stable within the translation unit
+    const void *enum_identity = nullptr;   // parser tag/definition identity; integer representation
 
     bool valid() const { return kind != Kind::invalid; }
     bool integer() const { return kind == Kind::integer; }
@@ -155,11 +156,16 @@ CType common_arithmetic(const CType &, const CType &);
 bool compatible(const CType &, const CType &);
 std::optional<std::uint64_t> size_of(const CType &);
 unsigned align_of(const CType &);
+// All bundled LP64 targets support these fundamental alignments in every
+// object context. Extended alignments are not currently supported.
+inline constexpr unsigned max_object_alignment = 16;
+std::optional<unsigned> alignment_specifiers(Node *, const TypeContext &);
+bool check_object_alignment(unsigned requested, unsigned natural, Node *, const TypeContext &);
 std::string_view mir_type(const CType &);
 std::uint64_t normalize(std::uint64_t, const CType &);
 std::optional<Constant> integer_constant(Node *, const TypeContext &);
 std::optional<Constant> real_constant(Node *, const TypeContext &, bool require_native = true);
-std::optional<Constant> size_or_alignment(Node *, const TypeContext &);
+std::optional<Constant> layout_constant(Node *, const TypeContext &);
 std::optional<std::string> string_constant(Node *, const Preprocessed &, Diagnostics &);
 
 struct Expr {
@@ -208,6 +214,10 @@ struct Symbol {
     bool internal = false;
     bool used = false;
     bool initialized = false;
+    // Keep the selected definition's specifier separate from the type and
+    // from other declarations. A present zero is distinct from no specifier.
+    std::optional<unsigned> definition_alignment = std::nullopt;
+    std::vector<std::pair<unsigned, Node *>> alignment_declarations = {};
 };
 
 struct Global {
@@ -230,7 +240,10 @@ struct Unit {
     // The parser shares bound expression nodes when it clones typedef types.
     // Resolve each bound where the declarator first appears, not at a later use.
     std::map<const Node *, std::optional<std::uint64_t>> array_bounds;
+    // Multiple declarators share the specifiers and their original scope.
+    std::map<const Node *, std::optional<unsigned>> alignment_values;
     std::map<const void *, RecordLayout> record_layouts; // keyed by parser tag identity
+    std::map<const Node *, std::uint64_t> enumeration_constants; // keyed by defining enumerator
     std::size_t block_statics = 0;
     std::size_t function_names = 0;
 
@@ -295,7 +308,7 @@ struct Function {
     Id emit(const CType &, std::string_view op, std::string operands = {}, Node *origin = nullptr);
     void emit_void(std::string_view op, std::string operands = {});
     Id constant(std::uint64_t, const CType & = integer_type());
-    LValue local(const CType &, Node *at);
+    LValue local(const CType &, Node *at, unsigned requested_alignment = 0);
     std::optional<LValue> find_local(std::string_view) const;
     bool declare_local(std::string name, LValue, Node *);
     void require_static(const LValue &) const;

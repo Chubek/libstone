@@ -1,7 +1,7 @@
 #ifndef _CEPHYR_STDINT_H
 #define _CEPHYR_STDINT_H
 
-/* Exact types for RV64 Linux's LP64 data model. */
+/* Exact-width types for the bundled Linux LP64 targets. */
 typedef signed char int8_t;
 typedef unsigned char uint8_t;
 typedef short int16_t;
@@ -82,8 +82,7 @@ typedef unsigned long uintmax_t;
 #define PTRDIFF_MIN INT64_MIN
 #define PTRDIFF_MAX INT64_MAX
 #define SIZE_MAX UINT64_MAX
-#define SIG_ATOMIC_MIN INT32_MIN
-#define SIG_ATOMIC_MAX INT32_MAX
+/* No SIG_ATOMIC_MIN/MAX until the runtime provides sig_atomic_t. */
 #ifdef __aarch64__
 #define WCHAR_MIN 0U
 #define WCHAR_MAX UINT32_MAX

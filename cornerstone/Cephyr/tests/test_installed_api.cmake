@@ -38,6 +38,16 @@ run("${CMAKE_COMMAND}" --build "${consumer}" ${config_args})
 run("${CMAKE_COMMAND}" -E env --unset=CEPHYR_CONFIG
   "${TEST_CTEST}" --test-dir "${consumer}" --output-on-failure)
 run("${prefix}/${INSTALL_BINDIR}/cephyr" --version)
+set(qml_assets "${prefix}/${INSTALL_DATADIR}/cephyr/qml")
+foreach(asset IN ITEMS builtin.qmb compile_rules.py qml_frontend.py)
+  if(NOT EXISTS "${qml_assets}/${asset}")
+    message(FATAL_ERROR "Missing installed QML asset: ${asset}")
+  endif()
+endforeach()
+run("${TEST_PYTHON}" "${SOURCE_DIR}/tests/test_qml_driver.py"
+  "${prefix}/${INSTALL_BINDIR}/cephyr"
+  QmlDriverTests.test_opt_in_builtin_does_not_require_python
+  QmlDriverTests.test_profile_file_paths_merge_and_refresh)
 if(TEST_MOONSTONE_PROLIFIC)
   run("${TEST_PYTHON}" "${SOURCE_DIR}/tests/test_moonstone_tools.py"
     "${prefix}/${INSTALL_BINDIR}/cephyr" --have prolific --only-profile)

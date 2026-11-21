@@ -14,10 +14,12 @@ int main(void)
     const char *const syntax[] = {"-fsyntax-only", "-x", "c", "-"};
     const char *const sarif[] = {"-fsyntax-only", "--diagnostics-format=sarif", "-"};
     const char *const mir[] = {"--emit-mir", "-x", "c", "-", "-o", "-"};
+    const char *const qml_mir[] = {"--emit-mir", "--qml-pass=canonicalize", "-o", "-", "-"};
     const char *const broken_args[] = {NULL};
     const char source[] = "#include <stdint.h>\n#define TEST_VALUE 347\n"
                           "int embedding_c(void) { return TEST_VALUE; }\n";
     const char broken[] = "int embedding_broken(void) { return ; + }";
+    const char identity[] = "unsigned long embedding_qml(unsigned long x) { return x + 0ul; }";
     /* The source is a length-delimited span, not a C string. */
     char bytes[sizeof(source) - 1];
     memcpy(bytes, source, sizeof(bytes));
@@ -111,6 +113,15 @@ int main(void)
     request.argc = sizeof(syntax) / sizeof(*syntax);
     CHECK(cephyr_compile(&request, &result) == CEPHYR_OK && result);
     CHECK(cephyr_result_output(result, &size) && size == 0);
+    cephyr_result_destroy(result);
+
+    request.argv = qml_mir;
+    request.argc = sizeof(qml_mir) / sizeof(*qml_mir);
+    request.stdin_data = identity;
+    request.stdin_size = sizeof(identity) - 1;
+    CHECK(cephyr_compile(&request, &result) == CEPHYR_OK && result);
+    const char *qml_output = cephyr_result_output(result, NULL);
+    CHECK(strstr(qml_output, "function embedding_qml ") && !strstr(qml_output, "\nadd "));
     cephyr_result_destroy(result);
     return 0;
 }

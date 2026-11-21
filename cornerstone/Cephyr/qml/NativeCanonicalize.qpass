@@ -1,0 +1,15 @@
+# Identities for pure, fixed-width native integer SSA operations.
+# Numeric leaves match literal values discovered through integer const defs.
+# The native host checks operation/operand types and replacement legality.
+rewrite canonicalize add_zero_right : add(?x, 0) => ?x;
+rewrite canonicalize add_zero_left : add(0, ?x) => ?x;
+rewrite canonicalize sub_zero : sub(?x, 0) => ?x;
+rewrite canonicalize mul_one_right : mul(?x, 1) => ?x;
+rewrite canonicalize mul_one_left : mul(1, ?x) => ?x;
+rewrite canonicalize or_zero_right : or(?x, 0) => ?x;
+rewrite canonicalize or_zero_left : or(0, ?x) => ?x;
+rewrite canonicalize xor_zero_right : xor(?x, 0) => ?x;
+rewrite canonicalize xor_zero_left : xor(0, ?x) => ?x;
+rewrite canonicalize shl_zero : shl(?x, 0) => ?x;
+rewrite canonicalize lshr_zero : lshr(?x, 0) => ?x;
+rewrite canonicalize ashr_zero : ashr(?x, 0) => ?x;

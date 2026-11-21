@@ -1045,6 +1045,14 @@ static int handle_if(struct lexer_state *ls)
 	while (!next_token(ls) && ls->ctok->type != NEWLINE) {
 		struct token t;
 
+		/* A reachable #elif is collected while its preceding group is
+		   inactive, so the source lexer's active-token check is off. */
+		if (!ls->condcomp && (ls->flags & C11_CONSTRAINTS)
+			&& ls->ctok->type == NAME
+			&& !strcmp(ls->ctok->name, "__VA_ARGS__")) {
+			error(ls->ctok->line,
+				"'__VA_ARGS__' is only allowed in a variadic macro replacement list");
+		}
 		if (ltww && ttMWS(ls->ctok->type)) continue;
 		ltww = ttMWS(ls->ctok->type);
 		t.type = ls->ctok->type;
@@ -1921,7 +1929,7 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 					|| condfval(ls->ifnest - 1)) {
 					error(l, "rogue #else");
 					ret = 1;
-					goto handle_warp;
+					goto handle_warp_ign;
 				}
 				condfset(ls->ifnest - 1);
 				if (ls->ifnest == 1) protect_detect.state = 0;
@@ -1945,7 +1953,7 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				if (ls->ifnest == 0) {
 					error(l, "unmatched #endif");
 					ret = 1;
-					goto handle_warp;
+					goto handle_warp_ign;
 				}
 				if ((-- ls->ifnest) == 0
 					&& protect_detect.state == 2) {
@@ -2027,6 +2035,9 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 				}
 				if (ls->condnest == ls->ifnest - 1) {
 					if (!ls->condmet) ls->condcomp = 1;
+				} else if (save_flags & C11_CONSTRAINTS) {
+					condfset(ls->ifnest - 1);
+					goto handle_warp_ign;
 				}
 				condfset(ls->ifnest - 1);
 				if (ls->ifnest == 1) protect_detect.state = 0;
@@ -2054,7 +2065,8 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 						protect_detect.state == 2)
 						protect_detect.state = 3;
 					ls->condcomp = 1;
-				}
+				} else if (save_flags & C11_CONSTRAINTS)
+					goto handle_warp_ign;
 				goto handle_warp;
 			} else if (!strcmp(ls->ctok->name, "if")
 				|| !strcmp(ls->ctok->name, "ifdef")
@@ -2107,7 +2119,10 @@ handle_warp_ign:
 	goto handle_exit;
 handle_warp:
 	while (!next_token(ls)) {
-		if (!ttWHI(ls->ctok->type) && (ls->flags & WARN_STANDARD)) {
+		if (!ttWHI(ls->ctok->type) && (save_flags & C11_CONSTRAINTS)) {
+			if (!ret) error(l, "trailing tokens in preprocessing directive");
+			ret = 1;
+		} else if (!ttWHI(ls->ctok->type) && (ls->flags & WARN_STANDARD)) {
 			warning(l, "trailing garbage in "
 				"preprocessing directive");
 		}

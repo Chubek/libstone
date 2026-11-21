@@ -229,11 +229,12 @@ suffix_error:
 	return 666;
 }
 
-static unsigned long pp_char(char *c, char *refc)
+static unsigned long pp_cchar(char **cursor, const char *refc, unsigned long escape_max)
 {
+	char *c = *cursor;
 	unsigned long r = 0;
+	int numeric = 0;
 
-	c ++;
 	if (*c == '\\') {
 		int i;
 
@@ -268,10 +269,21 @@ static unsigned long pp_char(char *c, char *refc)
 			break;
 		}
 		case 'x':
-			for (c ++; HEXAD(*c); c ++) r = (r * 16) + HVAL(*c);
+			numeric = 1;
+			c ++;
+			if (!HEXAD(*c)) {
+				error(eval_line, "hexadecimal escape requires a digit in %s", refc);
+				throw(eval_exception);
+			}
+			for (; HEXAD(*c); c ++) {
+				if (r > (ULONG_MAX - HVAL(*c)) / 16)
+					z_error(ARITH_EXCEP_CONST_O);
+				r = (r * 16) + HVAL(*c);
+			}
 			break;
 		default:
 			if (OCTAL(*c)) {
+				numeric = 1;
 				r = OVAL(*(c ++));
 				if (OCTAL(*c)) r = (r * 8) + OVAL(*(c ++));
 				if (OCTAL(*c)) r = (r * 8) + OVAL(*(c ++));
@@ -281,9 +293,6 @@ static unsigned long pp_char(char *c, char *refc)
 				throw(eval_exception);
 			}
 		}
-	} else if (*c == '\'') {
-		error(eval_line, "empty character constant");
-		throw(eval_exception);
 	} else if (eval_utf8_source && (unsigned char)*c >= 0x80) {
 		struct c11_utf8_state state = {0};
 		int status;
@@ -298,18 +307,44 @@ static unsigned long pp_char(char *c, char *refc)
 	} else {
 		r = *((unsigned char *)(c ++));
 	}
+	if (numeric && r > escape_max) {
+		error(eval_line, "numeric escape out of range in %s", refc);
+		throw(eval_exception);
+	}
 
 	if (transient_characters && r < 256) {
 		r = transient_characters[(size_t)r];
 	}
-
-	if (*c != '\'' && emit_eval_warnings) {
-		warning(eval_line, "multicharacter constant");
-	}
+	*cursor = c;
 	return r;
 }
 
-static ppval pp_strtoconst(char *refc)
+static unsigned long pp_char(char *c, const char *refc, int strict)
+{
+	unsigned long result, escape_max = ULONG_MAX;
+
+	if (strict) {
+		switch (*refc) {
+		case '\'': escape_max = 0xffUL; break;
+		case 'u': escape_max = 0xffffUL; break;
+		default: escape_max = 0xffffffffUL; break; /* L and U on LP64. */
+		}
+	}
+	if (*++c == '\'') {
+		error(eval_line, "empty character constant");
+		throw(eval_exception);
+	}
+	/* Keep ucpp's implementation-defined first-character value, but also
+	   validate the spelling and numeric escapes of every remaining c-char. */
+	result = pp_cchar(&c, refc, escape_max);
+	if (*c != '\'') {
+		if (emit_eval_warnings) warning(eval_line, "multicharacter constant");
+		while (*c && *c != '\'') pp_cchar(&c, refc, escape_max);
+	}
+	return result;
+}
+
+static ppval pp_strtoconst(char *refc, int strict)
 {
 	ppval q;
 	char *c = refc, *d;
@@ -325,9 +360,9 @@ static ppval pp_strtoconst(char *refc)
 			throw(eval_exception);
 		}
 		if (q.sign) {
-			q.u.sv = big_s_fromlong(pp_char(c, refc));
+			q.u.sv = big_s_fromlong(pp_char(c, refc, strict));
 		} else {
-			q.u.uv = big_u_fromulong(pp_char(c, refc));
+			q.u.uv = big_u_fromulong(pp_char(c, refc, strict));
 		}
 		return q;
 	}
@@ -337,6 +372,10 @@ static ppval pp_strtoconst(char *refc)
 		c ++;
 		if (*c == 'x' || *c == 'X') {
 			c ++;
+			if (!HEXAD(*c)) {
+				error(eval_line, "invalid integer constant '%s'", refc);
+				throw(eval_exception);
+			}
 			d = big_u_hexconst(c, &ru, &rs, &sp);
 		} else {
 			d = big_u_octconst(c, &ru, &rs, &sp);
@@ -352,7 +391,7 @@ static ppval pp_strtoconst(char *refc)
 				error(eval_line, "constant too large "
 					"for destination type");
 				throw(eval_exception);
-			} else {
+			} else if (!strict) {
 				warning(eval_line, "constant is so large "
 					"that it is unsigned");
 			}
@@ -373,7 +412,7 @@ static ppval pp_strtoconst(char *refc)
  */
 unsigned long strtoconst(char *c)
 {
-	ppval q = pp_strtoconst(c);
+	ppval q = pp_strtoconst(c, 0);
 
 	if (q.sign) q.u.uv = big_s_to_u(q.u.sv);
 	return big_u_toulong(q.u.uv);
@@ -382,14 +421,21 @@ unsigned long strtoconst(char *c)
 #define OP_UN(x)	((x) == LNOT || (x) == NOT || (x) == UPLUS \
 			|| (x) == UMINUS)
 
-static ppval eval_opun(int op, ppval v)
+static ppval eval_opun(int op, ppval v, int strict)
 {
 	if (op == LNOT) {
+		int nonzero = boolval(v);
 		v.sign = 1;
-		v.u.sv = big_s_fromint(big_s_lnot(v.u.sv));
+		v.u.sv = big_s_fromint(!nonzero);
 		return v;
 	}
 	if (v.sign) {
+#ifdef NATIVE_SIGNED
+		if (strict && op == UMINUS && v.u.sv == NATIVE_SIGNED_MIN) {
+			error(eval_line, "overflow on unary minus");
+			throw(eval_exception);
+		}
+#endif
 		switch (op) {
 		case NOT: v.u.sv = big_s_not(v.u.sv); break;
 		case UPLUS: break;
@@ -413,7 +459,64 @@ static ppval eval_opun(int op, ppval v)
                        || (x) == OR || (x) == LAND || (x) == LOR \
                        || (x) == COMMA)
 
-static ppval eval_opbin(int op, ppval v1, ppval v2)
+static int bin_sign(int op, int left, int right)
+{
+	switch (op) {
+	case LSH: case RSH: return left;
+	case COMMA: return right;
+	case STAR: case SLASH: case PCT: case PLUS: case MINUS:
+	case AND: case CIRC: case OR:
+		return left && right;
+	default: return 1; /* Comparison and logical operators yield int. */
+	}
+}
+
+#ifdef NATIVE_SIGNED
+/* Do not execute host operations whose C11 constant value is undefined or
+   out of range. Short-circuited operands never reach this function. */
+static void check_native_binop(int op, ppval left, ppval right, int shift)
+{
+	s_big x, y;
+	int overflow = 0;
+
+	if ((op == LSH || op == RSH) &&
+		(shift < 0 || shift >= NATIVE_UNSIGNED_BITS)) {
+		error(eval_line, "shift count out of range in #if expression");
+		throw(eval_exception);
+	}
+	if (!left.sign || (!right.sign && op != LSH)) return;
+	x = left.u.sv;
+	switch (op) {
+	case LSH:
+		overflow = x < 0 || x > (NATIVE_SIGNED_MAX >> shift);
+		break;
+	case PLUS:
+		y = right.u.sv;
+		overflow = (y > 0 && x > NATIVE_SIGNED_MAX - y)
+			|| (y < 0 && x < NATIVE_SIGNED_MIN - y);
+		break;
+	case MINUS:
+		y = right.u.sv;
+		overflow = (y < 0 && x > NATIVE_SIGNED_MAX + y)
+			|| (y > 0 && x < NATIVE_SIGNED_MIN + y);
+		break;
+	case STAR:
+		y = right.u.sv;
+		if (x > 0)
+			overflow = y > NATIVE_SIGNED_MAX / x || y < NATIVE_SIGNED_MIN / x;
+		else if (x < 0)
+			overflow = (y > 0 && x < NATIVE_SIGNED_MIN / y)
+				|| (y < 0 && x < NATIVE_SIGNED_MAX / y);
+		break;
+	}
+	if (overflow) {
+		error(eval_line, "signed overflow on '%s' in #if expression", operators_name[op]);
+		throw(eval_exception);
+	}
+}
+#endif
+
+static ppval eval_opbin(int op, ppval v1, ppval v2, int strict)
 {
 	ppval r;
 	int iv2 = 0;
@@ -466,6 +569,10 @@ static ppval eval_opbin(int op, ppval v1, ppval v2)
 		}
 		break;
 	case COMMA:
+		if (strict) {
+			error(eval_line, "evaluated comma operator in #if expression");
+			throw(eval_exception);
+		}
 		if (emit_eval_warnings) {
 			warning(eval_line, "ISO C forbids evaluated comma "
 				"operators in #if expressions");
@@ -477,6 +584,17 @@ static ppval eval_opbin(int op, ppval v1, ppval v2)
 #endif
 	}
 
+#ifdef NATIVE_SIGNED
+	if (strict) {
+		check_native_binop(op, v1, v2, iv2);
+		/* Cephyr documents arithmetic right shift, independent of host. */
+		if (op == RSH && v1.sign && v1.u.sv < 0) {
+			r.u.sv = -1 - ((-1 - v1.u.sv) >> iv2);
+			return r;
+		}
+	}
+#endif
+
 #define SBINOP(x)	if (r.sign) r.u.sv = big_s_ ## x (v1.u.sv, v2.u.sv); \
 			else r.u.uv = big_u_ ## x (v1.u.uv, v2.u.uv);
 
@@ -484,10 +602,7 @@ static ppval eval_opbin(int op, ppval v1, ppval v2)
 			(v1.u.sv, v2.u.sv)); else r.u.sv = big_s_fromint( \
 			big_u_ ## x (v1.u.uv, v2.u.uv));
 
-#define LBINOP(x)	if (v1.sign) r.u.sv = big_s_fromint( \
-			big_s_lval(v1.u.sv) x big_s_lval(v2.u.sv)); \
-			else r.u.sv = big_s_fromint( \
-			big_u_lval(v1.u.uv) x big_u_lval(v2.u.uv));
+#define LBINOP(x)	r.u.sv = big_s_fromint(boolval(v1) x boolval(v2));
 
 #define ABINOP(x)	if (r.sign) r.u.sv = big_s_ ## x (v1.u.sv, iv2); \
 			else r.u.uv = big_u_ ## x (v1.u.uv, iv2);
@@ -574,10 +689,10 @@ static int op_prec(int op)
  * -- all binary operators are left to right associative
  * -- there is only one non-unary and non-binary operator: the quest-colon
  *
- * If do_eval is 0, the evaluation of operators is not done. This is
- * for sequence point operators (&&, || and ?:).
+ * If do_eval is 0, still parse and determine the expression's type, but do
+ * not perform arithmetic. An unselected arm of ?: contributes its type.
  */
-static ppval eval_shrd(struct token_fifo *tf, int minprec, int do_eval)
+static ppval eval_shrd(struct token_fifo *tf, int minprec, int do_eval, int strict)
 {
 	ppval top;
 	struct token *ct;
@@ -586,7 +701,7 @@ static ppval eval_shrd(struct token_fifo *tf, int minprec, int do_eval)
 	if (tf->art == tf->nt) goto trunc_err;
 	ct = tf->t + (tf->art ++);
 	if (ct->type == LPAR) {
-		top = eval_shrd(tf, 0, do_eval);
+		top = eval_shrd(tf, 0, do_eval, strict);
 		if (tf->art == tf->nt) goto trunc_err;
 		ct = tf->t + (tf->art ++);
 		if (ct->type != RPAR) {
@@ -594,10 +709,11 @@ static ppval eval_shrd(struct token_fifo *tf, int minprec, int do_eval)
 			throw(eval_exception);
 		}
 	} else if (ct->type == NUMBER || ct->type == CHAR) {
-		top = pp_strtoconst(ct->name);
+		top = pp_strtoconst(ct->name, strict);
 	} else if (OP_UN(ct->type)) {
-		top = eval_opun(ct->type, eval_shrd(tf,
-			op_prec(ct->type), do_eval));
+		top = eval_shrd(tf, op_prec(ct->type), do_eval, strict);
+		if (do_eval) top = eval_opun(ct->type, top, strict);
+		else if (ct->type == LNOT) top.sign = 1;
 		goto eval_loop;
 	} else if (ttOP(ct->type)) goto rogue_op_err;
 	else {
@@ -615,20 +731,18 @@ eval_loop:
 		if (bp > minprec) {
 			ppval tr;
 
-			if ((ct->type == LOR && boolval(top))
-				|| (ct->type == LAND && !boolval(top))) {
-				tr = eval_shrd(tf, bp, 0);
-				if (do_eval) {
-					top.sign = 1;
-					if (ct->type == LOR)
-						top.u.sv = big_s_fromint(1);
-					if (ct->type == LAND)
-						top.u.sv = big_s_fromint(0);
-				}
+			int op = ct->type;
+			if (do_eval && ((op == LOR && boolval(top))
+				|| (op == LAND && !boolval(top)))) {
+				eval_shrd(tf, bp, 0, strict);
+				top.sign = 1;
+				top.u.sv = big_s_fromint(op == LOR);
 			} else {
-				tr = eval_shrd(tf, bp, do_eval);
+				tr = eval_shrd(tf, bp, do_eval, strict);
 				if (do_eval)
-					top = eval_opbin(ct->type, top, tr);
+					top = eval_opbin(op, top, tr, strict);
+				else
+					top.sign = bin_sign(op, top.sign, tr.sign);
 			}
 			goto eval_loop;
 		}
@@ -637,19 +751,26 @@ eval_loop:
 		ppval r1, r2;
 
 		if (bp >= minprec) {
-			int qv = boolval(top);
+			int qv = do_eval && boolval(top);
+			int sign;
 
-			r1 = eval_shrd(tf, bp, qv ? do_eval : 0);
+			/* The middle operand has the grammar of an expression,
+			   not a conditional-expression (it may contain commas). */
+			r1 = eval_shrd(tf, 0, qv, strict);
 			if (tf->art == tf->nt) goto trunc_err;
 			ct = tf->t + (tf->art ++);
 			if (ct->type != COLON) {
 				error(eval_line, "a colon was expected");
 				throw(eval_exception);
 			}
-			r2 = eval_shrd(tf, bp, qv ? 0 : do_eval);
+			r2 = eval_shrd(tf, bp, do_eval && !qv, strict);
+			sign = r1.sign && r2.sign;
 			if (do_eval) {
-				if (qv) top = r1; else top = r2;
+				top = qv ? r1 : r2;
+				if (top.sign && !sign)
+					top.u.uv = big_s_to_u(top.u.sv);
 			}
+			top.sign = sign;
 			goto eval_loop;
 		}
 	}
@@ -697,7 +818,8 @@ unsigned long eval_expr(struct token_fifo *tf, int *ret, unsigned long flags)
 		}
 	}
 	tf->art = sart;
-	r = eval_shrd(tf, 0, 1);
+	r = eval_shrd(tf, (flags & C11_CONSTRAINTS) ? op_prec(COMMA) : 0,
+		1, (flags & C11_CONSTRAINTS) != 0);
 	if (tf->art < tf->nt) {
 		error(eval_line, "trailing garbage in constant integral "
 			"expression");

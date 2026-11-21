@@ -12,7 +12,7 @@ with your application's privileges.
 | --- | --- | --- |
 | `CEPHYR_SDK_DESUGAR` | Raw C translation unit, before CPP | Optional replacement C text. This stage also runs for raw C with `-E`. It does not see the contents of includes and is skipped for `.i` and assembler inputs. |
 | `CEPHYR_SDK_ANALYZE` | Immutable MIR v1 text just after Cephyr has parsed, checked, and lowered the C translation unit | Additional diagnostics or rejection. Runs for C and `.i`, including `-fsyntax-only`. |
-| `CEPHYR_SDK_REWRITE` | MIR v1 text after analysis | Optional replacement MIR. Runs for `--emit-mir` and native output, not for `-fsyntax-only`. |
+| `CEPHYR_SDK_REWRITE` | MIR v1 text after analysis and any opt-in QML passes | Optional replacement MIR. Runs for `--emit-mir` and native output, not for `-fsyntax-only`. |
 | `CEPHYR_SDK_ASSEMBLY` | Final MIR v1 text for an exact target triple | Required assembly output, replacing the built-in backend for `-S`, `-c`, and linking from C/`.i`. |
 
 Each callback receives the stage, input name, resolved triple, architecture and
@@ -27,6 +27,22 @@ application guarantees that. Names must be unique within an SDK. An empty target
 selector applies to all targets except for assembly, which requires a concrete
 triple; two backend hooks cannot claim the same triple. A nonmatching backend is
 skipped and Cephyr uses its built-in backend.
+
+## Declarative QML profiles
+
+An embedding client can opt into QML without registering callbacks. Supply
+`--profile`, `--qml-pass`, `--qml-file`, `--qml-fuel`, and `--qml-param` in
+`cephyr_request.argv` exactly as on the CLI, for example
+`{"--emit-mir", "--qml-pass=canonicalize", "-o", "-", "-"}` with the source
+in `stdin_data`. C++ and Python clients pass the same arguments to `compile`.
+`--config FILE` selects a TOML file containing profiles; the usual
+`CEPHYR_CONFIG` and working-directory defaults also apply. See
+[QML optimization profiles](README.md#qml-optimization-profiles) for settings,
+precedence, dependencies, and trust requirements. The request and SDK ABI are
+unchanged.
+
+Analysis callbacks see MIR before QML. Changed QML output is structurally
+verified before any SDK rewrite callback runs. This is not an equivalence proof.
 
 ## Text formats and locations
 

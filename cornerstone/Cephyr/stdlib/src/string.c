@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <wchar.h>
 
 void *memcpy(void *restrict dest, const void *restrict src, size_t count)
 {
@@ -326,6 +327,217 @@ char *strerror(int errnum)
     case ERANGE: return "Numerical result out of range";
     case ENOSYS: return "Function not implemented";
     case EOVERFLOW: return "Value too large for data type";
+    case EILSEQ: return "Invalid or incomplete multibyte character";
     default: return "Unknown error";
     }
+}
+
+wchar_t *wcscpy(wchar_t *restrict dest, const wchar_t *restrict src)
+{
+    wchar_t *result = dest;
+    do {
+        *dest++ = *src;
+    } while (*src++ != 0);
+    return result;
+}
+
+wchar_t *wcsncpy(wchar_t *restrict dest, const wchar_t *restrict src, size_t n)
+{
+    size_t i = 0;
+    while (i < n && src[i] != 0) {
+        dest[i] = src[i];
+        ++i;
+    }
+    while (i < n)
+        dest[i++] = 0;
+    return dest;
+}
+
+wchar_t *wmemcpy(wchar_t *restrict dest, const wchar_t *restrict src, size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+        dest[i] = src[i];
+    return dest;
+}
+
+wchar_t *wmemmove(wchar_t *dest, const wchar_t *src, size_t n)
+{
+    if (dest == src)
+        return dest;
+    if ((uintptr_t)dest < (uintptr_t)src) {
+        for (size_t i = 0; i < n; ++i)
+            dest[i] = src[i];
+    } else {
+        while (n != 0) {
+            --n;
+            dest[n] = src[n];
+        }
+    }
+    return dest;
+}
+
+wchar_t *wcscat(wchar_t *restrict dest, const wchar_t *restrict src)
+{
+    wcscpy(dest + wcslen(dest), src);
+    return dest;
+}
+
+wchar_t *wcsncat(wchar_t *restrict dest, const wchar_t *restrict src, size_t n)
+{
+    wchar_t *end = dest + wcslen(dest);
+    while (n != 0 && *src != 0) {
+        *end++ = *src++;
+        --n;
+    }
+    *end = 0;
+    return dest;
+}
+
+static int wide_compare(wchar_t a, wchar_t b)
+{
+    return (a > b) - (a < b);
+}
+
+int wcscmp(const wchar_t *a, const wchar_t *b)
+{
+    while (*a != 0 && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return wide_compare(*a, *b);
+}
+
+int wcscoll(const wchar_t *a, const wchar_t *b)
+{
+    return wcscmp(a, b);
+}
+
+int wcsncmp(const wchar_t *a, const wchar_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; ++i) {
+        if (a[i] != b[i])
+            return wide_compare(a[i], b[i]);
+        if (a[i] == 0)
+            break;
+    }
+    return 0;
+}
+
+size_t wcsxfrm(wchar_t *restrict dest, const wchar_t *restrict src, size_t n)
+{
+    /* Numeric ordering of wide characters is the C locale's collation. */
+    size_t len = wcslen(src);
+    if (len < n)
+        wmemcpy(dest, src, len + 1);
+    return len;
+}
+
+int wmemcmp(const wchar_t *a, const wchar_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; ++i) {
+        if (a[i] != b[i])
+            return wide_compare(a[i], b[i]);
+    }
+    return 0;
+}
+
+wchar_t *wcschr(const wchar_t *str, wchar_t wc)
+{
+    for (;;) {
+        if (*str == wc)
+            return (wchar_t *)str;
+        if (*str == 0)
+            return NULL;
+        ++str;
+    }
+}
+
+size_t wcscspn(const wchar_t *str, const wchar_t *reject)
+{
+    size_t n = 0;
+    while (str[n] != 0 && wcschr(reject, str[n]) == NULL)
+        ++n;
+    return n;
+}
+
+wchar_t *wcspbrk(const wchar_t *str, const wchar_t *accept)
+{
+    size_t n = wcscspn(str, accept);
+    return str[n] == 0 ? NULL : (wchar_t *)str + n;
+}
+
+wchar_t *wcsrchr(const wchar_t *str, wchar_t wc)
+{
+    const wchar_t *last = NULL;
+    do {
+        if (*str == wc)
+            last = str;
+    } while (*str++ != 0);
+    return (wchar_t *)last;
+}
+
+size_t wcsspn(const wchar_t *str, const wchar_t *accept)
+{
+    size_t n = 0;
+    while (str[n] != 0 && wcschr(accept, str[n]) != NULL)
+        ++n;
+    return n;
+}
+
+wchar_t *wcsstr(const wchar_t *str, const wchar_t *needle)
+{
+    size_t len = wcslen(needle);
+    if (len == 0)
+        return (wchar_t *)str;
+    for (; *str != 0; ++str) {
+        if (*str == *needle && wcsncmp(str, needle, len) == 0)
+            return (wchar_t *)str;
+    }
+    return NULL;
+}
+
+wchar_t *wcstok(wchar_t *restrict str, const wchar_t *restrict delimiters,
+                wchar_t **restrict state)
+{
+    if (str == NULL)
+        str = *state;
+    if (str != NULL) {
+        str += wcsspn(str, delimiters);
+        if (*str != 0) {
+            wchar_t *end = str + wcscspn(str, delimiters);
+            if (*end != 0) {
+                *end = 0;
+                *state = end + 1;
+            } else {
+                *state = NULL;
+            }
+            return str;
+        }
+    }
+    *state = NULL;
+    return NULL;
+}
+
+wchar_t *wmemchr(const wchar_t *str, wchar_t wc, size_t n)
+{
+    for (size_t i = 0; i < n; ++i) {
+        if (str[i] == wc)
+            return (wchar_t *)str + i;
+    }
+    return NULL;
+}
+
+size_t wcslen(const wchar_t *str)
+{
+    size_t n = 0;
+    while (str[n] != 0)
+        ++n;
+    return n;
+}
+
+wchar_t *wmemset(wchar_t *dest, wchar_t wc, size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+        dest[i] = wc;
+    return dest;
 }

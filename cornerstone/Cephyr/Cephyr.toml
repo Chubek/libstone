@@ -65,3 +65,14 @@ trigraphs = true
 keep_comments = false
 line_markers = true
 hosted = true
+
+# Optional QML optimization profile; none is selected by default.
+# Select one with --profile NAME or uncomment the [qml] selector.
+# [qml]
+# profile = "optimizing"
+#
+# [profiles.optimizing]
+# passes = ["canonicalize", "strength_reduce"]
+# files = [] # Relative to this file; add trusted QML rule fragments here.
+# fuel = 4096
+# parameters = { canonicalize = { fuel = 2048 } }

@@ -25,6 +25,7 @@ public:
 
     void visit(IdentASTNode *n);
     void visit(IntegerConstASTNode *n);
+    void visit(EnumeratorDeclASTNode *n);
     void visit(StringConstASTNode *n);
     void visit(CharConstASTNode *n);
     void visit(SizeOfExprASTNode *n);

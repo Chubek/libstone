@@ -119,8 +119,6 @@ Constant converted(Constant value, CType type) {
     return value;
 }
 
-std::optional<Constant> parse_integer_literal(Node *, const Preprocessed &,
-                                              Diagnostics &);
 struct IceAnalysis {
     std::map<Node *, Constant> sizes;
     std::map<Node *, Node *> selections;
@@ -156,18 +154,6 @@ bool digit_value(char character, unsigned &digit) {
     else
         return false;
     return true;
-}
-
-bool identifier_spelling(std::string_view text) {
-    if (text.empty())
-        return false;
-    const auto first = static_cast<unsigned char>(text.front());
-    if (text.front() != '_' && !std::isalpha(first))
-        return false;
-    return std::all_of(text.begin() + 1, text.end(), [](char character) {
-        const auto value = static_cast<unsigned char>(character);
-        return character == '_' || std::isalnum(value);
-    });
 }
 
 struct LiteralSuffix {
@@ -316,32 +302,77 @@ std::optional<Constant> parse_integer_spelling(
     return std::nullopt;
 }
 
-std::optional<Constant> parse_integer_literal(Node *node,
-                                              const Preprocessed &source,
-                                              Diagnostics &diagnostics) {
+std::optional<Constant> integer_token_value(Node *node, const TypeContext &context) {
     if (!present(node) || node->getKind() != cparser::NK_INTEGER_CONST)
         return std::nullopt;
     auto *literal = static_cast<cparser::IntegerConstASTNode *>(node);
-    const auto original = spelling(literal);
-    if (!original.empty()) {
-        // The parser uses identifier spelling for enumerators, but its value
-        // is not reliable: it truncates initializers and numbers implicit
-        // enumerators independently of the preceding explicit value.
-        if (identifier_spelling(original)) {
-            constant_error(node, source, diagnostics,
-                           "enumerator values are not supported by the C parser");
-            return std::nullopt;
-        }
-        return parse_integer_spelling(node, original, source, diagnostics);
+    if (const auto *enumerator = literal->getEnumerator()) {
+        const auto &values = context.unit.enumeration_constants;
+        const auto found = values.find(enumerator);
+        if (found != values.end())
+            return Constant{integer_type(), found->second};
+        constant_error(node, context.source, context.diagnostics,
+                       "no constant value for enumerator '" +
+                       std::string(enumerator->getName()) + "'");
+        return std::nullopt;
     }
+    const auto original = spelling(literal);
+    if (!original.empty())
+        return parse_integer_spelling(node, original, context.source, context.diagnostics);
     CType type = integer_type();
     const auto value = literal->getValue();
     if (normalize(value, type) != value) {
-        constant_error(node, source, diagnostics,
+        constant_error(node, context.source, context.diagnostics,
                        "integer constant without token spelling does not fit in int");
         return std::nullopt;
     }
     return Constant{type, value};
+}
+
+bool evaluate_enumerators(Node *body, const TypeContext &context) {
+    if (!present(body))
+        return true;
+    const auto &members = static_cast<cparser::SequenceASTNode *>(body)->getElements();
+    auto &values = context.unit.enumeration_constants;
+    if (members.empty() || values.contains(members.back()))
+        return true;
+
+    constexpr auto minimum = std::numeric_limits<std::int32_t>::min();
+    constexpr auto maximum = std::numeric_limits<std::int32_t>::max();
+    // Use a widened value so even INT_MAX + 1 can be diagnosed without
+    // overflowing. Explicit initializers reset the sequence (6.7.2.2p2-3).
+    std::int64_t next = 0;
+    for (Node *member : members) {
+        auto *enumerator = static_cast<cparser::EnumeratorDeclASTNode *>(member);
+        const auto diagnose = [&](std::string_view suffix) {
+            constant_error(member, context.source, context.diagnostics,
+                           "enumerator '" + std::string(enumerator->getName()) + "' " +
+                           std::string(suffix));
+        };
+        if (Node *initializer = enumerator->getInitializer(); present(initializer)) {
+            const auto errors = context.diagnostics.error_count();
+            const auto constant = integer_constant(initializer, context);
+            if (!constant) {
+                if (context.diagnostics.error_count() == errors)
+                    diagnose("requires an integer constant expression");
+                return false;
+            }
+            if (constant->type.is_signed) {
+                (void)signed_value(*constant, next);
+            } else if (constant->value <= static_cast<std::uint64_t>(maximum)) {
+                next = static_cast<std::int64_t>(constant->value);
+            } else {
+                next = std::int64_t{maximum} + 1;
+            }
+        }
+        if (next < minimum || next > maximum) {
+            diagnose("has a value not representable as int");
+            return false;
+        }
+        values.emplace(member, static_cast<std::uint64_t>(next));
+        ++next;
+    }
+    return true;
 }
 
 bool append_utf8(std::string &output, std::uint32_t value) {
@@ -621,10 +652,11 @@ bool has_ice_form(Node *node, const TypeContext &context, IceAnalysis &analysis)
     case cparser::NK_CHAR_CONST:
         return true;
     case cparser::NK_SIZEOF_EXPR:
-    case cparser::NK_ALIGNOF_EXPR: {
+    case cparser::NK_ALIGNOF_EXPR:
+    case cparser::NK_OFFSETOF_EXPR: {
         // Validate the types even in an unselected conditional arm. Cache
         // the result so the value evaluator need not inspect the operand again.
-        const auto size = size_or_alignment(node, context);
+        const auto size = layout_constant(node, context);
         if (!size)
             return false;
         analysis.sizes.emplace(node, *size);
@@ -723,7 +755,7 @@ std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
         return std::nullopt;
     switch (node->getKind()) {
     case cparser::NK_INTEGER_CONST: {
-        const auto literal = parse_integer_literal(node, context.source, context.diagnostics);
+        const auto literal = integer_token_value(node, context);
         return literal ? std::optional<CType>(literal->type) : std::nullopt;
     }
     case cparser::NK_CHAR_CONST:
@@ -796,6 +828,7 @@ std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
     }
     case cparser::NK_SIZEOF_EXPR:
     case cparser::NK_ALIGNOF_EXPR:
+    case cparser::NK_OFFSETOF_EXPR:
         return integer_type(64, false, long_rank);
     default:
         return std::nullopt;
@@ -1027,7 +1060,7 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
         return std::nullopt;
     switch (node->getKind()) {
     case cparser::NK_INTEGER_CONST:
-        return parse_integer_literal(node, source, diagnostics);
+        return integer_token_value(node, context);
     case cparser::NK_CHAR_CONST:
         return parse_character_literal(node, source, diagnostics);
     case cparser::NK_GENERIC_EXPR:
@@ -1070,6 +1103,7 @@ std::optional<Constant> evaluate_ice(Node *node, const TypeContext &context,
     }
     case cparser::NK_SIZEOF_EXPR:
     case cparser::NK_ALIGNOF_EXPR:
+    case cparser::NK_OFFSETOF_EXPR:
         return analysis.sizes.at(node);
     case cparser::NK_LSHIFT_EXPR:
     case cparser::NK_RSHIFT_EXPR:
@@ -1274,8 +1308,16 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
         type.is_plain_char = integer->isPlainChar();
         return qualify(type);
     }
-    case cparser::NK_ENUMERAL_TYPE:
-        return qualify(integer_type());
+    case cparser::NK_ENUMERAL_TYPE: {
+        auto *enumeration = static_cast<cparser::EnumeralTypeASTNode *>(node);
+        if (!evaluate_enumerators(enumeration->getBody(), context))
+            return {};
+        // C11 6.7.2.2p4: choose int as the compatible type. Keep identity
+        // for comparisons between enumerated types, not for enumerators.
+        auto type = integer_type();
+        type.enum_identity = enumeration->getIdentity();
+        return qualify(type);
+    }
     case cparser::NK_POINTER_TYPE: {
         auto *pointer = static_cast<cparser::PointerTypeASTNode *>(node);
         CType pointee =
@@ -1442,7 +1484,7 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
 void bind_typedef_bounds(Node *node, const TypeContext &context) {
     // File-scope typedefs of otherwise unsupported types have historically
     // been allowed if they go unused. Force resolution for array bounds and
-    // record definitions. Also resolve arrays of records even without a bound:
+    // record/enum definitions. Also resolve arrays of records even without a bound:
     // a record containing a flexible array is already disallowed as an element.
     const auto needs_binding = [](auto &&self, Node *type) -> bool {
         const AnalysisDepth depth(semantic_depth);
@@ -1474,6 +1516,8 @@ void bind_typedef_bounds(Node *node, const TypeContext &context) {
             return present(static_cast<cparser::StructTypeASTNode *>(type)->getBody());
         case cparser::NK_UNION_TYPE:
             return present(static_cast<cparser::UnionTypeASTNode *>(type)->getBody());
+        case cparser::NK_ENUMERAL_TYPE:
+            return present(static_cast<cparser::EnumeralTypeASTNode *>(type)->getBody());
         default:
             return false;
         }
@@ -1486,6 +1530,7 @@ CType promote(const CType &type) {
     if (!type.integer())
         return {};
     CType value = unqualified(type);
+    value.enum_identity = nullptr;
     if (value.rank >= int_rank)
         return value;
     if (value.is_signed || value.bits < 32)
@@ -1532,7 +1577,9 @@ bool compatible(const CType &left, const CType &right) {
     case CType::Kind::void_:
         return true;
     case CType::Kind::integer:
-        return left.bits == right.bits && left.rank == right.rank &&
+        return (!left.enum_identity || !right.enum_identity ||
+                left.enum_identity == right.enum_identity) &&
+               left.bits == right.bits && left.rank == right.rank &&
                left.is_signed == right.is_signed && left.is_plain_char == right.is_plain_char;
     case CType::Kind::real:
         return left.bits == right.bits;
@@ -1771,8 +1818,54 @@ std::uint64_t normalize(std::uint64_t value, const CType &type) {
                                     : normalized;
 }
 
-std::optional<Constant> size_or_alignment(Node *node, const TypeContext &context) {
+static std::optional<Constant> member_offset(Node *node, const TypeContext &context) {
+    auto *offset = static_cast<cparser::OffsetOfExprASTNode *>(node);
+    auto type = read_type(offset->getType(), context, true);
+    const auto error = [&](Node *at, const char *message) -> std::optional<Constant> {
+        type_error(at, context.source, context.diagnostics, message);
+        return std::nullopt;
+    };
+    if (!type.valid())
+        return std::nullopt;
+    if (type.kind != CType::Kind::record || !size_of(type))
+        return error(node, "offsetof requires a complete struct or union type");
+
+    std::uint64_t bytes = 0;
+    for (Node *part : elements(offset->getDesignators())) {
+        if (part->getKind() == cparser::NK_IDENT_NODE) {
+            const auto *member = find_member(type, identifier(part));
+            if (!member)
+                return error(part, "offsetof designator names no such record member");
+            bytes += member->offset;
+            type = member->type;
+        } else {
+            if (type.kind != CType::Kind::array || !type.element || !type.count)
+                return error(part, "offsetof subscript requires an array of known bound");
+            const auto errors = context.diagnostics.error_count();
+            auto *expr = static_cast<cparser::ArrayDesignatorASTNode *>(part)->getIndex();
+            const auto index = integer_constant(expr, context);
+            if (!index || !index->type.integer()) {
+                if (context.diagnostics.error_count() != errors)
+                    return std::nullopt;
+                return error(part, "offsetof subscript requires an integer constant expression");
+            }
+            const auto i = normalize(index->value, index->type);
+            const auto size = size_of(*type.element);
+            if (i >= type.count || !size)
+                return error(part, "offsetof subscript is outside the array bound");
+            // The layout of the complete containing type bounds the sum.
+            bytes += i * *size;
+            const auto element = type.element; // Keep it alive while copying the type.
+            type = *element;
+        }
+    }
+    return Constant{integer_type(64, false, long_rank), bytes};
+}
+
+std::optional<Constant> layout_constant(Node *node, const TypeContext &context) {
     const AnalysisDepth depth(semantic_depth);
+    if (node->getKind() == cparser::NK_OFFSETOF_EXPR)
+        return member_offset(node, context);
     const bool alignment = node->getKind() == cparser::NK_ALIGNOF_EXPR;
     Node *operand = alignment ? static_cast<cparser::AlignOfExprASTNode *>(node)->getExpr()
                               : static_cast<cparser::SizeOfExprASTNode *>(node)->getExpr();
@@ -1803,6 +1896,49 @@ std::optional<Constant> integer_constant(Node *node, const TypeContext &context)
     IceAnalysis analysis;
     return has_ice_form(node, context, analysis) ? evaluate_ice(node, context, analysis)
                                                  : std::nullopt;
+}
+
+std::optional<unsigned> alignment_specifiers(Node *specifiers, const TypeContext &context) {
+    if (!present(specifiers))
+        return 0;
+    if (auto found = context.unit.alignment_values.find(specifiers);
+        found != context.unit.alignment_values.end())
+        return found->second;
+
+    const auto evaluate = [&]() -> std::optional<unsigned> {
+        unsigned strictest = 0;
+        for (Node *operand : elements(specifiers)) {
+            const auto errors = context.diagnostics.error_count();
+            const auto value = integer_constant(operand, context);
+            if (!value || !value->type.integer()) {
+                if (context.diagnostics.error_count() == errors)
+                    type_error(operand, context.source, context.diagnostics,
+                               "_Alignas requires an integer constant expression");
+                return {};
+            }
+            const auto bytes = normalize(value->value, value->type);
+            if (bytes > max_object_alignment || (bytes != 0 && (bytes & (bytes - 1)) != 0)) {
+                type_error(operand, context.source, context.diagnostics,
+                           "_Alignas requires a supported alignment (0, 1, 2, 4, 8, or 16)");
+                return {};
+            }
+            strictest = std::max(strictest, static_cast<unsigned>(bytes));
+        }
+        return strictest;
+    };
+    const auto value = evaluate();
+    if (!context.speculative)
+        context.unit.alignment_values.emplace(specifiers, value);
+    return value;
+}
+
+bool check_object_alignment(unsigned requested, unsigned natural, Node *node,
+                            const TypeContext &context) {
+    if (requested == 0 || requested >= natural)
+        return true;
+    type_error(node, context.source, context.diagnostics,
+               "_Alignas cannot weaken the natural alignment");
+    return false;
 }
 
 std::optional<Constant> real_constant(Node *node, const TypeContext &context, bool require_native) {

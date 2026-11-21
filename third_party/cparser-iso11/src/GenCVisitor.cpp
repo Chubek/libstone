@@ -32,7 +32,20 @@ void GenCVisitor::visit(IdentASTNode *n)
 
 void GenCVisitor::visit(IntegerConstASTNode *n)
 {
-    std::cout << n->getValue();
+    if (n->getEnumerator())
+        std::cout << n->getSpelling();
+    else
+        std::cout << n->getValue();
+}
+
+void GenCVisitor::visit(EnumeratorDeclASTNode *n)
+{
+    std::cout << n->getName();
+    if (n->getInitializer() != NULL_AST_NODE)
+    {
+        std::cout << " = ";
+        n->getInitializer()->accept(this);
+    }
 }
 
 void GenCVisitor::visit(StringConstASTNode *n)
@@ -729,15 +742,18 @@ void GenCVisitor::visit(EnumeralTypeASTNode *n)
 {
     std::cout << "enum ";
     n->getName()->accept(this);
-    printTab(_level);
-    std::cout << std::endl << "{" << std::endl;
-    _level++;
-    _inList++;
-    n->getBody()->accept(this);
-    _inList--;
-    _level--;
-    printTab(_level);
-    std::cout << "}";
+    if (n->getBody() != NULL_AST_NODE)
+    {
+        std::cout << " {";
+        const auto &members = static_cast<SequenceASTNode *>(n->getBody())->getElements();
+        for (std::size_t i = 0; i < members.size(); ++i)
+        {
+            if (i)
+                std::cout << ", ";
+            members[i]->accept(this);
+        }
+        std::cout << "}";
+    }
 }
 
 void GenCVisitor::visit(PointerTypeASTNode *n)

@@ -17,7 +17,10 @@
 #define SEEK_END 2
 
 typedef struct __cephyr_FILE FILE;
-typedef long fpos_t;
+typedef struct {
+    long __offset;
+    unsigned int __state;
+} fpos_t;
 
 extern FILE *stdin;
 extern FILE *stdout;

@@ -242,6 +242,16 @@ void check_directives(const std::filesystem::path &directory) {
              "#define BAD u8\"direct.h\"\n#include BAD\n",
              "#if 1\n#else\n#elif 1\n#endif\n",
              "#if 1\n#else\n#else\n#endif\n",
+             "#if 1\n#else extra\n#endif\n", "#if 0\n#else extra\n#endif\n",
+             "#if 0\n#endif extra\n", "#if 1\n#endif extra\n",
+             "#ifdef X extra\n#endif\n", "#ifndef X extra\n#endif\n",
+             "#undef X extra\n", "#define X+1\n",
+             "#define X 1\n#define X() 1\n", "#define X() 1\n#define X 1\n",
+             "#define X(a,b) a\n#define X(a) a\n",
+             "#define X(...) 1\n#define X() 1\n",
+             "#define X __VA_ARGS__\n", "#define X(__VA_ARGS__) 1\n",
+             "int __VA_ARGS__;\n", "#if 0\n#elif __VA_ARGS__\n#endif\n",
+             "#define X(...) __VA_ARGS__\nX(1); __VA_ARGS__\n",
              "#undef defined\n", "#undef __STDC_VERSION__\n",
              "#define __STDC_HOSTED__ 1\n", "#undef __STDC_NO_THREADS__\n",
              "#define __STDC_IEC_559__ 1\n", "#define __STDC_UTF_32__ 1\n"}) {
@@ -257,6 +267,89 @@ void check_directives(const std::filesystem::path &directory) {
                                source, {}, message));
     assert(rendered(message).find("#error MESSAGE \"detail\"") !=
            std::string::npos);
+
+    // ucpp's compact replacement lists cross to a two-byte parameter index
+    // after 127; redefining the macro must compare that index without changing it.
+    std::string many = "#define MANY(";
+    for (unsigned parameter = 0; parameter < 129; ++parameter) {
+        if (parameter)
+            many += ",";
+        many += "p" + std::to_string(parameter);
+    }
+    many += ") ";
+    const std::string definition = many + "p128\n";
+    cephyr::Diagnostics identical;
+    assert(cephyr::preprocess(definition + definition, source, options, identical));
+    cephyr::Diagnostics changed;
+    assert(!cephyr::preprocess(definition + many + "p127\n", source, options, changed));
+    assert(changed.error_count() == 1);
+    assert(rendered(changed).find("redefined unidentically") != std::string::npos);
+}
+
+void check_conditional_expressions() {
+    cephyr::Diagnostics diagnostics;
+    const auto result = cephyr::preprocess(
+        "#if 0\n"
+        "#ifdef bad tokens\n"
+        "#else bad tokens\n"
+        "#endif bad tokens\n"
+        "#define BAD __VA_ARGS__\n"
+        "#endif\n"
+        "#define V(head, ...) head __VA_ARGS__\n"
+        "#define V(head,...) /* ignored */ head __VA_ARGS__ /* ignored */\n"
+        "#if (1 ? -1 : 1U / 0) != 18446744073709551615U\n"
+        "#error an unselected operand still contributes its signedness\n"
+        "#endif\n"
+        "#if (0 ? 1U << 64 : -1) < 0 || (1 ? -1 : (1 ? 1U : 0)) < 0\n"
+        "#error the conditional type depends on both arms\n"
+        "#endif\n"
+        "#if (1 ? -1 : !1U) >= 0 || (1 ? -1 : 1 << 0U) >= 0\n"
+        "#error logical negation yields int and a shift has its left operand type\n"
+        "#endif\n"
+        "#if !(1 || (1, 2)) || (0 ? 1, 2 : 3) != 3 || (1 ? 3 : (1, 2)) != 3\n"
+        "#error an unevaluated comma operator is permitted\n"
+        "#endif\n"
+        "#if (1 ? 2 : -(-9223372036854775807 - 1)) != 2 || (-3 >> 1) != -2\n"
+        "#error dead arithmetic must not be performed\n"
+        "#endif\n"
+        "#if 0x8000000000000000 < 0 || -1U != 18446744073709551615U\n"
+        "#error expected 64-bit phase-4 integer types\n"
+        "#endif\n"
+        "#if !1U || !(1U && 2) || !(1 && 2U)\n"
+        "#error logical operators work across signedness\n"
+        "#endif\n"
+        "#if '\\377' != 255 || u'\\xffff' != 65535 || U'\\xffffffff' != 4294967295U\n"
+        "#error maximum numeric escape values are valid\n"
+        "#endif\n"
+        "int V(value, );\n",
+        "if-expressions.c", {}, diagnostics);
+    assert(result);
+    assert(rendered(diagnostics).empty());
+    assert(result->text.find("value") != std::string::npos);
+
+    for (const auto &[expression, message] : {
+             std::pair{"(1, 2)", "evaluated comma operator"},
+             std::pair{"1 ? 1, 2 : 3", "evaluated comma operator"},
+             std::pair{"(1U << 64)", "shift count out of range"},
+             std::pair{"(1 >> -1)", "shift count out of range"},
+             std::pair{"1 << 63", "signed overflow"},
+             std::pair{"9223372036854775807 + 1", "signed overflow"},
+             std::pair{"-9223372036854775807 - 2", "signed overflow"},
+             std::pair{"9223372036854775807 * 2", "signed overflow"},
+             std::pair{"-(-9223372036854775807 - 1)", "overflow on unary minus"},
+             std::pair{"(-9223372036854775807 - 1) % -1", "overflow on division"},
+             std::pair{"1 || 0xU", "invalid integer constant"},
+             std::pair{"'\\x'", "hexadecimal escape requires a digit"},
+             std::pair{"'a\\q'", "invalid escape sequence"},
+             std::pair{"'\\400'", "numeric escape out of range"},
+             std::pair{"u'\\x10000'", "numeric escape out of range"},
+             std::pair{"U'\\x100000000'", "numeric escape out of range"}}) {
+        cephyr::Diagnostics rejected;
+        assert(!cephyr::preprocess(std::string("#if ") + expression + "\n#endif\n",
+                                   "if-expressions.c", {}, rejected));
+        assert(rejected.error_count() == 1);
+        assert(rendered(rejected).find(message) != std::string::npos);
+    }
 }
 
 void check_pragmas() {
@@ -302,6 +395,7 @@ int main() {
     check_translation_phases(temporary.path);
     check_extended_source(temporary.path);
     check_directives(temporary.path);
+    check_conditional_expressions();
     check_pragmas();
     write(temporary.path / "local.h", "int from_header = VALUE;\n");
     write(temporary.path / "forced.h", "#define FORCED 9\n");

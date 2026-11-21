@@ -1,0 +1,4 @@
+# MachineIR integer mul and add both wrap at the same width. Reusing an
+# immutable SSA value does not repeat the C expression that produced it.
+rewrite strength_reduce double_right : mul(?x, 2) => add(?x, ?x);
+rewrite strength_reduce double_left : mul(2, ?x) => add(?x, ?x);

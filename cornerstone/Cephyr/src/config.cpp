@@ -606,6 +606,105 @@ bool read_preprocess(Config &config, const toml_table_t *table,
     return valid;
 }
 
+bool read_qml(Config &config, const toml_table_t *table,
+              const SourceMap &source, Diagnostics &diagnostics) {
+    bool valid = known_keys(table, {"profile"}, "qml", source, diagnostics);
+    if (auto name = string_value(table, "profile", "qml", source, diagnostics, valid)) {
+        if (validate_text(*name, "qml.profile", "qml", "profile", source, diagnostics))
+            config.qml_profile = std::move(*name);
+        else
+            valid = false;
+    }
+    return valid;
+}
+
+std::optional<unsigned> qml_fuel(const toml_table_t *table, std::string_view section,
+                                 const SourceMap &source, Diagnostics &diagnostics, bool &valid) {
+    if (!has(table, "fuel"))
+        return std::nullopt;
+    const auto fuel = toml_int_in(table, "fuel");
+    if (!fuel.ok || fuel.u.i <= 0 ||
+        static_cast<std::uintmax_t>(fuel.u.i) > std::numeric_limits<unsigned>::max()) {
+        error(diagnostics, source, "cephyr.config.value",
+              "configuration key '" + std::string(section) + ".fuel' must be a positive unsigned integer",
+              section, "fuel");
+        valid = false;
+        return std::nullopt;
+    }
+    return static_cast<unsigned>(fuel.u.i);
+}
+
+bool read_qml_parameters(QmlProfile &profile, const toml_table_t *entry,
+                         const std::string &section, const SourceMap &source,
+                         Diagnostics &diagnostics) {
+    if (!has(entry, "parameters"))
+        return true;
+    const auto *table = toml_table_in(entry, "parameters");
+    if (!table) {
+        error(diagnostics, source, "cephyr.config.type",
+              "configuration key '" + section + ".parameters' must be a table", section, "parameters");
+        return false;
+    }
+    bool valid = true;
+    for (int index = 0; const char *name = toml_key_in(table, index); ++index) {
+        const std::string phase = section + ".parameters." + name;
+        if (!validate_text(name, phase, section, "parameters", source, diagnostics)) {
+            valid = false;
+            continue;
+        }
+        const auto *parameter = toml_table_in(table, name);
+        if (!parameter) {
+            error(diagnostics, source, "cephyr.config.type",
+                  "configuration key '" + phase + "' must be a table", section, "parameters");
+            valid = false;
+            continue;
+        }
+        valid = known_keys(parameter, {"fuel"}, phase, source, diagnostics) && valid;
+        if (auto fuel = qml_fuel(parameter, phase, source, diagnostics, valid))
+            profile.phase_fuel.insert_or_assign(name, *fuel);
+    }
+    return valid;
+}
+
+bool read_profiles(Config &config, const toml_table_t *table,
+                   const std::filesystem::path &base, const SourceMap &source,
+                   Diagnostics &diagnostics) {
+    bool valid = true;
+    for (int index = 0; const char *name = toml_key_in(table, index); ++index) {
+        const std::string section = "profiles." + std::string(name);
+        if (!validate_text(name, section, "profiles", name, source, diagnostics)) {
+            valid = false;
+            continue;
+        }
+        const auto *entry = toml_table_in(table, name);
+        if (!entry) {
+            error(diagnostics, source, "cephyr.config.type",
+                  "configuration key '" + section + "' must be a table", "profiles", name);
+            valid = false;
+            continue;
+        }
+        valid = known_keys(entry, {"passes", "files", "fuel", "parameters"}, section, source, diagnostics) && valid;
+        QmlProfile profile;
+        if (auto passes = string_array(entry, "passes", section, source, diagnostics, valid)) {
+            for (const auto &pass : *passes)
+                valid = validate_text(pass, section + ".passes", section, "passes", source, diagnostics) && valid;
+            profile.passes = std::move(*passes);
+        }
+        if (auto files = string_array(entry, "files", section, source, diagnostics, valid)) {
+            for (const auto &file : *files) {
+                if (validate_text(file, section + ".files", section, "files", source, diagnostics))
+                    profile.files.push_back(resolve_path(base, file));
+                else
+                    valid = false;
+            }
+        }
+        profile.fuel = qml_fuel(entry, section, source, diagnostics, valid);
+        valid = read_qml_parameters(profile, entry, section, source, diagnostics) && valid;
+        config.qml_profiles.insert_or_assign(name, std::move(profile));
+    }
+    return valid;
+}
+
 bool validate_config(const Config &config, const SourceMap &source,
                      Diagnostics &diagnostics) {
     bool valid = true;
@@ -761,7 +860,7 @@ bool load_config(Config &config, const std::filesystem::path &path,
         root.get(),
         {"target", "representation", "assembler_style", "stdlib",
          "cache_enabled", "static_link", "paths", "tools", "flags",
-         "preprocess"},
+         "preprocess", "qml", "profiles"},
         {}, source, diagnostics);
     Config candidate = config;
 
@@ -805,6 +904,11 @@ bool load_config(Config &config, const std::filesystem::path &path,
             table_value(root.get(), "preprocess", source, diagnostics, valid))
         valid =
             read_preprocess(candidate, table, base, source, diagnostics) && valid;
+
+    if (auto *table = table_value(root.get(), "qml", source, diagnostics, valid))
+        valid = read_qml(candidate, table, source, diagnostics) && valid;
+    if (auto *table = table_value(root.get(), "profiles", source, diagnostics, valid))
+        valid = read_profiles(candidate, table, base, source, diagnostics) && valid;
 
     valid = validate_config(candidate, source, diagnostics) && valid;
     if (!valid)

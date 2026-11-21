@@ -24,6 +24,7 @@
 #define LLONG_MIN (-9223372036854775807LL - 1LL)
 #define LLONG_MAX 9223372036854775807LL
 #define ULLONG_MAX 18446744073709551615ULL
-#define MB_LEN_MAX 4
+/* The bundled runtime supports only the single-byte C locale. */
+#define MB_LEN_MAX 1
 
 #endif

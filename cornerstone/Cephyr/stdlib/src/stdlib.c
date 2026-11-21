@@ -7,8 +7,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
-static int digit_value(unsigned char ch)
+static int digit_value(wint_t ch)
 {
     if (ch >= '0' && ch <= '9')
         return (int)(ch - '0');
@@ -19,70 +20,82 @@ static int digit_value(unsigned char ch)
     return -1;
 }
 
+static wint_t integer_char(const void *str, int wide, size_t index)
+{
+    return wide ? (wint_t)((const wchar_t *)str)[index]
+                : ((const unsigned char *)str)[index];
+}
+
+static int integer_space(wint_t c)
+{
+    return c <= 0x7f && isspace((int)c);
+}
+
+/* The narrow and wide integer grammars are identical in the C locale.
+   Index whole elements so a non-ASCII wide value cannot become a digit
+   by truncation, and so the original end pointer needs no byte conversion. */
 static unsigned long long
-parse_magnitude(const char *str, char **end, int base,
+parse_magnitude(const void *str, size_t *end, int wide, int base,
                 unsigned long long positive_limit,
                 unsigned long long negative_limit, int *negative,
                 int *overflow)
 {
-    const char *original = str;
+    size_t i = 0;
     unsigned long long value = 0;
     unsigned long long limit;
     unsigned long long cutoff;
     unsigned long long cutlim;
-    int any = 0;
+    size_t digits;
 
     *negative = 0;
     *overflow = 0;
+    *end = 0;
     if (base != 0 && (base < 2 || base > 36)) {
         errno = EINVAL;
-        if (end != NULL)
-            *end = (char *)original;
         return 0;
     }
 
-    while (isspace((unsigned char)*str))
-        ++str;
-    if (*str == '+' || *str == '-') {
-        *negative = *str == '-';
-        ++str;
+    while (integer_space(integer_char(str, wide, i)))
+        ++i;
+    if (integer_char(str, wide, i) == '+' || integer_char(str, wide, i) == '-') {
+        *negative = integer_char(str, wide, i) == '-';
+        ++i;
     }
 
-    if ((base == 0 || base == 16) && str[0] == '0' &&
-        (str[1] == 'x' || str[1] == 'X') &&
-        digit_value((unsigned char)str[2]) >= 0 &&
-        digit_value((unsigned char)str[2]) < 16) {
-        base = 16;
-        str += 2;
-    } else if (base == 0) {
-        base = *str == '0' ? 8 : 10;
+    if ((base == 0 || base == 16) && integer_char(str, wide, i) == '0') {
+        wint_t prefix = integer_char(str, wide, i + 1);
+        if (prefix == 'x' || prefix == 'X') {
+            int digit = digit_value(integer_char(str, wide, i + 2));
+            if (digit >= 0 && digit < 16) {
+                base = 16;
+                i += 2;
+            }
+        }
     }
+    if (base == 0)
+        base = integer_char(str, wide, i) == '0' ? 8 : 10;
 
     limit = *negative ? negative_limit : positive_limit;
     cutoff = limit / (unsigned)base;
     cutlim = limit % (unsigned)base;
 
+    digits = i;
     for (;;) {
-        int digit = digit_value((unsigned char)*str);
+        int digit = digit_value(integer_char(str, wide, i));
         if (digit < 0 || digit >= base)
             break;
-        any = 1;
         if (value > cutoff ||
             (value == cutoff && (unsigned)digit > cutlim)) {
             *overflow = 1;
         } else if (!*overflow) {
             value = value * (unsigned)base + (unsigned)digit;
         }
-        ++str;
+        ++i;
     }
 
-    if (!any) {
-        if (end != NULL)
-            *end = (char *)original;
+    if (i == digits)
         return 0;
-    }
-    if (end != NULL)
-        *end = (char *)str;
+    *end = i;
     if (*overflow) {
         errno = ERANGE;
         return limit;
@@ -90,70 +103,109 @@ parse_magnitude(const char *str, char **end, int base,
     return value;
 }
 
-unsigned long long strtoull(const char *str, char **end, int base)
+static unsigned long long parse_unsigned(const void *str, size_t *end, int wide,
+                                         int base, unsigned long long max)
 {
     int negative;
     int overflow;
     unsigned long long value =
-        parse_magnitude(str, end, base, ULLONG_MAX, ULLONG_MAX, &negative,
-                        &overflow);
+        parse_magnitude(str, end, wide, base, max, max, &negative, &overflow);
 
     if (overflow)
-        return ULLONG_MAX;
+        return max;
     return negative ? 0ULL - value : value;
+}
+
+static long long parse_signed(const void *str, size_t *end, int wide, int base,
+                              long long min, long long max)
+{
+    int negative;
+    int overflow;
+    unsigned long long negative_limit = 0ULL - (unsigned long long)min;
+    unsigned long long value =
+        parse_magnitude(str, end, wide, base, (unsigned long long)max,
+                        negative_limit, &negative, &overflow);
+
+    if (overflow)
+        return negative ? min : max;
+    if (negative)
+        return value == negative_limit ? min : -(long long)value;
+    return (long long)value;
+}
+
+unsigned long long strtoull(const char *str, char **end, int base)
+{
+    size_t size;
+    unsigned long long value = parse_unsigned(str, &size, 0, base, ULLONG_MAX);
+    if (end != NULL)
+        *end = (char *)str + size;
+    return value;
 }
 
 unsigned long strtoul(const char *str, char **end, int base)
 {
-    int negative;
-    int overflow;
-    unsigned long long value =
-        parse_magnitude(str, end, base, ULONG_MAX, ULONG_MAX, &negative,
-                        &overflow);
-
-    if (overflow)
-        return ULONG_MAX;
-    if (negative)
-        return (unsigned long)(0UL - (unsigned long)value);
-    return (unsigned long)value;
+    size_t size;
+    unsigned long value =
+        (unsigned long)parse_unsigned(str, &size, 0, base, ULONG_MAX);
+    if (end != NULL)
+        *end = (char *)str + size;
+    return value;
 }
 
 long long strtoll(const char *str, char **end, int base)
 {
-    int negative;
-    int overflow;
-    unsigned long long value =
-        parse_magnitude(str, end, base, (unsigned long long)LLONG_MAX,
-                        (unsigned long long)LLONG_MAX + 1ULL, &negative,
-                        &overflow);
-
-    if (overflow)
-        return negative ? LLONG_MIN : LLONG_MAX;
-    if (negative) {
-        if (value == (unsigned long long)LLONG_MAX + 1ULL)
-            return LLONG_MIN;
-        return -(long long)value;
-    }
-    return (long long)value;
+    size_t size;
+    long long value = parse_signed(str, &size, 0, base, LLONG_MIN, LLONG_MAX);
+    if (end != NULL)
+        *end = (char *)str + size;
+    return value;
 }
 
 long strtol(const char *str, char **end, int base)
 {
-    int negative;
-    int overflow;
-    unsigned long long value =
-        parse_magnitude(str, end, base, (unsigned long long)LONG_MAX,
-                        (unsigned long long)LONG_MAX + 1ULL, &negative,
-                        &overflow);
+    size_t size;
+    long value = (long)parse_signed(str, &size, 0, base, LONG_MIN, LONG_MAX);
+    if (end != NULL)
+        *end = (char *)str + size;
+    return value;
+}
 
-    if (overflow)
-        return negative ? LONG_MIN : LONG_MAX;
-    if (negative) {
-        if (value == (unsigned long long)LONG_MAX + 1ULL)
-            return LONG_MIN;
-        return -(long)value;
-    }
-    return (long)value;
+unsigned long long wcstoull(const wchar_t *restrict str, wchar_t **restrict end,
+                            int base)
+{
+    size_t size;
+    unsigned long long value = parse_unsigned(str, &size, 1, base, ULLONG_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
+}
+
+unsigned long wcstoul(const wchar_t *restrict str, wchar_t **restrict end, int base)
+{
+    size_t size;
+    unsigned long value =
+        (unsigned long)parse_unsigned(str, &size, 1, base, ULONG_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
+}
+
+long long wcstoll(const wchar_t *restrict str, wchar_t **restrict end, int base)
+{
+    size_t size;
+    long long value = parse_signed(str, &size, 1, base, LLONG_MIN, LLONG_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
+}
+
+long wcstol(const wchar_t *restrict str, wchar_t **restrict end, int base)
+{
+    size_t size;
+    long value = (long)parse_signed(str, &size, 1, base, LONG_MIN, LONG_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
 }
 
 int atoi(const char *str)
@@ -231,6 +283,25 @@ intmax_t strtoimax(const char *str, char **end, int base)
 uintmax_t strtoumax(const char *str, char **end, int base)
 {
     return (uintmax_t)strtoull(str, end, base);
+}
+
+intmax_t wcstoimax(const wchar_t *restrict str, wchar_t **restrict end, int base)
+{
+    size_t size;
+    intmax_t value =
+        (intmax_t)parse_signed(str, &size, 1, base, INTMAX_MIN, INTMAX_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
+}
+
+uintmax_t wcstoumax(const wchar_t *restrict str, wchar_t **restrict end, int base)
+{
+    size_t size;
+    uintmax_t value = (uintmax_t)parse_unsigned(str, &size, 1, base, UINTMAX_MAX);
+    if (end != NULL)
+        *end = (wchar_t *)str + size;
+    return value;
 }
 
 static void swap_bytes(unsigned char *lhs, unsigned char *rhs, size_t size)

@@ -8,6 +8,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "stream.h"
+
 enum { NO_LOOKAHEAD = EOF - 1 };
 
 struct scan_input {
@@ -471,6 +473,8 @@ int vfscanf(FILE *stream, const char *format, va_list args)
         errno = EINVAL;
         return EOF;
     }
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return EOF;
     return scan(&input, format, args);
 }
 

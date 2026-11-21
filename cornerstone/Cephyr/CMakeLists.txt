@@ -42,8 +42,41 @@ if(NOT TARGET Archon::Archon)
   add_subdirectory("${cephyr_archon}" archon)
 endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+find_package(Perl REQUIRED)
 find_path(CEPHYR_LMDB_INCLUDE_DIR NAMES lmdb.h REQUIRED)
 find_library(CEPHYR_LMDB_LIBRARY NAMES lmdb REQUIRED)
+
+set(cephyr_llsynth "${cephyr_repo}/cornerstone/LLSynth/scripts")
+set(cephyr_qml "${CMAKE_CURRENT_SOURCE_DIR}/qml")
+set(cephyr_qml_build "${CMAKE_CURRENT_BINARY_DIR}/qml")
+set(cephyr_qml_frontend "${cephyr_qml_build}/qml_frontend.py")
+set(cephyr_qml_compiler "${cephyr_qml_build}/compile_rules.py")
+set(cephyr_qml_bundle "${cephyr_qml_build}/builtin.qmb")
+set(cephyr_qml_builtin
+  "${cephyr_qml}/NativeCanonicalize.qpass"
+  "${cephyr_qml}/NativeStrengthReduce.qpass")
+add_custom_command(OUTPUT "${cephyr_qml_frontend}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${cephyr_qml_build}"
+  COMMAND "${PERL_EXECUTABLE}" "${cephyr_llsynth}/llsynth.pl"
+    --mode=interpret -T python3 --driver-mode=library -o "${cephyr_qml_frontend}"
+    --depfile "${cephyr_qml_frontend}.d" "${CMAKE_CURRENT_SOURCE_DIR}/QML.llsynth"
+  DEPENDS QML.llsynth "${cephyr_llsynth}/llsynth.pl"
+    "${cephyr_llsynth}/LLSynthCompiler.pm" "${cephyr_llsynth}/LLSynthEmit.pm"
+    "${cephyr_llsynth}/LLSynthMeta.pm" "${cephyr_llsynth}/LLSynthModules.pm"
+    "${cephyr_llsynth}/LLSynthCompanions.pm"
+  DEPFILE "${cephyr_qml_frontend}.d"
+  VERBATIM)
+add_custom_command(OUTPUT "${cephyr_qml_compiler}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${cephyr_qml_build}"
+  COMMAND "${CMAKE_COMMAND}" -E copy "${cephyr_qml}/compile_rules.py" "${cephyr_qml_compiler}"
+  DEPENDS "${cephyr_qml}/compile_rules.py"
+  VERBATIM)
+add_custom_command(OUTPUT "${cephyr_qml_bundle}"
+  COMMAND "${Python3_EXECUTABLE}" -I -B "${cephyr_qml_compiler}"
+    --frontend "${cephyr_qml_frontend}" --output "${cephyr_qml_bundle}" ${cephyr_qml_builtin}
+  DEPENDS "${cephyr_qml_frontend}" "${cephyr_qml_compiler}" ${cephyr_qml_builtin}
+  VERBATIM)
+add_custom_target(cephyr_qml_assets DEPENDS "${cephyr_qml_bundle}")
 
 add_library(cephyr_cparser STATIC)
 foreach(source IN ITEMS AbstractSyntaxTree ASTNode CLexer CParser GenCVisitor Lexer
@@ -84,10 +117,11 @@ add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
   src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
-  src/moonstone_tools.cpp
+  src/moonstone_tools.cpp src/qml_rewrite.cpp
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
   "${cephyr_native}/Legalizer.c")
 add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
+add_dependencies(cephyr_compiler cephyr_qml_assets)
 target_compile_features(cephyr_compiler PRIVATE cxx_std_20 INTERFACE cxx_std_17)
 set_target_properties(cephyr_compiler PROPERTIES
   C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF CXX_EXTENSIONS OFF
@@ -174,6 +208,8 @@ target_compile_definitions(cephyr_compiler PRIVATE
   CEPHYR_VERSION="${PROJECT_VERSION}"
   CEPHYR_SOURCE_RESOURCES="${CMAKE_CURRENT_SOURCE_DIR}"
   CEPHYR_SOURCE_ARCHON="${cephyr_archon}"
+  CEPHYR_BUILD_QML="${cephyr_qml_build}"
+  CEPHYR_BUILD_PYTHON="${Python3_EXECUTABLE}"
   CEPHYR_LIB_RELATIVE_RESOURCES="${cephyr_lib_relative_resources}"
   CEPHYR_LIB_RELATIVE_ARCHON="${cephyr_lib_relative_archon}")
 
@@ -195,6 +231,12 @@ if(CEPHYR_INSTALL_PYTHON)
     FILES_MATCHING PATTERN "*.py" PATTERN "__pycache__" EXCLUDE)
 endif()
 install(DIRECTORY stdlib triples DESTINATION "${cephyr_data_dir}" USE_SOURCE_PERMISSIONS)
+install(FILES "${cephyr_qml_compiler}" "${cephyr_qml_frontend}" "${cephyr_qml_bundle}"
+  "${cephyr_qml}/README.md" ${cephyr_qml_builtin}
+  DESTINATION "${cephyr_data_dir}/qml")
+install(FILES benchmark/README.md benchmark/run.py benchmark/workloads.py
+  DESTINATION "${cephyr_data_dir}/benchmark")
+install(DIRECTORY benchmark/fixtures DESTINATION "${cephyr_data_dir}/benchmark")
 install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md MOONSTONE.md MOONSTONE_ANALYSIS.md
   DESTINATION "${cephyr_data_dir}")
 install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md
@@ -257,6 +299,25 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_cli_regression.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.driver PROPERTIES TIMEOUT 300)
+  set(cephyr_qml_test_args)
+  if(cephyr_test_prolific_artifact)
+    list(APPEND cephyr_qml_test_args --prolific)
+  endif()
+  add_test(NAME cephyr.qml-driver COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qml_driver.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_qml_test_args} ${cephyr_test_args})
+  set_tests_properties(cephyr.qml-driver PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.qml-frontend COMMAND "${Python3_EXECUTABLE}" -B -m unittest
+    discover -s "${cephyr_qml}/tests")
+  set_tests_properties(cephyr.qml-frontend PROPERTIES TIMEOUT 60)
+  add_executable(cephyr-qml-rewrite-test tests/qml_rewrite.cpp src/qml_rewrite.cpp
+    src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
+    "${cephyr_native}/Legalizer.c")
+  target_compile_features(cephyr-qml-rewrite-test PRIVATE c_std_99 cxx_std_20)
+  target_compile_definitions(cephyr-qml-rewrite-test PRIVATE AN_GENERIC_MIR_VERIFY=1)
+  target_include_directories(cephyr-qml-rewrite-test PRIVATE "${cephyr_native}")
+  target_link_libraries(cephyr-qml-rewrite-test PRIVATE cephyr_diagnostics)
+  add_test(NAME cephyr.qml-rewrite COMMAND cephyr-qml-rewrite-test)
   add_test(NAME cephyr.c11-sample COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_sample.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
@@ -265,6 +326,12 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_records.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.c11-records PROPERTIES TIMEOUT 120)
+  foreach(feature IN ITEMS alignment enums)
+    add_test(NAME cephyr.c11-${feature} COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_${feature}.py" "$<TARGET_FILE:cephyr>"
+      ${cephyr_test_args})
+    set_tests_properties(cephyr.c11-${feature} PROPERTIES TIMEOUT 120)
+  endforeach()
   set(cephyr_fp_test_args)
   if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
     list(APPEND cephyr_fp_test_args --qemu-aarch64 "${CEPHYR_QEMU_AARCH64_EXECUTABLE}")

@@ -2,6 +2,7 @@
 #define _CEPHYR_INTTYPES_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct {
     intmax_t quot;
@@ -186,6 +187,15 @@ uintmax_t strtoumax(const char *, __cephyr_end_pointer, int);
 #else
 intmax_t strtoimax(const char *, char **, int);
 uintmax_t strtoumax(const char *, char **, int);
+#endif
+
+#if defined(__CEPHYR__)
+typedef wchar_t **__cephyr_wc_int_end_pointer;
+intmax_t wcstoimax(const wchar_t *restrict, __cephyr_wc_int_end_pointer restrict, int);
+uintmax_t wcstoumax(const wchar_t *restrict, __cephyr_wc_int_end_pointer restrict, int);
+#else
+intmax_t wcstoimax(const wchar_t *restrict, wchar_t **restrict, int);
+uintmax_t wcstoumax(const wchar_t *restrict, wchar_t **restrict, int);
 #endif
 
 #endif

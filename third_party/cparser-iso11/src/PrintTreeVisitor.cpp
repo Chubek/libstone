@@ -41,7 +41,19 @@ void PrintTreeVisitor::visit(IntegerConstASTNode *n)
     printTab(_level);
     std::cout << "NK_INTEGER_CONST" << std::endl;
     printTab(_level);
-    std::cout << "Value: " << n->getValue() << std::endl;
+    if (n->getEnumerator())
+        std::cout << "Enumerator: " << n->getSpelling() << std::endl;
+    else
+        std::cout << "Value: " << n->getValue() << std::endl;
+    _level--;
+}
+
+void PrintTreeVisitor::visit(EnumeratorDeclASTNode *n)
+{
+    _level++;
+    printTab(_level);
+    std::cout << "NK_ENUMERATOR_DECL: " << n->getName() << std::endl;
+    n->getInitializer()->accept(this);
     _level--;
 }
 

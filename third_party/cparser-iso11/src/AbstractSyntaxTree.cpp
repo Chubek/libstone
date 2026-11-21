@@ -170,8 +170,11 @@ STType *AbstractSyntaxTree::getStbType(ASTNode *typeASTNode)
             type->elemType = getStbType(arrTypeASTNode->getElementType());
 
             if (type->elemType && AST_MATCH_INTEGER_CONST(arrTypeASTNode->getExpr()))
-                type->size = type->elemType->size *
-                             AST_INTEGER_CONST_VALUE(arrTypeASTNode->getExpr());
+            {
+                auto *bound = static_cast<IntegerConstASTNode *>(arrTypeASTNode->getExpr());
+                if (!bound->getEnumerator())
+                    type->size = type->elemType->size * bound->getValue();
+            }
 
             return type;
         }
@@ -261,10 +264,23 @@ bool sameTypedefType(ASTNode *left, ASTNode *right, bool ignoreQualifiers = fals
 
 bool sameBound(ASTNode *left, ASTNode *right)
 {
-    if (left == NULL_AST_NODE || right == NULL_AST_NODE)
-        return left == right;
-    return AST_MATCH_INTEGER_CONST(left) && AST_MATCH_INTEGER_CONST(right) &&
-           AST_INTEGER_CONST_VALUE(left) == AST_INTEGER_CONST_VALUE(right);
+    if (left == right)
+        return true;
+    if (!AST_MATCH_INTEGER_CONST(left) || !AST_MATCH_INTEGER_CONST(right))
+        return false;
+    auto *lhs = static_cast<IntegerConstASTNode *>(left);
+    auto *rhs = static_cast<IntegerConstASTNode *>(right);
+    if (lhs->getEnumerator() && lhs->getEnumerator() == rhs->getEnumerator())
+        return true;
+    const auto isLiteralBound = [](IntegerConstASTNode *node) {
+        if (!node->getEnumerator())
+            return true;
+        ASTNode *init = node->getEnumerator()->getInitializer();
+        return AST_MATCH_INTEGER_CONST(init) &&
+               !static_cast<IntegerConstASTNode *>(init)->getEnumerator();
+    };
+    return isLiteralBound(lhs) && isLiteralBound(rhs) &&
+           lhs->getValue() == rhs->getValue();
 }
 
 ASTNode *adjustedPointee(ASTNode *node)

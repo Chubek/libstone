@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <wchar.h>
+
+#include "stream.h"
 
 /* Linux-only operations kept private to libc. */
 int __cephyr_ioctl(int, unsigned long, void *);
@@ -29,6 +32,9 @@ struct __cephyr_FILE {
     int append;
     int buffering;
     int pushback;
+    int orientation;
+    wint_t wide_pushback;
+    mbstate_t conversion_state;
     int static_stream;
     unsigned char *buffer;
     size_t capacity;
@@ -41,15 +47,15 @@ struct __cephyr_FILE {
 
 static FILE stdin_object = {
     .descriptor = 0, .access = STREAM_READ, .buffering = STREAM_AUTO,
-    .pushback = EOF, .static_stream = 1
+    .pushback = EOF, .wide_pushback = WEOF, .static_stream = 1
 };
 static FILE stdout_object = {
     .descriptor = 1, .access = STREAM_WRITE, .buffering = STREAM_AUTO,
-    .pushback = EOF, .static_stream = 1, .next = &stdin_object
+    .pushback = EOF, .wide_pushback = WEOF, .static_stream = 1, .next = &stdin_object
 };
 static FILE stderr_object = {
     .descriptor = 2, .access = STREAM_WRITE, .buffering = _IONBF,
-    .pushback = EOF, .static_stream = 1, .next = &stdout_object
+    .pushback = EOF, .wide_pushback = WEOF, .static_stream = 1, .next = &stdout_object
 };
 
 FILE *stdin = &stdin_object;
@@ -80,6 +86,19 @@ static int stream_error(FILE *stream, int error)
         stream->state |= STREAM_ERROR;
     errno = error;
     return EOF;
+}
+
+int fwide(FILE *stream, int mode)
+{
+    if (stream->orientation == 0 && mode != 0)
+        stream->orientation = (mode > 0) - (mode < 0);
+    return stream->orientation;
+}
+
+int __cephyr_stdio_orient(FILE *stream, int orientation)
+{
+    return stream != NULL && fwide(stream, orientation) == orientation
+           ? 0 : stream_error(stream, EINVAL);
 }
 
 static size_t write_bytes(FILE *stream, const unsigned char *data, size_t size)
@@ -183,7 +202,8 @@ int ferror(FILE *stream)
 
 int ungetc(int ch, FILE *stream)
 {
-    if (ch == EOF || stream->pushback != EOF || stream->descriptor < 0 ||
+    if (ch == EOF || __cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF ||
+        stream->pushback != EOF || stream->descriptor < 0 ||
         !(stream->access & STREAM_READ))
         return EOF;
     if (flush_output(stream) == EOF)
@@ -217,18 +237,10 @@ static ssize_t read_bytes(FILE *stream, unsigned char *data, size_t size)
     return result;
 }
 
-size_t fread(void *ptr, size_t size, size_t count, FILE *stream)
+static size_t stream_read(FILE *stream, unsigned char *data, size_t total)
 {
-    unsigned char *data = ptr;
-    size_t total;
     size_t done = 0;
 
-    if (size == 0 || count == 0)
-        return 0;
-    if (stream == NULL || count > SIZE_MAX / size) {
-        stream_error(stream, EINVAL);
-        return 0;
-    }
     if (stream->descriptor < 0 || !(stream->access & STREAM_READ)) {
         stream_error(stream, EBADF);
         return 0;
@@ -237,7 +249,6 @@ size_t fread(void *ptr, size_t size, size_t count, FILE *stream)
         return 0;
     select_buffer(stream);
     stream->direction = STREAM_READ;
-    total = size * count;
     if (stream->pushback != EOF) {
         data[done++] = (unsigned char)stream->pushback;
         stream->pushback = EOF;
@@ -263,21 +274,13 @@ size_t fread(void *ptr, size_t size, size_t count, FILE *stream)
             stream->last = (size_t)result;
         }
     }
-    return done / size;
+    return done;
 }
 
-size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
+static size_t stream_write(FILE *stream, const unsigned char *data, size_t total)
 {
-    const unsigned char *data = ptr;
-    size_t total;
     size_t done = 0;
 
-    if (size == 0 || count == 0)
-        return 0;
-    if (stream == NULL || count > SIZE_MAX / size) {
-        stream_error(stream, EINVAL);
-        return 0;
-    }
     if (stream->descriptor < 0 || !(stream->access & STREAM_WRITE)) {
         stream_error(stream, EBADF);
         return 0;
@@ -286,11 +289,11 @@ size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
     if (stream->direction != STREAM_WRITE) {
         stream->first = stream->last = 0;
         stream->pushback = EOF;
+        stream->wide_pushback = WEOF;
         stream->direction = STREAM_WRITE;
     }
-    total = size * count;
     if (stream->capacity == 0)
-        return write_bytes(stream, data, total) / size;
+        return write_bytes(stream, data, total);
     while (done < total) {
         size_t amount = stream->capacity - stream->last;
         int line = 0;
@@ -315,11 +318,156 @@ size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
             }
         }
     }
-    return done / size;
+    return done;
+}
+
+size_t fread(void *ptr, size_t size, size_t count, FILE *stream)
+{
+    if (size == 0 || count == 0)
+        return 0;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return 0;
+    if (count > SIZE_MAX / size) {
+        stream_error(stream, EINVAL);
+        return 0;
+    }
+    return stream_read(stream, ptr, size * count) / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
+{
+    if (size == 0 || count == 0)
+        return 0;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_BYTE) == EOF)
+        return 0;
+    if (count > SIZE_MAX / size) {
+        stream_error(stream, EINVAL);
+        return 0;
+    }
+    return stream_write(stream, ptr, size * count) / size;
+}
+
+void perror(const char *prefix)
+{
+    const char *message = strerror(errno);
+
+    /* perror is not a byte I/O function (C11 7.21.1). Neither orient stderr
+       nor reject a wide-oriented stderr. The locale message is ASCII. */
+    if (prefix != NULL && *prefix != '\0') {
+        (void)stream_write(stderr, (const unsigned char *)prefix, strlen(prefix));
+        (void)stream_write(stderr, (const unsigned char *)": ", 2);
+    }
+    (void)stream_write(stderr, (const unsigned char *)message, strlen(message));
+    (void)stream_write(stderr, (const unsigned char *)"\n", 1);
+}
+
+wint_t fgetwc(FILE *stream)
+{
+    unsigned char byte;
+    wchar_t wc;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_WIDE) == EOF)
+        return WEOF;
+    if (stream->wide_pushback != WEOF) {
+        wint_t pushed = stream->wide_pushback;
+        stream->wide_pushback = WEOF;
+        return pushed;
+    }
+    if (stream_read(stream, &byte, 1) != 1)
+        return WEOF;
+    /* The C locale encodes each wide character in exactly one byte. */
+    if (mbrtowc(&wc, (const char *)&byte, 1, &stream->conversion_state) > 1) {
+        stream_error(stream, EILSEQ);
+        return WEOF;
+    }
+    return (wint_t)wc;
+}
+
+wchar_t *fgetws(wchar_t *restrict str, int count, FILE *restrict stream)
+{
+    int used = 0;
+    if (count <= 0 || __cephyr_stdio_orient(stream, CEPHYR_STREAM_WIDE) == EOF)
+        return NULL;
+    if (count == 1) {
+        *str = 0;
+        return str;
+    }
+    while (used < count - 1) {
+        wint_t wc = fgetwc(stream);
+        if (wc == WEOF) {
+            if (!feof(stream) || used == 0)
+                return NULL;
+            break;
+        }
+        str[used++] = (wchar_t)wc;
+        if (wc == L'\n')
+            break;
+    }
+    str[used] = 0;
+    return str;
+}
+
+wint_t fputwc(wchar_t wc, FILE *stream)
+{
+    char bytes[MB_LEN_MAX];
+    size_t length;
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_WIDE) == EOF)
+        return WEOF;
+    length = wcrtomb(bytes, wc, &stream->conversion_state);
+    if (length == (size_t)-1) {
+        stream->state |= STREAM_ERROR;
+        return WEOF;
+    }
+    return stream_write(stream, (const unsigned char *)bytes, length) == length
+           ? (wint_t)wc : WEOF;
+}
+
+int fputws(const wchar_t *restrict str, FILE *restrict stream)
+{
+    if (__cephyr_stdio_orient(stream, CEPHYR_STREAM_WIDE) == EOF)
+        return EOF;
+    while (*str != 0) {
+        if (fputwc(*str++, stream) == WEOF)
+            return EOF;
+    }
+    return 0;
+}
+
+wint_t getwc(FILE *stream)
+{
+    return fgetwc(stream);
+}
+
+wint_t getwchar(void)
+{
+    return fgetwc(stdin);
+}
+
+wint_t putwc(wchar_t wc, FILE *stream)
+{
+    return fputwc(wc, stream);
+}
+
+wint_t putwchar(wchar_t wc)
+{
+    return fputwc(wc, stdout);
+}
+
+wint_t ungetwc(wint_t wc, FILE *stream)
+{
+    if (wc == WEOF || __cephyr_stdio_orient(stream, CEPHYR_STREAM_WIDE) == EOF ||
+        stream->wide_pushback != WEOF || stream->descriptor < 0 ||
+        !(stream->access & STREAM_READ) || flush_output(stream) == EOF)
+        return WEOF;
+    stream->direction = STREAM_READ;
+    stream->wide_pushback = wc;
+    stream->state &= ~STREAM_EOF;
+    return wc;
 }
 
 static size_t unread(const FILE *stream)
 {
+    /* The logical position for wide pushback is unspecified; use the
+       position of the next byte in the file, ignoring wide pushback. */
     return stream->last - stream->first + (stream->pushback != EOF);
 }
 
@@ -344,6 +492,8 @@ int fseek(FILE *stream, long offset, int whence)
     stream->first = stream->last = 0;
     stream->direction = 0;
     stream->pushback = EOF;
+    stream->wide_pushback = WEOF;
+    stream->conversion_state = 0;
     stream->state &= ~STREAM_EOF;
     return 0;
 }
@@ -379,13 +529,17 @@ int fgetpos(FILE *stream, fpos_t *position)
     long result = ftell(stream);
     if (result == -1)
         return -1;
-    *position = result;
+    position->__offset = result;
+    position->__state = stream->conversion_state;
     return 0;
 }
 
 int fsetpos(FILE *stream, const fpos_t *position)
 {
-    return fseek(stream, *position, SEEK_SET);
+    if (fseek(stream, position->__offset, SEEK_SET) != 0)
+        return -1;
+    stream->conversion_state = position->__state;
+    return 0;
 }
 
 void rewind(FILE *stream)
@@ -453,6 +607,9 @@ static void attach(FILE *stream, int descriptor, int flags)
     stream->append = flags & O_APPEND;
     stream->buffering = STREAM_AUTO;
     stream->pushback = EOF;
+    stream->orientation = 0;
+    stream->wide_pushback = WEOF;
+    stream->conversion_state = 0;
 }
 
 static FILE *new_stream(int descriptor, int flags)

@@ -951,6 +951,13 @@ static inline int read_token(struct lexer_state *ls)
 	} while (1);
 	if (!(ls->flags & LEXER) && (ls->flags & DISCARD_COMMENTS)
 			&& ls->ctok->type == COMMENT) put_char(ls, ' ');
+	if (ls->ctok->type == NAME && ls->condcomp
+		&& (ls->flags & C11_CONSTRAINTS)
+		&& !(ls->flags & (PHASE3_INPUT | VA_ARGS_REPLACEMENT))
+		&& !strcmp(ls->ctok->name, "__VA_ARGS__")) {
+		error(l, "'__VA_ARGS__' is only allowed in a variadic macro replacement list");
+		ls->character_error = 1;
+	}
 	if (extended && (ls->ctok->type == NAME || ls->ctok->type == NUMBER)) {
 		unsigned long code_point = 0;
 		switch (check_spelling(ls->ctok->name, 0, ls->ctok->type == NUMBER,

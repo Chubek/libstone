@@ -25,7 +25,7 @@ for arch in x86_64 aarch64 riscv64; do
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    for source in smoke io files general time multibyte nonlocal scanf; do
+    for source in smoke io files general time multibyte nonlocal scanf wide-stream wide-string; do
         "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
@@ -61,6 +61,11 @@ for arch in x86_64 aarch64 riscv64; do
     run "$output/test-smoke"
     run "$output/test-time"
     run "$output/test-multibyte"
+    run "$output/test-wide-string"
+    text=$(printf 'Z!' | run "$output/test-wide-stream" 2>"$output/test-wide-stream.stderr")
+    test "$text" = Q
+    test "$(cat "$output/test-wide-stream.stderr")" = "wide stream test: Invalid argument
+Invalid argument"
     run "$output/test-nonlocal"
     printf '18? 24\n' | run "$output/test-scanf"
     text=$(printf 'c!' | run "$output/test-io" pipe)

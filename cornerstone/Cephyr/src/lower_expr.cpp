@@ -534,8 +534,9 @@ CType expression_type(Node *node, const TypeContext &context) {
     return *signature.element;
   }
   case cparser::NK_SIZEOF_EXPR:
-  case cparser::NK_ALIGNOF_EXPR: {
-    const auto size = size_or_alignment(node, context);
+  case cparser::NK_ALIGNOF_EXPR:
+  case cparser::NK_OFFSETOF_EXPR: {
+    const auto size = layout_constant(node, context);
     return size ? size->type : invalid_type();
   }
   case cparser::NK_LIST:
@@ -899,6 +900,13 @@ Expr logical(Function &function, ASTNodeKind kind, Node *lhs_node,
 }
 
 Expr conditional(Function &function, cparser::CondExprASTNode *node) {
+  // The condition can introduce an enumerator in a type name that is
+  // visible in either arm, even though the arms are typed before lowering.
+  auto condition = lower_expr(function, node->getCondition());
+  const auto condition_id = truth(function, condition, node->getCondition());
+  if (condition_id == no_value)
+    return invalid_expr();
+
   const auto result_type =
       conditional_type(TypeContext(function.unit, &function),
                        node->getThenClause(), node->getElseClause());
@@ -906,11 +914,6 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
     function.error(node, "incompatible operands to conditional expression");
     return invalid_expr();
   }
-
-  auto condition = lower_expr(function, node->getCondition());
-  const auto condition_id = truth(function, condition, node->getCondition());
-  if (condition_id == no_value)
-    return invalid_expr();
 
   const auto yes = function.block();
   const auto no = function.block();
@@ -1207,8 +1210,8 @@ Expr string_literal(Function &function, Node *node) {
   return {type, function.emit(type, "global_addr", symbol), std::nullopt};
 }
 
-Expr lower_size_or_alignment(Function &function, Node *node) {
-  const auto result = size_or_alignment(node, TypeContext(function.unit, &function));
+Expr lower_layout_constant(Function &function, Node *node) {
+  const auto result = layout_constant(node, TypeContext(function.unit, &function));
   if (!result)
     return invalid_expr();
   return {result->type, function.constant(result->value, result->type), result->value};
@@ -1890,7 +1893,8 @@ Expr lower_expr(Function &function, Node *node) {
     break;
   case cparser::NK_SIZEOF_EXPR:
   case cparser::NK_ALIGNOF_EXPR:
-    result = lower_size_or_alignment(function, node);
+  case cparser::NK_OFFSETOF_EXPR:
+    result = lower_layout_constant(function, node);
     break;
   case cparser::NK_LIST: {
     const auto expressions = elements(node);

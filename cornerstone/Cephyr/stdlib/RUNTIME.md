@@ -28,9 +28,15 @@ power-of-two alignments and requires the requested size to be a multiple of
 the alignment. `free` accepts aligned allocations; `realloc` preserves their
 contents, not the requested extended alignment. This is not an arena allocator.
 
-`src/stream.c` implements buffered byte streams on Linux descriptors. Logical
-file positions account for read-ahead, pending output, and the one-byte pushback
-slot. Append writes use `O_APPEND`; `a+` starts reading from the beginning.
+`src/stream.c` implements buffered byte and wide streams on Linux descriptors.
+Wide I/O shares descriptor buffering but uses the ASCII C-locale conversions
+with per-stream `mbstate_t`. `fgetpos`/`fsetpos` save and restore this state
+along with the logical offset; the C locale always remains in the initial
+conversion state. `fpos_t` is now a structure, so recompile callers that were
+built with the old byte-only `long` definition. Logical positions account for
+read-ahead, pending output, and byte pushback. Wide pushback uses a separate
+one-character slot and leaves the underlying file position unchanged.
+Append writes use `O_APPEND`; `a+` starts reading from the beginning.
 Temporary files use `O_TMPFILE` when available, or `O_CREAT|O_EXCL` followed by
 unlink. Temporary names use Linux `getrandom`; the fallback is for filesystems
 without `O_TMPFILE`, not for kernels without `getrandom`.

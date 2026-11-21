@@ -654,12 +654,13 @@ ARITH_DECL_BI_SS_S(slash)
 	return x / y;
 }
 
-/*
- * Only division by 0 needs to be checked.
- */
 ARITH_DECL_BI_SS_S(pct)
 {
 	if (y == 0) ARITH_ERROR(ARITH_EXCEP_PCT_D);
+#if NEGATIVE_IS_BIGGER
+	else if (x == NATIVE_SIGNED_MIN && y == (arith_s)(-1))
+		ARITH_ERROR(ARITH_EXCEP_SLASH_O);
+#endif
 	return x % y;
 }
 

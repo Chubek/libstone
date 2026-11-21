@@ -1,18 +1,15 @@
-# Cephyr QML 1.1 — LLSynth-generated expression-MIR transformation frontend.
+# Cephyr QML 1.1 — LLSynth-generated expression runner and rule exporter.
 # Source grammar: rewrite PHASE NAME : TREE => TREE;
 #                 reject PHASE NAME : TREE;
 #                 pass PHASE;
 #                 run TREE;
-# The .qpass files in qml/ are fragments; combine them with qml/bundle.py.
-# This is deliberately not a full Cephyr/Archon MachineIR adapter.
-# Execute with an LLSynth-generated Python tool, or use qml/runtime.py
-# as the independently tested reference implementation.
-# Compatible with current LLSynth .end and nominal type syntax.
-# All source is trusted; rewrite rules are pure AST templates.
+# A final run statement selects the expression tool (qml/bundle.py).
+# Directive-only fragments select rule export (qml/compile_rules.py).
+# Native legality is checked separately by the host, not the frontend.
 
 .language "QML"
 .version "1.1"
-.summary "Cephyr QML expression-MIR pass compiler, bootstrapped on LLSynth"
+.summary "Cephyr QML expression runner and rule exporter, bootstrapped on LLSynth"
 .start Program
 .option parser = lalr1
 
@@ -21,20 +18,26 @@
 
 .skip /[ \t\r\n]+/
 .skip /#[^\n]*/
-.token INT: Int = /[0-9]+/
+.token INT: Int = /-?[0-9]+/
 .token ID: String = /[A-Za-z_][A-Za-z0-9_]*/
 
-# The newer LLSynth nominal algebraic types model compiler metadata.
+.prodtype %RuleSource
+    phase: String
+    name: String
+    pattern: Vec<Any>
+    replacement: Vec<Any>
+.end
+
+.sumtype %Directive
+    Rewrite: %RuleSource
+    Pass: String
+    Reject: %RuleSource
+.end
+
 .prodtype %Rewrite
     phase: String
     name: String
     decision: Vec<Any>
-.end
-
-.sumtype %Directive
-    Rewrite: %Rewrite
-    Pass: String
-    Reject: %Rewrite
 .end
 
 .exception !UnknownMeta(name: String) "Unbound rewrite metavariable: {name}"
@@ -46,18 +49,8 @@
 .exception !DivisionByZero "Division by zero in constant IR"
 .exception !Rejected(name: String) "Rejected IR shape: {name}"
 
-# All source and decision nodes are tagged vectors of Any. The nominal types
-# above keep QML's own directive metadata distinct from tree operands.
-
-
-
-
-
-
-
-
-
-
+# Trees and expression decision nodes are tagged vectors of Any. Directive
+# metadata stays nominal until exported or lowered to expression decisions.
 
 # A pattern may bind a metavariable multiple times; later uses must match.
 # This collector is also used to reject unbound variables in replacements.
@@ -129,9 +122,13 @@ if kind == "node" {
 return [box("test"), box(path), box(discriminator(pattern)), box(yes), box(no)];
 .end
 
-.function make_rule(phase: String, name: String, pattern: Vec<Any>, replacement: Vec<Any>) -> %Rewrite
+.function rewrite_source(phase: String, name: String, pattern: Vec<Any>, replacement: Vec<Any>) -> %RuleSource
 let names: Vec<String> = collect_metas(pattern, []);
 validate_replacement(replacement, names);
+return %RuleSource(phase, name, pattern, replacement);
+.end
+
+.function make_rule(phase: String, name: String, pattern: Vec<Any>, replacement: Vec<Any>) -> %Rewrite
 let yes: Vec<Any> = [box("leaf"), box(replacement)];
 let no: Vec<Any> = [box("fail")];
 let empty_path: Vec<Int> = [];
@@ -417,10 +414,12 @@ let passes: Vec<String> = [];
 # User-defined rewrites precede intrinsic ones inside a phase.
 for d in decls {
     if %Directive.is_Rewrite(d) {
-        push(rules, %Directive.get_Rewrite(d));
+        let r: %RuleSource = %Directive.get_Rewrite(d);
+        push(rules, make_rule(%RuleSource.phase(r), %RuleSource.name(r), %RuleSource.pattern(r), %RuleSource.replacement(r)));
     } else {
         if %Directive.is_Reject(d) {
-            push(checks, %Directive.get_Reject(d));
+            let r: %RuleSource = %Directive.get_Reject(d);
+            push(checks, make_rule(%RuleSource.phase(r), %RuleSource.name(r), %RuleSource.pattern(r), bool_term(true)));
         } else {
             let phase: String = %Directive.get_Pass(d);
             push(passes, phase);
@@ -448,21 +447,50 @@ discard infer(tree, []);
 return tree;
 .end
 
+# The native host consumes source patterns, not the expression runner's
+# decisions. Preserve directive order without adding any expression builtins.
+.function export_rules(decls: Vec<%Directive>) -> Vec<Any>
+let out: Vec<Any> = [];
+for d in decls {
+    if %Directive.is_Rewrite(d) {
+        let r: %RuleSource = %Directive.get_Rewrite(d);
+        push(out, box([box("R"), box(%RuleSource.phase(r)), box(%RuleSource.name(r)), box(%RuleSource.pattern(r)), box(%RuleSource.replacement(r))]));
+    } else {
+        if %Directive.is_Reject(d) {
+            let r: %RuleSource = %Directive.get_Reject(d);
+            push(out, box([box("X"), box(%RuleSource.phase(r)), box(%RuleSource.name(r)), box(%RuleSource.pattern(r))]));
+        } else {
+            push(out, box([box("P"), box(%Directive.get_Pass(d))]));
+        }
+    }
+}
+return out;
+.end
+
 # --- QML surface grammar ---------------------------------------------------
 # The `?name` form is a pattern variable in LHS and template reference in RHS.
 # The same generic Tree grammar allows operations supplied by host compilers:
-# unknown MIR nodes are accepted by parsing, but rejected if left after passes.
+# unknown constructors are accepted by parsing; hosts check their own IR.
 .rule Program
-'syntax: decls:Directive* "run" term:Tree ";" EOF
-'semantics: return run_program($decls, $term);
+'syntax: decls:Directive* term:ProgramEnd EOF
+'semantics:
+if len($term) == 0 { return export_rules($decls); }
+return run_program($decls, $term);
+.end
+
+.rule ProgramEnd
+'syntax: "run" term:Tree ";" |
+'semantics:
+on term -> return $term; -> end
+return [];
 .end
 
 .rule Directive
 'syntax: "rewrite" phase:ID name:ID ":" lhs:Tree "=>" rhs:Tree ";" | "pass" selected:ID ";" | "reject" reject_phase:ID checkname:ID ":" bad:Tree ";"
 'semantics:
-on name -> return %Directive.Rewrite(make_rule($phase, $name, $lhs, $rhs)); -> end
+on name -> return %Directive.Rewrite(rewrite_source($phase, $name, $lhs, $rhs)); -> end
 on selected -> return %Directive.Pass($selected); -> end
-on checkname -> return %Directive.Reject(make_rule($reject_phase, $checkname, $bad, bool_term(true))); -> end
+on checkname -> return %Directive.Reject(%RuleSource($reject_phase, $checkname, $bad, [])); -> end
 .end
 
 .rule Tree

@@ -40,6 +40,7 @@ NullASTNode *NullASTNode::getInstance()
 void IdentASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void IntegerConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void EnumeratorDeclASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void RealConstASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
@@ -55,6 +56,7 @@ void ArrayDesignatorASTNode::accept(TreeVisitor *v) { v->visit(this); }
 void SizeOfExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void AlignOfExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
+void OffsetOfExprASTNode::accept(TreeVisitor *v) { v->visit(this); }
 
 void TypeDeclASTNode::accept(TreeVisitor *v) { v->visit(this); }
 

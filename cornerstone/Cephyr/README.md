@@ -11,7 +11,8 @@ See [the libc inventory](stdlib/README.md) and
 ## Build and use
 
 Requires CMake 3.20+, a C++20 compiler, CPython 3.10+ with embedding development
-files, and LMDB development files. Lua, Kaguya, ucpp, tomlc99, lmdbxx, and
+files, Perl (to generate the QML frontend), and LMDB development files.
+Lua, Kaguya, ucpp, tomlc99, lmdbxx, and
 cparser-iso11 are taken from `third_party/`; the build does not download them.
 The bundled target bank uses `clang`, `ld.lld`, and `llvm-ar` to assemble and
 link ELF output. The default target is `x86_64-linux-gnu`.
@@ -131,7 +132,7 @@ script unless it repeats the TOML triple (or repeats the built-in default when
 TOML omits `target`). A non-empty `paths.triple_script` bypasses auto detection;
 if no concrete triple is supplied, the script supplies it. For auto builds
 Cephyr checks that the effective tools for the requested stage are executable
-before compiling; `-E`, `-fsyntax-only` and `--emit-mir` need no tools. Tool
+before compiling; `-E`, `-fsyntax-only` and ordinary `--emit-mir` need no external tools. Tool
 discovery does not validate an overridden tool's target flags, linker sysroot,
 or library availability.
 
@@ -157,12 +158,71 @@ LMDB. Preprocessing, frontend checks, and `--emit-mir` do not build a backend.
 `--emit-mir` is a debugging view; data which cannot be represented by native
 MachineIR's word-only globals is emitted separately in `-S` output.
 
+### QML optimization profiles
+
+QML rewrites Cephyr's typed Archon MachineIR after lowering. Nothing runs
+by default. Enable a built-in pass directly or select a profile:
+
+```sh
+cephyr --emit-mir --qml-pass=canonicalize example.c -o -
+cephyr --config project/Cephyr.toml --profile=fast -c example.c
+```
+
+```toml
+[qml]
+profile = "fast" # Optional default; --profile overrides it.
+
+[profiles.fast]
+passes = ["canonicalize", "strength_reduce", "project_optimizations"]
+files = ["rules/project.qpass"]
+fuel = 4096
+parameters = { project_optimizations = { fuel = 256 } }
+```
+
+`passes` lists QML phase names in execution order. The built-in `canonicalize`
+pass applies identities such as `x + 0 → x` to native integer MIR.
+`strength_reduce` rewrites wrapping multiplication by two to addition.
+A rule fragment may supply another phase, for example:
+
+```qml
+rewrite project_optimizations eliminate_sub_zero : sub(?x, 0) => ?x;
+```
+
+Profile `files` are relative to the configuration file; repeatable `--qml-file`
+paths are relative to the working directory. Cephyr compiles all selected files
+together once per invocation, in profile-then-CLI file order. Each repeatable
+`--qml-pass` appends a phase after the profile passes. Select at least one pass
+when passing files or fuel. `--qml-fuel N` overrides profile fuel (default 4096).
+The repeatable `--qml-param PHASE.fuel=N` overrides phase-local fuel; only `fuel`
+is supported and the named phase must be selected. Fuel settings accept
+integers from 1 to 1,000,000. The global limit counts changes across the
+translation unit, and a phase-local limit caps changes within that pass.
+Unknown profiles, phases and parameter keys are errors.
+
+QML operates on C and preprocessed C inputs for `--emit-mir`, `-S`, `-c`,
+and linking from source. QML is not run for `-E`, `-fsyntax-only`, assembler,
+or link-only inputs; those stages do not load rule files. QML processing does
+not alter the generated Archon backend cache key because that cache stores no
+per-input artifacts. Built-in rules are precompiled; installed Cephyr uses
+`python3` (3.10+) on `PATH` only when compiling user-supplied fragments. Optional
+Prolific profiles report `qml_configure` and `qml_rewrite`, as well as
+`qml_verify` when the pass changes MIR or a custom backend needs verification.
+
+Treat rules and profiles as **trusted build inputs**. Cephyr structurally checks
+the rewritten MIR before it can reach SDK rewrite hooks, MIR output, or a
+backend. That check does not prove equivalence or preserve program behavior
+automatically.
+
+See the [QML rule format](qml/README.md) and the [Prolific benchmark](benchmark/README.md)
+for rule authoring and reproducible measurements.
+
 ## Current limits
 
 - The native C subset covers integer and pointer operations, fixed-signature
   calls, direct external scalar variadic calls, scalar and aggregate storage,
   structure and union member access and copy, flexible array members,
-  designated initializers, fixed-size `sizeof` in integer constant expressions,
+  designated initializers, enums, fundamental alignment specifiers, `offsetof`,
+  fixed-size `sizeof` in integer constant expressions,
   `_Static_assert`, `__func__`, `_Generic`, loops, `goto`, and `switch` including
   fallthrough.
   AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,

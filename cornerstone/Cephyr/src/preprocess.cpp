@@ -597,7 +597,7 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     if (options.assembler)
         lexer.flags |= ASSEMBLY_INPUT;
     else
-        lexer.flags |= UTF8_SOURCE;
+        lexer.flags |= UTF8_SOURCE | C11_CONSTRAINTS;
     lexer.output = output;
 
     std::string synthetic_source;

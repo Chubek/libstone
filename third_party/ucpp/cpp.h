@@ -240,11 +240,13 @@ struct lexer_state {
 #define ASSEMBLY_INPUT	     0x200000UL /* permit assembler '#' comment lines */
 #define CHECK_SOURCE_EOF     0x400000UL /* diagnose missing final newline/splice */
 #define PROCESS_TEXT_PRAGMAS 0x800000UL /* execute pragmas rather than dumping them */
+#define C11_CONSTRAINTS	    0x2000000UL /* diagnose malformed C11 constructs */
 
 /* internal flags */
 #define READ_AGAIN	     0x080000UL	/* emit again the last token */
 #define TEXT_OUTPUT	     0x100000UL	/* output text */
 #define PHASE3_INPUT	    0x1000000UL /* retokenize without trigraphs or splicing */
+#define VA_ARGS_REPLACEMENT 0x4000000UL /* scanning a variadic replacement list */
 
 /*
  * Public function prototypes

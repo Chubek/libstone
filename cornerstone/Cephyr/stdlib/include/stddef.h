@@ -10,18 +10,10 @@ typedef unsigned int wchar_t;
 typedef int wchar_t;
 #endif
 
-#if defined(__CEPHYR__)
-/*
- * The current parser cannot represent long double or an explicitly aligned
- * aggregate.  Do not lie about an 8-byte substitute on a 16-byte-aligned ABI.
- */
-#define __CEPHYR_MAX_ALIGN_T_UNAVAILABLE 1
-#else
+/* The bundled LP64 targets support 16-byte fundamental alignment. */
 typedef struct {
-    long long __cephyr_ll;
-    long double __cephyr_ld;
+    _Alignas(16) unsigned char __cephyr_aligned;
 } max_align_t;
-#endif
 
 #ifndef NULL
 #define NULL ((void *)0)

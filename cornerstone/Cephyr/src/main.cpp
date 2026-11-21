@@ -1,6 +1,7 @@
 #include "driver.hpp"
 #include "mir_verify.h"
 #include "moonstone_tools.hpp"
+#include "qml_rewrite.hpp"
 #include "sdk_internal.hpp"
 
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <filesystem>
@@ -60,6 +62,8 @@ struct Options {
     fs::path output, config_file, sysroot;
     fs::path profile_output;
     std::string target, stdlib;
+    std::string qml_profile;
+    QmlProfile qml;
     Command assembler_options;
     PreprocessOptions preprocess;
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
@@ -100,6 +104,11 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --stdlib MODE             cephyr, system, or none
   --target TRIPLE|auto      Select a Lua target or a supported native host target
   --config FILE             Read FILE instead of ./Cephyr.toml
+  --profile NAME            Select a QML profile from the configuration
+  --qml-pass NAME           Append a QML pass (repeatable)
+  --qml-file PATH           Load a QML rule fragment (repeatable)
+  --qml-fuel N              Set the QML rewrite fuel limit
+  --qml-param PHASE.KEY=N   Set a phase parameter (repeatable; KEY may be fuel)
   --no-cache                Regenerate the Archon backend without using LMDB
   --diagnostics-format=FMT  text or sarif
   --moonstone-analyze       Inspect supported typed MIR (optional build)
@@ -182,6 +191,16 @@ std::optional<Command> comma_arguments(std::string_view text)
     return std::nullopt;
 }
 
+std::optional<unsigned> positive_unsigned(std::string_view text)
+{
+    if (text.empty())
+        return std::nullopt;
+    unsigned value;
+    const auto end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    return ec == std::errc{} && ptr == end && value ? std::optional{value} : std::nullopt;
+}
+
 bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Diagnostics &diag)
 {
     bool positional = false, input_dash = false;
@@ -255,6 +274,36 @@ bool parse_options(std::size_t argc, const char *const *argv, Options &opts, Dia
                 diag.error("cephyr.option", "unsupported C standard '" + value + "'; use -std=c11");
         } else if (option("--config")) {
             opts.config_file = argument("--config");
+        } else if (option("--profile")) {
+            opts.qml_profile = argument("--profile");
+        } else if (option("--qml-pass")) {
+            if (auto pass = argument("--qml-pass"); !pass.empty())
+                opts.qml.passes.push_back(std::move(pass));
+        } else if (option("--qml-file")) {
+            if (auto file = argument("--qml-file"); !file.empty())
+                opts.qml.files.emplace_back(std::move(file));
+        } else if (option("--qml-fuel")) {
+            const auto value = argument("--qml-fuel");
+            if (!value.empty()) {
+                if (auto fuel = positive_unsigned(value))
+                    opts.qml.fuel = *fuel;
+                else
+                    diag.error("cephyr.option", "--qml-fuel must be a positive unsigned integer");
+            }
+        } else if (option("--qml-param")) {
+            const auto param = argument("--qml-param");
+            if (!param.empty()) {
+                const auto dot = param.find('.');
+                const auto eq = param.find('=');
+                if (dot == std::string::npos || eq == std::string::npos || !dot || dot + 1 >= eq)
+                    diag.error("cephyr.option", "--qml-param requires PHASE.KEY=N");
+                else if (param.compare(dot + 1, eq - dot - 1, "fuel") != 0)
+                    diag.error("cephyr.option", "unknown QML parameter '" + param.substr(0, eq) + "'");
+                else if (auto fuel = positive_unsigned(std::string_view(param).substr(eq + 1)))
+                    opts.qml.phase_fuel.insert_or_assign(param.substr(0, dot), *fuel);
+                else
+                    diag.error("cephyr.option", "QML phase fuel must be a positive unsigned integer");
+            }
         } else if (option("--target") || token == "-target") {
             opts.target = argument(token == "-target" ? "-target" : "--target");
         } else if (option("--sysroot")) {
@@ -609,6 +658,12 @@ bool can_publish(const fs::path &path, const Options &opts, Diagnostics &diag)
             return false;
         }
     }
+    for (const auto &file : opts.qml.files) {
+        if (same_file(path, file)) {
+            diag.error("cephyr.output", "output would overwrite a QML rule file", Location{path.string()});
+            return false;
+        }
+    }
     return true;
 }
 
@@ -723,6 +778,109 @@ bool execute(const Command &args, const Options &opts, Diagnostics &diag)
     }
     const auto before = diag.error_count();
     return run_process(args, diag) == 0 && diag.error_count() == before;
+}
+
+bool add_qml_bundle(qml::Pipeline &pipeline, const fs::path &path, Diagnostics &diag)
+{
+    const auto name = path.string();
+    constexpr auto max_size = 16u * 1024u * 1024u;
+    std::error_code ec;
+    const auto size = fs::file_size(path, ec);
+    if (ec || size > max_size) {
+        diag.error("cephyr.qml.bundle", ec ? "cannot read compiled QML rules: " + ec.message() :
+                   "compiled QML rules exceed the 16 MiB limit", Location{name});
+        return false;
+    }
+    std::ifstream file(path, std::ios::binary);
+    std::string contents(static_cast<std::size_t>(size), '\0');
+    if (!file.read(contents.data(), static_cast<std::streamsize>(size)) ||
+        file.peek() != std::char_traits<char>::eof() || file.bad()) {
+        diag.error("cephyr.qml.bundle", "cannot read compiled QML rules", Location{name});
+        return false;
+    }
+    return pipeline.add_compiled(contents, diag, name);
+}
+
+bool configure_qml(Options &opts, const Config &config,
+                   std::optional<qml::Pipeline> &pipeline, Diagnostics &diag)
+{
+    const auto name = opts.qml_profile.empty() ? config.qml_profile.value_or("") : opts.qml_profile;
+    if (!name.empty()) {
+        const auto selected = config.qml_profiles.find(name);
+        if (selected == config.qml_profiles.end()) {
+            diag.error("cephyr.qml.profile", "unknown QML profile '" + name + "'",
+                       Location{config_path(opts).string()});
+            return false;
+        }
+        auto effective = selected->second;
+        extend(effective.passes, opts.qml.passes);
+        effective.files.insert(effective.files.end(), opts.qml.files.begin(), opts.qml.files.end());
+        if (opts.qml.fuel)
+            effective.fuel = opts.qml.fuel;
+        for (const auto &[phase, fuel] : opts.qml.phase_fuel)
+            effective.phase_fuel.insert_or_assign(phase, fuel);
+        opts.qml = std::move(effective);
+    }
+    const auto &[passes, files, fuel, phase_fuel] = opts.qml;
+    for (const auto &parameter : phase_fuel) {
+        const auto &phase = parameter.first;
+        if (std::find(passes.begin(), passes.end(), phase) == passes.end()) {
+            diag.error("cephyr.qml.profile", "parameter specified for unselected QML pass '" + phase + "'");
+            return false;
+        }
+    }
+    if (passes.empty()) {
+        if (files.empty() && !fuel)
+            return true;
+        diag.error("cephyr.qml.profile", "select at least one QML pass when supplying rule files or fuel");
+        return false;
+    }
+
+    if (!opts.profile_output.empty() && !can_publish(opts.profile_output, opts, diag))
+        return false;
+    const auto resource_root = resources().first;
+    const bool build_tree = resource_root == fs::path(CEPHYR_SOURCE_RESOURCES);
+    const auto assets = build_tree ? fs::path(CEPHYR_BUILD_QML) : resource_root / "qml";
+    pipeline.emplace();
+    if (!add_qml_bundle(*pipeline, assets / "builtin.qmb", diag))
+        return false;
+    if (!files.empty()) {
+        const auto compiler = assets / "compile_rules.py";
+        const auto frontend = assets / "qml_frontend.py";
+        if (!path_exists(compiler) || !path_exists(frontend)) {
+            diag.error("cephyr.qml.bundle", "QML rule compiler or generated frontend is missing",
+                       Location{assets.string()});
+            return false;
+        }
+        for (const auto &file : files) {
+            std::error_code error;
+            if (!fs::is_regular_file(file, error)) {
+                diag.error("cephyr.qml.rules", "QML rule input is not a readable regular file",
+                           Location{file.string()});
+                return false;
+            }
+        }
+        TempDirectory directory(fs::absolute(fs::temp_directory_path()), "cephyr-qml-XXXXXX");
+        const auto bundle = directory.path / "rules.qmb";
+        Command command{build_tree ? CEPHYR_BUILD_PYTHON : "python3", "-I", "-B", compiler.string(),
+                        "--frontend", frontend.string(), "--output", bundle.string(), "--"};
+        for (const auto &file : files)
+            command.push_back(fs::absolute(file).string());
+        if (!execute(command, opts, diag) || !add_qml_bundle(*pipeline, bundle, diag))
+            return false;
+    }
+    return pipeline->configure(passes, fuel.value_or(4096), diag, phase_fuel);
+}
+
+bool verify_mir(std::string_view mir, Diagnostics &diag, std::string_view name,
+                std::string_view code)
+{
+    ArchonBackendDiagnostic verification{};
+    if (cephyr_verify_mir(mir.data(), mir.size(), &verification) == ARCHON_BACKEND_OK)
+        return true;
+    diag.error(code, verification.message[0] ? verification.message :
+               "Archon rejected MachineIR", Location{std::string(name)});
+    return false;
 }
 
 bool assemble(const Config &config, const Target &target, const Options &opts,
@@ -908,7 +1066,7 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
             check("a target archiver", config.archiver.empty() ? target.archiver : config.archiver));
 }
 
-bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag,
+bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag,
              MoonstoneProfile *profile)
 {
     detail::MoonstoneAnalysis *analysis = nullptr;
@@ -923,6 +1081,19 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
     if (!loaded)
         return false;
     auto &config = *loaded;
+    std::optional<qml::Pipeline> qml_pipeline;
+    if (opts.stage != Stage::preprocess && opts.stage != Stage::syntax &&
+        (!opts.qml_profile.empty() || config.qml_profile || !opts.qml.passes.empty() ||
+         !opts.qml.files.empty() || opts.qml.fuel || !opts.qml.phase_fuel.empty()) &&
+        std::any_of(opts.inputs.begin(), opts.inputs.end(),
+                    [](const Input &input) { return c_input(input.language); })) {
+        if (!measured(profile, "qml_configure", {}, [&] {
+            return configure_qml(opts, config, qml_pipeline, diag);
+        }))
+            return false;
+        // The LMDB cache stores only generated target backend source, never
+        // rewritten MIR, assembly, or objects. It does not depend on QML.
+    }
     const bool automatic = config.target == "auto" && config.triple_script.empty();
     std::optional<Target> target;
     if (automatic) {
@@ -1100,21 +1271,29 @@ bool compile(const Options &opts, Invocation &invocation, SdkPipeline &sdk, Diag
                 return false;
             if (opts.stage == Stage::syntax)
                 continue;
+            const bool custom_backend = opts.stage != Stage::mir && sdk_backend;
+            if (qml_pipeline) {
+                bool qml_changed = false;
+                // This is canonical MIR from lower(); the analysis hooks
+                // above cannot replace it. Verify any changed output before
+                // passing it to hooks, or as usual for a custom backend.
+                if (!measured(profile, "qml_rewrite", name, [&] {
+                    return qml_pipeline->rewrite_canonical(lowered->mir, diag, name, &qml_changed);
+                }))
+                    return false;
+                if ((qml_changed || custom_backend) && !measured(profile, "qml_verify", name, [&] {
+                    return verify_mir(lowered->mir, diag, name, "cephyr.qml.mir");
+                }))
+                    return false;
+            }
             bool rewritten = false;
             if (!measured(profile, "sdk_rewrite", name, [&] {
                 return sdk.rewrite(lowered->mir, *target, name, diag, &rewritten);
             }))
                 return false;
-            const bool custom_backend = opts.stage != Stage::mir && sdk_backend;
-            if (rewritten || custom_backend) {
-                ArchonBackendDiagnostic verification{};
-                if (cephyr_verify_mir(lowered->mir.data(), lowered->mir.size(), &verification) !=
-                    ARCHON_BACKEND_OK) {
-                    diag.error("cephyr.sdk.mir", verification.message[0] ? verification.message :
-                               "Archon rejected MachineIR", Location{name});
-                    return false;
-                }
-            }
+            if ((rewritten || (custom_backend && !qml_pipeline)) &&
+                !verify_mir(lowered->mir, diag, name, "cephyr.sdk.mir"))
+                return false;
             if (opts.stage == Stage::mir) {
                 if (!publish_text(output_name(input, opts), lowered->mir, opts, invocation, diag))
                     return false;

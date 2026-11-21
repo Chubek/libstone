@@ -43,6 +43,7 @@ unsigned cephyr_python_version(void);
  *
  * Use -o - to capture assembly or MIR; -E captures output by default. Calls
  * can overlap on different threads, but same-thread recursion is rejected.
+ * Opt into QML through the same argv options and TOML profiles as the CLI.
  * See EMBEDDING.md for host CPython lifecycle and native backend requirements.
  */
 int cephyr_compile(const cephyr_request *request, cephyr_result **result);

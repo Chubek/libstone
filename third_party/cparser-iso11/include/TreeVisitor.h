@@ -21,6 +21,7 @@ public:
 
     virtual void visit(IdentASTNode *n);
     virtual void visit(IntegerConstASTNode *n);
+    virtual void visit(EnumeratorDeclASTNode *n);
     virtual void visit(RealConstASTNode *n);
     virtual void visit(StringConstASTNode *n);
     virtual void visit(CharConstASTNode *n);
@@ -31,6 +32,7 @@ public:
     virtual void visit(ArrayDesignatorASTNode *n);
     virtual void visit(SizeOfExprASTNode *n);
     virtual void visit(AlignOfExprASTNode *n);
+    virtual void visit(OffsetOfExprASTNode *n);
     virtual void visit(TypeDeclASTNode *n);
     virtual void visit(FunctionDeclASTNode *n);
     virtual void visit(VarDeclASTNode *n);

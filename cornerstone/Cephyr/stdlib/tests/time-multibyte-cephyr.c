@@ -1,4 +1,6 @@
+#include <inttypes.h>
 #include <setjmp.h>
+#include <stdio.h>
 #include <time.h>
 #include <uchar.h>
 #include <wchar.h>
@@ -9,6 +11,40 @@
 #if !defined(__CEPHYR_HAS_SCALAR_FP) && !defined(__CEPHYR_DIFFTIME_UNAVAILABLE)
 #error "difftime must be gated without a supported native floating-point ABI"
 #endif
+
+static int wide_stream(void)
+{
+    /* Use execution-set codes rather than native wide literals. */
+    wchar_t text[4];
+    wchar_t line[4];
+    wchar_t *end;
+    fpos_t position;
+    FILE *file = tmpfile();
+    if (file == NULL || fwide(file, 0) != 0)
+        return 9;
+    text[0] = 'h';
+    text[1] = 'i';
+    text[2] = '\n';
+    text[3] = 0;
+    if (fputws(text, file) < 0 || fwide(file, -1) <= 0)
+        return 10;
+    rewind(file);
+    if (fgetpos(file, &position) != 0 || fgetwc(file) != 'h')
+        return 11;
+    if (ungetwc('z', file) != 'z' || fsetpos(file, &position) != 0)
+        return 12;
+    if (fgetws(line, 4, file) != line || wcscmp(text, line) != 0)
+        return 13;
+    if (getwc(file) != WEOF || !feof(file) || fclose(file) != 0)
+        return 14;
+    text[0] = '4';
+    text[1] = '2';
+    if (wcstol(text, &end, 10) != 42 || *end != '\n')
+        return 15;
+    if (wcstoumax(text, &end, 8) != 34 || *end != '\n')
+        return 16;
+    return 0;
+}
 
 int main(void)
 {
@@ -41,5 +77,5 @@ int main(void)
         return 5;
     if (mbrtowc(&wc, "a", 1, &state) != 1 || wc != 'a' || !mbsinit(&state))
         return 6;
-    return 0;
+    return wide_stream();
 }

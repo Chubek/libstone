@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import sys
 
-TOKEN = re.compile(r"\s+|\#[^\n]*|=>|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[?:;,()]|.", re.S)
+TOKEN = re.compile(r"\s+|\#[^\n]*|=>|[A-Za-z_][A-Za-z_0-9]*|-?[0-9]+|[?:;,()]|.", re.S)
 
 class SyntaxErrorQML(Exception):
     pass
@@ -47,9 +47,11 @@ class Reader:
             return ('bool', True)
         if t == 'false':
             return ('bool', False)
-        if t.isdigit():
-            if int(t) > (2**63 - 1): raise SyntaxErrorQML('integer outside Int64 range')
-            return ('int', int(t))
+        if re.fullmatch(r'-?[0-9]+', t):
+            value = int(t)
+            if not -(2**63) <= value <= 2**63 - 1:
+                raise SyntaxErrorQML('integer outside Int64 range')
+            return ('int', value)
         if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', t):
             raise SyntaxErrorQML(f'unexpected term {t!r}')
         if self.peek() == '(':

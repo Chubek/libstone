@@ -44,8 +44,8 @@ return node_term(name, [box(a), box(b)]);
 return node_term(name, [box(a), box(b), box(c)]);
 .end
 
-.function prepend(first: Vec<Any>, tail: Vec<Any>) -> Vec<Any>
+.function prepend(first: Vec<Any>, tail: Vec<Vec<Any>>) -> Vec<Any>
 let values: Vec<Any> = [box(first)];
-for item in tail { push(values, item); }
+for item in tail { push(values, box(item)); }
 return values;
 .end

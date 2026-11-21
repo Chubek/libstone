@@ -378,7 +378,7 @@ int handle_define(struct lexer_state *ls)
 #endif
 	int ltwws = 1, redef = 0;
 	char *mname = 0;
-	int narg;
+	int narg, status;
 	size_t nt;
 	long l = ls->line;
 	
@@ -394,7 +394,7 @@ int handle_define(struct lexer_state *ls)
 	}
 	if (mname == 0) {
 		error(l, "missing macro name");
-		return 1;
+		goto warp_error;
 	}
 	if (reserved_macro_name(mname)) {
 		error(l, "trying to redefine the special macro %s", mname);
@@ -430,7 +430,20 @@ int handle_define(struct lexer_state *ls)
 #define mval	(m->val)
 #endif
 	}
-	if (next_token(ls)) goto define_end;
+	status = next_token(ls);
+	if (status) {
+		if (redef) {
+			if (n->narg >= 0) goto redef_error_2;
+#ifdef LOW_MEM
+			if (n->cval.length) goto redef_error_2;
+#else
+			if (n->val.nt) goto redef_error_2;
+#endif
+			return status == 1;
+		}
+		if (status == 1) goto define_error;
+		goto define_end;
+	}
 	/*
 	 * Check if the token immediately following the macro name is
 	 * a left parenthesis; if so, then this is a macro with arguments.
@@ -440,8 +453,9 @@ int handle_define(struct lexer_state *ls)
 		int i, j;
 		int need_comma = 0, saw_mdots = 0;
 
+		if (redef && n->narg < 0) goto redef_error;
 		narg = 0;
-		while (!next_token(ls)) {
+		while (!(status = next_token(ls))) {
 			if (ls->ctok->type == NEWLINE) {
 				error(l, "truncated macro definition");
 				goto define_error;
@@ -516,7 +530,7 @@ int handle_define(struct lexer_state *ls)
 					error(l, "void macro argument");
 					goto warp_error;
 				}
-				if (redef && n->vaarg && !saw_mdots)
+				if (redef && (n->narg != narg || n->vaarg != saw_mdots))
 					goto redef_error;
 				break;
 			} else if (ttMWS(ls->ctok->type)) {
@@ -524,6 +538,10 @@ int handle_define(struct lexer_state *ls)
 			}
 			error(l, "invalid macro argument");
 			goto warp_error;
+		}
+		if (status) {
+			if (status != 1) error(l, "truncated macro definition");
+			goto define_error;
 		}
 		if (!redef) {
 			for (i = 1; i < narg; i ++) for (j = 0; j < i; j ++)
@@ -535,6 +553,11 @@ int handle_define(struct lexer_state *ls)
 		}
 		if (!redef) m->narg = narg;
 	} else {
+		if (redef && n->narg >= 0) goto redef_error;
+		if (!ttWHI(ls->ctok->type) && (ls->flags & C11_CONSTRAINTS)) {
+			error(l, "missing whitespace after object-like macro name");
+			goto warp_error;
+		}
 		if (!ttWHI(ls->ctok->type) && (ls->flags & WARN_STANDARD))
 			warning(ls->line, "identifier not followed by "
 				"whitespace in #define");
@@ -544,7 +567,8 @@ int handle_define(struct lexer_state *ls)
 	if (redef) nt = 0;
 
 	/* now, we have the arguments. Let's get the macro contents. */
-	while (!next_token(ls) && ls->ctok->type != NEWLINE) {
+	if (redef ? n->vaarg : m->vaarg) ls->flags |= VA_ARGS_REPLACEMENT;
+	while (!(status = next_token(ls)) && ls->ctok->type != NEWLINE) {
 		struct token t;
 
 		t.type = ls->ctok->type;
@@ -558,9 +582,10 @@ int handle_define(struct lexer_state *ls)
 				if (redef) {
 					if (!n->vaarg) goto redef_error;
 				} else if (!m->vaarg) {
-					error(l, "'__VA_ARGS__' is forbidden "
-						"in macros with a fixed "
-						"number of arguments");
+					if (!(ls->flags & C11_CONSTRAINTS))
+						error(l, "'__VA_ARGS__' is forbidden "
+							"in macros with a fixed "
+							"number of arguments");
 					goto warp_error;
 				}
 				t.type = MACROARG;
@@ -601,13 +626,14 @@ int handle_define(struct lexer_state *ls)
 #else
 				if (t.type != NONE) goto redef_error;
 #endif
+				continue; /* Only trailing whitespace beyond the old list. */
 			} else if (t.type != n->cval.t[n->cval.rp]) {
 				goto redef_error;
 			} else if (t.type == MACROARG) {
 				unsigned anum = n->cval.t[n->cval.rp + 1];
 
 				if (anum >= 128U) anum = ((anum & 127U) << 8)
-					| m->cval.t[n->cval.rp + 2];
+					| n->cval.t[n->cval.rp + 2];
 				if (anum != (unsigned)t.line) goto redef_error;
 			} else if (S_TOKEN(t.type) && strcmp(ls->ctok->name,
 				   (char *)(n->cval.t + n->cval.rp + 1))) {
@@ -617,7 +643,7 @@ int handle_define(struct lexer_state *ls)
 			if (S_TOKEN(tt)) n->cval.rp += 1
 				+ strlen((char *)(n->cval.t + n->cval.rp));
 			else if (tt == MACROARG) {
-				if (n->cval.t[++ n->cval.rp] >= 128)
+				if (n->cval.t[n->cval.rp ++] >= 128)
 					n->cval.rp ++;
 			}
 #else
@@ -639,6 +665,8 @@ int handle_define(struct lexer_state *ls)
 		}
 	}
 
+	ls->flags &= ~VA_ARGS_REPLACEMENT;
+	if (status == 1) goto define_error;
 	if (redef) {
 #ifdef LOW_MEM
 		if (n->cval.rp < n->cval.length) goto redef_error_2;
@@ -737,6 +765,7 @@ redef_error_2:
 warp_error:
 	while (ls->ctok->type != NEWLINE && !next_token(ls));
 define_error:
+	ls->flags &= ~VA_ARGS_REPLACEMENT;
 	if (m) del_macro(m);
 	if (mname) freemem(mname);
 #ifdef LOW_MEM
@@ -1802,124 +1831,78 @@ int undef_macro(struct lexer_state *ls, char *def)
 	return ret;
 }
 
-/*
- * We saw a #ifdef directive. Parse the line.
- * return value: 1 if the macro is defined, 0 if it is not, -1 on error
- */
+/* #ifdef, #ifndef, and #undef each take exactly one unexpanded identifier. */
+static char *directive_macro_name(struct lexer_state *ls, char *directive)
+{
+	long line = ls->line;
+	int status, trailing = 0;
+	char *name = 0;
+
+	do status = next_token(ls);
+	while (!status && ttMWS(ls->ctok->type));
+	if (status || ls->ctok->type != NAME) {
+		if (status != 1) error(line, "expected a macro name for #%s", directive);
+		if (!status && ls->ctok->type != NEWLINE)
+			while (!next_token(ls) && ls->ctok->type != NEWLINE);
+		return 0;
+	}
+
+	name = sdup(ls->ctok->name);
+	while (!(status = next_token(ls)) && ls->ctok->type != NEWLINE)
+		if (!ttMWS(ls->ctok->type)) trailing = 1;
+	if (trailing) {
+		if (ls->flags & C11_CONSTRAINTS)
+			error(line, "trailing tokens in #%s", directive);
+		else if (ls->flags & WARN_STANDARD)
+			warning(line, "trailing garbage in #%s", directive);
+	}
+	if (status == 1 || (trailing && (ls->flags & C11_CONSTRAINTS))) {
+		freemem(name);
+		return 0;
+	}
+	return name;
+}
+
 int handle_ifdef(struct lexer_state *ls)
 {
-	while (!next_token(ls)) {
-		int tgd = 1;
-
-		if (ls->ctok->type == NEWLINE) break;
-		if (ttMWS(ls->ctok->type)) continue;
-		if (ls->ctok->type == NAME) {
-			int x = get_macro(ls->ctok->name) != 0;
-			while (!next_token(ls) && ls->ctok->type != NEWLINE)
-				if (tgd && !ttWHI(ls->ctok->type)
-					&& (ls->flags & WARN_STANDARD)) {
-					warning(ls->line, "trailing garbage "
-						"in #ifdef");
-					tgd = 0;
-				}
-			return x;
-		}
-		error(ls->line, "illegal macro name for #ifdef");
-		while (!next_token(ls) && ls->ctok->type != NEWLINE)
-			if (tgd && !ttWHI(ls->ctok->type)
-				&& (ls->flags & WARN_STANDARD)) {
-				warning(ls->line, "trailing garbage in "
-					"#ifdef");
-				tgd = 0;
-			}
-		return -1;
-	}
-	error(ls->line, "unfinished #ifdef");
-	return -1;
+	char *name = directive_macro_name(ls, "ifdef");
+	int defined;
+	if (!name) return -1;
+	defined = get_macro(name) != 0;
+	freemem(name);
+	return defined;
 }
 
-/*
- * for #undef
- * return value: 1 on error, 0 on success. Undefining a macro that was
- * already not defined is not an error.
- */
 int handle_undef(struct lexer_state *ls)
 {
-	while (!next_token(ls)) {
-		if (ls->ctok->type == NEWLINE) break;
-		if (ttMWS(ls->ctok->type)) continue;
-		if (ls->ctok->type == NAME) {
-			struct macro *m = get_macro(ls->ctok->name);
-			int tgd = 1;
-
-			if (reserved_macro_name(ls->ctok->name)) {
-				error(ls->ctok->line, "trying to undef special macro %s",
-					ls->ctok->name);
-				goto undef_error;
-			}
-			if (m != 0) {
-				if (emit_defines)
-					fprintf(emit_output, "#undef %s\n",
-						ls->ctok->name);
-				remove_macro(ls->ctok->name);
-			}
-			while (!next_token(ls) && ls->ctok->type != NEWLINE)
-				if (tgd && !ttWHI(ls->ctok->type)
-					&& (ls->flags & WARN_STANDARD)) {
-					warning(ls->line, "trailing garbage "
-						"in #undef");
-					tgd = 0;
-				}
-			return 0;
-		}
-		error(ls->line, "illegal macro name for #undef");
-	undef_error:
-		while (!next_token(ls) && ls->ctok->type != NEWLINE);
-		return 1;
+	long line = ls->line;
+	char *name = directive_macro_name(ls, "undef");
+	int ret = 0;
+	if (!name) return 1;
+	if (reserved_macro_name(name)) {
+		error(line, "trying to undef special macro %s", name);
+		ret = 1;
+	} else if (get_macro(name)) {
+		if (emit_defines) fprintf(emit_output, "#undef %s\n", name);
+		remove_macro(name);
 	}
-	error(ls->line, "unfinished #undef");
-	return 1;
+	freemem(name);
+	return ret;
 }
 
-/*
- * for #ifndef
- * return value: 0 if the macro is defined, 1 if it is not, -1 on error.
- */
 int handle_ifndef(struct lexer_state *ls)
 {
-	while (!next_token(ls)) {
-		int tgd = 1;
-
-		if (ls->ctok->type == NEWLINE) break;
-		if (ttMWS(ls->ctok->type)) continue;
-		if (ls->ctok->type == NAME) {
-			int x = get_macro(ls->ctok->name) == 0;
-
-			while (!next_token(ls) && ls->ctok->type != NEWLINE)
-				if (tgd && !ttWHI(ls->ctok->type)
-					&& (ls->flags & WARN_STANDARD)) {
-					warning(ls->line, "trailing garbage "
-						"in #ifndef");
-					tgd = 0;
-				}
-			if (protect_detect.state == 1) {
-				protect_detect.state = 2;
-				protect_detect.macro = sdup(ls->ctok->name);
-			}
-			return x;
-		}
-		error(ls->line, "illegal macro name for #ifndef");
-		while (!next_token(ls) && ls->ctok->type != NEWLINE)
-			if (tgd && !ttWHI(ls->ctok->type)
-				&& (ls->flags & WARN_STANDARD)) {
-				warning(ls->line, "trailing garbage in "
-					"#ifndef");
-				tgd = 0;
-			}
-		return -1;
+	char *name = directive_macro_name(ls, "ifndef");
+	int undefined;
+	if (!name) return -1;
+	undefined = get_macro(name) == 0;
+	if (protect_detect.state == 1) {
+		protect_detect.state = 2;
+		protect_detect.macro = name;
+	} else {
+		freemem(name);
 	}
-	error(ls->line, "unfinished #ifndef");
-	return -1;
+	return undefined;
 }
 
 /*

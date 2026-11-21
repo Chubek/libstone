@@ -13,6 +13,7 @@ namespace cparser
 
 void TreeVisitor::visit(IdentASTNode *n) {}
 void TreeVisitor::visit(IntegerConstASTNode *n) {}
+void TreeVisitor::visit(EnumeratorDeclASTNode *n) { n->getInitializer()->accept(this); }
 void TreeVisitor::visit(RealConstASTNode *n) {}
 void TreeVisitor::visit(StringConstASTNode *n) {}
 void TreeVisitor::visit(CharConstASTNode *n) {}
@@ -24,6 +25,11 @@ void TreeVisitor::visit(StaticAssertASTNode *n)
 
 void TreeVisitor::visit(SizeOfExprASTNode *n) { n->getExpr()->accept(this); }
 void TreeVisitor::visit(AlignOfExprASTNode *n) { n->getExpr()->accept(this); }
+void TreeVisitor::visit(OffsetOfExprASTNode *n)
+{
+    n->getType()->accept(this);
+    n->getDesignators()->accept(this);
+}
 
 void TreeVisitor::visit(GenericExprASTNode *n)
 {
@@ -61,6 +67,7 @@ void TreeVisitor::visit(FunctionDeclASTNode *n)
 
 void TreeVisitor::visit(VarDeclASTNode *n)
 {
+    n->getAlignments()->accept(this);
     n->getName()->accept(this);
     n->getType()->accept(this);
     n->getInit()->accept(this);
@@ -74,6 +81,7 @@ void TreeVisitor::visit(ParmDeclASTNode *n)
 
 void TreeVisitor::visit(FieldDeclASTNode *n)
 {
+    n->getAlignments()->accept(this);
     n->getName()->accept(this);
     n->getType()->accept(this);
 }

@@ -55,6 +55,7 @@ enum ASTNodeKind
     NK_LIST,
     NK_SIZEOF_EXPR,
     NK_ALIGNOF_EXPR,
+    NK_OFFSETOF_EXPR,
 
     // Declarations
     NK_FUNCTION_DECL,
@@ -62,6 +63,7 @@ enum ASTNodeKind
     NK_VAR_DECL,
     NK_PARM_DECL,
     NK_FIELD_DECL,
+    NK_ENUMERATOR_DECL,
 
     // Statements
     NK_ASM_STMT,
@@ -269,10 +271,33 @@ public:
     void accept(TreeVisitor *v);
 };
 
+class EnumeratorDeclASTNode : public ASTNode
+{
+    std::string _name;
+    ASTNode *_initializer;
+
+public:
+    EnumeratorDeclASTNode(std::string name, ASTNode *initializer, int line)
+        : ASTNode(NK_ENUMERATOR_DECL), _name(std::move(name))
+    {
+        setLineNum(line);
+        ASSIGN_AST_NODE_REF(_initializer, initializer);
+    }
+
+    ~EnumeratorDeclASTNode() { DELETE_AST_NODE_REF(_initializer); }
+
+    const char *getName() const { return _name.c_str(); }
+    ASTNode *getInitializer() const { return _initializer; }
+    void accept(TreeVisitor *v);
+};
+
 class IntegerConstASTNode : public ASTNode
 {
     std::uint64_t _value;
     std::string _spelling;
+    // Arena-owned. Lexical binding is fixed by the parser; the language
+    // consumer must evaluate the declaration in its target's integer model.
+    const EnumeratorDeclASTNode *_enumerator = nullptr;
 
 public:
     IntegerConstASTNode(std::uint64_t VALUE, std::string Spelling = {})
@@ -282,8 +307,24 @@ public:
         kind = NK_INTEGER_CONST;
     }
 
+    explicit IntegerConstASTNode(const EnumeratorDeclASTNode *enumerator)
+        : IntegerConstASTNode(0, enumerator->getName())
+    {
+        _enumerator = enumerator;
+        // Preserve the raw literal hint for clients inspecting a simple AST.
+        // It is not the semantically evaluated value of an enumerator.
+        auto *initializer = enumerator->getInitializer();
+        if (initializer->getKind() == NK_INTEGER_CONST)
+        {
+            auto *literal = static_cast<IntegerConstASTNode *>(initializer);
+            if (!literal->getEnumerator())
+                _value = literal->getValue();
+        }
+    }
+
     std::uint64_t getValue() const { return _value; }
     const char *getSpelling() const { return _spelling.c_str(); }
+    const EnumeratorDeclASTNode *getEnumerator() const { return _enumerator; }
 
     //STType *checkType(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -499,6 +540,28 @@ public:
     void accept(TreeVisitor *v);
 };
 
+class OffsetOfExprASTNode : public ASTNode
+{
+    ASTNode *_type;
+    ASTNode *_designators;
+
+public:
+    OffsetOfExprASTNode(ASTNode *type, ASTNode *designators)
+        : ASTNode(NK_OFFSETOF_EXPR)
+    {
+        ASSIGN_AST_NODE_REF(_type, type);
+        ASSIGN_AST_NODE_REF(_designators, designators);
+    }
+    ~OffsetOfExprASTNode()
+    {
+        DELETE_AST_NODE_REF(_type);
+        DELETE_AST_NODE_REF(_designators);
+    }
+    ASTNode *getType() const { return _type; }
+    ASTNode *getDesignators() const { return _designators; }
+    void accept(TreeVisitor *v);
+};
+
 class TypeDeclASTNode : public ASTNode
 {
     ASTNode *_name;
@@ -589,6 +652,7 @@ class VarDeclASTNode : public ASTNode
     ASTNode *_type;
     ASTNode *_name;
     ASTNode *_init;
+    ASTNode *_alignments = NULL_AST_NODE;
 
 public:
     VarDeclASTNode(ASTNode *Type, ASTNode *Name)
@@ -612,15 +676,18 @@ public:
         DELETE_AST_NODE_REF(_type);
         DELETE_AST_NODE_REF(_name);
         DELETE_AST_NODE_REF(_init);
+        DELETE_AST_NODE_REF(_alignments);
     }
 
     void setType(ASTNode *Type) { ASSIGN_AST_NODE_REF(_type, Type); }
     void setName(ASTNode *Name) { ASSIGN_AST_NODE_REF(_name, Name); }
     void setInit(ASTNode *Init) { ASSIGN_AST_NODE_REF(_init, Init); }
+    void setAlignments(ASTNode *values) { ASSIGN_AST_NODE_REF(_alignments, values); }
 
     ASTNode *getName() { return _name; }
     ASTNode *getType() { return _type; }
     ASTNode *getInit() { return _init; }
+    ASTNode *getAlignments() { return _alignments; }
 
     void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);
@@ -656,19 +723,22 @@ class FieldDeclASTNode : public ASTNode
 {
     ASTNode *_type;
     ASTNode *_name;
+    ASTNode *_alignments;
 
 public:
-    FieldDeclASTNode(ASTNode *Type, ASTNode *Name)
+    FieldDeclASTNode(ASTNode *Type, ASTNode *Name, ASTNode *alignments = NULL_AST_NODE)
     {
         kind = NK_FIELD_DECL;
         ASSIGN_AST_NODE_REF(_type, Type);
         ASSIGN_AST_NODE_REF(_name, Name);
+        ASSIGN_AST_NODE_REF(_alignments, alignments);
     }
 
     ~FieldDeclASTNode()
     {
         DELETE_AST_NODE_REF(_type);
         DELETE_AST_NODE_REF(_name);
+        DELETE_AST_NODE_REF(_alignments);
     }
 
     void setType(ASTNode *Type) { ASSIGN_AST_NODE_REF(_type, Type); }
@@ -676,6 +746,7 @@ public:
 
     ASTNode *getName() { return _name; }
     ASTNode *getType() { return _type; }
+    ASTNode *getAlignments() { return _alignments; }
 
     void declare(AbstractSyntaxTree *ast);
     void accept(TreeVisitor *v);

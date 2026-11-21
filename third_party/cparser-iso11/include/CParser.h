@@ -64,6 +64,7 @@ class CParser : public Parser
     // Expressions
     ASTNode *PrimaryExpression();
     ASTNode *GenericSelection();
+    ASTNode *OffsetOfExpression();
     ASTNode *GenericAssocList();
     ASTNode *GenericAssociation();
     StringConstASTNode *StringLiteral();
@@ -89,15 +90,15 @@ class CParser : public Parser
     ASTNode *ConstantExpression();
 
     // Declarations
-    ASTNode *Declaration(ASTNode *declSpec);
+    ASTNode *Declaration(ASTNode *declSpec, ASTNode *alignments);
     ASTNode *TypedefDeclaration(ASTNode *declSpec);
     ASTNode *StaticAssertDeclaration();
-    ASTNode *DeclarationSpecifiers(bool typeOnly = false);
-    SequenceASTNode *InitDeclaratorList(ASTNode *typeSpec);
-    ASTNode *InitDeclarator(ASTNode *typeSpec);
+    ASTNode *DeclarationSpecifiers(bool typeOnly, ASTNode **alignments = nullptr);
+    SequenceASTNode *InitDeclaratorList(ASTNode *typeSpec, ASTNode *alignments);
+    ASTNode *InitDeclarator(ASTNode *typeSpec, ASTNode *alignments);
     ASTNode *InitDeclaratorAfterName(ASTNode *typeSpec, ASTNode *type,
                                     ASTNode *name, STScope *parameterScope,
-                                    bool allowDefinition = false);
+                                    ASTNode *alignments, bool allowDefinition = false);
     void StorageClassSpecifier(unsigned &flags);
     ASTNode *TypeSpecifier();
     ASTNode *StructOrUnionSpecifier();
@@ -105,8 +106,8 @@ class CParser : public Parser
     SequenceASTNode *StructDeclarationList();
     ASTNode *StructDeclaration();
     ASTNode *SpecifierQualifierList();
-    SequenceASTNode *StructDeclaratorList(ASTNode *typeSpec);
-    ASTNode *StructDeclarator(ASTNode *typeSpec);
+    SequenceASTNode *StructDeclaratorList(ASTNode *typeSpec, ASTNode *alignments);
+    ASTNode *StructDeclarator(ASTNode *typeSpec, ASTNode *alignments);
     ASTNode *EnumSpecifier();
     SequenceASTNode *EnumeratorList();
     void TypeQualifier(unsigned &flags);

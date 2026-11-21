@@ -1,10 +1,12 @@
 """Regression tests for bundled QML syntax and compiled rewrite decisions."""
 from __future__ import annotations
 import importlib.util
+import os
 from pathlib import Path
 import random
 import subprocess
 import sys
+import tempfile
 import unittest
 
 QML = Path(__file__).resolve().parents[1]
@@ -87,6 +89,144 @@ class QMLTests(unittest.TestCase):
         d,t=rt.parse(text)
         tree,typ=rt.execute(d,t)
         self.assertEqual((tree,typ),(('int',42),'Int'))
+
+
+class GeneratedQMLTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        work = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(work.cleanup)
+        cls.work = Path(work.name)
+        cls.frontend = cls.work / 'qml_frontend.py'
+        generator = ROOT.parent / 'LLSynth' / 'scripts' / 'llsynth.pl'
+        subprocess.run(
+            ['perl', generator, '--mode=interpret', '-T', 'python3',
+             '-o', cls.frontend, ROOT / 'QML.llsynth'],
+            check=True, capture_output=True, text=True,
+        )
+
+    def frontend_command(self, *args, source=None):
+        return subprocess.run(
+            [sys.executable, '-I', '-B', self.frontend, *args],
+            input=source, capture_output=True, text=True,
+        )
+
+    def compile(self, *files):
+        output = self.work / 'compiled.qmb'
+        output.unlink(missing_ok=True)
+        result = subprocess.run(
+            [sys.executable, '-I', '-B', QML / 'compile_rules.py',
+             '--frontend', self.frontend, '--output', output, *files],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result, output.read_bytes() if output.exists() else None
+
+    def fragment(self, name, text):
+        path = self.work / name
+        path.write_text(text, encoding='utf-8')
+        return path
+
+    def test_generated_expression_tool(self):
+        for source in (bundle.assemble(),
+                       bundle.assemble(term_file=QML / 'examples' / 'alternate-run.qml')):
+            result = self.frontend_command('-', source=source)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "['int', 42]\n")
+        negative = 'run -9223372036854775808;'
+        directives, tree = rt.parse(negative)
+        self.assertEqual(rt.execute(directives, tree), (('int', -(2**63)), 'Int'))
+        result = self.frontend_command('-', source=negative)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "['int', -9223372036854775808]\n")
+
+    def test_generated_frontend_exports_directive_records(self):
+        result = self.frontend_command('-', source='rewrite p id : op(?x) => ?x;')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "[['R', 'p', 'id', ['node', 'op', [['meta', 'x']]], ['meta', 'x']]]\n")
+
+    def test_compile_rules_preserves_order_and_encodes_every_tree_tag(self):
+        first = self.fragment('first.qpass', '''# A fragment, not an expression program
+pass canonicalize;
+rewrite canonicalize id : add(?x, 000) => ?x;
+reject canonicalize forbidden : node(_,
+    true, false, name, empty(), -9223372036854775808, 9223372036854775807);
+''')
+        second = self.fragment('second.qpass', 'pass another; # no final newline')
+        result, compiled = self.compile(first, second)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(compiled,
+                         b'CEPHYR-QML-1\n'
+                         b'P canonicalize\n'
+                         b'R canonicalize id n add 2 m x i 0 m x\n'
+                         b'X canonicalize forbidden n node 7 w b 1 b 0 s name n empty 0 '
+                         b'i -9223372036854775808 i 9223372036854775807\n'
+                         b'P another\n')
+
+    def test_compile_builtins(self):
+        result, compiled = self.compile(QML / 'NativeCanonicalize.qpass',
+                                        QML / 'NativeStrengthReduce.qpass')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(compiled.splitlines(), [
+            b'CEPHYR-QML-1',
+            b'R canonicalize add_zero_right n add 2 m x i 0 m x',
+            b'R canonicalize add_zero_left n add 2 i 0 m x m x',
+            b'R canonicalize sub_zero n sub 2 m x i 0 m x',
+            b'R canonicalize mul_one_right n mul 2 m x i 1 m x',
+            b'R canonicalize mul_one_left n mul 2 i 1 m x m x',
+            b'R canonicalize or_zero_right n or 2 m x i 0 m x',
+            b'R canonicalize or_zero_left n or 2 i 0 m x m x',
+            b'R canonicalize xor_zero_right n xor 2 m x i 0 m x',
+            b'R canonicalize xor_zero_left n xor 2 i 0 m x m x',
+            b'R canonicalize shl_zero n shl 2 m x i 0 m x',
+            b'R canonicalize lshr_zero n lshr 2 m x i 0 m x',
+            b'R canonicalize ashr_zero n ashr 2 m x i 0 m x',
+            b'R strength_reduce double_right n mul 2 m x i 2 n add 2 m x m x',
+            b'R strength_reduce double_left n mul 2 i 2 m x n add 2 m x m x',
+        ])
+
+    def test_fragments_reject_invalid_input_without_output(self):
+        good = self.fragment('good.qpass', 'pass canonicalize;')
+        cases = [
+            ('rewrite p bad : f(?x) => ?y;', '!UnknownMeta'),
+            ('rewrite p bad : f(?x) => _;', 'wildcard in replacement'),
+            ('rewrite p bad : f(?x) => ?x', 'PARSE'),
+            ('pass canonicalize; @', 'LEX'),
+            ('reject p big : 9223372036854775808;', 'INTEGER_OVERFLOW'),
+            ('reject p small : -9223372036854775809;', 'INTEGER_OVERFLOW'),
+            ('run div(1, 0);', "'run' is only supported by the expression tool"),
+            ('#' + ' ' * 65536, 'total rule input exceeds'),
+            ('pass p;\n' * 128, 'too many directives'),
+            ('reject p deep : ' + 'f(' * 32 + '_' + ')' * 32 + ';', 'tree nesting exceeds'),
+            ('reject p wide : f(' + ','.join(['_'] * 33) + ');', 'more than 32 arguments'),
+            (''.join(f'reject p rule_{i} : f(f({",".join(["_"] * 31)}), _);\n'
+                     for i in range(125)), 'too many tree terms'),
+            ('pass ' + 'a' * 65 + ';', 'identifier is longer than 64 characters'),
+        ]
+        for text, message in cases:
+            with self.subTest(message=message):
+                second = self.fragment('bad.qpass', text)
+                result, compiled = self.compile(good, second)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('bad.qpass:', result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertIsNone(compiled)
+
+    def test_fragments_are_parsed_independently(self):
+        first = self.fragment('incomplete.qpass', 'rewrite p incomplete : add(?x, 0) =>')
+        second = self.fragment('continuation.qpass', '?x;')
+        result, compiled = self.compile(first, second)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('incomplete.qpass:', result.stderr)
+        self.assertIsNone(compiled)
+
+    def test_named_pipe_does_not_block_rule_compilation(self):
+        pipe = self.work / 'pipe.qpass'
+        os.mkfifo(pipe)
+        result, compiled = self.compile(pipe)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('expected a regular rule file', result.stderr)
+        self.assertIsNone(compiled)
+
 
 if __name__ == '__main__':
     unittest.main()

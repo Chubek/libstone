@@ -26,6 +26,9 @@ that does not accept Clang's `--target=...` flag, set
 - ASCII `ctype` functions and the §7.30 wide classification and mapping
   functions (`<wctype.h>`) in the C locale.
 - The C memory/string functions, plus `strnlen`; collation uses the C locale.
+- All §7.29.4.2–6 wide string and memory operations, including independent
+  `wcstok` cursors and C-locale collation. Wide memory operations preserve
+  any `wchar_t` value, whether or not it encodes as external text.
 - C11 §7.11 localization: `setlocale` and `localeconv` support the ASCII `C`
   locale only. `POSIX` is an alias, and the native locale selected by `""` is
   always `C`. The §7.22.7–8 multibyte/wide conversions use this stateless,
@@ -43,7 +46,9 @@ that does not accept Clang's `--target=...` flag, set
 - §7.22 general utilities: integer text conversion with base detection and
   `ERANGE`, integer absolute value/division, `qsort`, `bsearch`, deterministic
   `rand`/`srand`, `getenv`, `aligned_alloc` and the other allocation functions,
-  and separate `atexit`/`at_quick_exit` handler lists.
+  and separate `atexit`/`at_quick_exit` handler lists. The shared integer
+  parser also handles `wcstol`, `wcstoll`, `wcstoul`, `wcstoull`, `wcstoimax`,
+  and `wcstoumax` (§7.29.4.1.2 and §7.8.2.4).
 - §7.21 narrow streams: standard streams, `fopen`, `freopen`, `fclose`, file
   positioning, one byte of `ungetc`, and character, line, and block I/O.
   The Linux text and binary modes both transfer bytes without translation.
@@ -51,6 +56,12 @@ that does not accept Clang's `--target=...` flag, set
   and fully buffered elsewhere. `setvbuf`/`setbuf` configure buffering before
   I/O, and `fflush(NULL)` flushes pending output on all streams. Normal
   `exit` flushes output after running handlers; `quick_exit` and `_Exit` do not.
+- All §7.29.3 unformatted wide I/O, including `fwide`, character and line I/O,
+  and one wide character of `ungetwc`. Streams are initially unoriented,
+  including `stdin`, `stdout`, and `stderr`. The first applicable I/O call or
+  explicit `fwide` request fixes orientation until a successful `freopen`.
+  Wide streams use the ASCII `C` locale, including embedded null characters
+  in files; unrepresentable input or output reports `EILSEQ`.
 - §7.21 file operations: `remove`, `rename`, `tmpfile`, and `tmpnam`.
   `tmpfile` uses anonymous or immediately unlinked files under `/tmp`; prefer
   it over `tmpnam`, which generates a name but does not reserve it. If using
@@ -71,10 +82,9 @@ that does not accept Clang's `--target=...` flag, set
   that cannot form such a range is literal.
 
 This is not a complete hosted libc. Missing areas include floating
-conversion and math, `%lc`/`%ls` **output**, the remaining `<wchar.h>` APIs (wide
-streams, formatted wide I/O, wide numeric conversion, and wide string
-manipulation), locales beyond `C`, `system`, signal handling, atomics, and
-threading. An unsupported formatted-output conversion returns
+conversion (narrow and wide) and math, `%lc`/`%ls` **output**, formatted wide
+I/O (§7.29.2), locales beyond `C`, `system`, signal handling, atomics, and
+threading. An unsupported narrow formatted-output conversion returns
 `-1` with `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
 
 On formatted input, floating conversions (`aAeEfFgG` with any valid length)
@@ -101,14 +111,13 @@ function definitions or `va_list`, even when it can make direct calls:
 `stdio.h` does not declare the `v` forms under `__CEPHYR__`, and including
 `stdarg.h` in that profile is an error.
 
-The current vendor parser also cannot faithfully represent `long double`,
-explicit alignment declarations, or aggregate return values. Under
-`__CEPHYR__`, the headers therefore expose
-`__CEPHYR_MAX_ALIGN_T_UNAVAILABLE`, `__CEPHYR_ALIGNAS_UNAVAILABLE`, and
-`__CEPHYR_STRUCT_VALUE_API_UNAVAILABLE` rather than substituting ABI-wrong
-types or declarations. External target compilation receives the standard
-declarations for these interfaces. `assert` reports the expression, file,
-line, and enclosing function before calling `abort`.
+Cephyr supports fundamental alignment, `max_align_t`, and `offsetof`.
+`long double` and by-value aggregate calls and returns are still unsupported.
+Under `__CEPHYR__`, headers expose `__CEPHYR_STRUCT_VALUE_API_UNAVAILABLE`
+rather than substitute ABI-wrong declarations when a library function needs
+that ABI. External target compilation receives the standard declarations.
+`assert` reports the expression, file, line, and enclosing function before
+calling `abort`.
 
 The Cephyr profile defines `__CEPHYR_DIFFTIME_UNAVAILABLE` on targets without
 native scalar floating-point calls. It defines `__CEPHYR_NONLOCAL_JUMPS_UNAVAILABLE`
@@ -120,8 +129,9 @@ Run `sh tests/run.sh /path/to/build-dir` with Clang, `llvm-ar`, and `ld.lld`
 to statically link and test the packaged library without host headers or libc.
 It checks the stream lifecycle, buffering, file operations, pipe behavior,
 locale, allocation, startup environment, termination, calendar and clock
-operations, restartable conversions, formatted input, and nonlocal jumps (including
-register restoration). It runs on matching Linux hardware or with a
+operations, restartable conversions, formatted input, unformatted wide streams,
+wide strings, and nonlocal jumps (including register restoration).
+It runs on matching Linux hardware or with a
 user-mode QEMU on `PATH`. Emulator paths can also be provided via
 `CEPHYR_TEST_QEMU_AMD64`, `CEPHYR_TEST_QEMU_AARCH64`, and `CEPHYR_TEST_QEMU`
 (RV64). If a target cannot run, the suite still builds and statically links it.
@@ -130,5 +140,7 @@ user-mode QEMU on `PATH`. Emulator paths can also be provided via
 `tests/variadic-cephyr.c` exercises direct `snprintf` and `sscanf` calls spanning
 argument registers and the stack. `tests/time-multibyte-cephyr.c` exercises
 the scalar and pointer APIs, including `difftime` where the native ABI supports
-it. It does not use returns-twice calls. Run target binaries on matching
-Linux hardware or under an emulator.
+it, wide stream positioning and round trips, wide string comparison, and wide
+integer conversion. The wide portions construct `wchar_t` arrays using
+ordinary execution-set codes, so they do not depend on frontend support for
+wide literals. Run target binaries on matching Linux hardware or under an emulator.

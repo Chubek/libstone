@@ -4,6 +4,7 @@
 #include <cephyr/preprocess.hpp>
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,6 +12,13 @@
 namespace cephyr {
 
 class Diagnostics;
+
+struct QmlProfile {
+    std::vector<std::string> passes;
+    std::vector<std::filesystem::path> files;
+    std::optional<unsigned> fuel;
+    std::map<std::string, unsigned, std::less<>> phase_fuel;
+};
 
 struct Config {
     std::optional<std::string> target; // unset uses the driver default (or the explicit script)
@@ -48,6 +56,8 @@ struct Config {
     std::vector<std::string> runtime_flags;
 
     PreprocessOptions preprocess;
+    std::optional<std::string> qml_profile;
+    std::map<std::string, QmlProfile, std::less<>> qml_profiles;
 
     bool cache_enabled = true;
     bool static_link = true;
