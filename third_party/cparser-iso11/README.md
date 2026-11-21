@@ -44,13 +44,15 @@ Generic selections retain the controller and each ordered type/default
 association, and designated initializers retain their ordered member/index
 paths and nested initializer lists. C11 `u8` string tokens concatenate with
 ordinary string tokens, and universal character names in strings decode as
-UTF-8.
+UTF-8. In identifiers, direct UTF-8 and universal character names are checked
+against C11 Annex D and use the same UTF-8 representation for name lookup.
 
 This is not a complete C11 front end or ABI checker. Unsupported productions
-include general enum initializer expressions, wide literals, Unicode
-identifiers, atomic and thread-local declarations, GNU attributes, and inline
+include general enum initializer expressions, wide literals,
+atomic and thread-local declarations, GNU attributes, and inline
 assembly. The native lowerer has additional restrictions independent of the
-syntax accepted here.
+syntax accepted here, including ASCII-only file-scope object and function
+names.
 See `cornerstone/Cephyr/tests/parser.cpp` for AST and diagnostic regressions.
 
 ## References

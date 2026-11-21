@@ -166,7 +166,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
 {
     const ArchonMIRFunction *fn = source;
     ArchonMIRFunction scheduled;
-    ArchonMIRBlock blocks[AN_MAX_BLOCK];
+    ArchonMIRBlock *blocks = NULL;
     ArchonMIRInst *storage = NULL;
     size_t slots = 0, phi_count = 0, outgoing_words = 0, b, i;
     unsigned next_label = (unsigned)fn->block_count;
@@ -174,6 +174,9 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
     ANFrame frame;
     ANHome *homes = NULL;
     if (ctx->flags & ARCHON_BACKEND_SCHEDULE_PURE) {
+        blocks = calloc(source->block_count, sizeof(*blocks));
+        if (!blocks)
+            return an_error(ctx, ARCHON_BACKEND_NOMEM, "allocating scheduled blocks");
         if (!schedule_function(ctx, source, blocks, &storage))
             goto done;
         scheduled = *source;
@@ -244,6 +247,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
 done:
     an_layout_dispose(out);
     free(homes);
+    free(blocks);
     free(storage);
     return ok;
 }

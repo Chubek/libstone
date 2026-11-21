@@ -2,7 +2,8 @@
 
 Cephyr is a Unix-style C compiler driver for Archon. It currently implements a
 subset of ISO C11 for **AMD64 / SysV LP64**, **AArch64 / AAPCS64 LP64**, and
-**RV64IM / LP64** on Linux. It is not a conforming hosted C11 implementation.
+**RV64IM / LP64** on Linux. It is not yet a conforming hosted or freestanding
+C11 implementation.
 See [the libc inventory](stdlib/README.md) and
 [the target bank](triples/README.md) for the runtime and target boundaries, and
 [ISO C11 implementation status](C11.md) for language and environment details.
@@ -160,9 +161,10 @@ MachineIR's word-only globals is emitted separately in `-S` output.
 
 - The native C subset covers integer and pointer operations, fixed-signature
   calls, direct external scalar variadic calls, scalar and aggregate storage,
-  structure and union member access and copy, designated initializers,
-  fixed-size `sizeof` in integer constant expressions, `_Static_assert`,
-  `__func__`, `_Generic`, loops, `goto`, and `switch` including fallthrough.
+  structure and union member access and copy, flexible array members,
+  designated initializers, fixed-size `sizeof` in integer constant expressions,
+  `_Static_assert`, `__func__`, `_Generic`, loops, `goto`, and `switch` including
+  fallthrough.
   AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,
   comparisons, and fixed-prototype calls. RV64IM runtime floating point,
   floating arguments to variadic functions, `long double`, by-value aggregate

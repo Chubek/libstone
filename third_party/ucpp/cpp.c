@@ -341,6 +341,7 @@ static void reinit_lexer_state(struct lexer_state *ls, int wb)
 	ls->saw_source_char = 0;
 	ls->last_source_char = 0;
 	ls->final_splice = 0;
+	ls->utf8 = (struct c11_utf8_state){0};
 	ls->discard = 1;
 	ls->last = 0;		/* we suppose '\n' is not 0 */
 	ls->line = 1;
@@ -373,6 +374,7 @@ void init_buf_lexer_state(struct lexer_state *ls, int wb)
 	ls->pending_token = 0;
 
 	ls->flags = 0;
+	ls->character_error = 0;
 	ls->count_trigraphs = 0;
 	ls->gf = getmem(sizeof(struct garbage_fifo));
 	init_garbage_fifo(ls->gf);
@@ -417,6 +419,7 @@ static void restore_lexer_state(struct lexer_state *ls,
 	ls->saw_source_char = lsbak->saw_source_char;
 	ls->last_source_char = lsbak->last_source_char;
 	ls->final_splice = lsbak->final_splice;
+	ls->utf8 = lsbak->utf8;
 	ls->last = lsbak->last;
 	ls->discard = lsbak->discard;
 	ls->line = lsbak->line;
@@ -1116,7 +1119,7 @@ static int handle_if(struct lexer_state *ls)
 			struct macro *m = get_macro(ct->name);
 
 			if (m) {
-				if (substitute_macro(ls, m, &tf1, 0,
+				if (substitute_macro(ls, m, ct->name, &tf1, 0,
 #ifdef NO_PRAGMA_IN_DIRECTIVE
 					1,
 #else
@@ -1225,7 +1228,7 @@ static int handle_if(struct lexer_state *ls)
 		return -1;
 	}
 	eval_line = l;
-	z = eval_expr(&tf3, &ret, (ls->flags & WARN_STANDARD) != 0);
+	z = eval_expr(&tf3, &ret, ls->flags);
 	freemem(tf3.t);
 	if (ret) return -1;
 	return (z != 0);
@@ -1276,7 +1279,7 @@ static int expand_directive(struct lexer_state *ls, struct token_fifo *in,
 		struct macro *m = t->type == NAME ? get_macro(t->name) : 0;
 
 		if (m) {
-			if (substitute_macro(ls, m, in, 0,
+			if (substitute_macro(ls, m, t->name, in, 0,
 #ifdef NO_PRAGMA_IN_DIRECTIVE
 				1,
 #else
@@ -1350,7 +1353,8 @@ static int handle_include(struct lexer_state *ls, unsigned long flags, int nex)
 						| PHASE3_INPUT;
 					saved = alt.gf;
 					alt.gf = ls->gf;
-					status = collect_directive(&alt, &tf);
+					status = collect_directive(&alt, &tf)
+						|| alt.character_error;
 					alt.gf = saved;
 					free_lexer_state(&alt);
 					freemem(tokens);
@@ -2211,7 +2215,7 @@ int cpp(struct lexer_state *ls)
 				/* A subsequent '#' on this line was not the first
 				   preprocessing token, even if this macro vanishes. */
 				ls->ltwnl = 0;
-				x = substitute_macro(ls, m, 0, 1, 0,
+				x = substitute_macro(ls, m, ls->ctok->name, 0, 1, 0,
 					ls->ctok->line);
 				if (!(ls->flags & LEXER))
 					garbage_collect(ls->gf);
@@ -2305,8 +2309,7 @@ int lex(struct lexer_state *ls)
 
 /*
  * check_cpp_errors() must be called when the end of input is reached;
- * it checks pending errors due to truncated constructs (actually none,
- * this is reserved for future evolutions).
+ * It checks character errors reported while continuing to tokenize.
  */
 int check_cpp_errors(struct lexer_state *ls)
 {
@@ -2321,7 +2324,7 @@ int check_cpp_errors(struct lexer_state *ls)
 #endif
 	if ((ls->flags & WARN_TRIGRAPHS) && ls->count_trigraphs)
 		warning(0, "%ld trigraph(s) encountered", ls->count_trigraphs);
-	return 0;
+	return ls->character_error;
 }
 
 /*

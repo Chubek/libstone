@@ -60,20 +60,41 @@ that does not accept Clang's `--target=...` flag, set
   `%n`, and `%%`, including ordinary flags, widths, precisions, and integer
   length modifiers. `snprintf` always bounds and terminates output when its
   size is nonzero.
+- §7.21.6 formatted input (`scanf`, `fscanf`, `sscanf`, and their `v` forms)
+  for `%d`, `%i`, `%u`, `%o`, `%x`, `%X`, `%c`, `%s`, `%[`, `%p`, `%n`,
+  and `%%`. Includes field widths, assignment suppression, integer length
+  modifiers, and ASCII-only `%lc`, `%ls`, and `%l[`. Stream matching keeps
+  the first nonmatching byte unread using one byte of pushback, even on pipes.
+  `%p` accepts `0x` (or `0X`) followed by hexadecimal digits, matching the
+  bundled `%p` output; use it to read pointers printed within the same run.
+  Scansets support ascending byte ranges, parsed left to right; a hyphen
+  that cannot form such a range is literal.
 
-This is not a complete hosted libc. Missing areas include `scanf`, floating
-conversion and math, `%lc`/`%ls`, the remaining `<wchar.h>` APIs (wide
+This is not a complete hosted libc. Missing areas include floating
+conversion and math, `%lc`/`%ls` **output**, the remaining `<wchar.h>` APIs (wide
 streams, formatted wide I/O, wide numeric conversion, and wide string
 manipulation), locales beyond `C`, `system`, signal handling, atomics, and
 threading. An unsupported formatted-output conversion returns
 `-1` with `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
+
+On formatted input, floating conversions (`aAeEfFgG` with any valid length)
+stop with `ENOSYS`; malformed directives stop with `EINVAL`; a width larger
+than `SIZE_MAX` stops with `EOVERFLOW`. Integer values outside the destination
+range stop with `ERANGE` rather than writing the result (C11 does not define
+out-of-range assignments). A field using a wide destination reports
+`EILSEQ` on non-ASCII input. These stops return the number of assignments
+already made, or `EOF` if none (`EILSEQ` follows the ordinary input-failure
+rule: `EOF` only before the first completed conversion). The scanner stops
+before consuming input for a malformed or unsupported directive. Fixed-width
+character fields and wide fields stage input so that a failed field does not
+write its destination; staging large fields can fail with `ENOMEM`.
 
 ## Variadic ABI boundary
 
 The library sources are compiled by the external target compiler, whose target
 variadic ABI is trusted. Cephyr-generated calls are a separate capability.
 When the driver defines `__CEPHYR_HAS_VARIADIC_CALLS`, Cephyr's `stdio.h`
-declares `printf`, `fprintf`, `sprintf`, and `snprintf` for direct calls with
+declares the non-`v` formatted input and output functions for direct calls with
 supported integer and pointer arguments. Without that macro it defines
 `__CEPHYR_VARIADIC_IO_UNAVAILABLE` instead. Cephyr does not support variadic
 function definitions or `va_list`, even when it can make direct calls:
@@ -99,14 +120,14 @@ Run `sh tests/run.sh /path/to/build-dir` with Clang, `llvm-ar`, and `ld.lld`
 to statically link and test the packaged library without host headers or libc.
 It checks the stream lifecycle, buffering, file operations, pipe behavior,
 locale, allocation, startup environment, termination, calendar and clock
-operations, restartable conversions, and nonlocal jumps (including
+operations, restartable conversions, formatted input, and nonlocal jumps (including
 register restoration). It runs on matching Linux hardware or with a
 user-mode QEMU on `PATH`. Emulator paths can also be provided via
 `CEPHYR_TEST_QEMU_AMD64`, `CEPHYR_TEST_QEMU_AARCH64`, and `CEPHYR_TEST_QEMU`
 (RV64). If a target cannot run, the suite still builds and statically links it.
 
 `tests/headers-cephyr.c` checks the Cephyr header profile.
-`tests/variadic-cephyr.c` exercises a direct scalar variadic call spanning
+`tests/variadic-cephyr.c` exercises direct `snprintf` and `sscanf` calls spanning
 argument registers and the stack. `tests/time-multibyte-cephyr.c` exercises
 the scalar and pointer APIs, including `difftime` where the native ABI supports
 it. It does not use returns-twice calls. Run target binaries on matching

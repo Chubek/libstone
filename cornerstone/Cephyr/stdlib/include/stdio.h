@@ -64,6 +64,9 @@ int printf(const char *, ...);
 int fprintf(FILE *, const char *, ...);
 int sprintf(char *, const char *, ...);
 int snprintf(char *, size_t, const char *, ...);
+int scanf(const char *, ...);
+int fscanf(FILE *, const char *, ...);
+int sscanf(const char *, const char *, ...);
 #else
 #define __CEPHYR_VARIADIC_IO_UNAVAILABLE 1
 #endif
@@ -74,6 +77,9 @@ int vprintf(const char *, va_list);
 int vfprintf(FILE *, const char *, va_list);
 int vsprintf(char *, const char *, va_list);
 int vsnprintf(char *, size_t, const char *, va_list);
+int vscanf(const char *, va_list);
+int vfscanf(FILE *, const char *, va_list);
+int vsscanf(const char *, const char *, va_list);
 #endif
 
 #endif

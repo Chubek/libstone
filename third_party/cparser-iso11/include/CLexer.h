@@ -163,7 +163,8 @@ class CLexer : public Lexer
     void readNumberLit(Token *t, bool leadingDot = false);
     void readStringLit(Token *t, bool utf8 = false);
     void readCharLit(Token *t);
-    unsigned readUniversalCharacter(Token *t);
+    unsigned readUniversalCharacter(Token *t, std::string &spelling);
+    unsigned readUTF8Character(Token *t, std::string &spelling);
     void comment(int line, int column);
     void initialize();
 

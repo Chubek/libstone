@@ -103,6 +103,86 @@ void check_translation_phases(const std::filesystem::path &directory) {
     }
 }
 
+void check_extended_source(const std::filesystem::path &directory) {
+    const auto source = (directory / "unicode.c").string();
+    write(directory / "unicode.h",
+          "#ifndef G\\u00c9\n#define GÉ\n"
+          "#define VA\\U000000E9 41\n#endif\n");
+    cephyr::PreprocessOptions options;
+    options.macros.emplace_back(true, "\\u0190");
+    options.macros.emplace_back(true, "Æ=2");
+    options.macros.emplace_back(false, "\\U000000C6");
+    cephyr::Diagnostics diagnostics;
+    const auto result = cephyr::preprocess(
+        "#include \"unicode.h\"\n"
+        "#include \"unicode.h\"\n"
+        "#define ID(π) \\u03C0\n"
+        "#define CAT(a,b) a ## b\n"
+        "#define STR(x) #x\n"
+        "#define XSTR(x) STR(x)\n"
+        "#define f\\u00e9(x) x\n"
+        "#if !defined(G\\U000000C9) || ID(CAT(VA, é)) != 41 || Ɛ != 1 || defined(Æ)\n"
+        "#error extended macro identity failed\n"
+        "#endif\n"
+        "#if '\\u00E9' != 'é'\n#error character spellings differ\n#endif\n"
+        "#undef VAé\n"
+        "#ifdef VA\\u00e9\n#error undef used the wrong lookup key\n#endif\n"
+        "STR(\\U000000E9) STR(é) STR(1\\u0301) STR(2é) STR(3\\u00A3) XSTR(f\\U000000E9)\n"
+        "XSTR(CAT(other, \\u00E9)) XSTR(CAT(u8, \"é\"))\n"
+        "char *s = \"\\u00A3\" \"é\";\n"
+        // Form a UCN via a trigraph, then splice in its hex digits using
+        // another trigraph and CRLF. A physical UTF-8 sequence cannot be
+        // formed by the same splice (checked below).
+        "int ?" "?/u00?" "?/\r\nE9;\n",
+        source, options, diagnostics);
+    assert(result);
+    assert(diagnostics.error_count() == 0);
+    for (const auto *token : {R"("\U000000E9")", "\"é\"", R"("1\u0301")",
+                              "\"2é\"", R"("3\u00A3")", R"("f\U000000E9")", R"("other\u00E9")",
+                              "\"u8\\\"é\\\"\"", R"("\u00A3")", R"(\u00E9;)"})
+        assert(result->text.find(token) != std::string::npos);
+
+    for (const auto &[text, message] : {
+             std::pair{"int \\u0xE9;\n", "malformed universal character name"},
+             std::pair{"int x\\U0000E9;\n", "malformed universal character name"},
+             std::pair{"int \\u0041;\n", "invalid code point"},
+             std::pair{"int a\\uD800;\n", "invalid code point"},
+             std::pair{"int \\U00110000;\n", "invalid code point"},
+             std::pair{"int \\u0040;\n", "Annex D.1"},
+             std::pair{"int x\\u00D7;\n", "Annex D.1"},
+             std::pair{"int \\U0001FFFE;\n", "Annex D.1"},
+             std::pair{"int x·;\n", ""}, // U+00B7 is permitted.
+             std::pair{"int 𝄞;\n", ""},  // U+1D11E is in Annex D.1.
+             std::pair{"int £;\n", "Annex D.1"},
+             std::pair{"int \\u0301end;\n", "Annex D.2"},
+             std::pair{"int \xcc\x81""end;\n", "Annex D.2"},
+             std::pair{"#define F(π, \\u03C0) 0\n", "duplicate macro argument"},
+             std::pair{"#define F \\u03C0\n#define F π\n", "redefined unidentically"},
+             std::pair{"// \xc0\xaf\n", "invalid UTF-8 source encoding"},
+             std::pair{"// \xed\xa0\x80\n", "invalid UTF-8 source encoding"},
+             std::pair{"// \xf4\x90\x80\x80\n", "invalid UTF-8 source encoding"},
+             std::pair{"// \xe2", "truncated UTF-8 source character"},
+             std::pair{"int \xc3\\\n\xa9;\n", "invalid UTF-8 source encoding"}}) {
+        cephyr::Diagnostics checked;
+        const auto output = cephyr::preprocess(text, source, {}, checked);
+        if (!*message) {
+            assert(output && checked.error_count() == 0);
+        } else {
+            assert(!output);
+            const auto messages = rendered(checked);
+            assert(messages.find("unicode.c:") != std::string::npos);
+            assert(messages.find(message) != std::string::npos);
+        }
+    }
+
+    write(directory / "bad-ucn.h",
+          "#line 50 \"header-mapped.h\"\r\nint ?" "?/u00?" "?/\r\nA3;\n");
+    cephyr::Diagnostics header_errors;
+    assert(!cephyr::preprocess("#include \"bad-ucn.h\"\n", source, {}, header_errors));
+    assert(rendered(header_errors).find("header-mapped.h:50: error") != std::string::npos);
+    assert(rendered(header_errors).find("U+00A3") != std::string::npos);
+}
+
 void check_directives(const std::filesystem::path &directory) {
     const auto source = (directory / "directives.c").string();
     write(directory / "direct.h", "int direct_header;\n");
@@ -220,6 +300,7 @@ void check_pragmas() {
 int main() {
     TemporaryDirectory temporary;
     check_translation_phases(temporary.path);
+    check_extended_source(temporary.path);
     check_directives(temporary.path);
     check_pragmas();
     write(temporary.path / "local.h", "int from_header = VALUE;\n");

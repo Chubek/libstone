@@ -18,5 +18,15 @@ int main(void)
 
     if (length != (int)strlen(expected) || strcmp(text, expected) != 0)
         return 1;
+    int values[7];
+    char end;
+    if (sscanf("1 2 3 4 5 6 7!", "%d %d %d %d %d %d %d%c",
+               &values[0], &values[1], &values[2], &values[3],
+               &values[4], &values[5], &values[6], &end) != 8 || end != '!')
+        return 2;
+    for (int i = 0; i < 7; ++i) {
+        if (values[i] != i + 1)
+            return 3;
+    }
     return puts(text) == EOF;
 }

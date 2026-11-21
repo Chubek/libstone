@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define AN_MAX_VALUE 4096u
-#define AN_MAX_BLOCK 256u
+#define AN_MAX_BLOCK ARCHON_MIR_MAX_BLOCKS
 #define AN_MAX_PARAMS ARCHON_MIR_MAX_PARAMS
 #define AN_MAX_INSTS 16384u
 #define AN_MAX_MODULE_INSTS 65536u

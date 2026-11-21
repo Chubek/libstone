@@ -1,5 +1,6 @@
 #include "NativeInternal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -32,11 +33,19 @@ typedef struct {
 } Predecessor;
 typedef struct {
     Definition defs[AN_MAX_VALUE];
-    uint64_t dom[AN_MAX_BLOCK][AN_DOM_WORDS];
+    uint64_t *dom;
+    unsigned dom_words;
+    unsigned order[AN_MAX_BLOCK];
+    unsigned char seen[AN_MAX_BLOCK];
     unsigned incoming[AN_MAX_BLOCK];
     Predecessor preds[AN_MAX_EDGES + 1u]; /* Index 0 terminates a list. */
     unsigned pred_count;
 } VerifyFunction;
+
+static uint64_t *dom_set(const VerifyFunction *v, size_t block)
+{
+    return v->dom + block * v->dom_words;
+}
 
 static int result_type(ArchonMIRType type)
 {
@@ -267,11 +276,13 @@ static int collect(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction *fn,
 static int dominators(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction *fn,
     VerifyFunction *v)
 {
-    unsigned order[AN_MAX_BLOCK] = { 0 }, seen[AN_MAX_BLOCK] = { 1 };
+    unsigned *order = v->order;
+    unsigned char *seen = v->seen;
     unsigned n = (unsigned)fn->block_count, tail = 1, i, j, pass;
-    unsigned words = (n + 63u) / 64u;
+    unsigned words = v->dom_words;
 
     ctx->instruction = SIZE_MAX;
+    seen[0] = 1;
     for (i = 0; i < tail; ++i) {
         const ArchonMIRTerm *term = &fn->blocks[order[i]].term;
         ctx->block = order[i];
@@ -293,10 +304,10 @@ static int dominators(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction *
     }
 
     ctx->block = SIZE_MAX;
-    v->dom[0][0] = 1;
+    v->dom[0] = 1;
     for (i = 1; i < n; ++i)
         for (j = 0; j < words; ++j)
-            v->dom[i][j] = UINT64_MAX;
+            dom_set(v, i)[j] = UINT64_MAX;
     /* Intersect predecessor sets in reachability order. If d doesn't dominate
      * b, a simple path to b avoiding d witnesses this within n-1 rounds. */
     for (pass = 0; pass < n; ++pass) {
@@ -305,16 +316,17 @@ static int dominators(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction *
             return 0;
         for (i = 1; i < n; ++i) {
             unsigned b = order[i], pred;
+            uint64_t *set = dom_set(v, b);
             uint64_t bits[AN_DOM_WORDS];
             for (j = 0; j < words; ++j)
                 bits[j] = UINT64_MAX;
             for (pred = v->incoming[b]; pred; pred = v->preds[pred].next)
                 for (j = 0; j < words; ++j)
-                    bits[j] &= v->dom[v->preds[pred].from][j];
+                    bits[j] &= dom_set(v, v->preds[pred].from)[j];
             bits[b / 64u] |= UINT64_C(1) << (b % 64u);
             for (j = 0; j < words; ++j) {
-                changed |= v->dom[b][j] != bits[j];
-                v->dom[b][j] = bits[j];
+                changed |= set[j] != bits[j];
+                set[j] = bits[j];
             }
         }
         if (!changed)
@@ -335,7 +347,7 @@ static int use(ANContext *ctx, const ArchonMIRFunction *fn, const VerifyFunction
         return an_error(ctx, ARCHON_BACKEND_INVALID, "operand has no definition");
     b = def->block - 1u;
     if (b == ctx->block ? def->position >= position
-        : !(v->dom[ctx->block][b / 64u] & (UINT64_C(1) << (b % 64u))))
+        : !(dom_set(v, ctx->block)[b / 64u] & (UINT64_C(1) << (b % 64u))))
         return an_error(ctx, ARCHON_BACKEND_INVALID, "definition does not dominate use");
     return 1;
 }
@@ -506,12 +518,23 @@ static int verify_uses(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction 
 
 static int verify_function(ANContext *ctx, VerifyModule *m, const ArchonMIRFunction *fn)
 {
-    VerifyFunction v;
-    memset(v.defs, 0, fn->value_count * sizeof(v.defs[0]));
-    memset(v.dom[0], 0, sizeof(v.dom[0]));
-    memset(v.incoming, 0, fn->block_count * sizeof(v.incoming[0]));
-    v.pred_count = 0;
-    return collect(ctx, m, fn, &v) && dominators(ctx, m, fn, &v) && verify_uses(ctx, m, fn, &v);
+    VerifyFunction *v = calloc(1, sizeof(*v));
+    int ok = 0;
+    if (!v)
+        return an_error(ctx, ARCHON_BACKEND_NOMEM, "allocating CFG verifier scratch");
+    if (collect(ctx, m, fn, v)) {
+        /* Declarations already bound block_count, so this matrix uses at most
+         * ARCHON_MIR_MAX_BLOCKS rows of AN_DOM_WORDS words. */
+        v->dom_words = (unsigned)((fn->block_count + 63u) / 64u);
+        v->dom = calloc(fn->block_count * v->dom_words, sizeof(*v->dom));
+        if (v->dom)
+            ok = dominators(ctx, m, fn, v) && verify_uses(ctx, m, fn, v);
+        else
+            an_error(ctx, ARCHON_BACKEND_NOMEM, "allocating dominance sets");
+    }
+    free(v->dom);
+    free(v);
+    return ok;
 }
 
 int an_verify(ANContext *ctx, const ArchonMIRModule *module)

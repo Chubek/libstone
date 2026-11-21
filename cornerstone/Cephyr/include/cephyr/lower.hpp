@@ -81,6 +81,8 @@ struct RecordMember {
     std::string name;
     CType type;
     std::uint64_t offset;
+
+    bool flexible_array() const { return type.kind == CType::Kind::array && !type.count; }
 };
 
 struct RecordLayout {
@@ -88,6 +90,8 @@ struct RecordLayout {
     bool defining = false;
     bool has_const_member = false;
     bool has_volatile_member = false;
+    // C11 6.7.2.1p3 also restricts unions that recursively contain such a structure.
+    bool contains_flexible_array = false;
     std::uint64_t size = 0; // zero while the type is incomplete
     unsigned alignment = 0;
     std::vector<RecordMember> members;

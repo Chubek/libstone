@@ -1332,6 +1332,9 @@ class CephyrCLIRegressionTests(unittest.TestCase):
     def test_106_native_utf8_string_literals(self) -> None:
         self._check_native_c11_fixture("utf8_literals")
 
+    def test_107_native_extended_identifiers(self) -> None:
+        self._check_native_c11_fixture("extended_identifiers")
+
 
 def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)

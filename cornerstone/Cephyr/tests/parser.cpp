@@ -298,6 +298,40 @@ void check_tokens() {
     fails(source(R"(int c = L'a';)"), "wide character constants are not supported");
 }
 
+void check_extended_identifiers() {
+    auto unit = parses(R"(
+        typedef int \U000000C9;
+        É é(É \u03B1) {
+            É prefix\u0301 = α;
+            struct T { É Δ; } record = { .\u0394 = prefix́ };
+            goto \u03BB;
+        λ:
+            return record.Δ + '\u00E9' - 'é';
+        }
+        int \U0001D11E;
+    )");
+    const auto &top = items(unit.root());
+    expect(top.size() == 3, "lost extended identifiers from preprocessed input");
+    auto *fn = as<FunctionDeclASTNode>(top[1], NK_FUNCTION_DECL);
+    expect(std::string_view(AST_IDENT_VALUE(fn->getName())) == "é",
+           "wrong UTF-8 identifier in AST");
+    auto *param = as<ParmDeclASTNode>(items(fn->getPrms())[0], NK_PARM_DECL);
+    expect(std::string_view(AST_IDENT_VALUE(param->getName())) == "α",
+           "UCN identifier was not canonicalized to UTF-8");
+
+    fails(source(R"(int \u00p1;)"), "malformed universal character name");
+    fails(source(R"(int \U000100;)"), "malformed universal character name");
+    fails(source(R"(int \u0069nt;)"), "invalid code point");
+    fails(source(R"(int x\uD800;)"), "invalid code point");
+    fails(source(R"(int x\u0024;)"), "Annex D.1");
+    fails(source(R"(int x\u1680;)"), "Annex D.1");
+    fails(source(R"(int \u20D0x;)"), "Annex D.2");
+    fails(source(R"(int x = 4\u00E9;)"), "extended character in numeric preprocessing token");
+    fails(source("int \xf0\x8f\xbf\xbf;"), "invalid UTF-8 source encoding");
+    fails(source("const char *s = \"\x80\";"), "invalid UTF-8 source encoding");
+    fails(source(R"(void f(void) { \u00e9: ; é: ; })"), "duplicate label 'é'");
+}
+
 void check_predefined_function_name() {
     auto unit = parses(R"(
         int fun(void) {
@@ -379,6 +413,7 @@ int main() {
     check_statement_scopes();
     check_namespaces();
     check_tokens();
+    check_extended_identifiers();
     check_predefined_function_name();
     check_generic_ast();
     check_designation_ast();

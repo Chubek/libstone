@@ -25,7 +25,7 @@ for arch in x86_64 aarch64 riscv64; do
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    for source in smoke io files general time multibyte nonlocal; do
+    for source in smoke io files general time multibyte nonlocal scanf; do
         "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
@@ -62,6 +62,7 @@ for arch in x86_64 aarch64 riscv64; do
     run "$output/test-time"
     run "$output/test-multibyte"
     run "$output/test-nonlocal"
+    printf '18? 24\n' | run "$output/test-scanf"
     text=$(printf 'c!' | run "$output/test-io" pipe)
     test "$text" = C
     mkdir -p "$output/remove-dir"

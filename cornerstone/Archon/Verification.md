@@ -39,9 +39,9 @@ external data symbol.
   arithmetic preconditions, or termination.
 
 Module limits include 256 combined symbols, 65,536 instructions, and 65,536
-global words. A function may have up to 256 blocks, 16,384 instructions, and
+global words. A function may have up to 4,096 blocks, 16,384 instructions, and
 4,096 entries in each of its value and local tables. ABI signatures and call
-argument lists may have at most 64 entries. Block parameter and edge argument
+argument lists may have at most 128 entries. Block parameter and edge argument
 lists are bounded by the value table limit. A separate module work limit
 bounds aggregate operand checking and dominance computation. Reachability and
 dominance operate on bounded scratch storage without recursion. Cancellation

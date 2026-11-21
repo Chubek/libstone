@@ -73,9 +73,10 @@ enum {
 	S_PLUS, S_MINUS, S_DOT, S_DOT2, S_SLASH, S_NUMBER, S_NUMBER2, S_LT,
 	S_LT2, S_EQ, S_GT, S_GT2, S_CIRC, S_PIPE, S_BACKSLASH,
 	S_COMMENT, S_COMMENT2, S_COMMENT3, S_COMMENT4, S_COMMENT5,
-	S_NAME, S_NAME_BS, S_LCHAR, S_UCHAR, S_U8CHAR,
+	S_NAME, S_NAME_BS, S_NUMBER_BS, S_LCHAR, S_UCHAR, S_U8CHAR,
 	MSTATE,
-	S_ILL, S_DDOT, S_DDSHARP, S_BS, S_ROGUE_BS, S_BEHEAD, S_DECAY,
+	S_ILL, S_DDOT, S_DDSHARP, S_BS, S_ROGUE_BS, S_ROGUE_NUMBER_BS,
+	S_BEHEAD, S_DECAY,
 	S_TRUNC, S_TRUNCC, S_OUCH
 };
 
@@ -248,10 +249,18 @@ static struct machine_state {
 	{ S_NUMBER,	{ '.' },	PUT(S_NUMBER)		},
 	{ S_NUMBER,	{ 'E', 'e' },	PUT(S_NUMBER2)		},
 	{ S_NUMBER,	{ 'P', 'p' },	PUT(S_NUMBER2)		},
+	{ S_NUMBER,	{ '\\' },	S_NUMBER_BS		},
 
 	{ S_NUMBER2,	{ ANY },	FRZ(STO(NUMBER))	},
 	{ S_NUMBER2,	{ ALP, NUM },	PUT(S_NUMBER)		},
+	{ S_NUMBER2,	{ '.' },	PUT(S_NUMBER)		},
+	{ S_NUMBER2,	{ 'E', 'e' },	PUT(S_NUMBER2)		},
+	{ S_NUMBER2,	{ 'P', 'p' },	PUT(S_NUMBER2)		},
 	{ S_NUMBER2,	{ '+', '-' },	PUT(S_NUMBER)		},
+	{ S_NUMBER2,	{ '\\' },	S_NUMBER_BS		},
+
+	{ S_NUMBER_BS,	{ ANY },	FRZ(S_ROGUE_NUMBER_BS)	},
+	{ S_NUMBER_BS,	{ 'u', 'U' },	PUT(S_NUMBER)		},
 
 	/* after a < */
 	{ S_LT,		{ ANY },	FRZ(STO(LT))		},
@@ -490,7 +499,7 @@ void put_char(struct lexer_state *ls, unsigned char c)
 /*
  * get next raw input character
  */
-static inline int read_char(struct lexer_state *ls)
+static inline int read_source_byte(struct lexer_state *ls)
 {
 	unsigned char c;
 
@@ -550,6 +559,28 @@ static inline int read_char(struct lexer_state *ls)
 	}
 	ls->saw_source_char = 1;
 	ls->last_source_char = c;
+	return c;
+}
+
+static inline int read_char(struct lexer_state *ls)
+{
+	int c = read_source_byte(ls);
+	if ((ls->flags & UTF8_SOURCE) && !(ls->flags & PHASE3_INPUT)) {
+		if (c < 0 && ls->utf8.remaining) {
+			error(ls->line, "truncated UTF-8 source character");
+			ls->utf8.remaining = 0;
+			ls->character_error = 1;
+		} else if (c >= 0 && (c >= 0x80 || ls->utf8.remaining)) {
+			int was_pending = ls->utf8.remaining != 0;
+			if (c11_utf8_feed(&ls->utf8, c) < 0) {
+				error(ls->line, "invalid UTF-8 source encoding");
+				ls->character_error = 1;
+				/* A valid lead byte can begin a new character. */
+				if (was_pending && c >= 0xc2 && c <= 0xf4)
+					c11_utf8_feed(&ls->utf8, c);
+			}
+		}
+	}
 	return c;
 }
 
@@ -668,131 +699,80 @@ void discard_char(struct lexer_state *ls)
 	if (ls->discard) ouch("overcollecting garbage");
 #endif
 	ls->discard = 1;
-	ls->utf8 = 0;
 	if (ls->last == '\n') ls->line ++;
 }
 
 /*
- * Convert an UTF-8 encoded character to a Universal Character Name
- * using \u (or \U when appropriate).
+ * Validate extended characters without rewriting the spelling: phase-4
+ * stringizing and token pasting must see the original preprocessing token.
+ * Return 1 on success and 0 on error, providing a canonical UTF-8 copy
+ * in 'out' when non-null. This copy never grows beyond the input length.
  */
-static int utf8_to_string(unsigned char buf[], unsigned long utf8)
+enum spelling_status {
+	SPELLING_OK, SPELLING_BAD_UTF8, SPELLING_BAD_ESCAPE, SPELLING_BAD_CODE_POINT,
+	SPELLING_BAD_IDENTIFIER, SPELLING_BAD_INITIAL
+};
+
+static enum spelling_status check_spelling(const char *id, char *out,
+	int number, unsigned long *code_point)
 {
-	unsigned long val = 0;
-	static char hex[16] = "0123456789abcdef";
+	const unsigned char *p = (const unsigned char *)id;
 
-	if (utf8 & 0x80UL) {
-		unsigned long x1, x2, x3, x4;
-
-		x1 = (utf8 >> 24) & 0x7fUL;
-		x2 = (utf8 >> 16) & 0x7fUL;
-		x3 = (utf8 >> 8) & 0x7fUL;
-		x4 = (utf8) & 0x3fUL;
-		x1 &= 0x07UL;
-		if (x2 & 0x40UL) x2 &= 0x0fUL;
-		if (x3 & 0x40UL) x3 &= 0x1fUL;
-		val = x4 | (x3 << 6) | (x2 << 12) | (x1 << 16);
-	} else val = utf8;
-	if (val < 128) {
-		buf[0] = val;
-		buf[1] = 0;
-		return 1;
-	} else if (val < 0xffffUL) {
-		buf[0] = '\\';
-		buf[1] = 'u';
-		buf[2] = hex[(size_t)(val >> 12)];
-		buf[3] = hex[(size_t)((val >> 8) & 0xfU)];
-		buf[4] = hex[(size_t)((val >> 4) & 0xfU)];
-		buf[5] = hex[(size_t)(val & 0xfU)];
-		buf[6] = 0;
-		return 6;
-	}
-	buf[0] = '\\';
-	buf[1] = 'U';
-	buf[2] = '0';
-	buf[3] = '0';
-	buf[4] = hex[(size_t)(val >> 20)];
-	buf[5] = hex[(size_t)((val >> 16) & 0xfU)];
-	buf[6] = hex[(size_t)((val >> 12) & 0xfU)];
-	buf[7] = hex[(size_t)((val >> 8) & 0xfU)];
-	buf[8] = hex[(size_t)((val >> 4) & 0xfU)];
-	buf[9] = hex[(size_t)(val & 0xfU)];
-	buf[10] = 0;
-	return 10;
-}
-
-/*
- * Scan the identifier and put it in canonical form:
- *  -- tranform \U0000xxxx into \uxxxx
- *  -- inside \u and \U, make letters low case
- *  -- report (some) incorrect use of UCN
- */
-static void canonize_id(struct lexer_state *ls, char *id)
-{
-	char *c, *d;
-
-	for (c = d = id; *c;) {
-		if (*c == '\\') {
-			int i;
-
-			if (!*(c + 1)) goto canon_error;
-			if (*(c + 1) == 'U') {
-				for (i = 0; i < 8 && *(c + i + 2); i ++);
-				if (i != 8) goto canon_error;
-				*(d ++) = '\\';
-				c += 2;
-				for (i = 0; i < 4 && *(c + i) == '0'; i ++);
-				if (i == 4) {
-					*(d ++) = 'u';
-					c += 4;
-				} else {
-					*(d ++) = 'U';
-					i = 8;
-				}
-				for (; i > 0; i --) {
-					switch (*c) {
-					case 'A': *(d ++) = 'a'; break;
-					case 'B': *(d ++) = 'b'; break;
-					case 'C': *(d ++) = 'c'; break;
-					case 'D': *(d ++) = 'd'; break;
-					case 'E': *(d ++) = 'e'; break;
-					case 'F': *(d ++) = 'f'; break;
-					default: *(d ++) = *c; break;
-					}
-					c ++;
-				}
-			} else if (*(c + 1) == 'u') {
-				for (i = 0; i < 4 && *(c + i + 2); i ++);
-				if (i != 4) goto canon_error;
-				*(d ++) = '\\';
-				*(d ++) = 'u';
-				c += 2;
-				for (; i > 0; i --) {
-					switch (*c) {
-					case 'A': *(d ++) = 'a'; break;
-					case 'B': *(d ++) = 'b'; break;
-					case 'C': *(d ++) = 'c'; break;
-					case 'D': *(d ++) = 'd'; break;
-					case 'E': *(d ++) = 'e'; break;
-					case 'F': *(d ++) = 'f'; break;
-					default: *(d ++) = *c; break;
-					}
-					c ++;
-				}
-			} else goto canon_error;
+	while (*p) {
+		unsigned long c = 0;
+		int initial = !number && p == (const unsigned char *)id;
+		if (*p == '\\') {
+			int digits;
+			if (*++p == 'u') digits = 4;
+			else if (*p == 'U') digits = 8;
+			else return SPELLING_BAD_ESCAPE;
+			p++;
+			while (digits--) {
+				int digit = c11_hex_value(*p);
+				if (digit < 0) return SPELLING_BAD_ESCAPE;
+				c = c * 16 + digit;
+				p++;
+			}
+			*code_point = c;
+			if (!c11_valid_ucn(c)) return SPELLING_BAD_CODE_POINT;
+		} else if (*p >= 0x80) {
+			struct c11_utf8_state state = {0};
+			int status;
+			do {
+				if (!*p) return SPELLING_BAD_UTF8;
+				status = c11_utf8_feed(&state, *p++);
+			} while (!status);
+			/* Phase 1 already diagnosed ill-formed UTF-8 input. */
+			if (status < 0) return SPELLING_BAD_UTF8;
+			c = state.value;
+			*code_point = c;
+		} else {
+			if (out) *out++ = (char)*p;
+			p++;
 			continue;
 		}
-		*(d ++) = *(c ++);
+		if (!number) {
+			if (!c11_identifier_ucn(c)) return SPELLING_BAD_IDENTIFIER;
+			if (initial && !c11_initial_ucn(c)) return SPELLING_BAD_INITIAL;
+		}
+		if (out) out += c11_encode_utf8(c, out);
 	}
-	*d = 0;
-	return;
+	if (out) *out = 0;
+	return SPELLING_OK;
+}
 
-canon_error:
-	for (; *c; *(d ++) = *(c ++));
-	if (ls->flags & WARN_STANDARD) {
-		warning(ls->line, "malformed identifier with UCN: '%s'", id);
-	}
-	*d = 0;
+/* Return a table key, aliasing the original spelling if no UCN needs
+   decoding. The caller frees the key only if it differs from 'id'. */
+char *identifier_key(char *id)
+{
+	unsigned long code_point = 0;
+	char *key;
+	if (!strchr(id, '\\')) return id;
+	key = getmem(strlen(id) + 1);
+	if (check_spelling(id, key, 0, &code_point) == SPELLING_OK)
+		return key;
+	freemem(key);
+	return id;
 }
 
 /*
@@ -805,9 +785,7 @@ static inline int read_token(struct lexer_state *ls)
 {
 	int cstat = S_START, nstat;
 	size_t ltok = 0;
-	int c, outc = 0, ucn_in_id = 0;
-	int shift_state;
-	unsigned long utf8;
+	int c, outc = 0, extended = 0, ucn_remaining = 0;
 	long l;
 
 	ls->ctok->line = ls->line;
@@ -819,10 +797,6 @@ static inline int read_token(struct lexer_state *ls)
 		ls->pending_token = 0;
 		return 0;
 	}
-	if (ls->flags & UTF8_SOURCE) {
-		utf8 = ls->utf8;
-		shift_state = 0;
-	}
 	/* Phase 2 can advance past physical lines before the token starts. */
 	next_char(ls);
 	l = ls->ctok->line = ls->line;
@@ -831,49 +805,20 @@ static inline int read_token(struct lexer_state *ls)
 	do {
 		c = next_char(ls);
 		if (c < 0) {
-			if ((ls->flags & UTF8_SOURCE) && shift_state) {
-				if (ls->flags & WARN_STANDARD)
-					warning(ls->line, "truncated UTF-8 "
-						"character");
-				shift_state = 0;
-				utf8 = 0;
-			}
 			if (cstat == S_START) return 2;
 			nstat = cppm_vch[cstat];
 		} else {
-			if (ls->flags & UTF8_SOURCE) {
-				if (shift_state) {
-					if ((c & 0xc0) != 0x80) {
-						if (ls->flags & WARN_STANDARD)
-							warning(ls->line,
-								"truncated "
-								"UTF-8 "
-								"character");
-						shift_state = 0;
-						utf8 = 0;
-						c = '_';
-					} else {
-						utf8 = (utf8 << 8) | c;
-						if (-- shift_state) {
-							ls->discard = 1;
-							continue;
-						}
-						c = '_';
-					}
-				} else if ((c & 0xc0) == 0xc0) {
-					if ((c & 0x30) == 0x30) {
-						shift_state = 3;
-					} else if (c & 0x20) {
-						shift_state = 2;
-					} else {
-						shift_state = 1;
-					}
-					utf8 = c;
-					ls->discard = 1;
-					continue;
-				} else utf8 = 0;
-			}
-			nstat = cppm[cstat][c < MAX_CHAR_VAL ? c : 0];
+			/* UTF-8 source bytes act as identifier-nondigits in the
+			   DFA, but every byte is kept in the spelling. */
+			int symbol = (ls->flags & UTF8_SOURCE) && c >= 0x80
+				? '_' : c < MAX_CHAR_VAL ? c : 0;
+			nstat = cppm[cstat][symbol];
+			/* An e/E inside a UCN is not the e/E that can introduce
+			   a sign in a pp-number. */
+			if (ucn_remaining && c11_hex_value(c) >= 0) {
+				ucn_remaining--;
+				nstat = PUT(cstat);
+			} else ucn_remaining = 0;
 		}
 #ifdef AUDIT
 		if (nstat == S_OUCH) {
@@ -905,6 +850,10 @@ static inline int read_token(struct lexer_state *ls)
 		case S_ROGUE_BS:
 			ls->pending_token = BUNCH;
 			nstat = FRZ(STO(NAME));
+			break;
+		case S_ROGUE_NUMBER_BS:
+			ls->pending_token = BUNCH;
+			nstat = FRZ(STO(NUMBER));
 			break;
 		case S_DDOT:
 			ls->pending_token = DOT;
@@ -981,21 +930,14 @@ static inline int read_token(struct lexer_state *ls)
 			outc = 0;
 		}
 		if (ttPUT(nstat)) {
-			if (cstat == S_NAME_BS) {
-				ucn_in_id = 1;
+			if (cstat == S_NAME_BS || cstat == S_NUMBER_BS) {
+				extended = 1;
+				ucn_remaining = c == 'u' ? 4 : 8;
 				wan(ls->ctok->name, ltok, '\\', ls->tknl);
 			}
-			if ((ls->flags & UTF8_SOURCE) && utf8) {
-				unsigned char buf[11];
-				int i, j;
-
-				for (i = 0, j = utf8_to_string(buf, utf8);
-					i < j; i ++)
-					wan(ls->ctok->name, ltok, buf[i],
-						ls->tknl);
-				/* if (j > 1) ucn_in_id = 1; */
-			} else wan(ls->ctok->name, ltok,
-				(unsigned char)c, ls->tknl);
+			if ((ls->flags & UTF8_SOURCE) && c >= 0x80)
+				extended = 1;
+			wan(ls->ctok->name, ltok, (unsigned char)c, ls->tknl);
 		}
 		if (ttSTO(nstat)) {
 			if (S_TOKEN(noMOD(nstat))) {
@@ -1009,8 +951,27 @@ static inline int read_token(struct lexer_state *ls)
 	} while (1);
 	if (!(ls->flags & LEXER) && (ls->flags & DISCARD_COMMENTS)
 			&& ls->ctok->type == COMMENT) put_char(ls, ' ');
-	if (ucn_in_id && ls->ctok->type == NAME)
-		canonize_id(ls, ls->ctok->name);
+	if (extended && (ls->ctok->type == NAME || ls->ctok->type == NUMBER)) {
+		unsigned long code_point = 0;
+		switch (check_spelling(ls->ctok->name, 0, ls->ctok->type == NUMBER,
+			&code_point)) {
+		case SPELLING_OK: case SPELLING_BAD_UTF8:
+			return 0;
+		case SPELLING_BAD_ESCAPE:
+			error(l, "malformed universal character name");
+			break;
+		case SPELLING_BAD_CODE_POINT:
+			error(l, "invalid code point U+%04lX in universal character name", code_point);
+			break;
+		case SPELLING_BAD_IDENTIFIER:
+			error(l, "U+%04lX is not allowed in a C11 identifier (Annex D.1)", code_point);
+			break;
+		case SPELLING_BAD_INITIAL:
+			error(l, "U+%04lX is not allowed initially in a C11 identifier (Annex D.2)", code_point);
+			break;
+		}
+		ls->character_error = 1;
+	}
 	return 0;
 }
 

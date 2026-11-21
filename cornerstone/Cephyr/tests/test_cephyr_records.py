@@ -10,6 +10,7 @@ import tempfile
 
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "records" / "native.c"
+FLEXIBLE = FIXTURE.with_name("flexible.c")
 
 NEGATIVE = [
     ("unknown", "struct R { int n; }; int f(struct R *p) { return p->missing; }",
@@ -18,7 +19,34 @@ NEGATIVE = [
     ("incomplete-element", "struct R; extern struct R a[2];", r"incomplete structure|complete object"),
     ("incomplete-static", "static struct R r; struct R { int n; };", r"internal tentative"),
     ("self", "struct R { struct R member; };", r"complete object type"),
-    ("flexible", "struct R { int n; char bytes[]; };", r"flexible array"),
+    ("flexible-only", "struct R { char bytes[]; };", r"preceding named member"),
+    ("flexible-nonfinal", "struct R { int n; char bytes[], last; };", r"last member"),
+    ("flexible-union", "union U { int n; char bytes[]; };", r"requires a structure"),
+    ("flexible-array-element", "struct R { int n; char bytes[]; }; struct R a[2];",
+     r"array element type cannot contain a flexible array"),
+    ("flexible-array-typedef", "struct R { int n; char bytes[]; }; typedef struct R A[];",
+     r"array element type cannot contain a flexible array"),
+    ("flexible-contained", "struct R { int n; char bytes[]; }; struct S { struct R r; };",
+     r"structure member cannot contain a flexible array"),
+    ("flexible-recursive-union-array", "struct R { int n; char bytes[]; };"
+     "union U { struct R r; }; union V { union U u; }; union V a[2];",
+     r"array element type cannot contain a flexible array"),
+    ("flexible-recursive-union-member", "struct R { int n; char bytes[]; };"
+     "union U { struct R r; }; union V { union U u; }; struct S { union V v; };",
+     r"structure member cannot contain a flexible array"),
+    ("flexible-incomplete-element", "struct T; struct R { int n; struct T bits[]; };",
+     r"incomplete structure|complete element"),
+    ("flexible-initialized", "struct R { int n; char bytes[]; }; struct R r = {1, \"a\"};",
+     r"too many elements|flexible array member cannot be initialized"),
+    ("flexible-designated", "struct R { int n; char bytes[]; };"
+     "void f(void) { struct R r = {.n = 1, .bytes[0] = 'x'}; }",
+     r"flexible array member cannot be initialized"),
+    ("flexible-sizeof", "struct R { int n; char bytes[]; };"
+     "unsigned long f(struct R *p) { return sizeof p->bytes; }",
+     r"sizeof requires a complete object type"),
+    ("flexible-qualified", "struct R { int n; char bytes[]; };"
+     "void f(const struct R *p) { p->bytes[0] = 'x'; }",
+     r"modifiable|const-qualified"),
     ("const", "struct R { int n; }; void f(const struct R *p) { p->n = 3; }",
      r"modifiable|const-qualified"),
     ("nested-const", "struct Q { const int n; }; struct R { struct Q q[2]; };"
@@ -66,14 +94,15 @@ def main() -> None:
         env["XDG_CACHE_HOME"] = str(work / "cache")
         for triple, hosts, emulator in targets:
             command = [args.cephyr.resolve(), "-std=c11", f"--target={triple}"]
-            executable = work / triple
-            subprocess.run([*command, FIXTURE, "-o", executable], cwd=work, env=env, check=True)
-            if host in hosts:
-                subprocess.run([executable], cwd=work, env=env, check=True)
-            elif emulator:
-                subprocess.run([emulator, executable], cwd=work, env=env, check=True)
-            else:
-                print(f"{triple}: linked, execution skipped (no emulator)")
+            for fixture in (FIXTURE, FLEXIBLE):
+                executable = work / f"{triple}-{fixture.stem}"
+                subprocess.run([*command, fixture, "-o", executable], cwd=work, env=env, check=True)
+                if host in hosts:
+                    subprocess.run([executable], cwd=work, env=env, check=True)
+                elif emulator:
+                    subprocess.run([emulator, executable], cwd=work, env=env, check=True)
+                else:
+                    print(f"{triple}: {fixture.stem} linked, execution skipped (no emulator)")
             for name, source, diagnostic in NEGATIVE:
                 bad = work / f"{name}.c"
                 bad.write_text(source + "\n", encoding="ascii")

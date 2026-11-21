@@ -22,6 +22,13 @@ def sample_source() -> str:
     arguments = ", ".join(["0"] * 126 + ["17"])
     call_arguments = ", ".join(str(i + 1) for i in range(127))
     logical_line = "#define LONG_LINE" + " " * (4095 - len("#define LONG_LINE 1")) + "1"
+    # Use a runtime value so lowering must keep the full dispatch graph.
+    # Null statements keep the labels at the same syntactic nesting depth
+    # while still exercising fallthrough between them.
+    cases = [
+        f"  case {i}:" + {511: " return 2;", 1022: " return 3;"}.get(i, " ;")
+        for i in range(1023)
+    ]
     return "\n".join([
         "#include <assert.h>",
         "#include <iso646.h>",
@@ -57,6 +64,20 @@ def sample_source() -> str:
         "static char big_object[65535];",
         '_Static_assert(sizeof(long_string) == 4096, "concatenated literal");',
         '_Static_assert(sizeof(big_object) == 65535, "object size");',
+        "struct many_members {",
+        *[f"  int member_{i};" for i in range(1023)],
+        "};",
+        '_Static_assert(sizeof(struct many_members) == 1023 * sizeof(int), "member count");',
+        # Count enumerators without using their values (still unsupported).
+        "enum many_enumerators {",
+        *[f"  enumerator_{i}," for i in range(1023)],
+        "};",
+        "struct nested_records {",
+        *[f"  struct nested_{i} {{" for i in range(63)],
+        "  int word;",
+        *[f"  }} inner_{i};" for i in reversed(range(63))],
+        "};",
+        '_Static_assert(sizeof(struct nested_records) == sizeof(int), "nested records");',
         "static int ************deep_pointer;",
         "static int " + "(" * 63 + "seen" + ")" * 63 + ";",
         'static void first(void) { if (seen != 2 || puts("atexit: LIFO") == EOF) _Exit(9); }',
@@ -81,6 +102,12 @@ def sample_source() -> str:
         "  return iswctype('z', letter) && !iswctype(WEOF, letter) &&",
         "         towctrans('z', upper) == 'Z' && towctrans(WEOF, upper) == WEOF;",
         "}",
+        "static int many_cases(int selector) {",
+        "  switch (selector) {",
+        *cases,
+        "  default: return 4;",
+        "  }",
+        "}",
         "int main(int argc, char *argv[]) {",
         '_Static_assert(sizeof __func__ == sizeof "main", "function identifier is an array");',
         *[f"  int local_{i};" for i in range(511)],
@@ -100,6 +127,9 @@ def sample_source() -> str:
         f"  if (tail({call_arguments}) != 128) return 8;",
         "  if (check_stream() || !operators()) return 10;",
         "  if (!wide_classification()) return 11;",
+        "  if (many_cases(argc - 2) != 2 || many_cases(511) != 2 ||",
+        "      many_cases(512) != 3 || many_cases(1022) != 3 ||",
+        "      many_cases(1023) != 4 || many_cases(-1) != 4) return 12;",
         "  if (argv[1][1] == '!') assert(argc == 3);",
         "}",  # Falling off main returns zero and performs normal termination (§5.1.2.2.3).
         "",

@@ -823,7 +823,7 @@ std::optional<Runtime> build_runtime(const Options &opts, const Config &config, 
         for (const char *source : {amd64 ? "syscall-amd64.S" : aarch64 ? "syscall-aarch64.S" : "syscall.S",
                                    amd64 ? "setjmp-amd64.S" : aarch64 ? "setjmp-aarch64.S" : "setjmp.S",
                                    "runtime.c", "allocator.c", "assert.c",
-                                   "ctype.c", "stdlib.c", "stdio.c", "stream.c", "string.c",
+                                    "ctype.c", "stdlib.c", "stdio.c", "scanf.c", "stream.c", "string.c",
                                    "time.c", "multibyte.c"}) {
             const auto object = workspace / ("libc-" + fs::path(source).stem().string() + ".o");
             if (!compile(source, object))

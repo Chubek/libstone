@@ -38,6 +38,7 @@
 JMP_BUF eval_exception;
 long eval_line;
 static int emit_eval_warnings;
+static int eval_utf8_source;
 
 /*
  * If you want to hardcode a conversion table, define a static array
@@ -260,8 +261,7 @@ static unsigned long pp_char(char *c, char *refc)
 				error(eval_line, "malformed UCN in %s", refc);
 				throw(eval_exception);
 			}
-			if ((r < 0xa0 && r != 0x24 && r != 0x40 && r != 0x60)
-				|| (r >= 0xd800 && r <= 0xdfff) || r > 0x10ffff) {
+			if (!c11_valid_ucn(r)) {
 				error(eval_line, "invalid code point in UCN in %s", refc);
 				throw(eval_exception);
 			}
@@ -284,6 +284,17 @@ static unsigned long pp_char(char *c, char *refc)
 	} else if (*c == '\'') {
 		error(eval_line, "empty character constant");
 		throw(eval_exception);
+	} else if (eval_utf8_source && (unsigned char)*c >= 0x80) {
+		struct c11_utf8_state state = {0};
+		int status;
+		do {
+			status = c11_utf8_feed(&state, (unsigned char)*c++);
+		} while (!status);
+		if (status < 0) {
+			error(eval_line, "invalid UTF-8 character in %s", refc);
+			throw(eval_exception);
+		}
+		r = state.value;
 	} else {
 		r = *((unsigned char *)(c ++));
 	}
@@ -667,12 +678,13 @@ invalid_token_err:
  * counterparts using the Fortran way: a + or a - is considered unary
  * if it does not follow a constant, an identifier or a right parenthesis.
  */
-unsigned long eval_expr(struct token_fifo *tf, int *ret, int ew)
+unsigned long eval_expr(struct token_fifo *tf, int *ret, unsigned long flags)
 {
 	size_t sart;
 	ppval r;
 
-	emit_eval_warnings = ew;
+	emit_eval_warnings = (flags & WARN_STANDARD) != 0;
+	eval_utf8_source = (flags & UTF8_SOURCE) != 0;
 	if (catch(eval_exception)) goto eval_err;
 	/* first, distinguish unary + and - from binary + and - */
 	for (sart = tf->art; tf->art < tf->nt; tf->art ++) {

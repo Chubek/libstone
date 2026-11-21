@@ -1291,6 +1291,11 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
             read_type(array->getElementType(), context, false);
         if (!element.valid())
             return {};
+        if (element.kind == CType::Kind::record && element.record->contains_flexible_array) {
+            type_error(node, source, diagnostics,
+                       "an array element type cannot contain a flexible array member");
+            return {};
+        }
         if (element.kind == CType::Kind::void_ ||
             element.kind == CType::Kind::function) {
             type_error(node, source, diagnostics,
@@ -1436,10 +1441,9 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete) {
 
 void bind_typedef_bounds(Node *node, const TypeContext &context) {
     // File-scope typedefs of otherwise unsupported types have historically
-    // been allowed if they go unused. Force resolution when a cloned type
-    // can otherwise rebind an array bound at a use site, or when this is the
-    // declaration that supplies the definition of a record (including any
-    // array bounds in its members).
+    // been allowed if they go unused. Force resolution for array bounds and
+    // record definitions. Also resolve arrays of records even without a bound:
+    // a record containing a flexible array is already disallowed as an element.
     const auto needs_binding = [](auto &&self, Node *type) -> bool {
         const AnalysisDepth depth(semantic_depth);
         if (!present(type))
@@ -1447,7 +1451,11 @@ void bind_typedef_bounds(Node *node, const TypeContext &context) {
         switch (type->getKind()) {
         case cparser::NK_ARRAY_TYPE: {
             auto *array = static_cast<cparser::ArrayTypeASTNode *>(type);
-            return present(array->getExpr()) || self(self, array->getElementType());
+            auto *element = array->getElementType();
+            return present(array->getExpr()) ||
+                (present(element) && (element->getKind() == cparser::NK_STRUCT_TYPE ||
+                                      element->getKind() == cparser::NK_UNION_TYPE)) ||
+                self(self, element);
         }
         case cparser::NK_POINTER_TYPE:
             return self(self, static_cast<cparser::PointerTypeASTNode *>(type)->getBaseType());

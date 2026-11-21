@@ -108,6 +108,22 @@ class RuntimeTextTests(unittest.TestCase):
         caps = self.cli("--list-capabilities")
         self.assertIn(b"RISCV64IM/LP64", caps.stdout)
 
+    def test_large_cfg_with_scheduling(self):
+        block_count = 4096
+        header = f"archon-mir 1\nmodule 1 0 0\nfunction chain i64 1 2 {block_count} 0\ntypes i64 i64\n"
+        jump = "block 0 0\nparams\nbr {} 0\n"
+        program = (
+            header + "".join(jump.format(i) for i in range(1, block_count))
+            + "block 0 1\nparams\ncopy 1 0\nret 1\nend\n"
+        ).encode("ascii")
+        generated = self.cli("--input", "-", "--schedule-pure", data=program)
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        self.assertIn(b"chain:", generated.stdout)
+        too_many = program.replace(b"2 4096 0", b"2 4097 0", 1)
+        result = self.cli("--verify-input", "-", data=too_many)
+        self.assertEqual((result.returncode, result.stdout), (1, b""))
+        self.assertIn(b"count", result.stderr)
+
     def test_rejects_malformed_data_without_publishing(self):
         for source, diagnostic in (
             (b"#include <anything>", b"archon-mir"),

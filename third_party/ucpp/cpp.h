@@ -129,6 +129,7 @@ enum {
 };
 
 #include "tune.h"
+#include "../c11_source_chars.h"
 #include <stdio.h>
 #include <setjmp.h>
 
@@ -164,7 +165,8 @@ struct lexer_state {
 	int final_splice;
 	int last;
 	int discard;
-	unsigned long utf8;
+	struct c11_utf8_state utf8;
+	int character_error;
 	unsigned char copy_line[COPY_LINE_LENGTH];
 	int cli;
 
@@ -228,7 +230,7 @@ struct lexer_state {
 #define HANDLE_ASSERTIONS    0x000800UL	/* understand assertions */
 #define HANDLE_PRAGMA	     0x001000UL	/* emit PRAGMA tokens in lexer mode */
 #define MACRO_VAARG	     0x002000UL	/* understand macros with '...' */
-#define UTF8_SOURCE	     0x004000UL	/* identifiers are in UTF8 encoding */
+#define UTF8_SOURCE	     0x004000UL	/* UTF-8 source, including identifiers */
 #define HANDLE_TRIGRAPHS     0x008000UL	/* handle trigraphs */
 
 /* global ucpp behaviour */

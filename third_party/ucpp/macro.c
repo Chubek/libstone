@@ -43,6 +43,34 @@
 static HTT macros;
 static int macros_init_done = 0;
 
+static void put_macro(struct macro *m, char *name)
+{
+	char *key = identifier_key(name);
+	HTT_put(&macros, m, key);
+	if (key != name) freemem(key);
+}
+
+static void remove_macro(char *name)
+{
+	char *key = identifier_key(name);
+	HTT_del(&macros, key);
+	if (key != name) freemem(key);
+}
+
+static int same_identifier(char *a, char *b)
+{
+	char *ka, *kb;
+	int equal;
+	if (!strcmp(a, b)) return 1;
+	if (!strchr(a, '\\') && !strchr(b, '\\')) return 0;
+	ka = identifier_key(a);
+	kb = identifier_key(b);
+	equal = !strcmp(ka, kb);
+	if (ka != a) freemem(ka);
+	if (kb != b) freemem(kb);
+	return equal;
+}
+
 static void del_macro(void *m)
 {
 	struct macro *n = m;
@@ -383,7 +411,7 @@ int handle_define(struct lexer_state *ls)
 	 * Since it is easy to avoid this error (with a #undef directive),
 	 * we choose to enforce the rule and emit an error.
 	 */
-	if ((n = HTT_get(&macros, mname)) != 0) {
+	if ((n = get_macro(mname)) != 0) {
 		/* redefinition of a macro: we must check that we define
 		   it identical */
 		redef = 1;
@@ -499,7 +527,7 @@ int handle_define(struct lexer_state *ls)
 		}
 		if (!redef) {
 			for (i = 1; i < narg; i ++) for (j = 0; j < i; j ++)
-				if (!strcmp(m->arg[i], m->arg[j])) {
+				if (same_identifier(m->arg[i], m->arg[j])) {
 					error(l, "duplicate macro "
 						"argument");
 					goto warp_error;
@@ -539,7 +567,7 @@ int handle_define(struct lexer_state *ls)
 				t.line = redef ? n->narg : m->narg;
 			}
 			for (i = 0; i < narg; i ++)
-				if (!strcmp(redef ? n->arg[i] : m->arg[i],
+				if (same_identifier(redef ? n->arg[i] : m->arg[i],
 					ls->ctok->name)) {
 					t.type = MACROARG;
 					/* this is a hack: we store the
@@ -696,7 +724,7 @@ define_end:
 		if (mval.nt) freemem(mval.t);
 	}
 #endif
-	HTT_put(&macros, m, mname);
+	put_macro(m, mname);
 	freemem(mname);
 	if (emit_defines) print_macro(m);
 	return 0;
@@ -882,7 +910,8 @@ harvested:
  */
 struct lexer_state dsharp_lexer;
 
-static inline int concat_token(struct token *t1, struct token *t2)
+static inline int concat_token(struct lexer_state *ls, struct token *t1,
+	struct token *t2)
 {
 	char *n1 = token_name(t1), *n2 = token_name(t2);
 	size_t l1 = strlen(n1), l2 = strlen(n2);
@@ -898,11 +927,14 @@ static inline int concat_token(struct token *t1, struct token *t2)
 	dsharp_lexer.ebuf = l1 + l2;
 	dsharp_lexer.discard = 1;
 	dsharp_lexer.flags = (DEFAULT_LEXER_FLAGS & ~HANDLE_TRIGRAPHS)
-		| PHASE3_INPUT;
+		| PHASE3_INPUT | (ls->flags & UTF8_SOURCE);
 	dsharp_lexer.line = t1->line > 0 ? t1->line : t2->line;
 	dsharp_lexer.nlka = 0;
+	dsharp_lexer.macfile = 0;
 	dsharp_lexer.pending_token = 0;
+	dsharp_lexer.character_error = 0;
 	r = next_token(&dsharp_lexer);
+	ls->character_error |= dsharp_lexer.character_error;
 	freemem(x);
 	/* An identifier/number usually leaves EOF in last, whereas a
 	   closed string or punctuator can finish without looking past it. */
@@ -945,6 +977,7 @@ static int tokenize_pragma(struct lexer_state *ls, char *buf, long line,
 	tokenize_lexer.nlka = 0;
 	tokenize_lexer.macfile = 0;
 	tokenize_lexer.pending_token = 0;
+	tokenize_lexer.character_error = 0;
 	tf->art = tf->nt = 0;
 	while (!(r = next_token(&tokenize_lexer))) {
 		struct token t, *ct = tokenize_lexer.ctok;
@@ -955,7 +988,7 @@ static int tokenize_pragma(struct lexer_state *ls, char *buf, long line,
 		aol(tf->t, tf->nt, t, TOKEN_LIST_MEMG);
 	}
 	buf[length] = 0;
-	return r == 1;
+	return r == 1 || tokenize_lexer.character_error;
 }
 #endif
 
@@ -1060,7 +1093,7 @@ char compile_time[12], compile_date[24];
  * take some tokens from ls to complete a call (fetch arguments) if
  * and only if penury is non zero.
  */
-int substitute_macro(struct lexer_state *ls, struct macro *m,
+int substitute_macro(struct lexer_state *ls, struct macro *m, char *spelling,
 	struct token_fifo *tfi, int penury, int reject_nested, long l)
 {
 	char *mname = HASH_ITEM_NAME(m);
@@ -1077,7 +1110,7 @@ int substitute_macro(struct lexer_state *ls, struct macro *m,
 	if (m->nest > reject_nested) {
 		t.type = NAME;
 		t.line = ls->line;
-		t.name = mname;
+		t.name = spelling;
 		print_token(ls, &t, 0);
 		return 0;
 	}
@@ -1160,6 +1193,14 @@ collect_args:
 		unsigned long save_flags = ls->flags;
 		int wr = 0;
 
+		/* A function-like macro without '(' retains its original token
+		   spelling, even when lookup used a different canonical key. */
+		if (!tfi) {
+			if (strcmp(spelling, mname)) {
+				spelling = sdup(spelling);
+				throw_away(ls->gf, spelling);
+			} else spelling = mname;
+		}
 		ls->flags |= LEXER;
 		if (m->narg > 0 || m->vaarg)
 			atl = getmem((m->narg + m->vaarg)
@@ -1180,7 +1221,7 @@ collect_args:
 		no_argument_next:
 			t.type = NAME;
 			t.line = l;
-			t.name = mname;
+			t.name = spelling;
 			print_token_nailed(ls, &t, l);
 			if (wr) {
 				t.type = NONE;
@@ -1302,7 +1343,7 @@ collect_args:
 
 #define ZAP_LINE(t)	do { \
 		if ((t).type == NAME && (t).line >= 0) { \
-			struct macro *zlm = HTT_get(&macros, (t).name); \
+			struct macro *zlm = get_macro((t).name); \
 			if (zlm && zlm->nest > reject_nested) \
 				(t).line = -1 - (t).line; \
 		} \
@@ -1385,7 +1426,7 @@ collect_args:
 #endif
 			z = ct->line;	/* the argument number is there */
 			if (ltwds && atl[z].nt != 0 && etl.nt) {
-				if (concat_token(etl.t + (-- etl.nt),
+				if (concat_token(ls, etl.t + (-- etl.nt),
 					atl[z].t)) {
 					warning(ls->line, "operator '##' "
 						"produced the invalid token "
@@ -1461,12 +1502,11 @@ collect_args:
 					cct = atl[z].t + (atl[z].art ++);
 					if (cct->type == NAME
 						&& cct->line >= 0
-						&& (nm = HTT_get(&macros,
-						    cct->name))
+						&& (nm = get_macro(cct->name))
 						&& nm->nest <=
 						    (reject_nested + 1)) {
 						ret |= substitute_macro(ls,
-							nm, atl + z, 0,
+							nm, cct->name, atl + z, 0,
 							reject_nested + 1,
 							cct->line ? cct->line : l);
 						continue;
@@ -1528,7 +1568,7 @@ collect_args:
 			ltwds = 1;
 			continue;
 		} else if (ltwds && etl.nt != 0) {
-			if (concat_token(etl.t + (-- etl.nt), ct)) {
+			if (concat_token(ls, etl.t + (-- etl.nt), ct)) {
 				warning(ls->line, "operator '##' produced "
 					"the invalid token '%s%s'",
 					token_name(etl.t + etl.nt),
@@ -1636,8 +1676,8 @@ collect_args:
 
 		ct = etl.t + (etl.art ++);
 		if (ct->type == NAME && ct->line >= 0
-			&& (nm = HTT_get(&macros, ct->name))) {
-			if (substitute_macro(ls, nm, &etl,
+			&& (nm = get_macro(ct->name))) {
+			if (substitute_macro(ls, nm, ct->name, &etl,
 				penury, reject_nested, ct->line ? ct->line : l)) {
 				m->nest = save_nest;
 				goto exit_error_2;
@@ -1697,75 +1737,31 @@ void print_defines(void)
  */
 int define_macro(struct lexer_state *ls, char *def)
 {
-	char *c = sdup(def), *d;
-	int with_def = 0;
-	int ret = 0;
+	struct lexer_state lls;
+	const char *eq = strchr(def, '=');
+	size_t n = strlen(def);
+	char *c;
+	int ret;
 
-	for (d = c; *d && *d != '='; d ++);
-	if (*d) {
-		*d = ' ';
-		with_def = 1;
+	if (!n || eq == def) {
+		error(-1, "void macro name");
+		return 1;
 	}
-	if (with_def) {
-		struct lexer_state lls;
-		size_t n = strlen(c) + 1;
-
-		if (c == d) {
-			error(-1, "void macro name");
-			ret = 1;
-		} else {
-			*(c + n - 1) = '\n';
-			init_buf_lexer_state(&lls, 0);
-			lls.flags = ls->flags | LEXER;
-			lls.input = 0;
-			lls.input_string = (unsigned char *)c;
-			lls.pbuf = 0;
-			lls.ebuf = n;
-			lls.line = -1;
-			ret = handle_define(&lls);
-			free_lexer_state(&lls);
-		}
-	} else {
-		struct macro *m;
-
-		if (!*c) {
-			error(-1, "void macro name");
-			ret = 1;
-		} else if (reserved_macro_name(c)) {
-			error(-1, "trying to redefine the special macro %s", c);
-			ret = 1;
-		} else if ((m = HTT_get(&macros, c))
-#ifdef LOW_MEM
-			&& (m->cval.length != 3
-			|| m->cval.t[0] != NUMBER
-			|| strcmp((char *)(m->cval.t + 1), "1"))) {
-#else
-			&& (m->val.nt != 1
-			|| m->val.t[0].type != NUMBER
-			|| strcmp(m->val.t[0].name, "1"))) {
-#endif
-			error(-1, "macro %s already defined", c);
-			ret = 1;
-		} else {
-#ifndef LOW_MEM
-			struct token t;
-#endif
-
-			m = new_macro();
-#ifdef LOW_MEM
-			m->cval.length = 3;
-			m->cval.t = getmem(3);
-			m->cval.t[0] = NUMBER;
-			m->cval.t[1] = '1';
-			m->cval.t[2] = 0;
-#else
-			t.type = NUMBER;
-			t.name = sdup("1");
-			aol(m->val.t, m->val.nt, t, TOKEN_LIST_MEMG);
-#endif
-			HTT_put(&macros, m, c);
-		}
+	c = getmem(n + 3);
+	mmv(c, def, n);
+	if (eq) c[eq - def] = ' ';
+	else {
+		c[n++] = ' ';
+		c[n++] = '1';
 	}
+	c[n++] = '\n';
+	init_buf_lexer_state(&lls, 0);
+	lls.flags = ls->flags | LEXER;
+	lls.input_string = (unsigned char *)c;
+	lls.ebuf = n;
+	lls.line = -1;
+	ret = handle_define(&lls) || lls.character_error;
+	free_lexer_state(&lls);
 	freemem(c);
 	return ret;
 }
@@ -1779,18 +1775,31 @@ int define_macro(struct lexer_state *ls, char *def)
  */
 int undef_macro(struct lexer_state *ls, char *def)
 {
-	char *c = def;
+	struct lexer_state lls;
+	int ret = 0;
 
-	if (!*c) {
+	if (!*def) {
 		error(-1, "void macro name");
 		return 1;
 	}
-	if (reserved_macro_name(c)) {
-		error(-1, "trying to undef special macro %s", c);
-		return 1;
+	init_buf_lexer_state(&lls, 0);
+	lls.flags = ls->flags | LEXER;
+	lls.input_string = (unsigned char *)def;
+	lls.ebuf = strlen(def);
+	lls.line = -1;
+	if (next_token(&lls) || lls.ctok->type != NAME
+		|| lls.pending_token || lls.last >= 0) {
+		error(-1, "invalid macro name for undefinition");
+		ret = 1;
+	} else if (!lls.character_error) {
+		if (reserved_macro_name(lls.ctok->name)) {
+			error(-1, "trying to undef special macro %s", lls.ctok->name);
+			ret = 1;
+		} else remove_macro(lls.ctok->name);
 	}
-	if (HTT_get(&macros, c)) HTT_del(&macros, c);
-	return 0;
+	ret |= lls.character_error;
+	free_lexer_state(&lls);
+	return ret;
 }
 
 /*
@@ -1805,7 +1814,7 @@ int handle_ifdef(struct lexer_state *ls)
 		if (ls->ctok->type == NEWLINE) break;
 		if (ttMWS(ls->ctok->type)) continue;
 		if (ls->ctok->type == NAME) {
-			int x = (HTT_get(&macros, ls->ctok->name) != 0);
+			int x = get_macro(ls->ctok->name) != 0;
 			while (!next_token(ls) && ls->ctok->type != NEWLINE)
 				if (tgd && !ttWHI(ls->ctok->type)
 					&& (ls->flags & WARN_STANDARD)) {
@@ -1840,7 +1849,7 @@ int handle_undef(struct lexer_state *ls)
 		if (ls->ctok->type == NEWLINE) break;
 		if (ttMWS(ls->ctok->type)) continue;
 		if (ls->ctok->type == NAME) {
-			struct macro *m = HTT_get(&macros, ls->ctok->name);
+			struct macro *m = get_macro(ls->ctok->name);
 			int tgd = 1;
 
 			if (reserved_macro_name(ls->ctok->name)) {
@@ -1852,7 +1861,7 @@ int handle_undef(struct lexer_state *ls)
 				if (emit_defines)
 					fprintf(emit_output, "#undef %s\n",
 						ls->ctok->name);
-				HTT_del(&macros, ls->ctok->name);
+				remove_macro(ls->ctok->name);
 			}
 			while (!next_token(ls) && ls->ctok->type != NEWLINE)
 				if (tgd && !ttWHI(ls->ctok->type)
@@ -1884,7 +1893,7 @@ int handle_ifndef(struct lexer_state *ls)
 		if (ls->ctok->type == NEWLINE) break;
 		if (ttMWS(ls->ctok->type)) continue;
 		if (ls->ctok->type == NAME) {
-			int x = (HTT_get(&macros, ls->ctok->name) == 0);
+			int x = get_macro(ls->ctok->name) == 0;
 
 			while (!next_token(ls) && ls->ctok->type != NEWLINE)
 				if (tgd && !ttWHI(ls->ctok->type)
@@ -1938,5 +1947,8 @@ void init_macros(void)
  */
 struct macro *get_macro(char *name)
 {
-	return HTT_get(&macros, name);
+	char *key = identifier_key(name);
+	struct macro *m = HTT_get(&macros, key);
+	if (key != name) freemem(key);
+	return m;
 }

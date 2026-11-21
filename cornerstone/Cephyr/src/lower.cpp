@@ -21,7 +21,7 @@
 namespace cephyr::detail {
 namespace {
 
-constexpr std::size_t max_blocks = 256, max_values = 4096;
+constexpr std::size_t max_blocks = ARCHON_MIR_MAX_BLOCKS, max_values = 4096;
 constexpr std::size_t max_symbols = 256;
 constexpr std::size_t max_function_instructions = 16384, max_module_instructions = 65536;
 constexpr std::size_t max_mir = 4u * 1024u * 1024u;
@@ -413,7 +413,8 @@ private:
             auto &last = path.back();
             const auto &parent = parents.back();
             if (parent.kind == CType::Kind::array ? (!parent.count || last + 1 < parent.count) :
-                (!parent.record->is_union && last + 1 < parent.record->members.size())) {
+                (!parent.record->is_union && last + 1 < parent.record->members.size() &&
+                 !parent.record->members[last + 1].flexible_array())) {
                 ++last;
                 return path;
             }
@@ -440,13 +441,16 @@ private:
         } else if (type.kind == CType::Kind::record && type.record && type.record->size) {
             if (index >= type.record->members.size())
                 return error(at, "too many elements in aggregate initializer");
+            const auto &member = type.record->members[index];
+            if (member.flexible_array())
+                return error(at, "a flexible array member cannot be initialized");
             if (type.record->is_union) {
                 if (const auto active = active_unions.find(path);
                     active != active_unions.end() && active->second != index)
                     reset(object, at, path, true);
                 active_unions[path] = index;
             }
-            object.offset += type.record->members[index].offset;
+            object.offset += member.offset;
         } else {
             return error(at, "initializer requires a complete aggregate type");
         }
@@ -575,6 +579,7 @@ CType read_record_type(Node *node, const TypeContext &context)
     };
     std::uint64_t extent = 0;
     unsigned max_alignment = 1;
+    bool contains_flexible_array = false;
     std::vector<RecordMember> members;
     std::set<std::string> names;
     for (auto *item : elements(body)) {
@@ -588,6 +593,8 @@ CType read_record_type(Node *node, const TypeContext &context)
         if (item->getKind() != cparser::NK_FIELD_DECL)
             return error(item, "unsupported record member declaration");
         auto *field = static_cast<cparser::FieldDeclASTNode *>(item);
+        if (structure && contains_flexible_array)
+            return error(field->getName(), "a flexible array member must be the last member of its structure");
         auto name = identifier(field->getName());
         if (name.empty())
             return error(item, "unnamed and anonymous record members are not supported");
@@ -596,11 +603,25 @@ CType read_record_type(Node *node, const TypeContext &context)
         auto member_type = read_type(field->getType(), context, true);
         if (!member_type.valid())
             return {};
-        if (member_type.kind == CType::Kind::array && !member_type.count)
-            return error(field->getName(), "flexible array members are not supported");
-        const auto size = size_of(member_type);
+        const bool flexible = member_type.kind == CType::Kind::array && !member_type.count;
+        if (flexible) {
+            if (!structure || members.empty())
+                return error(field->getName(),
+                             "a flexible array member requires a structure with a preceding named member");
+            if (!member_type.element || !size_of(*member_type.element))
+                return error(field->getName(), "a flexible array member requires a complete element type");
+            contains_flexible_array = true;
+        }
+        if (member_type.kind == CType::Kind::record && member_type.record->contains_flexible_array) {
+            if (structure)
+                return error(field->getName(), "a structure member cannot contain a flexible array member");
+            contains_flexible_array = true;
+        }
+        // The incomplete array has an aligned offset but contributes no
+        // elements to the fixed representation (6.7.2.1p18).
+        const auto size = flexible ? std::optional<std::uint64_t>{0} : size_of(member_type);
         const auto alignment = align_of(member_type);
-        if (!size || !*size || !alignment)
+        if (!size || (!flexible && !*size) || !alignment)
             return error(field->getName(), "record member must have a complete object type");
         // All supported constituents follow the bundled little-endian LP64
         // targets' natural layout. Bit-fields and explicit alignment must not
@@ -626,6 +647,7 @@ CType read_record_type(Node *node, const TypeContext &context)
     }
     layout.alignment = max_alignment;
     layout.size = *size;
+    layout.contains_flexible_array = contains_flexible_array;
     return type;
 }
 
@@ -955,8 +977,11 @@ std::optional<LValue> Function::find_local(std::string_view name) const
 
 bool Function::declare_local(std::string name, LValue storage, Node *at)
 {
-    if (!symbol_name(name)) {
-        error(at, "unsupported local identifier");
+    // Block-scope objects and parameters are keyed by the lexer's canonical
+    // spelling, not emitted as assembler symbols. Their storage uses frame
+    // indices or compiler-generated names.
+    if (name.empty()) {
+        error(at, "local declaration has no identifier");
         return false;
     }
     if (!scopes.back().emplace(name, std::move(storage)).second) {

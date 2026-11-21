@@ -7,6 +7,7 @@
 
 #include "../include/Lexer.h"
 #include "../include/CLexer.h"
+#include "../../c11_source_chars.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -34,17 +35,56 @@ unsigned CLexer::keyword(const char *s)
     }
 }
 
+static bool nameStart(int ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+}
+
+static bool nameDigit(int ch)
+{
+    return ch >= '0' && ch <= '9';
+}
+
+static void appendUTF8(std::string &value, unsigned codePoint)
+{
+    char encoded[4];
+    const auto bytes = c11_encode_utf8(codePoint, encoded);
+    value.append(encoded, bytes);
+}
+
 void CLexer::readName(Token *t)
 {
-    t->sval.clear();
-    t->sval.push_back(_ch);
-    nextCh();
-
-    while (_ch != EOF &&
-           (std::isalnum(static_cast<unsigned char>(_ch)) || _ch == '_'))
+    while (nameStart(_ch) || nameDigit(_ch) || _ch == '\\' || _ch >= 0x80)
     {
-        t->sval.push_back(_ch);
-        nextCh();
+        if (_ch == '\\' || _ch >= 0x80)
+        {
+            unsigned codePoint;
+            if (_ch == '\\')
+            {
+                t->spelling.push_back('\\');
+                nextCh();
+                if (_ch != 'u' && _ch != 'U')
+                    error(t->line, t->col, "expected universal character name in identifier");
+                t->spelling.push_back(static_cast<char>(_ch));
+                codePoint = readUniversalCharacter(t, t->spelling);
+            }
+            else
+                codePoint = readUTF8Character(t, t->spelling);
+
+            if (!c11_identifier_ucn(codePoint))
+                error(t->line, t->col, "U+%04X is not allowed in a C11 identifier (Annex D.1)",
+                      codePoint);
+            if (t->sval.empty() && !c11_initial_ucn(codePoint))
+                error(t->line, t->col, "U+%04X is not allowed initially in a C11 identifier (Annex D.2)",
+                      codePoint);
+            appendUTF8(t->sval, codePoint);
+        }
+        else
+        {
+            t->spelling.push_back(static_cast<char>(_ch));
+            t->sval.push_back(static_cast<char>(_ch));
+            nextCh();
+        }
     }
 
     if (t->sval == "u8" && _ch == '"')
@@ -69,8 +109,7 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
     while (_ch != EOF)
     {
         const char ch = static_cast<char>(_ch);
-        const bool digit = std::isalnum(static_cast<unsigned char>(ch)) != 0;
-        if (digit || ch == '_' || ch == '.')
+        if (nameStart(_ch) || nameDigit(_ch) || ch == '.')
         {
             spelling.push_back(ch);
             exponentSign = ch == 'e' || ch == 'E' || ch == 'p' || ch == 'P';
@@ -81,6 +120,12 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
             spelling.push_back(ch);
             exponentSign = false;
             nextCh();
+        }
+        else if (_ch == '\\' || _ch >= 0x80)
+        {
+            // C11 6.4.8 includes identifier-nondigit in a pp-number, but
+            // neither a UCN nor an extended character can form a C number.
+            error(t->line, t->col, "extended character in numeric preprocessing token");
         }
         else
         {
@@ -191,50 +236,40 @@ void CLexer::readNumberLit(Token *t, bool leadingDot)
     t->info.uval = value;
 }
 
-unsigned CLexer::readUniversalCharacter(Token *t)
+unsigned CLexer::readUniversalCharacter(Token *t, std::string &spelling)
 {
     const unsigned digits = _ch == 'u' ? 4 : 8;
     nextCh();
     unsigned codePoint = 0;
     for (unsigned i = 0; i < digits; ++i)
     {
-        const int ch = _ch;
-        const unsigned digit = ch >= '0' && ch <= '9' ? ch - '0' :
-                               ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 :
-                               ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : 16;
-        if (digit >= 16)
+        const int digit = c11_hex_value(_ch);
+        if (digit < 0)
             error(t->line, t->col, "malformed universal character name");
-        t->spelling.push_back(static_cast<char>(ch));
+        spelling.push_back(static_cast<char>(_ch));
         codePoint = codePoint * 16 + digit;
         nextCh();
     }
-    if ((codePoint < 0xa0 && codePoint != '$' && codePoint != '@' && codePoint != '`') ||
-        (codePoint >= 0xd800 && codePoint <= 0xdfff) || codePoint > 0x10ffff)
+    if (!c11_valid_ucn(codePoint))
         error(t->line, t->col, "invalid code point in universal character name");
     return codePoint;
 }
 
-static void appendUTF8(std::string &value, unsigned codePoint)
+unsigned CLexer::readUTF8Character(Token *t, std::string &spelling)
 {
-    if (codePoint < 0x80)
-        value.push_back(static_cast<char>(codePoint));
-    else
+    c11_utf8_state state{};
+    int status;
+    do
     {
-        if (codePoint < 0x800)
-            value.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
-        else if (codePoint < 0x10000)
-        {
-            value.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
-            value.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-        }
-        else
-        {
-            value.push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
-            value.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
-            value.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-        }
-        value.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-    }
+        if (_ch == EOF)
+            error(t->line, t->col, "truncated UTF-8 character");
+        status = c11_utf8_feed(&state, static_cast<unsigned>(_ch));
+        if (status < 0)
+            error(t->line, t->col, "invalid UTF-8 source encoding");
+        spelling.push_back(static_cast<char>(_ch));
+        nextCh();
+    } while (!status);
+    return static_cast<unsigned>(state.value);
 }
 
 void CLexer::readStringLit(Token *t, bool utf8)
@@ -270,7 +305,7 @@ void CLexer::readStringLit(Token *t, bool utf8)
             case 'v': value.push_back('\v'); nextCh(); return;
             case 'u':
             case 'U':
-                appendUTF8(value, readUniversalCharacter(t));
+                appendUTF8(value, readUniversalCharacter(t, raw));
                 return;
             case 'x':
             {
@@ -317,6 +352,8 @@ void CLexer::readStringLit(Token *t, bool utf8)
     {
         if (_ch == '\\')
             appendEscape(t->sval, t->spelling);
+        else if (_ch >= 0x80)
+            appendUTF8(t->sval, readUTF8Character(t, t->spelling));
         else
         {
             t->sval.push_back(static_cast<char>(_ch));
@@ -405,7 +442,7 @@ void CLexer::readCharLit(Token *t)
                 break;
             case 'u':
             case 'U':
-                t->info.ival = static_cast<int>(readUniversalCharacter(t));
+                t->info.ival = static_cast<int>(readUniversalCharacter(t, t->spelling));
                 consumed = true;
                 break;
             case 'x':
@@ -450,6 +487,8 @@ void CLexer::readCharLit(Token *t)
         if (!consumed)
             nextCh();
     }
+    else if (_ch >= 0x80)
+        t->info.ival = static_cast<int>(readUTF8Character(t, t->spelling));
     else
     {
         t->info.ival = _ch;
@@ -500,12 +539,11 @@ nextToken:
     t->sval.clear();
     t->spelling.clear();
 
-    if (_ch != EOF &&
-        (std::isalpha(static_cast<unsigned char>(_ch)) || _ch == '_'))
+    if (nameStart(_ch) || _ch == '\\' || _ch >= 0x80)
     {
         readName(t);
     }
-    else if (_ch != EOF && std::isdigit(static_cast<unsigned char>(_ch)))
+    else if (nameDigit(_ch))
     {
         readNumberLit(t);
     }

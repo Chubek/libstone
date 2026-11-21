@@ -68,6 +68,7 @@ struct comp_token_fifo {
 #define put_char	ucpp_put_char
 #define discard_char	ucpp_discard_char
 #define next_token	ucpp_next_token
+#define identifier_key	ucpp_identifier_key
 #define grap_char	ucpp_grap_char
 #define space_char	ucpp_space_char
 
@@ -75,6 +76,7 @@ void init_cppm(void);
 void put_char(struct lexer_state *, unsigned char);
 void discard_char(struct lexer_state *);
 int next_token(struct lexer_state *);
+char *identifier_key(char *);
 int grap_char(struct lexer_state *);
 int space_char(int);
 
@@ -135,7 +137,7 @@ int handle_define(struct lexer_state *);
 int handle_undef(struct lexer_state *);
 int handle_ifdef(struct lexer_state *);
 int handle_ifndef(struct lexer_state *);
-int substitute_macro(struct lexer_state *, struct macro *,
+int substitute_macro(struct lexer_state *, struct macro *, char *,
 	struct token_fifo *, int, int, long);
 struct macro *get_macro(char *);
 void wipe_macros(void);
@@ -154,7 +156,7 @@ extern struct lexer_state tokenize_lexer;
 #define eval_line	ucpp_eval_line
 
 unsigned long strtoconst(char *);
-unsigned long eval_expr(struct token_fifo *, int *, int);
+unsigned long eval_expr(struct token_fifo *, int *, unsigned long);
 extern long eval_line;
 
 #define eval_exception	ucpp_eval_exception
