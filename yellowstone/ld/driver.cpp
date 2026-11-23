@@ -75,6 +75,7 @@ bool linkState(LinkState& state, std::vector<uint8_t>& out,
       const auto& emulation = state.options.emulator;
       bool match = (state.arch == qbfd::Arch::X86_64 && emulation == "elf_x86_64") ||
                    (state.arch == qbfd::Arch::X86 && emulation == "elf_i386") ||
+                   (state.arch == qbfd::Arch::RISCV64 && emulation == "elf64lriscv") ||
                    (state.arch == qbfd::Arch::AArch64 && emulation == "aarch64linux");
       if (!match) {
         error = "unsupported native ELF emulation or architecture mismatch: " + emulation;

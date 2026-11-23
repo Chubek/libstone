@@ -407,3 +407,15 @@ success.
 
 See [VALIDATION.md](VALIDATION.md) for tested configurations and remaining
 platform coverage.
+
+#### Cephyr target subset
+
+Native static ELF supports the instruction-field relocations used by the
+Cephyr AMD64, little-endian AArch64 and RV64IM/LP64 packages. This includes
+static GOT slots with the default layout, AArch64 ADR/ADRP, low12 scaled
+accesses and branches, and RV64 branches, calls and paired PC-relative
+high/low relocations. RV64 does not shorten instruction sequences or remove
+alignment padding: compile external objects for fixed layout (`-mno-relax`).
+Use a different explicit linker for unsupported inputs or non-AMD64 DSOs.
+Native AMD64 dynamic links also accept `-init SYMBOL`, `-fini SYMBOL` and
+literal `--defsym NAME=INTEGER` definitions.

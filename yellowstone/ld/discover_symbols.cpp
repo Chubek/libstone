@@ -194,6 +194,17 @@ bool discoverSymbols(LinkState& state, std::string& error) {
     }
   }
 
+  for (const auto& [name, value] : state.options.absoluteSymbols) {
+    Def def;
+    def.symbol.name = name;
+    def.symbol.value = value;
+    def.symbol.binding = qbfd::SymbolBinding::Global;
+    def.symbol.flags = qbfd::sym::Absolute;
+    if (!state.defs.emplace(name, std::move(def)).second) {
+      error = "--defsym conflicts with input definition of `" + name + "'";
+      return false;
+    }
+  }
   if (!resolveCommons(state, error)) return false;
 
   // Final undefined check (deferred so --allow-undefined can pass).
@@ -204,6 +215,8 @@ bool discoverSymbols(LinkState& state, std::string& error) {
     // acquire an address until the runtime loader processes the image.
     std::vector<std::string> missing;
     for (const auto& u : state.undefined) {
+      if (u == "__global_pointer$" && state.arch == qbfd::Arch::RISCV64 &&
+          !hasScript(state) && state.options.mode == Mode::Exec && !state.options.pie) continue;
       if (state.defs.count(u) || state.dynamicDefs.count(u) ||
           state.scriptSymbols.count(u))
         continue;

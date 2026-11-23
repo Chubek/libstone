@@ -265,6 +265,7 @@ void publish(const std::filesystem::path& staged, const std::string& destination
 }
 
 void checkDestinations(const std::string& image, const std::vector<std::string>& auxiliary) {
+  if (std::none_of(auxiliary.begin(), auxiliary.end(), [](const auto& s) { return !s.empty(); })) return;
   std::vector<std::filesystem::path> paths;
   if (!image.empty()) paths.push_back(std::filesystem::weakly_canonical(image));
   for (const auto& name : auxiliary) {

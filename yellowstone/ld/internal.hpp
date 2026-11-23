@@ -61,6 +61,8 @@ struct LinkOptions {
   bool staticLink = false;               // --static / current -Bstatic state
   bool preferSharedLibraries = false;    // current -Bdynamic state
   std::vector<bool> librariesDynamic;    // parallel to libs when specified
+  std::string initSymbol, finiSymbol; // ELF DT_INIT / DT_FINI
+  std::map<std::string, uint64_t> absoluteSymbols; // literal --defsym values
   std::string soname;                    // DT_SONAME
   std::string runpath;                   // DT_RUNPATH / DT_RPATH
   std::string dynamicLinker;             // PT_INTERP
@@ -157,6 +159,9 @@ struct LinkState {
   std::vector<LoadedObject> objects;    // selected objects in link order
   std::vector<LoadedArchive> archives;  // archives seen (for -M reporting)
   std::vector<InputSection> inputSections;
+  // Static GOT offsets keyed by the input object and its symbol-table index.
+  std::map<std::pair<size_t, uint32_t>, uint64_t> staticGot;
+  std::optional<size_t> staticGotInput;
   std::map<std::string, Def> defs;      // global symbol table
   // Dynamic providers never contribute loadable sections.  The map identifies
   // the first DSO exporting each symbol; dynamicObjects preserves input order

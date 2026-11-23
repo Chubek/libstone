@@ -89,6 +89,15 @@ void parseNativeArguments(LinkOptions& o, Backend kind, const std::vector<std::s
       o.noUndefined = true;
     else if (kind == Backend::ELF && (a == "-E" || a == "--export-dynamic"))
       o.exportDynamic = true;
+    else if (kind == Backend::ELF && (a == "-init" || a == "--init")) o.initSymbol = value();
+    else if (kind == Backend::ELF && (a == "-fini" || a == "--fini")) o.finiSymbol = value();
+    else if (kind == Backend::ELF && (a == "--defsym" || a.starts_with("--defsym="))) {
+      const std::string expr = a == "--defsym" ? value() : a.substr(9);
+      const auto sep = expr.find('=');
+      if (!sep || sep == std::string::npos) throw std::runtime_error("expected --defsym NAME=INTEGER");
+      if (!o.absoluteSymbols.emplace(expr.substr(0, sep), number(expr.substr(sep + 1))).second)
+        throw std::runtime_error("duplicate --defsym definition: " + expr);
+    }
     else if (kind == Backend::ELF && (a == "--soname" || a == "-soname" || a == "-h"))
       o.soname = value();
     else if (kind == Backend::ELF && (a.starts_with("--soname=") || a.starts_with("-soname=")))

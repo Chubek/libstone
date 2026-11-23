@@ -14,6 +14,15 @@ bool linkStatic(LinkState& state, std::vector<uint8_t>& out,
     return false;
   }
   if (!assignAddresses(state, error)) return false;
+  if (state.arch == qbfd::Arch::RISCV64 && !hasScript(state) &&
+      std::find(state.undefined.begin(), state.undefined.end(), "__global_pointer$") != state.undefined.end() &&
+      !state.symAddr.count("__global_pointer$")) {
+    auto base = std::find_if(state.outSections.begin(), state.outSections.end(),
+                             [](const auto& s) { return s.name == ".sdata"; });
+    if (base == state.outSections.end()) base = std::find_if(state.outSections.begin(), state.outSections.end(),
+                             [](const auto& s) { return s.alloc && s.writable; });
+    state.symAddr["__global_pointer$"] = 0x800 + (base == state.outSections.end() ? 0 : base->vma);
+  }
   if (state.ltoPlan.gcSections) {
     if (state.outSections.size() >= ltoSectionLimit) {
       error = "--lto-script section GC: output section count limit exceeded";

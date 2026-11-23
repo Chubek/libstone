@@ -173,6 +173,29 @@ bool assignAddresses(LinkState& state, std::string& error) {
     }
   }
 
+  if (state.options.mode == Mode::Exec && !state.options.pie && state.dynamicObjects.empty() &&
+      (state.arch == qbfd::Arch::X86_64 || state.arch == qbfd::Arch::AArch64 || state.arch == qbfd::Arch::RISCV64)) {
+    for (const auto& in : state.inputSections) {
+      if (!in.kept) continue;
+      for (const auto& r : in.relocs) {
+        const bool got = state.arch == qbfd::Arch::X86_64 ? (r.nativeType == 9 || r.nativeType == 41 || r.nativeType == 42) :
+                         state.arch == qbfd::Arch::AArch64 ? r.nativeType == 311 || r.nativeType == 312
+                                                           : r.nativeType == 20;
+        if (got && r.symbol) state.staticGot.try_emplace({in.objectIndex, *r.symbol}, state.staticGot.size() * 8);
+      }
+    }
+    if (!state.staticGot.empty()) {
+      InputSection got;
+      got.sectionIndex = UINT32_MAX;
+      got.section.name = ".got";
+      got.section.alignment = 8;
+      got.section.size = state.staticGot.size() * 8;
+      got.section.flags = qbfd::sec::Data | qbfd::sec::Alloc | qbfd::sec::Writable;
+      state.staticGotInput = state.inputSections.size();
+      state.inputSections.push_back(std::move(got));
+    }
+  }
+
   // Group by output name. BSS-like sections merge into ".bss" only when
   // they are actually NOBITS; named BSS (.tbss etc.) keeps its name.
   std::map<std::string, size_t> outIndex;

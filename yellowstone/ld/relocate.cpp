@@ -68,6 +68,15 @@ bool applyRelocations(LinkState& state,
   bool relocatable = state.options.mode == Mode::Relocatable;
   const bool strictSections = state.ltoPlan.gcSections;
 
+  std::map<uint64_t, uint64_t> rvHigh;
+  size_t gotSection = SIZE_MAX;
+  if (state.staticGotInput) {
+    for (size_t i = 0; i < state.outSections.size(); ++i)
+      if (state.outSections[i].name == ".got") gotSection = i;
+  }
+  // The LO12 relocation names the address of the AUIPC, not its symbol.
+  // Resolve all high halves first, independent of section/relocation order.
+  for (int pass = isRISCV && !relocatable ? 0 : 1; pass != 2; ++pass) {
   for (const auto& in : state.inputSections) {
     if (!in.kept) continue;
     if (in.relocs.empty()) continue;
@@ -97,6 +106,21 @@ bool applyRelocations(LinkState& state,
     uint64_t baseOff = in.outOffset;
 
     for (const auto& r : in.relocs) {
+      if (isRISCV && (r.nativeType == 0 || r.nativeType == 51)) continue;
+      if (isRISCV && r.nativeType == 43 && !relocatable) {
+        // Retain emitted NOP padding only if it already aligns the following instruction.
+        if (r.addend < 0 || r.addend >= INT32_MAX || r.offset > in.section.size ||
+            uint64_t(r.addend) > in.section.size - r.offset) {
+          error = obj.label + ": invalid R_RISCV_ALIGN padding"; return false;
+        }
+        uint64_t alignment = 1;
+        while (alignment <= uint64_t(r.addend)) alignment <<= 1;
+        if ((place + r.offset + r.addend) % alignment) {
+          error = obj.label + ": R_RISCV_ALIGN requires instruction relaxation; assemble with -mno-relax"; return false;
+        }
+        continue;
+      }
+      if (pass == 0 && r.nativeType != 23 && r.nativeType != 20) continue;
       // Resolve the symbol value S.
       uint64_t S = 0;
       std::string symName;
@@ -113,7 +137,7 @@ bool applyRelocations(LinkState& state,
         if (sym->flags & qbfd::sym::Undefined) {
           auto it = state.symAddr.find(sym->name);
           if (it == state.symAddr.end()) {
-            if (state.options.allowUndefined ||
+            if (sym->binding == qbfd::SymbolBinding::Weak || state.options.allowUndefined ||
                 state.options.mode == Mode::Relocatable) {
               S = 0;
             } else {
@@ -155,7 +179,7 @@ bool applyRelocations(LinkState& state,
           }
           haveSym = true;
         } else {
-          auto it = !strictSections || usesGlobalRelocationSymbol(*sym)
+          auto it = usesGlobalRelocationSymbol(*sym)
                         ? state.symAddr.find(sym->name) : state.symAddr.end();
           if (it != state.symAddr.end()) {
             S = it->second;
@@ -203,7 +227,7 @@ bool applyRelocations(LinkState& state,
       uint32_t type = r.nativeType;
 
       auto needBytes = [&](unsigned w) -> bool {
-        if (r.offset > UINT64_MAX - baseOff || loc > img.size() || w > img.size() - loc) {
+        if (r.offset > in.section.size || w > in.section.size - r.offset || r.offset > UINT64_MAX - baseOff || loc > img.size() || w > img.size() - loc) {
           error = obj.label + ": relocation offset outside section " +
                   in.section.name;
           return false;
@@ -224,8 +248,100 @@ bool applyRelocations(LinkState& state,
         continue;
       }
 
+      const bool x86Got = isX86_64 && (type == 9 || type == 41 || type == 42);
+      if (x86Got || (isAArch64 && (type == 311 || type == 312)) || (isRISCV && type == 20)) {
+        if (gotSection == SIZE_MAX || !r.symbol || (!x86Got && A) || !state.staticGot.count({in.objectIndex,*r.symbol})) {
+          error = obj.label + ": static GOT relocation requires default layout and zero addend";
+          return false;
+        }
+        const uint64_t off = state.inputSections[*state.staticGotInput].outOffset + state.staticGot.at({in.objectIndex,*r.symbol});
+        writeVal(staged[gotSection], off, S, 8, state.endian);
+        S = state.outSections[gotSection].vma + off;
+      }
+      const uint64_t addr = S + uint64_t(A), delta = addr - P;
+      if (!pass) {
+        if (!rvHigh.emplace(P, delta).second) { error = obj.label + ": ambiguous PCREL_HI20"; return false; }
+        continue;
+      }
+      auto signedFits = [](uint64_t value, unsigned n) {
+        const uint64_t half = UINT64_C(1) << (n-1);
+        return value + half < 2 * half;
+      };
+      auto invalid = [&] { error = obj.label + ": misaligned or out-of-range relocation " + r.typeName + " against `" + symName + "'"; return false; };
+      auto insn = [&](unsigned off = 0) { return uint32_t(readVal(img, loc + off, 4, state.endian)); };
+      auto patch = [&](uint32_t mask, uint32_t value, unsigned off = 0) {
+        writeVal(img, loc + off, (insn(off) & ~mask) | (value & mask), 4, state.endian);
+      };
+      if (isAArch64 && ((type >= 274 && type <= 280) || (type >= 282 && type <= 286) || type == 299 || type == 311 || type == 312)) {
+        if (!needBytes(4)) return false;
+        if (type == 274 || type == 275 || type == 276 || type == 311) {
+          const uint64_t v = type == 274 ? delta : (addr >> 12) - (P >> 12);
+          if (type != 276 && !signedFits(v,21)) return invalid();
+          patch(0x60ffffe0, ((v & 3) << 29) | (((v >> 2) & 0x7ffff) << 5));
+        } else if (type == 279 || type == 280 || type == 282 || type == 283) {
+          unsigned bits = type == 279 ? 14 : type == 280 ? 19 : 26;
+          if ((delta & 3) || !signedFits(delta, bits + 2)) return invalid();
+          unsigned shift = bits == 26 ? 0 : 5;
+          patch(((1u << bits)-1) << shift, (delta >> 2) << shift);
+        } else {
+          unsigned scale = type == 284 ? 1 : type == 285 ? 2 : type == 286 || type == 312 ? 3 : type == 299 ? 4 : 0;
+          if (addr & ((1u << scale)-1)) return invalid();
+          patch(0x003ffc00, ((addr & 4095) >> scale) << 10);
+        }
+        continue;
+      }
+      if (isRISCV && (type >= 16 && type <= 28) && type != 21 && type != 22) {
+        if (!needBytes(type == 18 || type == 19 ? 8 : 4)) return false;
+        uint64_t v = type >= 26 ? addr : delta;
+        if (type == 24 || type == 25) {
+          auto hi = rvHigh.find(S);
+          if (hi == rvHigh.end() || A) { error = obj.label + ": unmatched PCREL_LO12 anchor"; return false; }
+          v = hi->second;
+        }
+        if (type == 16) {
+          if ((v & 1) || !signedFits(v,13)) return invalid();
+          patch(0xfe000f80, ((v & 0x1000) << 19) | ((v & 0x7e0) << 20) | ((v & 0x1e) << 7) | ((v & 0x800) >> 4));
+        } else if (type == 17) {
+          if ((v & 1) || !signedFits(v,21)) return invalid();
+          patch(0xfffff000, ((v & 0x100000) << 11) | ((v & 0x7fe) << 20) | ((v & 0x800) << 9) | (v & 0xff000));
+        } else if (type == 24 || type == 27) patch(0xfff00000, v << 20);
+        else if (type == 25 || type == 28) patch(0xfe000f80, ((v & 0xfe0) << 20) | ((v & 31) << 7));
+        else {
+          if (!signedFits((v + 0x800) & ~UINT64_C(0xfff),32)) return invalid();
+          patch(0xfffff000, v + 0x800);
+          if (type == 18 || type == 19) patch(0xfff00000, v << 20, 4);
+        }
+        continue;
+      }
+      if (isRISCV && type == 57) { // R_RISCV_32_PCREL
+        if (!needBytes(4)) return false;
+        if (!fitsS32(delta)) return invalid();
+        writeVal(img, loc, delta, 4, state.endian);
+        continue;
+      }
+      // GNU assemblers use paired ADD/SUB and SET/SUB relocations for
+      // section differences in unwind information and jump tables.
+      if (isRISCV && ((type >= 33 && type <= 40) || (type >= 52 && type <= 56))) {
+        const unsigned width = type <= 40 ? 1u << ((type - 33) % 4) : type <= 54 ? 1 : 1u << (type - 54);
+        if (!needBytes(width)) return false;
+        const auto old = readVal(img, loc, width, state.endian);
+        uint64_t value = type <= 36 ? old + addr : type <= 40 || type == 52 ? old - addr : addr;
+        if (type == 52 || type == 53) value = (old & 0xc0) | (value & 0x3f);
+        writeVal(img, loc, value, width, state.endian);
+        continue;
+      }
+      if (isRISCV && type != 1 && type != 2) {
+        if (!o.alloc) continue;
+        error = obj.label + ": unsupported RISC-V relocation " + std::to_string(type);
+        return false;
+      }
       if (isX86_64) {
         switch (type) {
+          case 9: case 41: case 42: // GOTPCREL[X], keep the load (no relaxation)
+            if (!needBytes(4)) return false;
+            if (!fitsS32(delta)) return invalid();
+            writeVal(img, loc, delta, 4, state.endian);
+            break;
           case 1: {  // R_X86_64_64
             if (!needBytes(8)) return false;
             uint64_t v = S + (uint64_t)(int64_t)A;
@@ -464,6 +580,7 @@ bool applyRelocations(LinkState& state,
         return false;
       }
     }
+  }
   }
   return true;
 }

@@ -570,6 +570,12 @@ class DynamicImage {
     return found && found->size;
   }
 
+  size_t relocatedGotCount() const {
+    return std::count_if(got_.begin(), got_.end(), [](const auto& kv) {
+      return !kv.second.symbol.absolute;
+    });
+  }
+
   void buildTags() {
     for (const auto& name : needed_) addTag(1, strings_.at(name));  // DT_NEEDED
     if (!state_.options.soname.empty())
@@ -590,9 +596,9 @@ class DynamicImage {
     size_t dynamic64 = 0;
     for (const auto& plan : plans_)
       if (plan.kind == PlanKind::Dynamic64) ++dynamic64;
-    if (!got_.empty() || dynamic64) {
+    if (relocatedGotCount() || dynamic64) {
       addTag(7, 0, ".rela.dyn");
-      addTag(8, (got_.size() + dynamic64) * 24);
+      addTag(8, (relocatedGotCount() + dynamic64) * 24);
       addTag(9, 24);
     }
     if (!plt_.empty()) {
@@ -601,8 +607,10 @@ class DynamicImage {
       addTag(20, 7);  // DT_PLTREL == DT_RELA
       addTag(23, 0, ".rela.plt");
     }
-    if (hasUserSection(".init")) addTag(12, 0, ".init");
-    if (hasUserSection(".fini")) addTag(13, 0, ".fini");
+    if (!state_.options.initSymbol.empty()) addTag(12);
+    else if (hasUserSection(".init")) addTag(12, 0, ".init");
+    if (!state_.options.finiSymbol.empty()) addTag(13);
+    else if (hasUserSection(".fini")) addTag(13, 0, ".fini");
     if (hasUserSection(".init_array")) {
       addTag(25, 0, ".init_array");
       addTag(27, section(".init_array")->size);
@@ -680,9 +688,9 @@ class DynamicImage {
     size_t dynamic64 = 0;
     for (const auto& plan : plans_)
       if (plan.kind == PlanKind::Dynamic64) ++dynamic64;
-    if (!got_.empty() || dynamic64)
+    if (relocatedGotCount() || dynamic64)
       ordered.push_back(synthetic(
-          ".rela.dyn", read, (got_.size() + dynamic64) * 24, 8));
+          ".rela.dyn", read, (relocatedGotCount() + dynamic64) * 24, 8));
     if (!plt_.empty())
       ordered.push_back(
           synthetic(".rela.plt", read, plt_.size() * 24, 8));
@@ -1020,6 +1028,13 @@ class DynamicImage {
     for (const auto& [key, entry] : got_) {
       (void)key;
       uint64_t address = checkedAdd(output.vma, entry.offset);
+      if (entry.symbol.absolute) {
+        // An SHN_ABS address must not receive an ELF load bias.
+        const auto value = entry.symbol.definition ? entry.symbol.definition->symbol.value :
+                           entry.symbol.source ? entry.symbol.source->value : 0;
+        put(bytes, entry.offset, value, 8);
+        continue;
+      }
       if (preemptible(entry.symbol)) {
         relaDynamic_.push_back(
             {address, dynIndex(entry.symbol), 6, 0});  // GLOB_DAT
@@ -1149,7 +1164,13 @@ class DynamicImage {
     auto& bytes = data(".dynamic");
     for (size_t i = 0; i < tags_.size(); ++i) {
       uint64_t value = tags_[i].value;
-      if (!tags_[i].addressOf.empty())
+      const std::string* named = tags_[i].tag == 12 ? &state_.options.initSymbol :
+                                 tags_[i].tag == 13 ? &state_.options.finiSymbol : nullptr;
+      if (named && !named->empty()) {
+        auto address = state_.symAddr.find(*named);
+        if (address == state_.symAddr.end()) throw std::runtime_error("undefined init/fini symbol: " + *named);
+        value = address->second;
+      } else if (!tags_[i].addressOf.empty())
         value = requiredSection(tags_[i].addressOf).vma;
       put(bytes, i * 16, tags_[i].tag, 8);
       put(bytes, i * 16 + 8, value, 8);
