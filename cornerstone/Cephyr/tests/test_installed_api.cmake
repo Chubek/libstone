@@ -17,15 +17,15 @@ endif()
 # Install from Cephyr's binary directory so a parent build need not install
 # unrelated components.
 run("${CMAKE_COMMAND}" --install "${BUILD_DIR}" --prefix "${staging}" ${config_args})
-# A root build installs Moonstone from a sibling directory. Borrow the exact
-# build dependency in that case so the isolated installation can still run.
-if(TEST_MOONSTONE_PROLIFIC)
-  get_filename_component(prolific_soname "${TEST_MOONSTONE_PROLIFIC}" NAME)
-  if(NOT EXISTS "${staging}/${INSTALL_LIBDIR}/${prolific_soname}")
-    file(COPY "${TEST_MOONSTONE_PROLIFIC}" DESTINATION "${staging}/${INSTALL_LIBDIR}"
-      FOLLOW_SYMLINK_CHAIN)
+# A root build installs shared dependencies from sibling directories.
+foreach(dependency IN ITEMS "${TEST_MOONSTONE_PROLIFIC}" "${TEST_BLACKSTONE}")
+  if(dependency)
+    get_filename_component(soname "${dependency}" NAME)
+    if(NOT EXISTS "${staging}/${INSTALL_LIBDIR}/${soname}")
+      file(COPY "${dependency}" DESTINATION "${staging}/${INSTALL_LIBDIR}" FOLLOW_SYMLINK_CHAIN)
+    endif()
   endif()
-endif()
+endforeach()
 # Use a moved prefix, so resource/library discovery cannot rely on the install path.
 file(REMOVE_RECURSE "${prefix}")
 file(RENAME "${staging}" "${prefix}")
@@ -35,9 +35,11 @@ run("${CMAKE_COMMAND}" -S "${SOURCE_DIR}/tests/installed_consumer" -B "${consume
   "-DCephyr_DIR=${prefix}/${INSTALL_LIBDIR}/cmake/Cephyr"
   "-DCEPHYR_TEST_SDK_EXAMPLE=${prefix}/${INSTALL_DATADIR}/cephyr/examples/sdk_desugar.c")
 run("${CMAKE_COMMAND}" --build "${consumer}" ${config_args})
-run("${CMAKE_COMMAND}" -E env --unset=CEPHYR_CONFIG
+run("${CMAKE_COMMAND}" -E env --unset=CEPHYR_CONFIG "PATH=${TEST_DIR}/empty-path"
   "${TEST_CTEST}" --test-dir "${consumer}" --output-on-failure)
 run("${prefix}/${INSTALL_BINDIR}/cephyr" --version)
+run("${TEST_PYTHON}" "${SOURCE_DIR}/tests/test_cephyr_cli_regression.py"
+  "${prefix}/${INSTALL_BINDIR}/cephyr" CephyrCLIRegressionTests.test_40_packaged_tools_cold_cache)
 set(qml_assets "${prefix}/${INSTALL_DATADIR}/cephyr/qml")
 foreach(asset IN ITEMS builtin.qmb compile_rules.py qml_frontend.py)
   if(NOT EXISTS "${qml_assets}/${asset}")

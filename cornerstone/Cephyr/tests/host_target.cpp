@@ -50,7 +50,7 @@ int main(int argc, char **argv)
     assert(host.machine == "riscv64" && host.os == "linux" &&
            host.environment == "gnu" && host.abi == "lp64" && host.rv64im);
     Diagnostics success;
-    const auto target = load_host_target(host, config, mappings, success);
+    auto target = load_host_target(host, config, mappings, success);
     assert(target && !success.error_count());
     assert(target->triple == "riscv64-linux-gnu" && target->architecture == "RISCV64IM" &&
            target->abi == "LP64" && target->is_linux);
@@ -134,6 +134,7 @@ int main(int argc, char **argv)
     write_bank("RISCV64IM", "LP64", "stdspec/riscv/rv64i.arch"); // claimed name alone does not qualify
 
     assert(setenv("PATH", scratch.path.c_str(), 1) == 0);
+    target->assembler = {"test-assembler"}; // a PATH-resolved custom tool
     Diagnostics missing_tool;
     assert(!check_auto_tool(*target, "a target assembler", target->assembler, missing_tool));
     assert(text(missing_tool).find("cephyr.target.auto.tool") != std::string::npos);

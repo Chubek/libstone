@@ -27,6 +27,9 @@ struct LoweredUnit {
     std::string mir;
     std::vector<std::string> local_symbols;
     std::string data_assembly;
+    // External C identifiers that cannot be represented in MIR v1.
+    std::map<std::string, std::string, std::less<>> elf_names;
+    void apply_elf_names(std::string &assembly) const;
 };
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
@@ -77,7 +80,7 @@ struct CType {
     bool valid() const { return kind != Kind::invalid; }
     bool integer() const { return kind == Kind::integer; }
     bool real() const { return kind == Kind::real; }
-    bool extended_real() const { return real() && bits == 80; }
+    bool extended_real() const { return real() && (bits == 80 || bits == 128); }
     bool arithmetic() const { return integer() || real(); }
     bool pointer() const { return kind == Kind::pointer; }
     bool aggregate() const { return kind == Kind::record || kind == Kind::array; }
@@ -90,7 +93,7 @@ struct BitField {
     unsigned width;
     unsigned shift; // position within the first byte of the field
     unsigned byte_in_container; // offset from the aligned base-type container
-    enum class VolatileAccess { unsupported, narrow, container };
+    enum class VolatileAccess { narrow, narrow_aapcs, container };
     VolatileAccess volatile_access;
 
     std::uint64_t mask() const { return (std::uint64_t{1} << width) - 1; }
@@ -136,7 +139,7 @@ struct Constant {
     std::uint64_t value = 0;
     // The upper 16 value bits of an x87 extended constant. All other
     // constants are fully represented in value.
-    std::uint16_t x87_sign_exponent = 0;
+    std::uint64_t high_word = 0;
 };
 
 struct Unit;
@@ -179,7 +182,7 @@ CType plain_char_type(const Preprocessed &);
 CType pointer_type(const CType &);
 CType read_type(Node *, const TypeContext &, bool allow_incomplete = false,
                 bool function_definition = false);
-CType read_parameter_type(Node *, const TypeContext &, bool definition);
+CType read_parameter_type(Node *, const TypeContext &, bool definition, Node **entry_bound = nullptr);
 CType read_record_type(Node *, const TypeContext &);
 std::optional<MemberAccess> find_member(const CType &, std::string_view);
 CType qualified_member_type(const CType &, const RecordMember &);
@@ -193,6 +196,8 @@ CType promote(const CType &);
 CType common_integer(const CType &, const CType &);
 CType common_arithmetic(const CType &, const CType &);
 bool compatible(const CType &, const CType &);
+// Precondition: the two types are compatible (C11 6.2.7).
+CType composite_type(const CType &, CType);
 std::optional<std::uint64_t> size_of(const CType &);
 unsigned align_of(const CType &);
 // All bundled LP64 targets support these fundamental alignments in every
@@ -215,7 +220,7 @@ struct Expr {
     Id id = no_value;
     // Only when evaluated as an ICE (or a single literal) for null conversions.
     std::optional<std::uint64_t> constant;
-    Id x87_sign_exponent = no_value; // separate integer SSA value, not an ABI slot
+    Id high_word = no_value; // separate integer SSA value, not an ABI slot
 };
 
 struct LValue {
@@ -285,7 +290,7 @@ struct Unit {
     bool hosted = true;
     std::map<std::string, Symbol> symbols;
     std::vector<std::pair<std::string, CType>> signatures;
-    std::map<std::string, CType> rv64_soft_fp_helpers;
+    std::map<std::string, CType> soft_fp_helpers;
     std::map<std::size_t, std::string> record_pair_calls;
     std::map<std::string, std::vector<std::size_t>> variadic_signatures;
     std::vector<Global> globals;
@@ -324,6 +329,11 @@ void check_static_assert(const TypeContext &, Node *);
 // Subobject initializers. Ordinary plans assume zero-filled storage; a
 // volatile automatic plan explicitly lists the omitted subobjects to zero.
 // String entries carry the exact bytes, including any required terminator.
+struct InitPortion {
+    std::uint64_t offset; // absolute within the destination object
+    CType type;
+    std::optional<BitField> bit_field = std::nullopt;
+};
 struct ObjectInitEntry {
     std::uint64_t offset;
     CType type;
@@ -331,9 +341,13 @@ struct ObjectInitEntry {
     std::optional<std::string> bytes;
     bool clear = false;
     std::optional<BitField> bit_field = std::nullopt;
+    // Absent: initialize the whole entry. Otherwise only these portions
+    // survive later designators (empty means check, but do not evaluate).
+    std::optional<std::vector<InitPortion>> portions = std::nullopt;
 };
 
 bool object_contains_bit_field(const CType &);
+bool check_unevaluated_initializer(const TypeContext &, const ObjectInitEntry &);
 
 std::optional<std::vector<ObjectInitEntry>> plan_object_initializer(
     const TypeContext &, CType &, Node *, bool direct = false);
@@ -405,10 +419,12 @@ bool copy_record(Function &, LValue, Expr, Node *, bool initializing = false);
 Id offset_address(Function &, Id, std::uint64_t, const CType &);
 void zero_object(Function &, Id, std::uint64_t size, unsigned alignment);
 void zero_initialized_subobject(Function &, Id, const CType &);
+void copy_initialized_subobject(Function &, Id dest, Id src, const CType &);
 Expr convert(Function &, Expr, const CType &, Node *, bool explicit_cast = false);
 Id truth(Function &, Expr, Node *);
 // Canonical scalar argument word; includes the RV64 psABI's required extension.
 Id abi_value(Function &, Expr);
+Expr from_abi_value(Function &, const CType &, Id);
 // Keep the C signature intact for type checking; classify and marshal only
 // at a native call boundary. Record values themselves remain address-backed.
 std::string_view record_abi_error(const Preprocessed &, const CType &function_type);

@@ -50,6 +50,7 @@ struct Preprocessed {
     bool native_amd64_stdarg = false;
     // The bundled AMD64 SysV frontend knows the x87 extended object format.
     bool native_amd64_x87 = false;
+    bool native_binary128 = false;
     bool native_aarch64_stdarg = false;
     // RV64IM's soft-float ABI also defines the native variadic cursor.
     bool native_scalar_stdarg() const {

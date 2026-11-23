@@ -51,9 +51,9 @@ NEGATIVE = [
      r"modifiable|const-qualified"),
     ("nested-const", "struct Q { const int n; }; struct R { struct Q q[2]; };"
      "void f(struct R *p) { *p = *p; }", r"const-qualified"),
-    ("volatile-union-members", "union U { volatile int n; long w; }; "
+    ("const-volatile-union-members", "union U { const volatile int n; long w; }; "
      "void f(union U *p, union U *q) { *q = *p; }",
-     r"whole-object copy of a union with volatile members"),
+     r"const-qualified"),
     ("too-many", "union U { int a; int b; }; union U x = {1, 2};", r"too many elements"),
     ("global-copy", "struct R { int n; }; struct R a = {1}, b = a;", r"must use braces"),
     ("register", "struct R { int n; }; int f(void) { register struct R r; return &r.n != 0; }",

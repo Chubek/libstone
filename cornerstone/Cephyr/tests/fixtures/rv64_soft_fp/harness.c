@@ -114,7 +114,7 @@ int test_main(void) {
     }
     if (bits32(call_float()) != 0xc0500000 || bits64(call_double(clang_double)) != 0xc00a000000000000UL)
         return 9;
-    /* Expected bits are independent of the compiler-rt implementations. */
+    /* Expected bits are independent of the software arithmetic implementation. */
     if (bits32(add_f(1.0f, 0x1p-24f)) != 0x3f800000 ||
         bits32(add_f(0x1.000002p0f, 0x1p-24f)) != 0x3f800002 ||
         bits32(sub_f(0x1p-126f, 0x1.fffffcp-127f)) != 1 ||

@@ -46,6 +46,7 @@ def run_signals(command, work):
     ]:
         result = subprocess.run(
             [*command, *arguments], cwd=work, capture_output=True, timeout=10,
+            env={**os.environ, "CEPHYR_STDLIB_TEST": "value=1"},
         )
         # User-mode QEMU can describe the guest signal on stderr as well.
         if (

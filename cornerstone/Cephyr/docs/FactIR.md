@@ -10,17 +10,20 @@ enabled = false
 `--factir` overrides the TOML setting. `--no-cache` controls the separate
 Archon generated-source cache; it does not disable FactIR.
 
-FactIR runs per C translation unit after the QML and SDK rewrite passes, before
+FactIR runs per C translation unit after QML, SDK rewrites, and Blackstone, before
 `--emit-mir` or the built-in Archon backend. It does not run during preprocessing,
 syntax checking, assembly-only inputs, or when invoking a custom SDK backend.
 
 ## What is proved
 
-The MIR text rewrite is a verified native MIR `i64` wrapping `add` with a known
-zero operand to a `copy` of its other operand. Zero recognition is limited to
+FactIR replaces a native MIR `i64` wrapping `add` with a known zero operand
+with a `copy` of its other operand. It also replaces `eq(eq(x,0),0)` with
+`copy x` when known bits prove `x` is either 0 or 1. Without that guard, a
+nonzero input such as 2 would give the wrong result. Zero recognition is limited to
 preceding same-block `const 0` instructions and chains of zero-preserving
 copies and integer conversions of that constant. Satie checks the 64-bit
-counterexample query using a bit-blasted modular adder. The pass requires
+counterexample query for each applicable identity using a bit-blasted modular
+adder or Boolean normalization circuit. The pass requires
 `UNSAT`, not `SAT` or `UNKNOWN`, and verifies the edited MIR. It does not
 change checked arithmetic, reorder instructions, or drop any producer,
 load, store, call, terminator, or other potentially observable operation.
@@ -53,12 +56,11 @@ guessed, and the analysis neither folds memory reads nor infers their effects.
 `known_bits_i64` dump tuples are `(function ordinal, SSA value, zero mask,
 one mask)`, with masks displayed as unsigned decimal integers.
 
-The LMDB environment is private, mode `0700`, and unique to one TU in one
-invocation. It commits facts with the exact post-rewrite MIR, target identity,
-MIR schema, and Datalog rule identity. It is removed on normal cleanup; there
-is no disk reuse across TUs, targets, or invocations. This private disk I/O
-also applies when compiling via the embedding API; disabling FactIR skips it.
-The committed relations feed several backend decisions:
+FactIR stages each translation unit's facts in memory and publishes a single
+result tied to the exact verified MIR and target identity. Budget exhaustion
+discards partial hints. Neither the CLI nor the embedding API needs a scratch
+database, and competing compilations share no fact state. The completed
+relations feed several backend decisions:
 
 | Stage | Supported backend paths | Use |
 | --- | --- | --- |
@@ -83,5 +85,10 @@ They are published after the primary compilation succeeds, to distinct new
 files (not stdout), with mode `0600`. Each file is published atomically without
 replacing an existing destination; the side files and the primary output are
 not a single publication transaction. A unit with no candidate produces an SMT-LIB file
-with no query; a unit with candidates produces one shared obligation and
-records the solver result. Without these flags no FactIR files are published.
+with no query; a unit with candidates records one obligation and solver
+result per applicable identity. Without these flags no FactIR files are published.
+
+To inspect FactIR's add-zero proof in isolation, disable
+[Blackstone](../README.md#blackstone-mir-optimization) and omit QML passes.
+An earlier pass may already have simplified the addition, leaving no FactIR
+candidate.

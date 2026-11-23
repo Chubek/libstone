@@ -6,19 +6,28 @@ static void edge(ANOut *out, size_t fn, const ArchonMIRFunction *f,
     const ANFrame *frame, const ANHome *homes, const ArchonMIREdge *edge, int fallthrough)
 {
     const ArchonMIRBlock *target = &f->blocks[edge->target];
-    size_t i;
+    size_t i, word = 0;
 
     /* Capture every argument before overwriting any destination. A back edge
      * can permute the very same homes it reads. */
     for (i = 0; i < edge->arg_count; ++i) {
         an_read(out, frame, homes, edge->args[i], AN_T0);
         an_store(out, AN_T0, an_abi.stack_pointer,
-            frame->phi_base + (int)i * WordBytes);
+            frame->phi_base + (int)word++ * WordBytes);
+        if (f->types[edge->args[i]] == ARCHON_MIR_F128) {
+            an_load(out, AN_T0, an_abi.stack_pointer, frame->high_offsets[edge->args[i]]);
+            an_store(out, AN_T0, an_abi.stack_pointer, frame->phi_base + (int)word++ * WordBytes);
+        }
     }
+    word = 0;
     for (i = 0; i < edge->arg_count; ++i) {
         an_load(out, AN_T0, an_abi.stack_pointer,
-            frame->phi_base + (int)i * WordBytes);
+            frame->phi_base + (int)word++ * WordBytes);
         an_write(out, frame, homes, target->params[i], AN_T0);
+        if (f->types[target->params[i]] == ARCHON_MIR_F128) {
+            an_load(out, AN_T0, an_abi.stack_pointer, frame->phi_base + (int)word++ * WordBytes);
+            an_store(out, AN_T0, an_abi.stack_pointer, frame->high_offsets[target->params[i]]);
+        }
     }
     if (!fallthrough)
         an_jump(out, fn, edge->target);
@@ -41,6 +50,8 @@ void an_terminator(ANContext *ctx, ANOut *out, const ArchonMIRFunction *f,
     case ARCHON_MIR_RETURN:
         if (term->value != ARCHON_MIR_NONE)
             an_read(out, frame, homes, term->value, an_abi.result);
+        if (f->result == ARCHON_MIR_F128)
+            an_load(out, an_abi.args[1], an_abi.stack_pointer, frame->high_offsets[term->value]);
         an_leave(out, frame);
         break;
     case ARCHON_MIR_BR:

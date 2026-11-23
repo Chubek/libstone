@@ -22,6 +22,8 @@ order within a stage. A successful transform's output is the next hook's input.
 Cephyr emits canonical MIR from lowering but does not reserialize callback
 output between hooks; rewriters should preserve the canonical form. Cephyr
 verifies the final rewritten MIR, not each intermediate rewrite result.
+The default [Blackstone pass](README.md#blackstone-mir-optimization) runs
+after SDK rewrites; assembly hooks receive its output.
 The analysis stage only sees the pre-rewrite MIR, so an analysis callback should
 not assume that later rewrites preserve properties it checks unless the
 application guarantees that. Names must be unique within an SDK. An empty target
@@ -74,7 +76,9 @@ with Cephyr's linkage/data information, which sits outside MIR. Do not assume
 that a rewrite can introduce new encodings, architectures, or MIR opcodes.
 
 An assembly callback must emit target-compatible assembly, including definitions
-for all MIR functions and all MIR globals with nonzero word counts. Honor
+for all MIR functions and all MIR globals with nonzero word counts. Use
+the exact MIR names, including ASCII placeholders for Unicode identifiers.
+Cephyr restores the external UTF-8 symbol spelling during ELF assembly emission. Honor
 `CEPHYR_SDK_POSITION_INDEPENDENT` when set. For C-local definitions owned by MIR,
 emit exactly one `\t.globl SYMBOL\n` for the MIR name (as the built-in backend
 does); Cephyr replaces it with `.local`. Zero-word MIR globals are declarations;

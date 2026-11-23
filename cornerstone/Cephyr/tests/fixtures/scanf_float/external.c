@@ -4,11 +4,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 int cephyr_scan_direct(float *, double *, float *, double *, float *, double *,
                        float *, double *, int *);
 int cephyr_scan_pipe(float *);
 int cephyr_scan_pipe_tail(char *, double *);
+#if defined(__x86_64__)
+int cephyr_scan_extended(void);
+#endif
 
 int external_scan_stdin(const char *format, ...)
 {
@@ -63,6 +67,44 @@ static void values(void)
     assert(float_bits(&a) == 1 && double_bits(&b) == 1);
     assert(scan_text("-nAn(PaYl0ad_) +iNfInItY", "%lf %F", &b, &a) == 2);
     assert(double_bits(&b) == 0xfff8000000000000UL && float_bits(&a) == 0x7f800000U);
+}
+
+static int scan_wide(const wchar_t *text, const wchar_t *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    int result = vswscanf(text, format, args);
+    va_end(args);
+    return result;
+}
+
+static void extended_values(void)
+{
+    const char text[] = "1 2 3 4 0x1.0000000000000002000000000001p0 -0x1p12000 nan() -Inf!";
+    const wchar_t wide[] = L"1 2 3 4 0x1.0000000000000002000000000001p0 -0x1p12000 nan() -Inf\u0132";
+    const long double expected[] = {1, 2, 3, 4, 0x1.0000000000000002000000000001p0L,
+                                    -0x1p12000L, __builtin_nanl(""), -__builtin_infl()};
+    long double v[8];
+    int n;
+    for (int w = 0; w < 2; ++w) {
+        memset(v, 0xa5, sizeof(v));
+        n = -1;
+        /* Destinations span the register and overflow areas of va_list. */
+        int rc = w ? scan_wide(wide, L"%La%LA%Le%LE%Lf%LF%Lg%LG%n",
+                               v, v+1, v+2, v+3, v+4, v+5, v+6, v+7, &n)
+                   : scan_text(text, "%La%LA%Le%LE%Lf%LF%Lg%LG%n",
+                               v, v+1, v+2, v+3, v+4, v+5, v+6, v+7, &n);
+        assert(rc == 8 && n == (int)sizeof(text) - 2);
+        for (int i = 0; i < 8; ++i)
+            assert(memcmp(v+i, expected+i, __LDBL_MANT_DIG__ == 64 ? 10 : 16) == 0);
+    }
+    /* Width truncates the exponent; no assignment or %n may occur. */
+    n = -1;
+    assert(swscanf(L"1e+2", L"%3Lf%n", v, &n) == 0 && n == -1 &&
+           memcmp(v, expected, __LDBL_MANT_DIG__ == 64 ? 10 : 16) == 0);
+#if defined(__x86_64__)
+    assert(cephyr_scan_extended());
+#endif
 }
 
 static void width_and_failures(void)
@@ -168,6 +210,7 @@ static void streams(void)
 int main(void)
 {
     values();
+    extended_values();
     width_and_failures();
     streams();
     return 0;

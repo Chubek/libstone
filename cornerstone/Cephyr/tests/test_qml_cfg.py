@@ -101,6 +101,8 @@ class QmlCfgTests(unittest.TestCase):
         self.env = os.environ.copy()
         self.env.pop("CEPHYR_CONFIG", None)
         self.env["XDG_CACHE_HOME"] = str(self.work / "cache")
+        # The opcode counts below measure QML transformations in isolation.
+        (self.work / "Cephyr.toml").write_text("[blackstone]\nenabled = false\n", encoding="ascii")
 
     def run_command(self, command, timeout=60):
         result = subprocess.run(command, cwd=self.work, env=self.env, capture_output=True,

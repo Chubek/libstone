@@ -19,11 +19,9 @@ add_library(sandstone STATIC "${SAND}/decoder/domsymas.c" ${DECODER})
 target_include_directories(sandstone PUBLIC "${SAND}/include" PRIVATE "${SAND}/decoder")
 find_package(ZLIB REQUIRED)
 target_link_libraries(sandstone PUBLIC ZLIB::ZLIB)
-add_library(sandstone_assembler STATIC
-  "${SAND}/assembler/assembler.c" "${SAND}/assembler/asm_opt.cpp" "${SAND}/assembler/parser.c"
-  "${SAND}/assembler/preprocess.cpp" "${SAND}/assembler/directives.c"
-  "${SAND}/assembler/binarizer.c" "${SAND}/assembler/lua.cpp"
-  "${SAND}/assembler/sdk.cpp")
+include("${SAND}/cmake/SandASSources.cmake")
+list(TRANSFORM sandstone_assembler_sources PREPEND "${SAND}/assembler/")
+add_library(sandstone_assembler STATIC ${sandstone_assembler_sources})
 target_include_directories(sandstone_assembler PUBLIC "${SAND}/assembler"
   PRIVATE "${VENDOR_ROOT}/third_party/kaguya/include" "${VENDOR_ROOT}/cmake")
 target_link_libraries(sandstone_assembler PUBLIC sandstone lua ${CMAKE_DL_LIBS} m)

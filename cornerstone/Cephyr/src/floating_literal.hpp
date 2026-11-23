@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <locale.h>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,8 +18,6 @@ enum class FloatingLiteralStatus {
     ok,
     malformed,
     unsupported_long_double,
-    unsupported_host,
-    unsupported_x87_host,
     overflow,
     too_long,
 };
@@ -29,8 +26,8 @@ struct FloatingLiteral {
     FloatingLiteralStatus status = FloatingLiteralStatus::malformed;
     unsigned width = 0;
     std::uint64_t bits = 0;
-    // Only for width 80: bits holds the explicit significand, not padding.
-    std::uint16_t x87_sign_exponent = 0;
+    // Upper payload word: sign/exponent for x87; all 64 bits for binary128.
+    std::uint64_t high_word = 0;
 
     explicit operator bool() const { return status == FloatingLiteralStatus::ok; }
 };
@@ -60,140 +57,19 @@ constexpr std::uint64_t round_right(std::uint64_t value, unsigned shift) {
     return hi + (lo > half || (lo == half && (hi & 1)));
 }
 
-template<class Real, class UInt, int Precision, int MaxExponent, UInt OneBits>
-FloatingLiteral translate(std::string_view spelling, bool hex, bool below_one) {
-    constexpr unsigned width = std::numeric_limits<UInt>::digits;
-    if constexpr (sizeof(Real) != sizeof(UInt) ||
-                  !std::numeric_limits<Real>::is_iec559 ||
-                  std::numeric_limits<Real>::radix != 2 ||
-                  std::numeric_limits<Real>::digits != Precision ||
-                  std::numeric_limits<Real>::max_exponent != MaxExponent) {
-        return {FloatingLiteralStatus::unsupported_host, width};
-    } else {
-        // Guard exotic host layouts before extracting a target bit pattern.
-        if constexpr (std::bit_cast<UInt>(Real{1}) != OneBits) {
-            return {FloatingLiteralStatus::unsupported_host, width};
-        } else {
-            Real value{};
-            const auto end = spelling.data() + spelling.size();
-            const auto parsed = std::from_chars(spelling.data(), end, value,
-                hex ? std::chars_format::hex : std::chars_format::general);
-            if (parsed.ptr != end)
-                return {};
-            if (parsed.ec == std::errc::result_out_of_range) {
-                // from_chars reports both overflow and nonzero input that
-                // rounds to zero as out_of_range. Only the latter is in range
-                // for our translation policy.
-                if (below_one)
-                    return {FloatingLiteralStatus::ok, width, 0};
-                return {FloatingLiteralStatus::overflow, width};
-            }
-            if (parsed.ec != std::errc{})
-                return {};
-            return {FloatingLiteralStatus::ok, width, std::bit_cast<UInt>(value)};
-        }
-    }
-}
-
-inline FloatingLiteral translate_x87_hex(std::string_view significand, std::int64_t top) {
-    // The least significant subnormal bit is 2**-16445. Keep at most
-    // 64 bits and round once, to nearest-even, including at that boundary.
-    if (top > 16383)
-        return {FloatingLiteralStatus::overflow, 80};
-    if (top < -16446)
-        return {FloatingLiteralStatus::ok, 80};
-    const auto bottom = top >= -16382 ? top - 63 : -16445;
-    auto position = top;
-    bool started = false, halfway = false, sticky = false;
-    std::uint64_t rounded = 0;
-    for (const char c : significand) {
-        if (c == '.')
-            continue;
-        const auto d = digit(c);
-        for (int i = 3; i >= 0; --i) {
-            const bool bit = (d >> i) & 1;
-            if (!started && !bit)
-                continue;
-            started = true;
-            if (position >= bottom)
-                rounded = (rounded << 1) | bit;
-            else if (position == bottom - 1)
-                halfway = bit;
-            else
-                sticky |= bit;
-            --position;
-        }
-    }
-    if (position >= bottom)
-        rounded <<= position - bottom + 1;
-    if (halfway && (sticky || (rounded & 1))) {
-        if (++rounded == 0) {
-            rounded = UINT64_C(1) << 63;
-            if (++top > 16383)
-                return {FloatingLiteralStatus::overflow, 80};
-        }
-    }
-    return {FloatingLiteralStatus::ok, 80, rounded,
-            static_cast<std::uint16_t>(top >= -16382 ? top + 16383 : rounded >> 63)};
-}
-
-inline FloatingLiteral translate_x87_decimal([[maybe_unused]] std::string_view spelling) {
-    // strtold_l translates directly to extended precision and handles the
-    // nonzero subnormals rejected by some long double from_chars versions.
-    // Use it only on a verified x87 host, in the C locale and nearest mode.
-#if defined(__linux__)
-    if constexpr (std::endian::native == std::endian::little &&
-                  std::numeric_limits<long double>::is_iec559 &&
-                  std::numeric_limits<long double>::digits == 64 &&
-                  std::numeric_limits<long double>::max_exponent == 16384 &&
-                  sizeof(long double) >= 10) {
-        const auto payload = [](long double value) {
-            FloatingLiteral result{FloatingLiteralStatus::ok, 80};
-            std::memcpy(&result.bits, &value, 8);
-            std::memcpy(&result.x87_sign_exponent,
-                        reinterpret_cast<const unsigned char *>(&value) + 8, 2);
-            return result;
-        };
-        const auto one = payload(1.0L);
-        if (one.bits != (UINT64_C(1) << 63) || one.x87_sign_exponent != 0x3fff)
-            return {FloatingLiteralStatus::unsupported_x87_host, 80};
-        const std::string text(spelling);
-        const auto locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
-        if (!locale)
-            return {FloatingLiteralStatus::unsupported_x87_host, 80};
-        std::fenv_t saved;
-        const bool held = std::feholdexcept(&saved) == 0;
-        const bool nearest = held && std::fesetround(FE_TONEAREST) == 0;
-        char *end = nullptr;
-        FloatingLiteral result{FloatingLiteralStatus::unsupported_x87_host, 80};
-        if (nearest) {
-            result = payload(strtold_l(text.c_str(), &end, locale));
-            if (end != text.c_str() + text.size())
-                result = {};
-            else if (result.x87_sign_exponent >= 0x7fff)
-                result = {FloatingLiteralStatus::overflow, 80};
-        }
-        if (held)
-            std::fesetenv(&saved);
-        freelocale(locale);
-        return result;
-    }
-#endif
-    return {FloatingLiteralStatus::unsupported_x87_host, 80};
-}
+extern "C" int cephyr_literal_bits(const char *, unsigned width, std::uint64_t *low,
+                                  std::uint64_t *high);
 
 } // namespace floating_literal_detail
 
 // C11 6.4.4.2: input is one unsigned token, not a signed expression.
 // Convert once, directly to the nominal format, independently of locale.
-// Implementations with a non-IEEE host format fail closed. This helper does
+// This helper does
 // not make target ABI decisions: a producer must separately gate FP lowering.
-inline FloatingLiteral parse_floating_literal(std::string_view token, bool sysv_x87 = false) {
+inline FloatingLiteral parse_floating_literal(std::string_view token, bool sysv_x87 = false,
+                                             bool binary128 = false) {
     using floating_literal_detail::digit;
     constexpr std::int64_t token_limit = 1024 * 1024;
-    // Bigger than any exponent that can be canceled by the significand's
-    // length (at most four binary exponent positions per hex digit).
-    constexpr std::int64_t exponent_limit = token_limit * 4 + 4096;
     if (token.empty())
         return {};
     if (token.size() > token_limit)
@@ -211,13 +87,13 @@ inline FloatingLiteral parse_floating_literal(std::string_view token, bool sysv_
     default:
         break;
     }
+    const auto spelling = token;
     const bool hex = token.starts_with("0x") || token.starts_with("0X");
     if (hex)
-        token.remove_prefix(2); // from_chars hex mode does not take 0x.
+        token.remove_prefix(2); // Validate the significand after the prefix.
 
     std::size_t i = 0;
-    std::int64_t count = 0, whole = 0, first_nonzero = -1;
-    int first_digit = 0;
+    std::size_t count = 0;
     bool point = false;
     for (; i < token.size(); ++i) {
         const char c = token[i];
@@ -228,63 +104,32 @@ inline FloatingLiteral parse_floating_literal(std::string_view token, bool sysv_
         const int d = digit(c);
         if (d >= (hex ? 16 : 10))
             break;
-        if (d && first_nonzero < 0) {
-            first_nonzero = count;
-            first_digit = d;
-        }
         ++count;
-        if (!point)
-            ++whole;
     }
     if (!count)
         return {};
 
-    const auto significand = token.substr(0, i);
-    std::int64_t exponent = 0;
     const bool has_exponent = i < token.size() &&
         (hex ? token[i] == 'p' || token[i] == 'P' : token[i] == 'e' || token[i] == 'E');
     if (has_exponent) {
         ++i;
-        const bool negative = i < token.size() && token[i] == '-';
-        if (i < token.size() && (negative || token[i] == '+'))
+        if (i < token.size() && (token[i] == '-' || token[i] == '+'))
             ++i;
         const auto begin = i;
-        for (; i < token.size() && digit(token[i]) < 10; ++i) {
-            if (exponent < exponent_limit) {
-                exponent = exponent * 10 + digit(token[i]);
-                if (exponent > exponent_limit)
-                    exponent = exponent_limit;
-            }
-        }
-        if (i == begin)
-            return {};
-        if (negative)
-            exponent = -exponent;
+        while (i < token.size() && digit(token[i]) < 10) ++i;
+        if (i == begin) return {};
     }
     if (i != token.size() || (hex ? !has_exponent : !point && !has_exponent))
         return {};
-    if (extended && !sysv_x87)
+    if (extended && !sysv_x87 && !binary128)
         return {FloatingLiteralStatus::unsupported_long_double};
 
-    const unsigned width = extended ? 80 : single ? 32 : 64;
-    if (first_nonzero < 0)
-        return {FloatingLiteralStatus::ok, width, 0};
-
-    auto leading_exponent = whole - first_nonzero - 1;
-    if (hex)
-        leading_exponent = leading_exponent * 4 +
-            (first_digit >= 8 ? 3 : first_digit >= 4 ? 2 : first_digit >= 2 ? 1 : 0);
-    if (extended)
-        return hex ? floating_literal_detail::translate_x87_hex(significand, leading_exponent + exponent)
-                   : floating_literal_detail::translate_x87_decimal(token);
-    // Only needed to distinguish over/underflow for from_chars.
-    const bool below_one = leading_exponent + exponent < 0;
-    using floating_literal_detail::translate;
-    if (single)
-        return translate<float, std::uint32_t, 24, 128, UINT32_C(0x3f800000)>(
-            token, hex, below_one);
-    return translate<double, std::uint64_t, 53, 1024, UINT64_C(0x3ff0000000000000)>(
-        token, hex, below_one);
+    const unsigned width = extended ? (binary128 ? 128 : 80) : single ? 32 : 64;
+    FloatingLiteral result{FloatingLiteralStatus::ok, width};
+    if (!floating_literal_detail::cephyr_literal_bits(std::string(spelling).c_str(), width,
+                                                     &result.bits, &result.high_word))
+        result.status = FloatingLiteralStatus::overflow;
+    return result;
 }
 
 // Apply a static initializer's f32/f64 assignment conversion after parsing
@@ -340,12 +185,19 @@ inline FloatingLiteral convert_floating_literal(FloatingLiteral value, unsigned 
 // The caller supplies the canonical i64 bit pattern (sign/zero extended
 // from its C type). Convert without host FP arithmetic or runtime fenv.
 inline FloatingLiteral integer_to_floating_literal(std::uint64_t value, bool is_signed, unsigned width) {
-    if (width != 32 && width != 64 && width != 80)
+    if (width != 32 && width != 64 && width != 80 && width != 128)
         return {};
     if (!value)
         return {FloatingLiteralStatus::ok, width, 0};
     const bool negative = is_signed && (value >> 63);
     const auto magnitude = negative ? -value : value;
+    if (width == 128) {
+        const unsigned top = std::bit_width(magnitude) - 1;
+        const auto fraction = static_cast<unsigned __int128>(magnitude ^ (UINT64_C(1) << top)) << (112 - top);
+        return {FloatingLiteralStatus::ok, 128, std::uint64_t(fraction),
+                (std::uint64_t(negative) << 63) | (std::uint64_t(top + 16383) << 48) |
+                    std::uint64_t(fraction >> 64)};
+    }
     if (width == 80) {
         const auto top = std::bit_width(magnitude) - 1;
         return {FloatingLiteralStatus::ok, 80, magnitude << (63 - top),
@@ -371,12 +223,28 @@ inline FloatingLiteral integer_to_floating_literal(std::uint64_t value, bool is_
 // discard the fractional part and require a representable truncated result.
 inline std::optional<std::uint64_t> floating_literal_to_integer(
     FloatingLiteral value, unsigned width, bool is_signed) {
+    if (value && value.width == 128 && width && width <= 64) {
+        const auto high = value.high_word;
+        if (width == 1 && !is_signed)
+            return value.bits || (high << 1);
+        const int exp = int((high >> 48) & 0x7fff) - 16383;
+        if (exp < 0) return 0;
+        if (exp >= 64) return std::nullopt;
+        const auto significand = (static_cast<unsigned __int128>((high & UINT64_C(0xffffffffffff)) |
+                                 (UINT64_C(1) << 48)) << 64) | value.bits;
+        const auto magnitude = std::uint64_t(significand >> (112 - exp));
+        const bool negative = high >> 63;
+        const auto limit = is_signed ? (UINT64_C(1) << (width - 1)) - !negative :
+            width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1;
+        if (magnitude > limit || (negative && !is_signed)) return std::nullopt;
+        return negative ? -magnitude : magnitude;
+    }
     if (!value || !width || width > 64 ||
         (value.width != 32 && value.width != 64 && value.width != 80) ||
         (value.width == 32 && value.bits > UINT32_MAX))
         return std::nullopt;
     if (value.width == 80) {
-        const auto biased = value.x87_sign_exponent & 0x7fff;
+        const auto biased = value.high_word & 0x7fff;
         if (width == 1 && !is_signed)
             return value.bits != 0;
         const int exponent = biased - 16383;
@@ -384,7 +252,7 @@ inline std::optional<std::uint64_t> floating_literal_to_integer(
             return 0;
         if (exponent >= 64)
             return std::nullopt;
-        const bool negative = value.x87_sign_exponent & 0x8000;
+        const bool negative = value.high_word & 0x8000;
         const auto magnitude = value.bits >> (63 - exponent);
         const auto limit = is_signed
             ? (UINT64_C(1) << (width - 1)) - !negative

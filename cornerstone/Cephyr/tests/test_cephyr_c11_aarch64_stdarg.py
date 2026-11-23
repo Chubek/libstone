@@ -174,7 +174,6 @@ def main():
             ("void f(float x, ...) { va_list a; va_start(a, x); }", "rightmost eligible"),
             ("void f(int x, ...) { const va_list a; va_start(a, x); }", "writable AAPCS64"),
             ("void f(int x, ...) { va_list a; va_arg(a, float); }", "only promoted"),
-            ("void f(int x, ...) { va_list a; va_arg(a, long double); }", "long double"),
             ("struct S { int i; }; void f(int x, ...) { va_list a; va_arg(a, struct S); }",
              "only promoted"),
             ("void f(va_list a) { }", "by-value aggregate ABI"),

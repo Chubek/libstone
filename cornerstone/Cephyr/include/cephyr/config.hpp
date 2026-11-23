@@ -27,6 +27,7 @@ struct Config {
     std::filesystem::path triple_script;
     std::filesystem::path archon_root;
     std::filesystem::path stdlib_root;
+    std::filesystem::path package_root; // Derived from the loaded library, never from the cache.
     std::filesystem::path cache_path;
     std::filesystem::path sysroot;
 
@@ -38,28 +39,18 @@ struct Config {
     // Tools are argv vectors, never shell command lines. The first element is
     // the executable and the remaining elements are fixed arguments. Empty
     // target-tool vectors inherit the selected target-bank entry.
-    std::vector<std::string> host_cc{"cc"};
     std::vector<std::string> assembler;
     std::vector<std::string> linker;
-    std::vector<std::string> archiver;
-
-    // Used only to build Cephyr's packaged libc. It is deliberately separate
-    // from host_cc and is not a facility for compiling user C source.
-    // Empty means to inherit the resolved target assembler command.
-    std::vector<std::string> runtime_cc;
-
-    std::vector<std::string> compile_flags;
     std::vector<std::string> assemble_flags;
     std::vector<std::string> link_flags;
-    // Additional flags for the packaged-libc compiler. When runtime_cc is
-    // absent these follow the resolved target assembler flags.
-    std::vector<std::string> runtime_flags;
 
     PreprocessOptions preprocess;
     std::optional<std::string> qml_profile;
     std::map<std::string, QmlProfile, std::less<>> qml_profiles;
 
     bool cache_enabled = true;
+    bool blackstone_enabled = true;
+    bool sandslab_enabled = false;
     bool factir_enabled = true;
     bool static_link = true;
     // Driver-only CLI state; intentionally not accepted from Cephyr.toml.

@@ -82,7 +82,7 @@ std::optional<HostPlatform> detect_host(Diagnostics &diag)
     }
 
     // These properties describe the running Cephyr binary, not the configured
-    // target assembler, linker, runtime compiler, or backend build compiler.
+    // target assembler or linker.
 #if defined(__ANDROID__)
     constexpr auto environment = "android";
 #elif defined(__GLIBC__)

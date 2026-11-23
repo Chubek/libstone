@@ -178,6 +178,10 @@ static int type(Parser *p, ArchonMIRType *out)
         *out = ARCHON_MIR_F32;
     else if (is_token(p, "f64"))
         *out = ARCHON_MIR_F64;
+    else if (is_token(p, "f128"))
+        *out = ARCHON_MIR_F128;
+    else if (is_token(p, "f80"))
+        *out = ARCHON_MIR_F80;
     else if (is_token(p, "void"))
         *out = ARCHON_MIR_VOID;
     else
@@ -261,6 +265,12 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"amd64_x87_lt", ARCHON_MIR_AMD64_X87_LT},
         {"amd64_x87_le", ARCHON_MIR_AMD64_X87_LE},
         {"amd64_x87_from_fp", ARCHON_MIR_AMD64_X87_FROM_FP},
+        {"f128_pack", ARCHON_MIR_F128_PACK},
+        {"f128_low", ARCHON_MIR_F128_LOW},
+        {"f128_high", ARCHON_MIR_F128_HIGH},
+        {"amd64_x87_pack", ARCHON_MIR_AMD64_X87_PACK},
+        {"amd64_x87_low", ARCHON_MIR_AMD64_X87_LOW},
+        {"amd64_x87_high", ARCHON_MIR_AMD64_X87_HIGH},
         {"amd64_x87_to_fp", ARCHON_MIR_AMD64_X87_TO_FP},
         {"amd64_x87_from_si", ARCHON_MIR_AMD64_X87_FROM_SI},
         {"amd64_x87_from_ui", ARCHON_MIR_AMD64_X87_FROM_UI},

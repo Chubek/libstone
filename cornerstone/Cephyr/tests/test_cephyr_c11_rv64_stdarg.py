@@ -19,12 +19,10 @@ NEGATIVE = (
     ("void f(int x, ...) { void *const a = 0; va_start(a, x); }", "writable RV64IM LP64 va_list"),
     ("void f(int x, ...) { va_list a; va_arg(a, float); }", "only promoted integer"),
     ("void f(int x, ...) { va_list a; va_arg(a, short); }", "only promoted integer"),
-    ("void f(int x, ...) { va_list a; va_arg(a, long double); }", "long double"),
     ("struct S { int x; }; void f(va_list a) { va_arg(a, struct S); }", "only promoted integer"),
     ("struct S { int x; }; void f(struct S s, ...) {}", "requires a fixed prototype"),
     ("struct S { int x; }; void g(int, ...); void f(struct S *s) { g(1, *s); }",
      "variadic argument"),
-    ("void g(int, ...); void f(void) { g(1, 1.0L); }", "long double"),
     ("void f(void (*p)(int, ...)) { p(0, 1); }", "variadic indirect calls"),
 )
 
@@ -50,7 +48,7 @@ def main():
                 raise AssertionError((command, expected, result.returncode, result.stderr))
 
         cephyr = (args.cephyr.resolve(), "-std=c11", f"--target={TRIPLE}")
-        clang = (args.clang, f"--target={TRIPLE}", "-march=rv64im", "-mabi=lp64")
+        clang = (args.clang, f"--target={TRIPLE}", "-march=rv64im", "-mabi=lp64", "-mno-relax")
         check(*clang, "-std=c11", "-O2", "-ffreestanding", "-fno-pie",
               "-fno-stack-protector", "-Wall", "-Wextra", "-Werror", "-c",
               FIXTURES / "external.c", "-o", "external.o")

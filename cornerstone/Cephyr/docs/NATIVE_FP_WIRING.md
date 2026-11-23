@@ -13,12 +13,25 @@ round-to-nearest-even evaluation. Both also support direct scalar variadic
 calls with default promotions and scalar variadic definitions. RV64IM
 supports storage, fixed-prototype transport, negation, comparisons,
 arithmetic, and numeric conversions for `float` and `double`. Arithmetic
-and conversions call pinned LLVM compiler-rt helpers; a link without the
-bundled runtime must supply the required helper symbols. RV64IM FP varargs
-remain unsupported.
+and conversions call the target ABI entry points in `stdlib/src/real_abi.c`,
+backed by Libstone integer arithmetic. A freestanding link without the
+bundled runtime must supply any referenced helper symbols.
 AMD64 supports x87 `long double` objects, scalar access, initialization,
 arithmetic, comparisons, and conversions to and from binary32, binary64, and
-integers through 64 bits. By-value and variadic calls are not supported.
+integers through 64 bits. Fixed `long double` parameters and returns use
+the SysV ABI (memory arguments, x87 `ST(0)` result); `...` arguments of
+this type are not supported.
+AArch64 and RV64IM use IEEE binary128 for `long double`. C expressions
+and object accesses use low and high integer words. A typed `f128` MIR
+operand carries both words across each call boundary. On AAPCS64 the
+operand uses one SIMD argument register or a 16-byte aligned stack slot;
+the result is in `q0`. RV64IM LP64 uses two XLEN slots, low word first,
+including `a7` plus `0(sp)` when a fixed argument straddles the boundary.
+Entirely stacked quads are aligned to 16 bytes; unnamed quads also require
+an even register pair. Returns use `a0:a1`. Widening, narrowing and arithmetic use the bundled
+TF runtime. The bundled helpers do not implement Annex F dynamic rounding
+and exception semantics. Literal conversion uses the bounded integer parser shared with libc.
+Static binary128 arithmetic uses exact integer ratios and rounds once at target precision.
 Annex F remains unsupported.
 
 ## Slice 1: capability, source types, and literal spelling
@@ -56,7 +69,7 @@ Annex F remains unsupported.
   `RealConstASTNode::getSpelling()` token, never `getValue()`. Pick nominal
   format from the suffix, decode exactly one token, and obtain bits directly
   in that format without going through `long double`. The decoder uses
-  locale-independent `from_chars` on guarded IEEE hosts. It returns separate
+  the locale-independent Cephyr integer converter with nearest-even rounding. It returns separate
   malformed, unsupported-format, size-limit, and overflow statuses; accepted
   underflow-to-zero gives `+0` until unary minus is applied. Static assignment
   conversion helpers operate on bits, including integer conversion, to avoid

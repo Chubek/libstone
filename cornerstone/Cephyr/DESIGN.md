@@ -7,10 +7,8 @@
    integer constant domain and CFG reachability. Unreachable code still gets
    checked; unreachable blocks are omitted from native MachineIR. C data
    pointers, code pointers, and integers remain distinct in that interface.
-3. Cephyr calls Archon's C++ API to compile the target description and
-   generate the native backend. The optional LMDB cache holds generation
-   artifacts, not user sources or output. The generated backend is built for
-   the driver host; its verified runtime lowers MachineIR to target assembly.
+3. Archon generates native backend packages at build time. The driver loads
+   the matching packaged module; its verified runtime lowers MachineIR to target assembly.
    A host or cross C compiler does not compile the user's C translation unit.
 4. Cephyr drives tools with argv, not a shell. The target assembler produces
    objects; the linker receives those objects in CLI order. AMD64, AArch64, and RV64IM

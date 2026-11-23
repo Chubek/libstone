@@ -37,6 +37,9 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL __cephyr_rt_sigprocmask, 135
     CEPHYR_SYSCALL __cephyr_getpid, 172
     CEPHYR_SYSCALL __cephyr_gettid, 178
+    CEPHYR_SYSCALL __cephyr_clone, 220
+    CEPHYR_SYSCALL __cephyr_execve, 221
+    CEPHYR_SYSCALL __cephyr_wait4, 260
     CEPHYR_SYSCALL __cephyr_unlinkat, 35
     CEPHYR_SYSCALL __cephyr_renameat, 276 /* renameat2; flags argument is zero */
     CEPHYR_SYSCALL __cephyr_getrandom, 278

@@ -8,6 +8,10 @@
     (defined(__x86_64__) || defined(__AARCH64EL__))
 int __cephyr_flt_rounds(void);
 #define FLT_ROUNDS (__cephyr_flt_rounds())
+#elif defined(__linux__) && defined(__LP64__) && defined(__riscv) && \
+      __riscv_xlen == 64 && defined(__riscv_float_abi_soft) && !defined(__riscv_flen) && \
+      defined(__riscv_mul) && defined(__riscv_div)
+#define FLT_ROUNDS 1 /* The RV64IM soft-float helpers always round to nearest. */
 #else
 #define FLT_ROUNDS (-1) /* No bundled rounding-mode query for this target. */
 #endif

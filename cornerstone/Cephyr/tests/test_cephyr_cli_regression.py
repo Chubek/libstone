@@ -395,6 +395,35 @@ int target_characters_ok;
         self.assertFalse(destination.exists())
         self.assertIn(b"unsupported target", failure.stderr.lower())
 
+    def test_11b_blackstone_default_and_opt_out(self) -> None:
+        source = b"unsigned long f(unsigned long x) { return x * 1UL; }\n"
+        args = ("--no-factir", "--emit-mir", "-x", "c", "-", "-o", "-")
+        default = self.invoke(*args, input_bytes=source).stdout
+        config = self.work / "Cephyr.toml"
+        config.write_text("[blackstone]\nenabled = true\n", encoding="utf-8")
+        self.assertEqual(default, self.invoke(*args, input_bytes=source).stdout)
+        config.write_text("[blackstone]\nenabled = false\n", encoding="utf-8")
+        original = self.invoke(*args, input_bytes=source).stdout
+        multiply = re.search(rb"(?m)^mul (\d+) (\d+) \d+$", original)
+        self.assertIsNotNone(multiply, original)
+        self.assertNotRegex(default, rb"(?m)^mul ")
+        self.assertNotRegex(default, rb"(?m)^(copy|zext) ")
+        self.assertRegex(default, rb"(?m)^load (\d+) \d+ 0\nret \1$")
+
+    def test_11c_blackstone_config_validation(self) -> None:
+        invalid = self.work / "invalid.toml"
+        for contents, diagnostic in (
+            ("blackstone = false", b"'blackstone' must be a table"),
+            ('[blackstone]\nenabled = "false"', b"'blackstone.enabled' must be a boolean"),
+            ("[blackstone]\nenable = false", b"unknown configuration key 'blackstone.enable'"),
+        ):
+            with self.subTest(contents=contents):
+                invalid.write_text(contents + "\n", encoding="utf-8")
+                result = self.invoke("--config", invalid, "--emit-mir", "-o", "-",
+                                     FIXTURES / "cephyr_cli_library.c", ok=False)
+                self.assertIn(diagnostic, result.stderr)
+                self.assertFalse(result.stdout)
+
     def test_12_custom_lua_target_selected_by_config_and_cli(self) -> None:
         bank = self.work / "custom-targets"
         bank.mkdir()
@@ -571,14 +600,14 @@ int target_characters_ok;
 
     def test_22_unsupported_constructs_do_not_publish_artifacts(self) -> None:
         cases = (
-            ("long-double", "long double f(void) { return 1.5L; }\n", rb"long double"),
+            ("complex", "double _Complex f(void) { return 1.5; }\n", rb"complex|_Complex"),
         )
         destination = self.work / "protected.mir"
         destination.write_bytes(b"previous output")
         for name, source, message in cases:
             with self.subTest(name=name):
                 result = self.invoke(
-                    "--emit-mir", "-x", "c", "-", "-o", destination,
+                    AARCH64, "--emit-mir", "-x", "c", "-", "-o", destination,
                     input_bytes=source.encode(), ok=False,
                 )
                 self.assertRegex(result.stderr, message)
@@ -598,7 +627,7 @@ int target_characters_ok;
                 result = self.invoke(
                     "-static", "-nostdlib", source, "-o", destination, ok=False
                 )
-                self.assertIn(b"undefined symbol", result.stderr)
+                self.assertRegex(result.stderr, rb"undefined (?:symbol|reference)")
                 self.assertIn(b"cephyr_cli_missing_symbol", result.stderr)
                 if previous is None:
                     self.assertFalse(destination.exists())
@@ -688,180 +717,44 @@ int target_characters_ok;
             self.assertRegex(text, rf"(?m)^{operation}\s")
         self.assertFalse(marker.exists(), "Cephyr delegated user C to a host compiler")
 
-    def _logging_tool(self, name: str, log: Path) -> Path:
-        wrapper = self.work / name
-        wrapper.write_text(
-            "#!/bin/sh\n"
-            "{\n"
-            "  echo BEGIN\n"
-            "  for argument do printf 'ARG=%s\\n' \"$argument\"; done\n"
-            f"}} >> {toml_string(log)}\n"
-            'exec "$@"\n',
-            encoding="utf-8",
-        )
-        wrapper.chmod(0o755)
-        return wrapper
+    def test_40_packaged_tools_cold_cache(self) -> None:
+        source = self.work / "packaged.c"
+        source.write_text('#include <stdio.h>\nint main(void) { puts("packaged"); return 0; }\n')
+        for triple, em in (("x86_64-linux-gnu", 62), ("aarch64-linux-gnu", 183), ("riscv64-linux-gnu", 243)):
+            for stage in ("--emit-mir", "-S", "-c", "link"):
+                with self.subTest(triple=triple, stage=stage):
+                    output = self.work / (triple + stage)
+                    env = {"PATH": "/nonexistent", "XDG_CACHE_HOME": str(self.work / (output.name + "-cache"))}
+                    self.invoke("--target", triple, *(() if stage == "link" else (stage,)), source,
+                                "-o", output, env=env)
+                    data = output.read_bytes()
+                    if stage == "--emit-mir": self.assertTrue(data.startswith(b"archon-mir"))
+                    elif stage == "-S": self.assertIn(b"main:", data)
+                    else:
+                        self.assertEqual(data[:4], b"\x7fELF")
+                        self.assertEqual(struct.unpack_from("<HH", data, 16), (1 if stage == "-c" else 2, em))
+                    if stage == "link":
+                        runner = {62: None, 183: QEMU_AARCH64, 243: QEMU}[em]
+                        if runner or triple.startswith(os.uname().machine + "-"):
+                            result = subprocess.run([*([runner] if runner else []), output],
+                                                    check=True, capture_output=True, timeout=10)
+                            self.assertEqual(result.stdout, b"packaged\n")
 
-    def _cache_config(
-        self,
-        path: Path,
-        cache: Path,
-        host_wrapper: Path,
-        host_cc: str,
-        assembler_wrapper: Path,
-        assembler: str,
-        compile_flags: tuple[str, ...] = (),
-    ) -> None:
-        flags = ", ".join(toml_string(flag) for flag in compile_flags)
-        path.write_text(
-            textwrap.dedent(
-                f"""\
-                target = "riscv64-linux-gnu"
-                stdlib = "none"
-
-                [paths]
-                cache_path = {toml_string(cache)}
-
-                [tools]
-                host_cc = [{toml_string(host_wrapper)}, {toml_string(host_cc)}]
-                assembler = [
-                  {toml_string(assembler_wrapper)},
-                  {toml_string(assembler)},
-                  "--target=riscv64-linux-gnu",
-                  "-march=rv64im",
-                  "-mabi=lp64",
-                ]
-
-                [flags]
-                compile = [{flags}]
-                """
-            ),
-            encoding="utf-8",
-        )
-
-    def test_40_cache_cold_warm_invalidation_and_no_cache(self) -> None:
-        host_cc = shutil.which("cc")
-        assembler = shutil.which("clang")
-        if not host_cc or not assembler:
-            self.skipTest("cache integration requires cc and RISC-V-capable clang")
-        targets = subprocess.run(
-            [assembler, "--print-targets"], capture_output=True, check=False, timeout=20
-        )
-        if not re.search(rb"(?m)^\s*riscv64\s+-", targets.stdout):
-            self.skipTest("cache integration requires clang with RISC-V support")
-
-        host_log = self.work / "host.log"
-        assembler_log = self.work / "assembler.log"
-        host_wrapper = self._logging_tool("log-host-cc", host_log)
-        assembler_wrapper = self._logging_tool("log-target-assembler", assembler_log)
-        cache = self.work / "generation-cache"
-        baseline = self.work / "baseline.toml"
-        changed = self.work / "changed.toml"
-        self._cache_config(
-            baseline,
-            cache,
-            host_wrapper,
-            host_cc,
-            assembler_wrapper,
-            assembler,
-        )
-        self._cache_config(
-            changed,
-            cache,
-            host_wrapper,
-            host_cc,
-            assembler_wrapper,
-            assembler,
-            ("-DCEPHYR_CLI_CACHE_VARIANT=1",),
-        )
-
-        def host_count() -> int:
-            if not host_log.exists():
-                return 0
-            return host_log.read_text(encoding="utf-8").count("BEGIN\n")
-
-        def compile_object(
-            label: str, config: Path, *extra: str
-        ) -> tuple[Path, subprocess.CompletedProcess[bytes]]:
-            output = self.work / f"{label}.o"
-            result = self.invoke(
-                "--config",
-                config,
-                "-v",
-                *extra,
-                "-c",
-                FIXTURES / "cephyr_cli_library.c",
-                "-o",
-                output,
-            )
-            self.assert_elf(output, 1)
-            return output, result
-
-        _, cold = compile_object("cold", baseline)
-        cold_count = host_count()
-        self.assertGreater(cold_count, 0, "cold cache did not build the Archon backend")
-        cache_data = cache / "data.mdb"
-        self.assertTrue(cache_data.is_file())
-        cold_cache_data = cache_data.read_bytes()
-        self.assertNotIn(
-            b"\x7fELF",
-            cold_cache_data,
-            "generation cache contains a native executable payload",
-        )
-        self.assertIn(b"Archon IRGen generated", cold.stderr)
-        self.assertNotIn(b"Archon IRGen cache hit", cold.stderr)
-
-        _, warm = compile_object("warm", baseline)
-        warm_count = host_count()
-        self.assertIn(b"Archon IRGen cache hit", warm.stderr)
-        self.assertNotIn(b"Archon IRGen generated", warm.stderr)
-        self.assertGreater(
-            warm_count,
-            cold_count,
-            "a generation-cache hit incorrectly reused a cached native host library",
-        )
-        self.assertEqual(
-            cache_data.read_bytes(),
-            cold_cache_data,
-            "a read-only generation-cache hit rewrote the cache database",
-        )
-
-        _, invalidated = compile_object("invalidated", changed)
-        invalidated_count = host_count()
-        self.assertGreater(
-            invalidated_count,
-            warm_count,
-            "changing a fingerprinted backend compile flag did not invalidate the cache",
-        )
-        self.assertIn(b"Archon IRGen generated", invalidated.stderr)
-        self.assertNotIn(b"Archon IRGen cache hit", invalidated.stderr)
-        invalidated_cache_data = cache_data.read_bytes()
-        self.assertNotEqual(
-            invalidated_cache_data,
-            cold_cache_data,
-            "cache invalidation did not publish a distinct generation entry",
-        )
-
-        _, uncached = compile_object("uncached", changed, "--no-cache")
-        self.assertGreater(
-            host_count(),
-            invalidated_count,
-            "--no-cache did not rebuild the private host backend library",
-        )
-        self.assertIn(b"Archon IRGen generated", uncached.stderr)
-        self.assertNotIn(b"Archon IRGen cache hit", uncached.stderr)
-        self.assertEqual(
-            cache_data.read_bytes(),
-            invalidated_cache_data,
-            "--no-cache unexpectedly modified the generation cache",
-        )
-
-        host_arguments = host_log.read_text(encoding="utf-8")
-        assembler_arguments = assembler_log.read_text(encoding="utf-8")
-        user_source = str(FIXTURES / "cephyr_cli_library.c")
-        self.assertNotIn(f"ARG={user_source}\n", host_arguments)
-        self.assertNotIn(f"ARG={user_source}\n", assembler_arguments)
-        self.assertIn(".s", assembler_arguments)
+    def test_41_backend_checks_imported_spec_without_generator(self) -> None:
+        root = self.work / "archon"
+        spec = root / "stdspec" / "amd64"
+        shutil.copytree(Path(__file__).resolve().parents[2] / "Archon/stdspec/amd64", spec)
+        config = self.work / "target.toml"
+        config.write_text(f'[paths]\narchon_root = {toml_string(root)}\n')
+        args = ("--config", config, "--target=x86_64-linux-gnu", "-S", "-o", "-", "-")
+        source = b"int verified(void) { return 42; }\n"
+        env = {"PATH": "/nonexistent"}
+        # The spec-only directory deliberately contains no Python modules.
+        self.assertIn(b"verified:", self.invoke(*args, input_bytes=source, env=env).stdout)
+        with (spec / "integer.arch").open("a") as out:
+            out.write("\n// no longer the packaged source\n")
+        self.assertIn(b"differs from packaged backend", self.invoke(
+            *args, input_bytes=source, env=env, ok=False).stderr)
 
     def test_50_assembly_object_and_language_selection(self) -> None:
         assembly = self.work / "semantics.s"
@@ -930,7 +823,7 @@ int target_characters_ok;
         shared = self.work / "freestanding.so"
         source = FIXTURES / "cephyr_cli_shared_pic.c"
         self.invoke(
-            RV64, "-shared",
+            "--config", FIXTURES.parent / "riscv64-cross-dso.toml", RV64, "-shared",
             "--stdlib=none",
             "-nostdlib",
             "-ffreestanding",
@@ -944,7 +837,7 @@ int target_characters_ok;
         self.invoke(RV64, "-fPIC", "-c", source, "-o", obj)
         self.assert_elf(obj, 1)
         explicit = self.work / "explicit-pic.so"
-        self.invoke(RV64, "-shared", "--stdlib=none", obj, "-o", explicit)
+        self.invoke("--config", FIXTURES.parent / "riscv64-cross-dso.toml", RV64, "-shared", "--stdlib=none", obj, "-o", explicit)
         self.assert_pic_shared_object(explicit)
 
     def test_65_static_binding_across_translation_units(self) -> None:
@@ -1187,7 +1080,7 @@ int target_characters_ok;
     def test_93_aarch64_pic_and_aapcs64_interop(self) -> None:
         source = FIXTURES / "scalar_abi_cephyr.c"
         shared = self.work / "libabi.so"
-        self.invoke(AARCH64, "-shared", "--stdlib=none", source, "-o", shared)
+        self.invoke("--config", FIXTURES.parent / "aarch64-cross-dso.toml", AARCH64, "-shared", "--stdlib=none", source, "-o", shared)
         self.assert_elf(shared, 3, 183)
         self.assertTrue(any(header[0] == 2 for header in self.elf_program_headers(shared.read_bytes())))
 

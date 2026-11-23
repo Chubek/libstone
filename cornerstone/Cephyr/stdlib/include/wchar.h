@@ -14,7 +14,7 @@ int fwscanf(struct __cephyr_FILE *restrict, const wchar_t *restrict, ...);
 int swscanf(const wchar_t *restrict, const wchar_t *restrict, ...);
 int wscanf(const wchar_t *restrict, ...);
 #endif
-#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG)
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG) || defined(__CEPHYR_HAS_RV64_STDARG)
 #include <stdarg.h>
 int vfwprintf(struct __cephyr_FILE *restrict, const wchar_t *restrict, va_list);
 int vswprintf(wchar_t *restrict, size_t, const wchar_t *restrict, va_list);
@@ -64,10 +64,12 @@ long long wcstoll(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict,
 unsigned long wcstoul(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
 unsigned long long wcstoull(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict, int);
 
-/* The bundled runtime does not implement the distinct long double formats. */
 #if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_SCALAR_FP)
 float wcstof(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict);
 double wcstod(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict);
+#endif
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_X87_ABI) || defined(__CEPHYR_HAS_BINARY128_ABI)
+long double wcstold(const wchar_t *restrict, __cephyr_wc_pointer_pointer restrict);
 #endif
 
 struct tm;

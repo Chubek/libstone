@@ -1,4 +1,20 @@
 #include <stdio.h>
+#include <wchar.h>
+
+#if defined(__x86_64__)
+/* A variadic pointer is a GP argument; no long double return or by-value
+   argument is needed. Exercise a Cephyr-owned object and its actual size. */
+int cephyr_scan_extended(void)
+{
+    long double v = 0.L;
+    int n = -1;
+    if (sscanf("1.0000000000000000001!", "%Lf%n", &v, &n) != 1 ||
+        v != 0x1.0000000000000002p0L || n != 21)
+        return 0;
+    return swscanf(L"-0x1p12000!", L"%La%n", &v, &n) == 1 &&
+           v == -0x1p12000L && n == 10;
+}
+#endif
 
 int external_scan_stdin(const char *, ...);
 

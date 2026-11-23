@@ -20,7 +20,7 @@ class Backend {
 
 public:
   Backend(const Config &, const Target &,
-          const std::filesystem::path &workspace, Diagnostics &);
+          Diagnostics &);
   ~Backend();
 
   Backend(const Backend &) = delete;

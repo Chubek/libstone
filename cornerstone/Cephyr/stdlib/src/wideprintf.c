@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
+#include "printf_sink.h"
 #include "stream.h"
 
 struct wide_sink {
@@ -62,6 +63,24 @@ struct field {
     int precision;
     enum length length;
 };
+
+static int fp_wide_reserve(void *context, size_t count)
+{
+    return reserve(context, count);
+}
+
+static int fp_wide_write(void *context, const char *ascii, size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+        if (put(context, ascii[i]) < 0)
+            return -1;
+    return 0;
+}
+
+static int fp_wide_repeat(void *context, char ch, size_t count)
+{
+    return repeat(context, ch, count);
+}
 
 static size_t padding(size_t count, const struct field *field)
 {
@@ -309,9 +328,15 @@ width:;
         break;
     case L'a': case L'A': case L'e': case L'E':
     case L'f': case L'F': case L'g': case L'G':
-        /* Do not fetch a floating argument, even when valid. */
-        if (length == DEFAULT || length == L || length == BIG_L)
+        if (length == BIG_L)
             return fail(ENOSYS);
+        if (length == DEFAULT || length == L) {
+            struct fp_sink fp = {sink, fp_wide_reserve, fp_wide_write, fp_wide_repeat};
+            return __cephyr_printf_float(&fp, va_arg(*args, double), (char)*format,
+                                         field.flags & ALT, field.flags & PLUS,
+                                         field.flags & SPACE, field.flags & LEFT,
+                                         field.flags & ZERO, field.width, field.precision);
+        }
         break;
     }
     return fail(EINVAL);

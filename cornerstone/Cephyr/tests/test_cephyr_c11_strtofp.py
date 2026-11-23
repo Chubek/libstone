@@ -29,6 +29,20 @@ def main():
         env = {**os.environ, "XDG_CACHE_HOME": str(work / "cache")}
         for triple, hosts, emulator in targets:
             executable = work / triple
+            for name, char_type, literal in (("strtold", "char", '"1"'),
+                                             ("wcstold", "wchar_t", 'L"1"')):
+                # Supply the real prototype explicitly, so this probes the
+                # result ABI rather than just an absent header declaration.
+                probe = work / "extended.c"
+                probe.write_text(f"#include <stddef.h>\n"
+                                 f"extern long double {name}(const {char_type} *, {char_type} **);\n"
+                                 f"void f(long double *x) {{ *x = {name}({literal}, 0); }}\n")
+                result = subprocess.run(
+                    [args.cephyr.resolve(), "-std=c11", f"--target={triple}", "-c",
+                     probe, "-o", work / "extended.o"], cwd=work, env=env,
+                    capture_output=True, text=True, timeout=60,
+                )
+                result.check_returncode()
             subprocess.run(
                 [args.cephyr.resolve(), "-std=c11", f"--target={triple}",
                  source, "-o", executable],
@@ -43,7 +57,7 @@ def main():
                 continue
             subprocess.run([*runner, executable], cwd=work, check=True, timeout=10)
             if triple.startswith("riscv64"):
-                print(f"{triple}: native declaration-gating test passed")
+                print(f"{triple}: native binary128 text conversions and binary32/64 declaration gates passed")
             else:
                 print(f"{triple}: native floating text conversion tests passed")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the bundled narrow floating scanner across the native variadic ABI."""
+"""Exercise bundled floating scanners across the native and target-compiler ABIs."""
 
 import argparse
 import os
@@ -24,7 +24,7 @@ def main():
     targets = [
         ("x86_64-linux-gnu", {"x86_64", "amd64"}, args.qemu_amd64, []),
         ("aarch64-linux-gnu", {"aarch64", "arm64"}, args.qemu_aarch64, ["-march=armv8-a"]),
-        ("riscv64-linux-gnu", {"riscv64"}, args.qemu, ["-march=rv64im", "-mabi=lp64"]),
+        ("riscv64-linux-gnu", {"riscv64"}, args.qemu, ["-march=rv64im", "-mabi=lp64", "-mno-relax"]),
     ]
     with tempfile.TemporaryDirectory(prefix="cephyr-scanf-float-") as directory:
         work = Path(directory)

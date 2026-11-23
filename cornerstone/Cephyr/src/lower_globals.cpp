@@ -451,7 +451,7 @@ bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
         // SysV AMD64 stores the 10-byte x87 payload at the beginning of a
         // 16-byte object. The zero-filled image supplies its trailing padding.
         write_integer(image, offset, value->value, 8);
-        write_integer(image, offset + 8, value->x87_sign_exponent, 2);
+        write_integer(image, offset + 8, value->high_word, type.bits == 128 ? 8 : 2);
         return true;
     }
     if (!width || *width > 8 || !type.bits || type.bits > 64) {

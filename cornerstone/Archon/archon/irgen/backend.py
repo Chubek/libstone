@@ -289,6 +289,9 @@ def _emit_scalar_gas(facts, archdb_version, *, registers, emitter, pic):
         "floating_point": {
             "formats": ["IEEE binary32", "IEEE binary64"],
             "abi": "reviewed fixed-arity scalar FP bank (registers 0 through 7, result 0)",
+            **({"f80_transport": "16-byte aligned stack arguments, x87 ST(0) result"}
+               if facts["abi"] == "SysVAMD64" else
+               {"f128_transport": "SIMD q0-q7 arguments, aligned stack overflow, q0 result"}),
         },
         "address_width": 64,
         "endian": "little",

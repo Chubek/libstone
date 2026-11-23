@@ -1,10 +1,47 @@
 #include <fenv.h>
 #include <float.h>
 
-#if defined(__clang__) && !defined(__CEPHYR__)
+#if defined(__clang__) && !defined(__CEPHYR__) && !defined(__riscv)
 #pragma STDC FENV_ACCESS ON
 #endif
 
+#if defined(__riscv)
+#include <string.h>
+
+_Static_assert(FE_ALL_EXCEPT == 0 && FLT_ROUNDS == 1, "fixed software environment");
+#if defined(FE_INVALID) || defined(FE_DIVBYZERO) || defined(FE_OVERFLOW) || \
+    defined(FE_UNDERFLOW) || defined(FE_INEXACT) || defined(FE_UPWARD) || \
+    defined(FE_DOWNWARD) || defined(FE_TOWARDZERO)
+#error "RV64IM advertised an unsupported floating-point mode or flag"
+#endif
+
+int main(void) {
+    fenv_t initial, held;
+    fexcept_t flags;
+    volatile double base = 1.0, half_ulp = 0x1p-53;
+    unsigned long bits;
+
+    if (fegetround() != FE_TONEAREST || fesetround(FE_TONEAREST) ||
+        !fesetround(-1) || fegetround() != FE_TONEAREST || fegetenv(&initial))
+        return 1;
+    if (feholdexcept(&held) || feraiseexcept(FE_ALL_EXCEPT) ||
+        fegetexceptflag(&flags, FE_ALL_EXCEPT) || feclearexcept(FE_ALL_EXCEPT) ||
+        fesetexceptflag(&flags, FE_ALL_EXCEPT))
+        return 2;
+    /* The two midpoint additions exercise both directions of ties-to-even. */
+    double rounded = base + half_ulp;
+    memcpy(&bits, &rounded, sizeof bits);
+    if (bits != 0x3ff0000000000000UL || feupdateenv(&held))
+        return 3;
+    base = 0x1.0000000000001p0;
+    rounded = base + half_ulp;
+    memcpy(&bits, &rounded, sizeof bits);
+    if (bits != 0x3ff0000000000002UL || fetestexcept(FE_ALL_EXCEPT) ||
+        fesetenv(FE_DFL_ENV) || fesetenv(&initial) || fegetround() != FE_TONEAREST)
+        return 4;
+    return 0;
+}
+#else
 _Static_assert(FE_ALL_EXCEPT == (FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT),
                "FE_ALL_EXCEPT comprises the advertised flags");
 
@@ -195,4 +232,5 @@ int main(int argc, char **argv) {
 int main(void) {
     return test_library();
 }
+#endif
 #endif

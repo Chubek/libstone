@@ -510,19 +510,13 @@ bool has_ice_form(Node *node, const TypeContext &context, ConstantAnalysis &anal
 
 FloatingLiteral decode_real_literal(Node *node, const Preprocessed &source, Diagnostics &diagnostics) {
     const auto literal = parse_floating_literal(
-        spelling(static_cast<cparser::RealConstASTNode *>(node)), source.native_amd64_x87);
+        spelling(static_cast<cparser::RealConstASTNode *>(node)), source.native_amd64_x87, source.native_binary128);
     std::string_view error;
     switch (literal.status) {
     case FloatingLiteralStatus::ok:
         return literal;
     case FloatingLiteralStatus::unsupported_long_double:
         error = "long double floating constants are not supported";
-        break;
-    case FloatingLiteralStatus::unsupported_host:
-        error = "floating constant translation requires an IEEE binary32/binary64 compiler host";
-        break;
-    case FloatingLiteralStatus::unsupported_x87_host:
-        error = "decimal long double literal translation requires an x87 extended-precision compiler host";
         break;
     case FloatingLiteralStatus::overflow:
         error = "floating constant is out of range for its nominal format";
@@ -758,6 +752,8 @@ std::optional<CType> infer_integer_type(Node *node, const TypeContext &context,
 }
 
 bool true_value(const Constant &constant) {
+    if (constant.type.real() && constant.type.bits == 128)
+        return constant.value || (constant.high_word << 1);
     if (constant.type.extended_real())
         return constant.value != 0;
     if (constant.type.real())
@@ -766,7 +762,7 @@ bool true_value(const Constant &constant) {
 }
 
 FloatingLiteral real_bits(const Constant &value) {
-    return {FloatingLiteralStatus::ok, value.type.bits, value.value, value.x87_sign_exponent};
+    return {FloatingLiteralStatus::ok, value.type.bits, value.value, value.high_word};
 }
 
 std::optional<Constant> convert_arithmetic_constant(
@@ -779,7 +775,7 @@ std::optional<Constant> convert_arithmetic_constant(
             : integer_to_floating_literal(normalize(value.value, value.type),
                                           value.type.is_signed, type.bits);
         if (result)
-            return Constant{unqualified(type), result.bits, result.x87_sign_exponent};
+            return Constant{unqualified(type), result.bits, result.high_word};
     } else if (value.type.real()) {
         if (const auto bits = floating_literal_to_integer(real_bits(value), type.bits, type.is_signed))
             return converted(Constant{type, *bits}, type);
@@ -829,7 +825,7 @@ std::optional<Constant> evaluate_floating_binary(
     }
     const auto result = floating_arithmetic(operation, a, b);
     if (result)
-        return Constant{common, result.bits, result.x87_sign_exponent};
+        return Constant{common, result.bits, result.high_word};
     constant_error(node, context.source, context.diagnostics,
                    "floating-point constant expression is out of range for its type");
     return std::nullopt;
@@ -1120,7 +1116,7 @@ std::optional<Constant> evaluate_constant(Node *node, const TypeContext &context
             if (!operand)
                 return std::nullopt;
             if (operand->type.extended_real())
-                operand->x87_sign_exponent ^= 0x8000;
+                operand->high_word ^= operand->type.bits == 128 ? UINT64_C(1) << 63 : 0x8000;
             else
                 operand->value ^= UINT64_C(1) << (operand->type.bits - 1);
             return operand;
@@ -1271,7 +1267,7 @@ CType plain_char_type(const Preprocessed &source) {
 
 CType real_type(unsigned bits) {
     CType result;
-    if (bits == 32 || bits == 64 || bits == 80) {
+    if (bits == 32 || bits == 64 || bits == 80 || bits == 128) {
         result.kind = CType::Kind::real;
         result.bits = bits;
     }
@@ -1317,7 +1313,7 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
     if (Node *bound = array->getExpr(); present(bound)) {
         const auto saved = context.unit.array_bounds.find(bound);
         if (saved != context.unit.array_bounds.end()) {
-            if (!saved->second || (*saved->second == 0 && parameter != ArrayParameter::prototype)) {
+            if (!saved->second || (*saved->second == 0 && parameter == ArrayParameter::no)) {
                 type_error(bound, source, diagnostics, "array bound has invalid type or value");
                 return {};
             }
@@ -1355,16 +1351,8 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
                         type_error(bound, source, diagnostics, "array bound must be a valid integer expression");
                     return {};
                 }
-                // §6.7.6.2p5: a nonconstant prototype-scope bound is
-                // treated as '*', so only its type needs to be checked.
-                // A definition instead evaluates its bound on entry
-                // (§6.9.1p10), even where adjustment removes that bound.
-                if (parameter == ArrayParameter::definition) {
-                    remember(std::nullopt);
-                    type_error(bound, source, diagnostics,
-                               "nonconstant array parameter bounds in function definitions are not supported");
-                    return {};
-                }
+                // Adjustment erases this bound from the type in both contexts.
+                // Only a definition evaluates the expression on function entry.
                 remember(std::uint64_t{0});
             }
         }
@@ -1380,13 +1368,17 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
     return qualify(std::move(result), array->getFlags() & qualifier_mask);
 }
 
-CType read_parameter_type(Node *node, const TypeContext &context, bool definition) {
+CType read_parameter_type(Node *node, const TypeContext &context, bool definition, Node **entry_bound) {
+    if (entry_bound)
+        *entry_bound = nullptr;
     if (present(node) && node->getKind() == cparser::NK_ARRAY_TYPE) {
         auto *array = static_cast<cparser::ArrayTypeASTNode *>(node);
         auto type = read_array_type(array, context, true,
                                     definition ? ArrayParameter::definition : ArrayParameter::prototype);
         if (!type.valid())
             return {};
+        if (entry_bound && definition && type.count == 0 && present(array->getExpr()))
+            *entry_bound = array->getExpr();
         // §6.7.6.3p7: the outer bound does not survive adjustment. A
         // static minimum is a caller precondition, not a dynamic check.
         return qualify(adjust_parameter(std::move(type)), array->getBracketQualifiers());
@@ -1534,6 +1526,8 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
         auto *real = static_cast<cparser::RealTypeASTNode *>(node);
         const auto bytes = real->getAlignment();
         if (real->getIsDouble() ? bytes != 8 : bytes != 4) {
+            if (real->getIsDouble() && bytes == 16 && source.native_binary128)
+                return qualify_node(real_type(128));
             if (real->getIsDouble() && bytes == 16 && source.native_amd64_x87)
                 return qualify_node(real_type(80));
             type_error(node, source, diagnostics, "long double floating-point types are not supported");
@@ -1701,6 +1695,28 @@ bool compatible(const CType &left, const CType &right) {
         return true;
     }
     return false;
+}
+
+CType composite_type(const CType &prior, CType next) {
+    if (!next.enum_identity)
+        next.enum_identity = prior.enum_identity;
+    if (next.kind == CType::Kind::array && !next.count)
+        next.count = prior.count;
+    if (next.kind == CType::Kind::function && prior.prototype) {
+        if (!next.prototype) {
+            next.prototype = true;
+            next.params = prior.params;
+            next.variadic = prior.variadic;
+        } else {
+            for (std::size_t i = 0; i < next.params.size(); ++i)
+                next.params[i] = composite_type(prior.params[i], std::move(next.params[i]));
+        }
+    }
+    // Pointer targets, array elements, and function results are all derived
+    // types; information on either side may complete a different subtree.
+    if (prior.element && next.element)
+        next.element = std::make_shared<const CType>(composite_type(*prior.element, *next.element));
+    return next;
 }
 
 Node *select_generic(Node *node, const TypeContext &context, CType *result_type) {
@@ -1874,7 +1890,7 @@ std::string_view mir_type(const CType &type) {
     case CType::Kind::integer:
         return "i64";
     case CType::Kind::real:
-        return type.bits == 32 ? "f32" : type.bits == 64 ? "f64" : "";
+        return type.bits == 32 ? "f32" : type.bits == 64 ? "f64" : type.bits == 128 ? "f128" : type.extended_real() ? "f80" : "";
     case CType::Kind::pointer:
         return type.function_pointer() ? "func_ptr" : "ptr";
     case CType::Kind::invalid:
@@ -2048,7 +2064,7 @@ std::optional<Constant> real_constant(Node *node, const TypeContext &context, bo
     }
     const auto literal = decode_real_literal(node, context.source, context.diagnostics);
     return literal ? std::optional<Constant>(Constant{real_type(literal.width), literal.bits,
-                                                       literal.x87_sign_exponent}) :
+                                                       literal.high_word}) :
                      std::nullopt;
 }
 

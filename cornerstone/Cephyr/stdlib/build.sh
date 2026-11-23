@@ -4,13 +4,13 @@ set -eu
 # The libc is deliberately built by a trusted external target compiler, not by
 # Cephyr's still-evolving C frontend.  Override these variables with absolute
 # tool paths/flags when packaging a toolchain.
-CC=${CC:-clang}
-AR=${AR:-llvm-ar}
 TARGET=${CEPHYR_LIBC_TARGET:-x86_64-linux-gnu}
-TARGET_OPTION=${CEPHYR_LIBC_TARGET_OPTION---target=$TARGET}
+CC=${CC:-${TARGET}-gcc}
+AR=${AR:-ar}
+TARGET_OPTION=${CEPHYR_LIBC_TARGET_OPTION-}
 case $TARGET in
     riscv64-*-linux-gnu|riscv64-linux-gnu)
-        default_flags='-march=rv64im -mabi=lp64'
+        default_flags='-march=rv64im -mabi=lp64 -mno-relax'
         suffix=
         ;;
     x86_64-*-linux-gnu|x86_64-linux-gnu)
@@ -40,10 +40,7 @@ compile() {
     )
 }
 
-sources='string ctype stdlib strtofp stdio scanf stream assert allocator runtime time multibyte wideprintf'
-case "$suffix" in
-    -amd64|-aarch64) sources="$sources fenv" ;;
-esac
+sources='string ctype stdlib strtofp stdio scanf stream assert allocator runtime time multibyte wideprintf fenv'
 set --
 for source in $sources; do
     object="$build/$source.o"
@@ -52,11 +49,24 @@ for source in $sources; do
     set -- "$@" "$object"
 done
 
+if [ "$suffix" != -amd64 ]; then
+    for source in real_bits real_abi; do
+        object="$build/$source.o"
+        compile -std=c11 -O2 -fno-lto -fno-fast-math -fvisibility=hidden \
+            -c "$root/src/$source.c" -o "$object"
+        set -- "$@" "$object"
+    done
+fi
+
 compile -c "$root/src/syscall$suffix.S" -o "$build/syscall.o"
 compile -c "$root/src/setjmp$suffix.S" -o "$build/setjmp.o"
 compile -c "$root/src/start$suffix.S" -o "$build/crt0.o"
 
-"$AR" rcs "$build/libc.a" "$@" "$build/syscall.o" "$build/setjmp.o"
+# Start a fresh archive: incremental packaging must not retain removed
+# members (in particular the superseded soft-float runtime).
+rm -f "$build/libc.new.a"
+"$AR" rcs "$build/libc.new.a" "$@" "$build/syscall.o" "$build/setjmp.o"
+mv "$build/libc.new.a" "$build/libc.a"
 
 echo "$build/libc.a"
 echo "$build/crt0.o"

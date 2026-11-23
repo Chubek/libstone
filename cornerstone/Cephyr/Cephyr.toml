@@ -5,8 +5,9 @@
 
 target = "x86_64-linux-gnu" # Or "auto" to require a supported native host/ABI.
 representation = "gated"
-assembler_style = "driver"  # "driver" (clang/gcc) or "as" (raw GNU as)
+assembler_style = "driver"  # Explicit replacement: "driver" (e.g. GCC) or "as" (raw).
 stdlib = "cephyr"            # "cephyr", "system", or "none"
+# Packaged native stages do not need a cache. Legacy cache settings are accepted.
 cache_enabled = true
 static_link = true
 
@@ -26,34 +27,21 @@ static_link = true
 # vector; it is passed directly and is never interpreted by a shell.
 # Executable paths containing "/" are relative to this file unless absolute;
 # bare executable names are looked up on PATH.
-host_cc = "cc"
 
 # Target tools and their required flags normally come from triples/<target>.lua.
 # An explicit tool replaces that bank command, so include all required fixed
 # target arguments in the argv array:
-# assembler = [
-#   "clang", "--target=x86_64-linux-gnu"
-# ]
-# linker = "ld.lld"
-# archiver = "llvm-ar"
+# assembler = ["x86_64-linux-gnu-gcc"]
+# linker = "ld"
 #
 # Linking with stdlib = "system" requires an explicit compiler-driver linker,
-# such as ["clang", "--target=x86_64-linux-gnu"], rather than raw ld.
-# Set assembler_style = "as" with a GNU-compatible raw assembler; configure
-# runtime_cc separately as a compiler driver when building Cephyr libc.
-
-# runtime_cc is only for building Cephyr's packaged libc, never user C.
-# Omit it to inherit the resolved target assembler command.
-# runtime_cc = ["clang", "--target=x86_64-linux-gnu"]
+# such as "x86_64-linux-gnu-gcc", rather than raw ld.
+# The bundled assembler and linker are SandAS and qobjld. Backend modules,
+# CRT and libc archives are generated once at Cephyr package build time.
 
 [flags]
-compile = []
 assemble = []
 link = []
-# With an inherited tool these follow its required bank flags; with an explicit
-# tool they follow only that tool's fixed argv above. When runtime_cc is omitted,
-# runtime flags follow the inherited assembler flags.
-# runtime = []
 
 [preprocess]
 include_dirs = []
@@ -66,12 +54,19 @@ keep_comments = false
 line_markers = true
 hosted = true
 
-# Optional QML optimization profile; none is selected by default.
+# SandSLAB shortens native AMD64 constants after lowering (default: off).
+# [sandslab]
+# enabled = true
+
+# Blackstone optimizes MIR by default. Uncomment to disable it.
+# [blackstone]
+# enabled = false
+
 # FactIR runs before the native backend or MIR emission. Override with --no-factir.
 # [factir]
 # enabled = false
 
-# Select a QML profile with --profile NAME or uncomment the [qml] selector.
+# Optional QML optimization profile; select with --profile NAME or uncomment [qml].
 # [qml]
 # profile = "optimizing"
 #

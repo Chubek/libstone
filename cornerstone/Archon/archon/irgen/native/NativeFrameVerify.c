@@ -50,9 +50,12 @@ static int verify_uses(ANContext *ctx, const ArchonMIRFunction *fn, size_t phi_c
             return an_error(ctx, ARCHON_BACKEND_INTERNAL, "missing frame slots for block parameters");
         spare_slots -= block->param_count;
         if (term->kind == ARCHON_MIR_BR || term->kind == ARCHON_MIR_CBR)
-            edge_words = term->yes.arg_count;
-        if (term->kind == ARCHON_MIR_CBR && term->no.arg_count > edge_words)
-            edge_words = term->no.arg_count;
+            edge_words = an_edge_words(fn->types, term->yes.args, term->yes.arg_count);
+        if (term->kind == ARCHON_MIR_CBR) {
+            size_t no = an_edge_words(fn->types, term->no.args, term->no.arg_count);
+            if (no > edge_words)
+                edge_words = no;
+        }
         if (edge_words > phi_count)
             return an_error(ctx, ARCHON_BACKEND_INTERNAL, "insufficient frame phi words for edge");
         if (edge_words > needed_phi)
@@ -72,7 +75,8 @@ static int verify_uses(ANContext *ctx, const ArchonMIRFunction *fn, size_t phi_c
             has_call = 1;
             if (inst->arg_count > AN_MAX_PARAMS)
                 return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame call arity");
-            call_words = inst->arg_count > an_abi.argc ? inst->arg_count - an_abi.argc : 0;
+            call_words = an_argument_slots(fn->types, inst->args, inst->arg_count);
+            call_words = call_words > an_abi.argc ? call_words - an_abi.argc : 0;
             if (call_words > outgoing_words)
                 return an_error(ctx, ARCHON_BACKEND_INTERNAL, "insufficient frame outgoing words for call");
             if (call_words > needed_outgoing)
@@ -112,14 +116,18 @@ int an_verify_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     /* The frame size and its negation fit int. Check the only displacements
      * above the frame, using division before the multiplication and addition
      * performed in an_parameters. The frame's one-past end is the first word. */
-    if (fn->param_count > an_abi.argc &&
-        fn->param_count - an_abi.argc - 1 > ((uintmax_t)INT_MAX - size) / WordBytes)
+    const size_t named = an_argument_slots(fn->types, NULL, fn->param_count);
+    if (named > an_abi.argc &&
+        named - an_abi.argc - 1 > ((uintmax_t)INT_MAX - size) / WordBytes)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "incoming stack argument displacement exceeds int");
 
     if (!words(0, outgoing_words, size, &end))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame outgoing region");
     if (!words(frame->slots_base, slots, size, &end))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame slot region");
+    for (i = 0; i < fn->value_count; ++i)
+        if (fn->types[i] == ARCHON_MIR_F128 && !words(frame->high_offsets[i], 1, size, &end))
+            return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid f128 high word region");
     if (!words(frame->phi_base, phi_count, size, &end))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame phi region");
     for (i = 0; i < fn->local_count; ++i) {
@@ -131,12 +139,12 @@ int an_verify_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     }
     if (calls ? !words(frame->return_offset, 1, size, &end) : frame->return_offset != -1)
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid frame saved return address");
-    if (variadic && fn->param_count < an_abi.argc) {
-        if (!words(frame->va_start_offset, an_abi.argc - fn->param_count, size, &end) ||
+    if (variadic && named < an_abi.argc) {
+        if (!words(frame->va_start_offset, an_abi.argc - named, size, &end) ||
             end != size)
             return an_error(ctx, ARCHON_BACKEND_INTERNAL, "register save area must abut incoming stack arguments");
     } else if (variadic) {
-        size_t named_stack = fn->param_count - an_abi.argc;
+        size_t named_stack = named - an_abi.argc;
         if (named_stack > ((uintmax_t)INT_MAX - size) / WordBytes ||
             (uintmax_t)frame->va_start_offset != size + named_stack * WordBytes)
             return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid first unnamed stack argument");

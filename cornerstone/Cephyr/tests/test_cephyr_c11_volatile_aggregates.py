@@ -28,6 +28,24 @@ void probe(void) {
 void init_probe(void) {
     volatile struct Packet local = {.cells[1].half = 5, .head = 1};
 }
+
+union Register { volatile unsigned char byte; unsigned int word; };
+struct Bank { union Register slots[2]; };
+struct Bank bank_src, bank_dst;
+void union_probe(void) {
+    bank_dst = bank_src;
+    bank_dst.slots[1] = bank_dst.slots[1];
+}
+
+static volatile unsigned int discarded;
+void override_probe(void) {
+    volatile struct Packet p = {.end = discarded, .cells[0] = {8, 9},
+        .end = 11, .cells[0] = {.byte = 1}, .cells[0].byte = 3};
+}
+
+void union_init_probe(void) {
+    union Register r = {.word = discarded, .byte = 5};
+}
 """
 
 PROGRAM = r"""
@@ -35,7 +53,6 @@ PROGRAM = r"""
 #include <stdlib.h>
 
 union U { unsigned long word; unsigned char bytes[8]; };
-union Register { volatile unsigned char byte; unsigned int word; };
 struct ReadOnly { const volatile unsigned short value; };
 static const volatile struct Packet read_only = {.end = 91};
 static union Register initialized = {.byte = 20};
@@ -72,6 +89,33 @@ int main(void) {
     union Register selected = {.byte = 12};
     if (selected.byte != 12 || initialized.byte != 20)
         return 7;
+    bank_src.slots[0].word = 0xacd12345u;
+    bank_src.slots[1].word = 0x88776655u;
+    union_probe();
+    if (bank_dst.slots[0].word != 0xacd12345u || bank_dst.slots[1].word != 0x88776655u)
+        return 11;
+    unsigned calls = 0;
+    struct Packet patched = {.cells[0] = (calls++, probe_members.cells[0]),
+        .cells[1] = (calls++, (struct Cell){54, 55}), .cells[1].byte = 1,
+        .cells[0] = {.half = 9}};
+    if (calls != 1 || patched.cells[0].half != 9 || patched.cells[0].byte ||
+        patched.cells[1].half != 54 || patched.cells[1].byte != 1)
+        return 12;
+    volatile struct Text { char s[8]; } text = {.s = "abcd", .s[2] = 'X', .s[6] = 'Y'};
+    if (text.s[0] != 'a' || text.s[1] != 'b' || text.s[2] != 'X' || text.s[3] != 'd' ||
+        text.s[4] || text.s[5] || text.s[6] != 'Y' || text.s[7])
+        return 13;
+    volatile union Choice { struct Cell c; unsigned word; } choice =
+        {.c.half = 13, .word = 2, .c.byte = 4};
+    if (choice.c.half || choice.c.byte != 4)
+        return 14;
+    union Choice pair = {.c = {71, 72}};
+    volatile struct { union Choice u; } inherited = {.u = pair, .u.c.half = 81};
+    if (inherited.u.c.half != 81 || inherited.u.c.byte != 72)
+        return 16;
+    volatile unsigned numbers[] = {[6] = 99, [5] = 2, 3};
+    if (sizeof numbers / sizeof *numbers != 7 || numbers[0] || numbers[5] != 2 || numbers[6] != 3)
+        return 15;
     struct Flex { unsigned long size; unsigned char mark; unsigned char extra[]; };
     volatile struct Flex *from = malloc(sizeof *from + 16);
     volatile struct Flex *to = malloc(sizeof *to + 16);
@@ -103,10 +147,12 @@ def memory_accesses(mir, function):
         if not instruction:
             continue
         op = instruction[0]
-        if op in ("const", "global_addr", "frame_addr", "ptr_add") or op.startswith("load"):
+        if op in ("const", "copy", "global_addr", "frame_addr", "ptr_add") or op.startswith("load"):
             _, result, *args = instruction
             if op == "const":
                 constants[result] = int(args[0], 0)
+            elif op == "copy" and args[0] in constants:
+                constants[result] = constants[args[0]]
             elif op == "global_addr":
                 addresses[result] = (args[0], 0)
             elif op == "frame_addr":
@@ -168,11 +214,27 @@ def main():
                                    ("store8", 4), ("store8", 5), ("store8", 8),
                                    ("store32", 12)]:
                     raise AssertionError(f"{triple} {passes}: unexpected initialization {initialized}")
+                copied = [op for op in memory_accesses(text, "union_probe") if op[0].startswith("bank_")]
+                if copied != [("bank_src", "load_u32", 0), ("bank_src", "load_u32", 4),
+                              ("bank_dst", "store32", 0), ("bank_dst", "store32", 4),
+                              ("bank_dst", "load_u32", 4), ("bank_dst", "store32", 4)]:
+                    raise AssertionError(f"{triple} {passes}: union representation {copied}")
+                for func, accesses in [
+                    ("override_probe", [("store32", 12), ("store8", 4), ("store8", 0),
+                                        ("store16", 2), ("store16", 6), ("store8", 8), ("store8", 9)]),
+                    ("union_init_probe", [("store8", 0)]),
+                ]:
+                    actual = [(op, off) for _, op, off in memory_accesses(text, func)]
+                    if actual != accesses:
+                        raise AssertionError(f"{triple} {passes} {func}: {actual}")
                 asm = work / "probe.s"
                 subprocess.run([*command, *passes, "-S", sequence, "-o", asm],
                                cwd=work, env=env, check=True)
-                native = re.findall(rf"(?m)^\s*({byte_load}|{byte_store})\s",
-                                    asm.read_text(encoding="ascii"))
+                assembly = asm.read_text(encoding="ascii")
+                native = []
+                for fn in ("probe", "init_probe"):
+                    body = re.search(rf'(?ms)^"?{fn}"?:.*?^\s*\.size\b', assembly).group()
+                    native.extend(re.findall(rf"(?m)^\s*({byte_load}|{byte_store})\s", body))
                 # The only other byte stores initialize three members and
                 # the padding of a wholly omitted cell. Every value source
                 # is snapshotted in memory.
@@ -185,13 +247,8 @@ def main():
                     subprocess.run([exe] if host in hosts else [emulator, exe],
                                    cwd=work, env=env, check=True)
             for code, diagnostic in [
-                ("struct S { int x; }; void f(void) { volatile struct S s = {.x=1, .x=2}; }",
-                 "overlapping designators"),
-                ("union U { int x; long y; };"
-                 "void f(void) { volatile union U u = {.x=1, .y=2}; }",
-                 "overlapping designators"),
-                ("union U { volatile unsigned x; unsigned long y; };"
-                 "void f(union U *p) { (void)*p; }", "union with volatile members"),
+                ("struct S { int x; }; void f(void) { volatile struct S s = {.x={1,2}, .x=2}; }",
+                 "exactly one expression"),
                 ("struct S { const volatile int x; }; void f(struct S *p) { *p = *p; }",
                  "const-qualified"),
             ]:

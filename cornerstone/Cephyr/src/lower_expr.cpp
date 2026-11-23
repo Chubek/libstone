@@ -100,15 +100,10 @@ bool compatible_object_pointers(const CType &lhs, const CType &rhs) {
 }
 
 CType pointer_composite(const CType &lhs, const CType &rhs) {
-  const CType *selected = lhs.element.get();
-  if (is_void_pointer(lhs) || is_void_pointer(rhs))
-    selected = is_void_pointer(lhs) ? lhs.element.get() : rhs.element.get();
-  else if (selected && selected->kind == CType::Kind::array && !selected->count &&
-           rhs.element && rhs.element->kind == CType::Kind::array)
-    selected = rhs.element.get(); // Keep a known bound in the composite type.
-  if (!selected)
+  if (!lhs.element || !rhs.element)
     return {};
-  auto pointee = *selected;
+  auto pointee = is_void_pointer(lhs) ? *lhs.element : is_void_pointer(rhs) ? *rhs.element :
+      composite_type(unqualified(*lhs.element), unqualified(*rhs.element));
   pointee.is_const = (lhs.element && lhs.element->is_const) ||
                      (rhs.element && rhs.element->is_const);
   pointee.is_volatile = (lhs.element && lhs.element->is_volatile) ||
@@ -207,8 +202,10 @@ CType stdarg_builtin_type(const TypeContext &context, Node *node, std::string_vi
     return error("va_arg requires a type name");
   const auto type = unqualified(*pointer.element);
   if (!(type.pointer() || (type.integer() && type.bits >= 32) ||
-        (type.real() && type.bits == 64)))
-    return error("va_arg supports only promoted integer, pointer and double types (not long double)");
+        (type.real() && (type.bits == 64 || ((aarch64 || rv64) && type.bits == 128)))))
+    return error(aarch64 || rv64
+        ? "va_arg supports only promoted integer, pointer, double and long double types"
+        : "va_arg supports only promoted integer, pointer and double types (not long double)");
   return type;
 }
 
@@ -385,7 +382,7 @@ CType conditional_type(const TypeContext &context, Node *then_node,
     if (lhs.function_pointer() || rhs.function_pointer()) {
       if (!compatible(lhs, rhs))
         return invalid_type();
-      return rhs.element->prototype ? rhs : lhs;
+      return composite_type(lhs, rhs);
     }
     return compatible_object_pointers(lhs, rhs) ? pointer_composite(lhs, rhs)
                                                : invalid_type();
@@ -448,7 +445,39 @@ CType member_type(const CType &record, Node *name, const TypeContext &context) {
 
 thread_local unsigned type_expression_depth = 0;
 
+bool check_initializer_constraints(const TypeContext &context, const ObjectInitEntry &entry,
+                                   bool check_type, std::string_view code, std::string_view incompatible) {
+  auto *value = entry.source;
+  const auto error = [&](std::string_view message) {
+    context.diagnostics.error(code, message, location(context.source, value));
+    return false;
+  };
+  while (value->getKind() == cparser::NK_LIST) {
+    const auto values = elements(value);
+    if (values.size() != 1)
+      return error("scalar initializer must contain exactly one expression");
+    value = values.front();
+  }
+  if (value->getKind() == cparser::NK_DESIGNATED_INIT)
+    return error("scalar initializer cannot have a designator");
+  if (!check_type)
+    return true;
+  const auto errors = context.diagnostics.error_count();
+  const auto source = decay(expression_type(value, context));
+  if (!assignment_compatible(context, entry.type, source, value)) {
+    if (context.diagnostics.error_count() != errors)
+      return false;
+    return error(incompatible);
+  }
+  return true;
+}
+
 } // namespace
+
+bool check_unevaluated_initializer(const TypeContext &context, const ObjectInitEntry &entry) {
+  return check_initializer_constraints(context, entry, true, "cephyr.aggregate.initializer",
+                                       "incompatible initializer");
+}
 
 std::optional<std::vector<ObjectInitEntry>> plan_compound_literal(
     const TypeContext &context, Node *node, CType &type, bool evaluated) {
@@ -474,24 +503,9 @@ std::optional<std::vector<ObjectInitEntry>> plan_compound_literal(
   for (const auto &entry : *plan) {
     if (entry.clear || entry.bytes)
       continue;
-    auto *value = entry.source;
-    while (value->getKind() == cparser::NK_LIST) {
-      const auto values = elements(value);
-      if (values.size() != 1)
-        return error(value, "scalar initializer must contain exactly one expression");
-      value = values.front();
-    }
-    if (value->getKind() == cparser::NK_DESIGNATED_INIT)
-      return error(value, "scalar initializer cannot have a designator");
-    if (!context.function || evaluated)
-      continue; // The static or runtime initializer will check the value.
-    const auto errors = context.diagnostics.error_count();
-    const auto source = decay(expression_type(value, context));
-    if (!assignment_compatible(context, entry.type, source, value)) {
-      if (context.diagnostics.error_count() != errors)
-        return std::nullopt;
-      return error(value, "incompatible compound literal initializer");
-    }
+    if (!check_initializer_constraints(context, entry, context.function && !evaluated,
+                                       "cephyr.compound-literal", "incompatible compound literal initializer"))
+      return std::nullopt;
   }
   return plan;
 }
@@ -746,8 +760,10 @@ bool uses_bit_field_snapshot(const LValue &target) {
 struct VolatileBitFieldAccess {
   // C11 5.1.2.3p6 and 6.7.3p7: use the target's volatile access policy.
   // AAPCS64 mandates a container-width load and a load/store pair for a
-  // write, even when every bit is replaced. AMD64/RV64 use only the field's
-  // occupied bytes, with the widest naturally aligned chunks, low first.
+  // write, even when every bit is replaced. If the container overlaps a
+  // different memory location, retain that read/write count per narrow chunk.
+  // AMD64/RV64 use the occupied bytes in naturally aligned chunks, low first,
+  // and only read preservation bits when needed.
   explicit VolatileBitFieldAccess(const LValue &target)
       : container(target.bit_field->volatile_access == BitField::VolatileAccess::container),
         bytes(container ? align_of(target.type) : target.bit_field->bytes()),
@@ -783,7 +799,8 @@ Id read_bit_field_storage(Function &function, const LValue &target, Node *at,
   Id storage = no_value;
   access.for_each_chunk([&](unsigned width, unsigned disp, unsigned shift) {
     const auto mask = VolatileBitFieldAccess::byte_mask(width);
-    if (preserve_only && !access.container && ((access.mask >> shift) & mask) == mask)
+    if (preserve_only && target.bit_field->volatile_access == BitField::VolatileAccess::narrow &&
+        ((access.mask >> shift) & mask) == mask)
       return;
     const auto *op = width == 4 ? "load_u32" : width == 2 ? "load_u16" : "load_u8";
     auto part = function.emit(word, op, id(target.address) + " " + std::to_string(disp), at);
@@ -794,17 +811,8 @@ Id read_bit_field_storage(Function &function, const LValue &target, Node *at,
   return storage;
 }
 
-bool supported_volatile_bit_field(Function &function, const LValue &target, Node *at) {
-  if (target.bit_field->volatile_access != BitField::VolatileAccess::unsupported)
-    return true;
-  function.error(at, "volatile bit-field access to an overlapping container or union member is not supported");
-  return false;
-}
-
 Expr read_volatile_bit_field(Function &function, const LValue &target, Node *at,
                              Id *snapshot = nullptr) {
-  if (!supported_volatile_bit_field(function, target, at))
-    return invalid_expr();
   const auto word = integer_type(64, false);
   const VolatileBitFieldAccess access(target);
   auto storage = read_bit_field_storage(function, target, at, access, false);
@@ -817,8 +825,6 @@ Expr read_volatile_bit_field(Function &function, const LValue &target, Node *at,
 
 void write_volatile_bit_field(Function &function, const LValue &target, Expr value,
                               Node *at, Id snapshot = no_value) {
-  if (!supported_volatile_bit_field(function, target, at))
-    return;
   const auto word = integer_type(64, false);
   const VolatileBitFieldAccess access(target);
   auto bits = function.emit(word, "and",
@@ -866,9 +872,9 @@ Id floating_bits(Function &function, const CType &type, std::uint64_t bits) {
   return function.emit(type, "fconst", std::to_string(bits));
 }
 
-Expr x87_constant(Function &function, Constant value) {
+Expr extended_constant(Function &function, Constant value) {
   return {value.type, function.constant(value.value, size_type()), std::nullopt,
-          function.constant(value.x87_sign_exponent, integer_type(16, false))};
+          function.constant(value.high_word, integer_type(value.type.bits == 128 ? 64 : 16, false))};
 }
 
 // The scalar snapshot stays in two SSA values, even across side effects
@@ -1030,23 +1036,22 @@ Expr integer_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
   return canonicalize(function, result, at);
 }
 
-// Use ordinary typed imports and LP64 calls: the Archon RV64 provider
-// already transports f32/f64 through the integer argument and result slots.
-// The helper signatures use XLEN integers, never C's narrow ABI slots.
-Expr rv64_soft_fp_call(Function &function, std::string name, const CType &result,
+// Compiler-runtime calls use ordinary typed imports. For quad, pack the
+// expression words into one ABI operand and unpack the result on return.
+Expr soft_fp_call(Function &function, std::string name, const CType &result,
                       Expr a, Node *at, std::optional<Expr> b = std::nullopt) {
   CType signature;
   signature.kind = CType::Kind::function;
   signature.element = std::make_shared<CType>(result);
   signature.prototype = true;
   signature.params.push_back(a.type.integer() ? integer_type(64, a.type.is_signed, 4) : a.type);
-  std::string operands = name + (b ? " 2 " : " 1 ") + id(a.id);
+  std::string operands = name + (b ? " 2 " : " 1 ") + id(a.type.extended_real() ? abi_value(function, a) : a.id);
   if (b) {
     signature.params.push_back(b->type);
-    operands += " " + id(b->id);
+    operands += " " + id(b->type.extended_real() ? abi_value(function, *b) : b->id);
   }
-  function.unit.rv64_soft_fp_helpers.try_emplace(std::move(name), std::move(signature));
-  return {result, function.emit(result, "call", operands, at), std::nullopt};
+  function.unit.soft_fp_helpers.try_emplace(std::move(name), std::move(signature));
+  return from_abi_value(function, result, function.emit(result, "call", operands, at));
 }
 
 Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
@@ -1073,6 +1078,11 @@ Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
     rhs = convert(function, rhs, type, at);
     if (!lhs.type.valid() || !rhs.type.valid())
       return invalid_expr();
+    if (type.bits == 128) {
+      const char *op = kind == cparser::NK_PLUS_EXPR ? "__addtf3" : kind == cparser::NK_MINUS_EXPR ?
+          "__subtf3" : kind == cparser::NK_MULT_EXPR ? "__multf3" : "__divtf3";
+      return soft_fp_call(function, op, type, lhs, at, rhs);
+    }
     if (type.extended_real()) {
       const auto left = x87_temporary(function, lhs, at);
       const auto right = x87_temporary(function, rhs, at);
@@ -1088,7 +1098,7 @@ Expr arithmetic_binary(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
       const char *stem = kind == cparser::NK_PLUS_EXPR ? "__add" :
           kind == cparser::NK_MINUS_EXPR ? "__sub" :
           kind == cparser::NK_MULT_EXPR ? "__mul" : "__div";
-      return rv64_soft_fp_call(function, std::string(stem) + (type.bits == 32 ? "sf3" : "df3"),
+      return soft_fp_call(function, std::string(stem) + (type.bits == 32 ? "sf3" : "df3"),
                              type, lhs, at, rhs);
     }
     const char *operation = kind == cparser::NK_PLUS_EXPR ? "fadd" :
@@ -1162,7 +1172,12 @@ Expr comparison(Function &function, ASTNodeKind kind, Expr lhs, Expr rhs,
     const bool inclusive = kind == cparser::NK_LE_EXPR || kind == cparser::NK_GE_EXPR;
     if (kind == cparser::NK_GT_EXPR || kind == cparser::NK_GE_EXPR)
       std::swap(lhs, rhs);
-    if (lhs.type.extended_real()) {
+    if (lhs.type.bits == 128) {
+      const auto cmp = soft_fp_call(function, relational ? "__letf2" : "__eqtf2", int_type(), lhs, at, rhs);
+      const auto signed_result = canonicalize(function, cmp, at);
+      result = function.emit(int_type(), relational ? "slt" : "eq",
+          binary_operands(signed_result.id, function.constant(relational && inclusive)), at);
+    } else if (lhs.type.extended_real()) {
       const char *op = !relational ? "amd64_x87_eq" : inclusive ? "amd64_x87_le" : "amd64_x87_lt";
       result = x87_compare(function, op, lhs, rhs, at);
       if (result == no_value)
@@ -1246,7 +1261,7 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
   Id sign_exponent = no_value;
   if (result_type.extended_real()) {
     result = function.param(join, size_type());
-    sign_exponent = function.param(join, integer_type(16, false));
+    sign_exponent = function.param(join, integer_type(result_type.bits == 128 ? 64 : 16, false));
   } else if (!is_void(result_type)) {
     result = function.param(join, result_type.kind == CType::Kind::record
                                       ? pointer_type(result_type) : result_type);
@@ -1255,7 +1270,7 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
     if (is_void(result_type))
       return {};
     if (result_type.extended_real())
-      return {value.id, value.x87_sign_exponent};
+      return {value.id, value.high_word};
     return {value.id};
   };
   function.branch(condition_id, yes, no);
@@ -1443,10 +1458,17 @@ Expr lower_stdarg_builtin(Function &function, cparser::CallExprASTNode *node,
       function.emit_void("rv64_va_start", id(cursor.address));
       return {type, no_value, std::nullopt};
     }
-    // The prologue places register and stack arguments in one sequence
-    // of XLEN slots; every supported promoted type needs exactly one.
-    const auto current = load(function, cursor, node);
-    const auto stride = function.constant(8, difference_type());
+    // The register save area abuts the incoming stack. Variadic quads start
+    // on even register pairs or at 16-byte aligned stack addresses.
+    auto current = load(function, cursor, node);
+    const bool wide = type.real() && type.bits == 128;
+    if (wide) {
+      const auto bits = function.emit(size_type(), "ptr_to_int", id(current.id));
+      const auto rounded = function.emit(size_type(), "add", binary_operands(bits, function.constant(15)));
+      const auto aligned = function.emit(size_type(), "and", binary_operands(rounded, function.constant(~UINT64_C(15))));
+      current.id = function.emit(cursor.type, "int_to_ptr", id(aligned));
+    }
+    const auto stride = function.constant(wide ? 16 : 8, difference_type());
     const auto next = function.emit(cursor.type, "ptr_add", binary_operands(current.id, stride));
     store(function, cursor, {cursor.type, next, std::nullopt}, node);
     return load(function, {type, current.id}, node);
@@ -1490,8 +1512,14 @@ Expr lower_stdarg_builtin(Function &function, cparser::CallExprASTNode *node,
 
   function.select(stack);
   const LValue overflow_slot{pointer, offset_address(function, ap.id, aarch64 ? 0 : 8, pointer)};
-  const auto overflow = load(function, overflow_slot, node);
-  const auto stride = function.constant(8, difference_type());
+  auto overflow = load(function, overflow_slot, node);
+  if (type.extended_real()) {
+    const auto bits = function.emit(size_type(), "ptr_to_int", id(overflow.id));
+    const auto rounded = function.emit(size_type(), "add", binary_operands(bits, function.constant(15)));
+    const auto aligned = function.emit(size_type(), "and", binary_operands(rounded, function.constant(~UINT64_C(15))));
+    overflow.id = function.emit(pointer, "int_to_ptr", id(aligned));
+  }
+  const auto stride = function.constant(type.extended_real() ? 16 : 8, difference_type());
   const auto next_overflow = function.emit(pointer, "ptr_add", binary_operands(overflow.id, stride));
   store(function, overflow_slot, {pointer, next_overflow, std::nullopt}, node);
   function.jump(join, {overflow.id});
@@ -1547,6 +1575,7 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
   lowered.reserve(arguments.size());
   if (type.variadic)
     adjusted.reserve(arguments.size());
+  unsigned rv_named_slots = 0;
   for (std::size_t index = 0; index != arguments.size(); ++index) {
     auto argument = lower_expr(function, arguments[index]);
     if (!argument.type.valid())
@@ -1558,7 +1587,7 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
       argument = convert(function, argument, promote(argument.type),
                          arguments[index]);
     } else if (argument.type.real()) {
-      if (argument.type.extended_real()) {
+      if (argument.type.extended_real() && !function.unit.source.native_binary128) {
         function.error(arguments[index], "variadic long double arguments are not supported");
         return invalid_expr();
       }
@@ -1566,7 +1595,8 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
         function.error(arguments[index], "floating-point variadic calls require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
         return invalid_expr();
       }
-      argument = convert(function, argument, real_type(64), arguments[index]);
+      if (argument.type.bits == 32)
+        argument = convert(function, argument, real_type(64), arguments[index]);
     } else if (!argument.type.pointer()) {
       function.error(arguments[index], native_stdarg
                          ? "variadic argument must be an integer, pointer or supported floating type"
@@ -1575,6 +1605,17 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
     }
     if (!argument.type.valid())
       return invalid_expr();
+    if (type.variadic && function.unit.source.native_rv64_soft_fp) {
+      const bool quad = argument.type.real() && argument.type.bits == 128;
+      if (quad && index >= type.params.size() && rv_named_slots < 8 && rv_named_slots % 2) {
+        // A fixed-signature MIR import would start the quad at the odd
+        // register. Occupy that unused register explicitly.
+        adjusted.push_back(size_type());
+        lowered.push_back(function.constant(0, size_type()));
+        ++rv_named_slots;
+      }
+      rv_named_slots += quad ? 2 : 1;
+    }
     if (type.variadic)
       adjusted.push_back(argument.type);
     if (!append_abi_argument(function, argument, arguments[index], lowered))
@@ -1585,6 +1626,10 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
   // A variadic declaration has no single native signature. Each promoted
   // call shape uses a fixed-signature import aliased to the actual symbol.
   if (type.variadic) {
+    if (adjusted.size() > ARCHON_MIR_MAX_PARAMS) {
+      function.error(node, "variadic call exceeds the native argument limit after ABI alignment");
+      return invalid_expr();
+    }
     name_for_call = function.unit.require_variadic_call(symbol, adjusted);
     if (symbol.internal)
       symbol.used = true;
@@ -1598,9 +1643,7 @@ Expr direct_call(Function &function, cparser::CallExprASTNode *node,
     function.emit_void("call", "- " + operands);
     return {result_type, no_value, std::nullopt};
   }
-  Expr result{result_type,
-              function.emit(result_type, "call", operands),
-              std::nullopt};
+  Expr result = from_abi_value(function, result_type, function.emit(result_type, "call", operands));
   // The psABI representation of uint32_t is sign-extended. Re-establish the C
   // semantic value before it participates in an expression.
   return canonicalize(function, result, node);
@@ -1661,9 +1704,7 @@ Expr indirect_call(Function &function, cparser::CallExprASTNode *node) {
     function.emit_void("call_indirect", "- " + operands);
     return {result_type, no_value, std::nullopt};
   }
-  Expr result{result_type,
-              function.emit(result_type, "call_indirect", operands),
-              std::nullopt};
+  Expr result = from_abi_value(function, result_type, function.emit(result_type, "call_indirect", operands));
   return canonicalize(function, result, node);
 }
 
@@ -1717,10 +1758,10 @@ Expr lower_binary(Function &function, Node *node) {
       static_cast<cparser::MinusExprASTNode *>(node)->isUnary()) {
     auto value = lower_expr(function, children->rhs);
     if (value.type.extended_real()) {
-      const auto word = integer_type(16, false);
-      const auto sign = function.constant(0x8000, word);
-      value.x87_sign_exponent = function.emit(
-          word, "xor", binary_operands(value.x87_sign_exponent, sign), node);
+      const auto word = integer_type(value.type.bits == 128 ? 64 : 16, false);
+      const auto sign = function.constant(value.type.bits == 128 ? UINT64_C(1) << 63 : 0x8000, word);
+      value.high_word = function.emit(
+          word, "xor", binary_operands(value.high_word, sign), node);
       return value;
     }
     if (value.type.real())
@@ -1816,7 +1857,7 @@ Expr load(Function &function, LValue value, Node *at) {
       // SysV AMD64 stores the 10-byte payload at offset zero; the remaining
       // six bytes are padding. Volatile accesses use these same ordered chunks.
       const auto low = function.emit(size_type(), "load", id(value.address) + " 0", at);
-      const auto high = function.emit(integer_type(16, false), "load_u16",
+      const auto high = function.emit(integer_type(type.bits == 128 ? 64 : 16, false), type.bits == 128 ? "load" : "load_u16",
                                       id(value.address) + " 8", at);
       return {type, low, std::nullopt, high};
     }
@@ -1894,7 +1935,7 @@ void store(Function &function, LValue target, Expr value, Node *at) {
   }
   if (target.type.extended_real()) {
     function.emit_void("store", binary_operands(target.address, value.id) + " 0");
-    function.emit_void("store16", binary_operands(target.address, value.x87_sign_exponent) + " 8");
+    function.emit_void(target.type.bits == 128 ? "store" : "store16", binary_operands(target.address, value.high_word) + " 8");
     return;
   }
 
@@ -1965,6 +2006,20 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
       function.error(at, "long double conversions require arithmetic types");
       return invalid_expr();
     }
+    if (target.bits == 128) {
+      const char *name = value.type.real() ? (value.type.bits == 32 ? "__extendsftf2" : "__extenddftf2") :
+          (value.type.is_signed ? "__floatditf" : "__floatunditf");
+      if (value.type.integer()) value = canonicalize(function, value, at);
+      return soft_fp_call(function, name, type, value, at);
+    }
+    if (value.type.bits == 128) {
+      if (target.real())
+        return soft_fp_call(function, type.bits == 32 ? "__trunctfsf2" : "__trunctfdf2", type, value, at);
+      auto converted = soft_fp_call(function, type.is_signed ? "__fixtfdi" : "__fixunstfdi",
+                                          integer_type(64, type.is_signed, 4), value, at);
+      converted.type = type;
+      return canonicalize(function, converted, at);
+    }
     if (target.extended_real()) {
       const auto temporary = function.local(type, at);
       if (temporary.address == no_value)
@@ -1994,7 +2049,7 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
       return {type, value.id, std::nullopt};
     if (value.type.real()) {
       if (function.unit.source.native_rv64_soft_fp)
-        return rv64_soft_fp_call(function, type.bits == 64 ? "__extendsfdf2" : "__truncdfsf2",
+        return soft_fp_call(function, type.bits == 64 ? "__extendsfdf2" : "__truncdfsf2",
                                type, value, at);
       return {type, function.emit(type, "fcast", id(value.id)), std::nullopt};
     }
@@ -2002,7 +2057,7 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
     if (!value.type.valid())
       return invalid_expr();
     if (function.unit.source.native_rv64_soft_fp)
-      return rv64_soft_fp_call(function, std::string(value.type.is_signed ? "__floatdi" : "__floatundi") +
+      return soft_fp_call(function, std::string(value.type.is_signed ? "__floatdi" : "__floatundi") +
                                        (type.bits == 32 ? "sf" : "df"),
                              type, value, at);
     return {type, function.emit(type, value.type.is_signed ? "sitofp" : "uitofp", id(value.id)),
@@ -2011,7 +2066,7 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
   if (target.integer() && value.type.real()) {
     const auto type = unqualified(target);
     if (function.unit.source.native_rv64_soft_fp) {
-      auto result = rv64_soft_fp_call(function, std::string(type.is_signed ? "__fix" : "__fixuns") +
+      auto result = soft_fp_call(function, std::string(type.is_signed ? "__fix" : "__fixuns") +
                                                (value.type.bits == 32 ? "sfdi" : "dfdi"),
                                      integer_type(64, type.is_signed, 4), value, at);
       result.type = type;
@@ -2103,8 +2158,12 @@ Expr convert(Function &function, Expr value, const CType &target, Node *at,
 Id truth(Function &function, Expr value, Node *at) {
   if (!value.type.valid())
     return no_value;
+  if (value.type.real() && value.type.bits == 128) {
+    const auto zero = extended_constant(function, Constant{value.type, 0});
+    return comparison(function, cparser::NK_NE_EXPR, value, zero, at).id;
+  }
   if (value.type.extended_real()) {
-    const auto zero = x87_constant(function, Constant{value.type, 0});
+    const auto zero = extended_constant(function, Constant{value.type, 0});
     const auto is_zero = x87_compare(function, "amd64_x87_eq", value, zero, at);
     return is_zero == no_value ? no_value : invert(function, is_zero);
   }
@@ -2127,7 +2186,18 @@ Id truth(Function &function, Expr value, Node *at) {
   return invert(function, is_zero);
 }
 
+// Inside C expressions extended precision uses two integer SSA values.
+// Only the ABI boundary needs a single f80 or f128 value.
+Expr from_abi_value(Function &function, const CType &type, Id value) {
+  if (type.extended_real())
+    return {type, function.emit(size_type(), type.bits == 128 ? "f128_low" : "amd64_x87_low", id(value)), std::nullopt,
+            function.emit(integer_type(type.bits == 128 ? 64 : 16, false), type.bits == 128 ? "f128_high" : "amd64_x87_high", id(value))};
+  return {type, value, std::nullopt};
+}
+
 Id abi_value(Function &function, Expr value) {
+  if (value.type.extended_real())
+    return function.emit(value.type, value.type.bits == 128 ? "f128_pack" : "amd64_x87_pack", binary_operands(value.id, value.high_word));
   if (!value.type.integer() || value.id == no_value)
     return value.id;
   if (value.type.bits > 32)
@@ -2154,8 +2224,7 @@ static LValue lower_member(Function &function, LValue object, Node *name) {
   if (object.address == no_value)
     return invalid_lvalue();
   auto offset = member->offset;
-  if (member->type.is_volatile && member->bit_field &&
-      member->bit_field->volatile_access != BitField::VolatileAccess::unsupported)
+  if (member->type.is_volatile && member->bit_field)
     offset -= member->bit_field->byte_in_container;
   return {member->type, offset_address(function, object.address, offset, member->type), {},
            object.register_object, nullptr, member->bit_field};
@@ -2282,7 +2351,7 @@ Expr lower_expr(Function &function, Node *node) {
     if (!value)
       return invalid_expr();
     result = value->type.extended_real()
-        ? x87_constant(function, *value)
+        ? extended_constant(function, *value)
         : Expr{value->type, floating_bits(function, value->type, value->value), std::nullopt};
     break;
   }

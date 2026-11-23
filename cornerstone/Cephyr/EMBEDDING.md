@@ -70,19 +70,19 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   `archon_root` selects the Archon package and `stdspec/` root. Explicit roots
   override the corresponding configured paths. Default installed resources
   are found relative to the loaded library even in an unrelated executable.
-  Build-tree binaries fall back to their configured source directories. Keep
-  Archon's installed or source layout intact: native IR generation also uses
-  the adjacent ASDL and Aurocks scripts and the license file.
+  Build-tree binaries use configured source and package directories. Installed
+  libraries use their own packaged backend modules and target runtimes; preserve
+  the `share/cephyr/native-packages` and Archon resource trees when relocating.
   File arguments, `Cephyr.toml`, and environment variables such as
   `CEPHYR_CONFIG` retain their normal driver meanings.
 - Cephyr does not change the process working directory, environment, or
-  standard streams. The native backend may run the configured host C compiler
-  to build generated Archon code. Object and link stages use configured
-  assembler, linker, and runtime tools as needed, without invoking a shell.
+  standard streams. The native backend loads a prebuilt module. Object and link
+  stages invoke the packaged SandAS and qobjld, or configured replacements,
+  directly. Bundled links use prebuilt CRT/libc without a target compiler.
   Treat settings, roots, SDK hooks, and tools as trusted build inputs;
   embedding is not a sandbox.
 - Calls can overlap on different threads. Cephyr serializes access to the
-  vendored preprocessor and its own LMDB cache handles, not the entire compiler.
+  vendored preprocessor. Each translation unit owns its FactIR result.
   Use distinct file outputs (or in-memory output) for concurrent requests.
   SDK callbacks run synchronously on the calling thread; recursive calls on
   that thread are rejected.
@@ -94,17 +94,9 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   CRT/libc, and leave target ABI implementation to the callback and configured
   tools. The tools must accept the GNU-style directives Cephyr appends for C
   global data.
-- Native code generation uses a GIL-enabled CPython main interpreter. If none
-  exists on first use, Cephyr initializes one for the life of the process; it
-  does not finalize or restart an interpreter. In a host-owned interpreter,
-  Cephyr uses that interpreter and
-  loads its selected Archon resources under a private Python package name,
-  without changing `sys.path` or replacing the host's `archon` package. Do not
-  initialize or finalize the interpreter concurrently with compilation.
-  Do not call from a subinterpreter. Release the GIL before waiting for
-  another thread that needs Cephyr's native backend. Python hosts should
-  check `cephyr_python_version()` matches their CPython major/minor before
-  calling `cephyr_compile`.
+- The native library does not initialize or link a Python interpreter.
+  `cephyr_python_version()` returns zero. The compiler checks the selected
+  architecture's source manifest and loads its packaged backend directly.
 
 ## Reusing a context and loading trusted code (C API)
 
@@ -126,7 +118,7 @@ earlier units. `cephyr_context_reset` clears the collection and registered
 symbols without changing the driver arguments. Concurrent links use snapshots;
 results and loaded modules do not borrow the context.
 
-On AMD64 Linux with direct LLD, `cephyr_context_register_host_symbol` can bind
+On AMD64 Linux with qobjld or direct LLD, `cephyr_context_register_host_symbol` can bind
 an external C function or data declaration in those links. For example, register
 `"counter"` as `CEPHYR_HOST_DATA` with `&counter`, and declare it as
 `extern int counter;` in the source. This refers to the actual host storage; a
@@ -182,11 +174,10 @@ int main(void)
 ```
 
 - Native capture returns a length-delimited byte span (up to 128 MiB),
-  including embedded NUL bytes. With the default Linux Clang/LLD tool path,
+  including embedded NUL bytes. With the default SandAS/qobjld path,
   embedding assembles through memory files and can capture the shared link
   into an anonymous memory file. This is not a diskless toolchain:
-  generated Archon backend sources and its compiled library, runtime
-  compilation/archive members, external QML bundles, configured tool or
+  external QML bundles, configured tool or
   pass-through cases, and atomic filesystem publication can still use
   named files. Memory files also require access to `/proc/self/fd`.
 - Loading uses the Linux dynamic loader with eager relocation and local
@@ -208,8 +199,7 @@ int main(void)
 
 ## Python
 
-Use the GIL-enabled CPython main interpreter (3.10 or later, with the same
-major/minor as the library). Set `PYTHONPATH` to `<prefix>/<libdir>/cephyr/python`
+Use the GIL-enabled CPython main interpreter (3.10 or later). Set `PYTHONPATH` to `<prefix>/<libdir>/cephyr/python`
 for a CMake installation, or to `cornerstone/Cephyr/python` in a source tree.
 
 ```python
@@ -224,7 +214,7 @@ print(result.output.decode("utf-8"))
 ```
 
 Importing `cephyr` does not load the library. Construction checks the library
-ABI and CPython version. It searches an explicit `library=` path first, then
+ABI (and any interpreter ABI reported by older libraries). It searches an explicit `library=` path first, then
 `CEPHYR_LIBRARY`, then its own directory and the CMake installation's libdir,
 and finally the system loader path. Supply `library=` or `CEPHYR_LIBRARY` for
 a typical source-tree build. The `cephyr.compile(...)` convenience function
@@ -236,6 +226,6 @@ arguments accept `str`, `bytes`, and path-like objects with filesystem encoding.
 `Result` owns copies of output and diagnostics as `bytes`, and `Result.sarif()`
 parses diagnostics requested in SARIF format. Calls from multiple Python
 threads can overlap; Cephyr releases the caller's GIL for native compilation
-and acquires it internally for Archon's Python code and SDK callbacks.
+and Python SDK callbacks acquire it when entered.
 Pass `sdk=` with an iterable of trusted Python hooks to either compile function.
 See [the Python SDK](SDK.md#python) for supported stages and callback results.

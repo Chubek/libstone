@@ -27,6 +27,20 @@ incoming edges, and every block must be reachable from entry. A conditional
 branch takes its `yes` edge for any nonzero `i64`. Each block has an explicit
 terminator. `void` is permitted in function and import result positions only.
 
+SysV AMD64 additionally accepts `f80` for x87 extended-precision ABI
+transport. Arguments occupy aligned 16-byte stack slots; results travel in
+`ST(0)`. `amd64_x87_pack DST LOW HIGH` packs the `i64` significand and the
+low 16 bits of the `i64` sign/exponent into `f80`. `amd64_x87_low DST SRC`
+and `amd64_x87_high DST SRC` extract them (zero-extending the latter).
+Copies and block edges preserve all 80 bits; binary32/64 arithmetic
+instructions do not take `f80` operands.
+
+`f128` is the corresponding lossless IEEE binary128 transport type for
+AAPCS64 and RV64IM LP64. `f128_pack DST LOW HIGH` consumes two `i64`
+words; `f128_low DST SRC` and `f128_high DST SRC` extract them. It may
+be copied and used on CFG edges and in function signatures. Scalar MIR
+FP arithmetic opcodes do not accept it; Cephyr uses typed TF helper calls.
+
 Unused instruction value fields and unused terminator values must be
 `ARCHON_MIR_NONE`, not zero. Other unused instruction fields are zero or
 `NULL`. Symbol references must match a declared function/import or data symbol

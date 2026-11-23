@@ -25,6 +25,6 @@ The following limits still apply:
   a structure cannot contain a structure with a flexible array (directly or
   via a union). A preceding member promoted from an anonymous subobject does
   count as a named member for a containing structure's own flexible array.
-- Existing volatile aggregate restrictions still apply, including overlapping
-  designators in volatile automatic initialization and whole-object copies of
-  unions with volatile members.
+- Volatile aggregate access follows the same rules for anonymous subobjects
+  and named members: whole-union copies transfer the representation, and
+  later designators override earlier initializers.

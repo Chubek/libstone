@@ -20,7 +20,6 @@ START = {
 }
 EMULATIONS = {"x86_64": "elf_x86_64", "aarch64": "aarch64elf"}
 NEGATIVE = {
-    "long-double": "long double f(long double x) { return x + 1.0L; }\n",
     "shift": "float f(float x) { return x << 1; }\n",
     "bitwise": "float f(float x) { return ~x; }\n",
     "remainder": "float f(float x) { return x % 1; }\n",

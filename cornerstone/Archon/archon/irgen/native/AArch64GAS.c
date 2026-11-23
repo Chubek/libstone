@@ -49,12 +49,17 @@ void an_gas_stack_store(ANGas *gas, const char *src, unsigned offset)
 void an_gas_fp_load(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
 {
     const int single = type == ARCHON_MIR_F32;
-    const char name[] = { single ? 's' : 'd', (char)('0' + reg), '\0' };
-    stack_move(gas, "ldr", name, offset, single ? 4 : 8);
+    const char name[] = { single ? 's' : type == ARCHON_MIR_F128 ? 'q' : 'd', (char)('0' + reg), '\0' };
+    stack_move(gas, "ldr", name, offset, single ? 4 : type == ARCHON_MIR_F128 ? 16 : 8);
 }
 
 void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
 {
+    if (type == ARCHON_MIR_F128) {
+        const char name[] = { 'q', (char)('0' + reg), '\0' };
+        stack_move(gas, "str", name, offset, 16);
+        return;
+    }
     int single = type == ARCHON_MIR_F32;
     an_gas_print(gas, "\tfmov %c9, %c%u\n", single ? 'w' : 'x', single ? 's' : 'd', reg);
     an_gas_stack_store(gas, an_gas_a, offset);

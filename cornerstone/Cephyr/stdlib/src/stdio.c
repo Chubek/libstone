@@ -8,6 +8,7 @@
 #include <wchar.h>
 
 #include "printf_float.h"
+#include "printf_sink.h"
 #include "stream.h"
 
 int fputc(int ch, FILE *stream)
@@ -276,15 +277,35 @@ static void emit_integer(struct output_sink *sink, unsigned long long value,
         sink_repeat(sink, ' ', padding);
 }
 
-static void emit_float_digits(struct output_sink *sink,
-                              const struct fp_output *out, int start,
-                              size_t count)
+static int fp_byte_reserve(void *context, size_t count)
+{
+    return sink_accepts(context, count) ? 0 : -1;
+}
+
+static int fp_byte_write(void *context, const char *data, size_t count)
+{
+    struct output_sink *sink = context;
+    sink_write(sink, data, count);
+    return sink->failed ? -1 : 0;
+}
+
+static int fp_byte_repeat(void *context, char ch, size_t count)
+{
+    struct output_sink *sink = context;
+    sink_repeat(sink, ch, count);
+    return sink->failed ? -1 : 0;
+}
+
+static int emit_float_digits(const struct fp_sink *sink,
+                             const struct fp_output *out, int start,
+                             size_t count)
 {
     if (start < 0) {
         size_t leading = (size_t)-start;
         if (leading > count)
             leading = count;
-        sink_repeat(sink, '0', leading);
+        if (sink->repeat(sink->context, '0', leading) < 0)
+            return -1;
         count -= leading;
         start += (int)leading;
     }
@@ -292,15 +313,16 @@ static void emit_float_digits(struct output_sink *sink,
         size_t digits = (size_t)(out->length - start);
         if (digits > count)
             digits = count;
-        sink_write(sink, out->digits + start, digits);
+        if (sink->write(sink->context, out->digits + start, digits) < 0)
+            return -1;
         count -= digits;
     }
-    sink_repeat(sink, '0', count);
+    return sink->repeat(sink->context, '0', count);
 }
 
-static void emit_float(struct output_sink *sink, double value, char conversion,
-                       int alternate, int plus, int blank, int left, int zero,
-                       int width, int precision)
+int __cephyr_printf_float(const struct fp_sink *sink, double value, char conversion,
+                          int alternate, int plus, int blank, int left, int zero,
+                          int width, int precision)
 {
     struct fp_output out = {0};
     fp_prepare(&out, value, conversion, precision, alternate, plus, blank);
@@ -310,30 +332,22 @@ static void emit_float(struct output_sink *sink, double value, char conversion,
     size_t total = (out.sign != '\0') + (out.hex ? 2 : 0) + whole +
                    point + out.fraction + out.exponent_length;
     size_t padding = field_padding(total, width);
-    if (!sink_accepts(sink, total + padding))
-        return;
-
+    void *ctx = sink->context;
     int zero_pad = zero && !left && !out.special;
-    if (!left && !zero_pad)
-        sink_repeat(sink, ' ', padding);
-    if (out.sign != '\0')
-        sink_write(sink, &out.sign, 1);
-    if (out.hex)
-        sink_write(sink, out.uppercase ? "0X" : "0x", 2);
-    if (zero_pad)
-        sink_repeat(sink, '0', padding);
+    if (sink->reserve(ctx, total + padding) < 0 ||
+        (!left && !zero_pad && sink->repeat(ctx, ' ', padding) < 0) ||
+        (out.sign && sink->write(ctx, &out.sign, 1) < 0) ||
+        (out.hex && sink->write(ctx, out.uppercase ? "0X" : "0x", 2) < 0) ||
+        (zero_pad && sink->repeat(ctx, '0', padding) < 0))
+        return -1;
 
-    if (out.point <= 0)
-        sink_write(sink, "0", 1);
-    else
-        emit_float_digits(sink, &out, 0, whole);
-    if (point)
-        sink_write(sink, ".", 1);
-    emit_float_digits(sink, &out, out.point, out.fraction);
-    if (out.exponent_length != 0)
-        sink_write(sink, out.exponent, out.exponent_length);
-    if (left)
-        sink_repeat(sink, ' ', padding);
+    int status = out.point <= 0 ? sink->write(ctx, "0", 1)
+                                : emit_float_digits(sink, &out, 0, whole);
+    if (status < 0 || (point && sink->write(ctx, ".", 1) < 0) ||
+        emit_float_digits(sink, &out, out.point, out.fraction) < 0 ||
+        (out.exponent_length && sink->write(ctx, out.exponent, out.exponent_length) < 0))
+        return -1;
+    return left ? sink->repeat(ctx, ' ', padding) : 0;
 }
 
 enum length_modifier {
@@ -527,8 +541,9 @@ static int format_to_sink(struct output_sink *sink, const char *format,
                     conversion == 'f' || conversion == 'F' ||
                     conversion == 'g' || conversion == 'G')) {
             /* l is a no-op for these conversions; L remains unsupported. */
-            emit_float(sink, va_arg(args, double), conversion, alternate, plus,
-                       blank, left, zero, width, precision);
+            struct fp_sink fp = {sink, fp_byte_reserve, fp_byte_write, fp_byte_repeat};
+            __cephyr_printf_float(&fp, va_arg(args, double), conversion, alternate,
+                                  plus, blank, left, zero, width, precision);
         } else if (conversion == 'p' && length == LENGTH_DEFAULT) {
             uintptr_t pointer = (uintptr_t)va_arg(args, void *);
             emit_integer(sink, pointer, 0, 16, 0, 2, 0, 0, left, zero, width,

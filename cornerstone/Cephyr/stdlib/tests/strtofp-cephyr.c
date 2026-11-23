@@ -5,6 +5,12 @@
 #include <string.h>
 #include <wchar.h>
 
+#if defined(__CEPHYR__) && !defined(__CEPHYR_HAS_X87_ABI) && !defined(__CEPHYR_HAS_BINARY128_ABI)
+/* The runtime provides these symbols, but not every frontend target
+   implements the matching long double return convention. */
+extern void strtold(void), wcstold(void);
+#endif
+
 #if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_SCALAR_FP)
 
 static uint64_t double_bits(double value)
@@ -78,6 +84,13 @@ static int check_rounding(void)
 
 int main(void)
 {
+#if defined(__CEPHYR_HAS_X87_ABI) || defined(__CEPHYR_HAS_BINARY128_ABI)
+    char *ld_end;
+    wchar_t *wend;
+    if (strtold("0x1.0000000000000002p0!", &ld_end) != 0x1.0000000000000002p0L ||
+        *ld_end != '!' || wcstold(L"-0x1p6000_", &wend) != -0x1p6000L || *wend != L'_')
+        return 90;
+#endif
     if (!check_double(" \t\n\v\f\r-12.5e+1#", 0xc05f400000000000UL, 14, EINVAL) ||
         !check_double("  +.e-3", 0, 0, EINVAL) ||
         !check_double("0x.p1", 0, 1, EINVAL) ||
@@ -156,6 +169,16 @@ int main(void)
 
 /* These declarations conflict if RV64IM Cephyr sees FP-return prototypes. */
 extern void strtof(void), strtod(void), atof(void), wcstof(void), wcstod(void);
-int main(void) { return 0; }
+int main(void) {
+#ifdef __CEPHYR_HAS_BINARY128_ABI
+    char *end;
+    wchar_t *wide;
+    if (strtold("0x1.0000000000000000000000000001p0!", &end) !=
+            0x1.0000000000000000000000000001p0L || *end != '!' ||
+        wcstold(L"-0x1p-16494?", &wide) != -0x1p-16494L || *wide != L'?')
+        return 1;
+#endif
+    return 0;
+}
 
 #endif

@@ -9,7 +9,10 @@ Each target is a Lua text chunk returning one table with these required fields:
 `os` is either `linux` or `none`. `specification` is an absolute path, a path
 relative to the target script, or `@archon/...` relative to the `archon_root`
 passed to `load_target`. Commands and flags are argv entries and are never
-evaluated by a shell.
+evaluated by a shell. Built-in `@package/sandstone-as` and `@package/qobjld`
+resolve relative to the loaded library's package, as do `@bank/*.symas`
+arguments. The bundled path uses the native SandAS bank encoder and ELF writer. The bank `archiver` field is legacy metadata; runtime
+archives ship prebuilt.
 
 The command arrays may contain fixed arguments after the executable.
 `assemble_flags` contains target/ISA options only; the driver appends its

@@ -475,8 +475,7 @@ bool read_tools(Config &config, const toml_table_t *table,
                 const std::filesystem::path &base, const SourceMap &source,
                 Diagnostics &diagnostics) {
     bool valid = known_keys(table,
-                            {"host_cc", "assembler", "linker", "archiver",
-                             "runtime_cc"},
+                            {"assembler", "linker"},
                             "tools", source, diagnostics);
     const auto assign = [&](std::string_view key,
                             std::vector<std::string> &destination) {
@@ -494,17 +493,14 @@ bool read_tools(Config &config, const toml_table_t *table,
             destination = std::move(*value);
         }
     };
-    assign("host_cc", config.host_cc);
     assign("assembler", config.assembler);
     assign("linker", config.linker);
-    assign("archiver", config.archiver);
-    assign("runtime_cc", config.runtime_cc);
     return valid;
 }
 
 bool read_flags(Config &config, const toml_table_t *table,
                 const SourceMap &source, Diagnostics &diagnostics) {
-    bool valid = known_keys(table, {"compile", "assemble", "link", "runtime"},
+    bool valid = known_keys(table, {"assemble", "link"},
                             "flags", source, diagnostics);
     const auto assign = [&](std::string_view key,
                             std::vector<std::string> &destination) {
@@ -512,10 +508,8 @@ bool read_flags(Config &config, const toml_table_t *table,
                 string_array(table, key, "flags", source, diagnostics, valid))
             destination = std::move(*value);
     };
-    assign("compile", config.compile_flags);
     assign("assemble", config.assemble_flags);
     assign("link", config.link_flags);
-    assign("runtime", config.runtime_flags);
     return valid;
 }
 
@@ -747,19 +741,11 @@ bool validate_config(const Config &config, const SourceMap &source,
               "stdlib");
         valid = false;
     }
-    valid = validate_argv(config.host_cc, "host_cc", source, diagnostics) && valid;
     if (!config.assembler.empty())
         valid = validate_argv(config.assembler, "assembler", source, diagnostics) &&
                 valid;
     if (!config.linker.empty())
         valid = validate_argv(config.linker, "linker", source, diagnostics) && valid;
-    if (!config.archiver.empty())
-        valid =
-            validate_argv(config.archiver, "archiver", source, diagnostics) && valid;
-    if (!config.runtime_cc.empty())
-        valid = validate_argv(config.runtime_cc, "runtime_cc", source, diagnostics) &&
-                valid;
-
     const auto validate_flags = [&](const std::vector<std::string> &flags,
                                     std::string_view key) {
         for (const std::string &flag : flags) {
@@ -773,10 +759,8 @@ bool validate_config(const Config &config, const SourceMap &source,
             }
         }
     };
-    validate_flags(config.compile_flags, "compile");
     validate_flags(config.assemble_flags, "assemble");
     validate_flags(config.link_flags, "link");
-    validate_flags(config.runtime_flags, "runtime");
     return valid;
 }
 
@@ -804,7 +788,7 @@ bool is_raw_linker_command(const std::vector<std::string> &argv) {
                 stem.substr(stem.size() - suffix.size()) == suffix &&
                 stem[stem.size() - suffix.size() - 1] == '-');
     };
-    return is_or_has_suffix("ld") || is_or_has_suffix("ld.bfd") ||
+    return stem == "qobjld" || is_or_has_suffix("ld") || is_or_has_suffix("ld.bfd") ||
            is_or_has_suffix("ld.gold") || is_or_has_suffix("ld.lld") ||
            is_or_has_suffix("lld") || is_or_has_suffix("mold");
 }
@@ -860,7 +844,7 @@ bool load_config(Config &config, const std::filesystem::path &path,
         root.get(),
         {"target", "representation", "assembler_style", "stdlib",
          "cache_enabled", "static_link", "paths", "tools", "flags",
-         "preprocess", "qml", "profiles", "factir"},
+         "preprocess", "qml", "profiles", "factir", "blackstone", "sandslab"},
         {}, source, diagnostics);
     Config candidate = config;
 
@@ -907,6 +891,16 @@ bool load_config(Config &config, const std::filesystem::path &path,
 
     if (auto *table = table_value(root.get(), "qml", source, diagnostics, valid))
         valid = read_qml(candidate, table, source, diagnostics) && valid;
+    if (auto *table = table_value(root.get(), "sandslab", source, diagnostics, valid)) {
+        valid = known_keys(table, {"enabled"}, "sandslab", source, diagnostics) && valid;
+        if (auto value = bool_value(table, "enabled", "sandslab", source, diagnostics, valid))
+            candidate.sandslab_enabled = *value;
+    }
+    if (auto *table = table_value(root.get(), "blackstone", source, diagnostics, valid)) {
+        valid = known_keys(table, {"enabled"}, "blackstone", source, diagnostics) && valid;
+        if (auto value = bool_value(table, "enabled", "blackstone", source, diagnostics, valid))
+            candidate.blackstone_enabled = *value;
+    }
     if (auto *table = table_value(root.get(), "factir", source, diagnostics, valid)) {
         valid = known_keys(table, {"enabled"}, "factir", source, diagnostics) && valid;
         if (auto value = bool_value(table, "enabled", "factir", source, diagnostics, valid))

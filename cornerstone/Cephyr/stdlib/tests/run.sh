@@ -3,9 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build=${1:?usage: sh tests/run.sh BUILD-DIRECTORY}
-CC=${CC:-clang}
-AR=${AR:-llvm-ar}
-LD_LLD=${LD_LLD:-ld.lld}
+AR=${AR:-ar}
 export CC AR
 
 CEPHYR_STDLIB_TEST='value=1'
@@ -18,31 +16,30 @@ for arch in x86_64 aarch64 riscv64; do
     target=$arch-linux-gnu
     output=$build/$target
     case "$arch" in
-        x86_64) set -- ;;
-        aarch64) set -- -march=armv8-a ;;
-        riscv64) set -- -march=rv64im -mabi=lp64 ;;
+        x86_64) CC=${CEPHYR_TEST_CC_AMD64:-$target-gcc}; set -- ;;
+        aarch64) CC=${CEPHYR_TEST_CC_AARCH64:-$target-gcc}; set -- -march=armv8-a ;;
+        riscv64) CC=${CEPHYR_TEST_CC_RV64:-$target-gcc}; set -- -march=rv64im -mabi=lp64 -mno-relax ;;
     esac
     CEPHYR_LIBC_TARGET="$target" CEPHYR_LIBC_TARGET_FLAGS="$*" \
         "$root/build.sh" "$output"
 
-    fenv=
-    if [ "$arch" != riscv64 ]; then
-        fenv=fenv-cephyr
-    fi
-    for source in smoke io files general time multibyte nonlocal scanf wide-scanf wide-stream wide-string wide-printf-cephyr variadic-cephyr signals-cephyr strtofp-cephyr printf-float-cephyr $fenv; do
-        "$CC" --target="$target" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
+    for source in smoke io files general time multibyte nonlocal scanf wide-scanf wide-stream wide-string wide-printf-cephyr variadic-cephyr signals-cephyr system-failures strtofp-cephyr strtold printf-float-cephyr fenv-cephyr; do
+        "$CC" "$@" -std=c11 -O2 -Wall -Wextra -Werror \
             -ffreestanding -fno-builtin -fno-stack-protector -nostdinc \
             -I "$root/include" -c "$root/tests/$source.c" -o "$output/test-$source.o"
         extra=
+        wrap=
         if [ "$source" = nonlocal ]; then
             extra="$output/nonlocal-registers.o"
-            "$CC" --target="$target" "$@" -c "$root/tests/nonlocal-registers.S" -o "$extra"
+            "$CC" "$@" -c "$root/tests/nonlocal-registers.S" -o "$extra"
+        elif [ "$source" = system-failures ]; then
+            wrap='-Wl,--wrap=__cephyr_clone,--wrap=__cephyr_execve,--wrap=__cephyr_wait4'
         fi
-        "$LD_LLD" -static --fatal-warnings -o "$output/test-$source" \
+        "$CC" "$@" -nostdlib -no-pie -static $wrap -o "$output/test-$source" \
             "$output/crt0.o" "$output/test-$source.o" ${extra:+"$extra"} "$output/libc.a"
     done
     # A custom CRT need not define environ. Link but do not run with no startup.
-    "$LD_LLD" -static --fatal-warnings -e main -o "$output/test-no-crt" \
+    "$CC" "$@" -nostdlib -no-pie -static -Wl,-e,main -o "$output/test-no-crt" \
         "$output/test-general.o" "$output/libc.a"
 
     run() {
@@ -67,10 +64,12 @@ for arch in x86_64 aarch64 riscv64; do
     run "$output/test-multibyte"
     run "$output/test-wide-string"
     run "$output/test-signals-cephyr"
+    run "$output/test-system-failures"
     run "$output/test-strtofp-cephyr"
+    run "$output/test-strtold"
     run "$output/test-printf-float-cephyr"
-    if [ -n "$fenv" ]; then
-        run "$output/test-fenv-cephyr"
+    run "$output/test-fenv-cephyr"
+    if [ "$arch" != riscv64 ]; then
         run "$output/test-fenv-cephyr" xr
         run "$output/test-fenv-cephyr" xu
         if [ "$arch" = x86_64 ]; then

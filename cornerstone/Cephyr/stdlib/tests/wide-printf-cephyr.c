@@ -1,11 +1,12 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 #include <wchar.h>
 
 #define CHECK(condition) do { if (!(condition)) return __LINE__; } while (0)
 
-#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG)
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG) || defined(__CEPHYR_HAS_RV64_STDARG)
 static int list_buffer(wchar_t *out, size_t size, const wchar_t *format, ...)
 {
     va_list args;
@@ -95,9 +96,23 @@ int main(void)
         CHECK(large[i] == L'0');
     CHECK(large[4094] == L'9' && large[4095] == 0);
 
+    float promoted = 1.5f;
+    CHECK(swprintf(buffer, 80, L"%+014.1lA|%-#7.0e|%.*lf%n", promoted, 2.0,
+                   1, 1.25, &count) == 26 && count == 26);
+    CHECK(wcscmp(buffer, L"+0X000001.8P+0|2.e+00 |1.2") == 0);
+    CHECK(swprintf(buffer, 80, L"%G/%g/%a", 0.00001, -0.0, 0x1p-1074) == 32);
+    CHECK(wcscmp(buffer, L"1E-05/-0/0x0.0000000000001p-1022") == 0);
+    uint64_t bits = UINT64_C(0x7ff0000000000000);
+    double inf;
+    memcpy(&inf, &bits, sizeof inf);
+    CHECK(swprintf(buffer, 80, L"%+08F", inf) == 8 && wcscmp(buffer, L"    +INF") == 0);
+    CHECK(swprintf(buffer, 80, L"x%.*f", INT_MAX, 0.5) < 0 &&
+          errno == EOVERFLOW && wcscmp(buffer, L"x") == 0);
+    CHECK(swprintf(buffer, 4, L"%f", 1.0) < 0 && errno == EOVERFLOW && buffer[0] == 0);
+    CHECK(swprintf(buffer, 80, L"%d %g %g %g %g %g %g %g %g %g %d",
+                   42, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, promoted, 9) == 24);
+    CHECK(wcscmp(buffer, L"42 1 2 3 4 5 6 7 8 1.5 9") == 0);
 #ifndef __CEPHYR__
-    CHECK(swprintf(buffer, 80, L"before%f", 1.0) < 0 && errno == ENOSYS);
-    CHECK(wcscmp(buffer, L"before") == 0);
     CHECK(swprintf(buffer, 80, L"%La", 1.0L) < 0 && errno == ENOSYS);
 #endif
 
@@ -112,6 +127,14 @@ int main(void)
     CHECK(fclose(file) == 0);
 
     file = tmpfile();
+    CHECK(file != NULL && fwprintf(file, L"%.3E!", promoted) == 10);
+    rewind(file);
+    double decoded;
+    CHECK(fwscanf(file, L"%lG", &decoded) == 1 && fgetwc(file) == L'!');
+    memcpy(&bits, &decoded, sizeof bits);
+    CHECK(bits == UINT64_C(0x3ff8000000000000) && fclose(file) == 0);
+
+    file = tmpfile();
     CHECK(file != NULL && fputc('x', file) == 'x' && fwide(file, 0) < 0);
     CHECK(fwprintf(file, L"") < 0 && errno == EINVAL && fwide(file, 0) < 0);
     CHECK(fclose(file) == 0);
@@ -122,9 +145,9 @@ int main(void)
     CHECK(fclose(file) == 0);
 
     CHECK(wprintf(L"wide:%d", -7) == 7 && fwide(stdout, 0) > 0);
-#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG)
-    CHECK(list_buffer(buffer, 80, L"%d:%ls", 3, L"list") == 6);
-    CHECK(wcscmp(buffer, L"3:list") == 0);
+#if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_AMD64_STDARG) || defined(__CEPHYR_HAS_RV64_STDARG)
+    CHECK(list_buffer(buffer, 80, L"%d:%g:%ls", 3, promoted, L"list") == 10);
+    CHECK(wcscmp(buffer, L"3:1.5:list") == 0);
     file = tmpfile();
     CHECK(file != NULL && list_stream(file, L"%ls", L"v") == 1 && fwide(file, 0) > 0);
     rewind(file);

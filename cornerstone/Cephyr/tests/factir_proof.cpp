@@ -50,5 +50,10 @@ int main()
         std::cerr << "FactIR loop join did not distinguish exact, partial, and unmodeled bits\n";
         return 1;
     }
+    if (!cephyr::factir::prove_boolize(~UINT64_C(1)).unsatisfiable() ||
+        !cephyr::factir::prove_boolize(~UINT64_C(3)).satisfiable()) {
+        std::cerr << "Double zero test is an identity only on canonical boolean inputs\n";
+        return 1;
+    }
     return 0;
 }

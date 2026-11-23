@@ -30,6 +30,9 @@ struct kernel_sigaction {
 #define KERNEL_SA_RESTART 0x10000000UL
 #define KERNEL_SIG_BLOCK 0
 #define KERNEL_SIG_UNBLOCK 1
+#define KERNEL_SIG_SETMASK 2
+#define KERNEL_SIGQUIT 3
+#define KERNEL_SIGCHLD 17
 
 int __cephyr_rt_sigaction(int sig, const struct kernel_sigaction *action,
                           struct kernel_sigaction *old, size_t mask_size);
@@ -38,6 +41,10 @@ int __cephyr_rt_sigprocmask(int how, const unsigned long *mask,
 int __cephyr_getpid(void);
 int __cephyr_gettid(void);
 int __cephyr_tgkill(int pid, int tid, int sig);
+int __cephyr_clone(unsigned long flags, void *stack, void *parent_tid,
+                   void *arg4, void *arg5);
+int __cephyr_execve(const char *, const char *const *, char *const *);
+int __cephyr_wait4(int pid, int *status, int options, void *usage);
 #ifdef __x86_64__
 #define KERNEL_SA_RESTORER 0x04000000UL
 void __cephyr_rt_sigreturn(void);
@@ -160,4 +167,53 @@ char *getenv(const char *name)
             return *entry + length + 1;
     }
     return NULL;
+}
+
+int system(const char *command)
+{
+    const struct kernel_sigaction ignore = {.handler = SIG_IGN};
+    const struct kernel_sigaction dfl = {.handler = SIG_DFL};
+    struct kernel_sigaction intr, quit;
+    const unsigned long chld = 1UL << (KERNEL_SIGCHLD - 1);
+    unsigned long mask;
+    int status = -1;
+
+    if (__cephyr_rt_sigprocmask(KERNEL_SIG_BLOCK, &chld, &mask, sizeof mask) < 0)
+        goto done;
+    if (__cephyr_rt_sigaction(SIGINT, &ignore, &intr, sizeof chld) < 0)
+        goto restore_mask;
+    if (__cephyr_rt_sigaction(KERNEL_SIGQUIT, &ignore, &quit, sizeof chld) < 0)
+        goto restore_int;
+
+    /* No CLONE_VM or shared stack: this is fork on all three Linux ABIs. */
+    int pid = __cephyr_clone(KERNEL_SIGCHLD, NULL, NULL, NULL, NULL);
+    if (pid == 0) {
+        const char *argv[] = {"sh", "-c", "--", command ? command : ":", NULL};
+        char *empty[] = {NULL};
+        if ((intr.handler != SIG_IGN &&
+             __cephyr_rt_sigaction(SIGINT, &dfl, NULL, sizeof chld) < 0) ||
+            (quit.handler != SIG_IGN &&
+             __cephyr_rt_sigaction(KERNEL_SIGQUIT, &dfl, NULL, sizeof chld) < 0) ||
+            __cephyr_rt_sigprocmask(KERNEL_SIG_SETMASK, &mask, NULL, sizeof mask) < 0)
+            _Exit(127);
+        __cephyr_execve("/bin/sh", argv, &environ && environ ? environ : empty);
+        _Exit(127);
+    }
+    if (pid > 0) {
+        int r, child_status;
+        do {
+            r = __cephyr_wait4(pid, &child_status, 0, NULL);
+        } while (r < 0 && errno == EINTR);
+        if (r == pid)
+            status = child_status;
+    }
+    /* Restore dispositions before a pending SIGCHLD handler can run.
+       Successful raw syscall wrappers leave errno alone. */
+    __cephyr_rt_sigaction(KERNEL_SIGQUIT, &quit, NULL, sizeof chld);
+restore_int:
+    __cephyr_rt_sigaction(SIGINT, &intr, NULL, sizeof chld);
+restore_mask:
+    __cephyr_rt_sigprocmask(KERNEL_SIG_SETMASK, &mask, NULL, sizeof mask);
+done:
+    return command ? status : status == 0;
 }

@@ -99,6 +99,16 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
 #endif
     switch (ins->op) {
 #ifdef AN_RV64_SOFT_FP_TRANSPORT
+    case ARCHON_MIR_F128_PACK:
+        an_read(out, frame, homes, ins->b, AN_T1);
+        an_store(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->dst]);
+        /* fall through */
+    case ARCHON_MIR_F128_LOW:
+        an_read(out, frame, homes, ins->a, AN_T2);
+        break;
+    case ARCHON_MIR_F128_HIGH:
+        an_load(out, AN_T2, an_abi.stack_pointer, frame->high_offsets[ins->a]);
+        break;
     case ARCHON_MIR_FCONST:
 #endif
     case ARCHON_MIR_CONST:
@@ -121,6 +131,11 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
         break;
 #endif
     case ARCHON_MIR_COPY:
+        if (fn->types[ins->a] == ARCHON_MIR_F128) {
+            an_load(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->a]);
+            an_store(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->dst]);
+        }
+        /* fall through */
     case ARCHON_MIR_PTR_TO_INT:
     case ARCHON_MIR_INT_TO_PTR:
     case ARCHON_MIR_FUNC_PTR_TO_INT:
@@ -297,15 +312,16 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
         goto done;
     for (b = 0; b < fn->block_count; ++b) {
         const ArchonMIRBlock *block = &fn->blocks[b];
-        if (block->param_count > phi_count)
-            phi_count = block->param_count;
+        const size_t words = an_edge_words(fn->types, block->params, block->param_count);
+        if (words > phi_count)
+            phi_count = words;
         for (i = 0; i < block->inst_count; ++i) {
             const ArchonMIRInst *ins = &block->insts[i];
             variadic |= ins->op == ARCHON_MIR_RV64_VA_START;
             if (an_is_call(ins->op)) {
-                size_t words = an_outgoing_words(ins->arg_count);
-                if (words > outgoing_words)
-                    outgoing_words = words;
+                size_t outgoing = an_outgoing_words(an_argument_slots(fn->types, ins->args, ins->arg_count));
+                if (outgoing > outgoing_words)
+                    outgoing_words = outgoing;
                 calls = 1;
             }
         }
@@ -323,9 +339,10 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
     if (variadic) {
         /* Save incoming unnamed register slots once, before the body can
          * clobber them. In RV64IM LP64 even floating scalars use XLEN slots. */
-        for (i = fn->param_count; i < an_abi.argc; ++i)
+        const size_t named = an_argument_slots(fn->types, NULL, fn->param_count);
+        for (i = named; i < an_abi.argc; ++i)
             an_store(out, an_abi.args[i], an_abi.stack_pointer,
-                frame.va_start_offset + (int)(8 * (i - fn->param_count)));
+                frame.va_start_offset + (int)(8 * (i - named)));
     }
     an_parameters(out, fn, &frame, homes);
     for (b = 0; b < fn->block_count; ++b) {

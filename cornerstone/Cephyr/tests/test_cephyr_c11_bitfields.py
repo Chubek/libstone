@@ -38,16 +38,6 @@ NEGATIVE = [
      "void f(struct S *a, struct S *b) { *a = *b; }", r"const-qualified"),
     ("const-volatile-member", "struct S { const volatile unsigned x:3; }; "
      "void f(struct S *s) { s->x = 2; }", r"modifiable|const-qualified"),
-    ("volatile-init", RECORD + "void f(void) { volatile struct S a = {2}; }",
-     r"volatile automatic initialization.*bit-fields"),
-    ("volatile-member-init", "struct S { volatile unsigned x:3; }; "
-     "void f(void) { struct S a = {2}; }", r"volatile automatic initialization.*bit-fields"),
-    ("volatile-copy", RECORD + "void f(volatile struct S *a, struct S *b) { *a = *b; }",
-     r"volatile copy.*bit-fields"),
-    ("volatile-member-copy", "struct S { volatile unsigned x:3; }; "
-     "void f(struct S *a, struct S *b) { *a = *b; }", r"volatile copy.*bit-fields"),
-    ("volatile-union", "union U { volatile unsigned x:3; int other; }; "
-     "unsigned f(union U *p) { return p->x; }", r"volatile bit-field access.*union"),
     ("by-value-param", RECORD + "int f(struct S s) { return s.x; }",
      r"by-value aggregate ABI.*bit-fields"),
     ("by-value-result", RECORD + "struct S f(struct S *p) { return *p; }",
@@ -55,14 +45,6 @@ NEGATIVE = [
     ("by-value-nested", RECORD + "struct T { struct S v[2]; }; "
      "int f(int (*p)(struct T), struct T *v) { return p(*v); }",
      r"by-value aggregate ABI.*bit-fields"),
-]
-AAPCS64_NEGATIVE = [
-    ("container-overlaps-member", "struct S { volatile unsigned x:3; unsigned char c; }; "
-     "void f(struct S *p) { p->x = 1; }", r"volatile bit-field access.*overlapping"),
-    ("container-overlaps-zero", "struct S { volatile unsigned x:3; _Bool:0; unsigned next:3; }; "
-     "unsigned f(struct S *p) { return ++p->x; }", r"volatile bit-field access.*overlapping"),
-    ("container-overlaps-flexible", "struct S { volatile unsigned x:3; char rest[]; }; "
-     "unsigned f(struct S *p) { return p->x; }", r"volatile bit-field access.*overlapping"),
 ]
 
 PASSES = ("--qml-pass=canonicalize", "--qml-pass=strength_reduce")
@@ -91,9 +73,12 @@ def expected_accesses(aarch64):
     wide_sequence = (read(*wide) + (read(*wide) if aarch64 else []) + write(*wide)
                      + read(*wide) + (read(*wide) if aarch64 else []) + write(*wide))
     result = {"volatile_access_sequence": sequence, "volatile_wide_sequence": wide_sequence}
-    if not aarch64:
-        split = ((8, 1), (16, 2))
-        result["volatile_split_sequence"] = read(*split) * 2 + write(*split)
+    split = ((8, 1), (16, 2))
+    result["volatile_split_sequence"] = read(*split) * (3 if aarch64 else 2) + write(*split)
+    field = word if aarch64 else byte
+    result["volatile_union_sequence"] = (read(*field) * 2 + write(*field) +
+                                         read(*field) * (2 if aarch64 else 1) + write(*field))
+    result["volatile_separate_sequence"] = read(*byte, (8, 1)) + write((8, 1))
     return result
 
 
@@ -128,7 +113,7 @@ def main():
     targets = [
         ("x86_64-linux-gnu", {"x86_64", "amd64"}, None, ()),
         ("aarch64-linux-gnu", {"aarch64", "arm64"}, args.qemu_aarch64, ()),
-        ("riscv64-linux-gnu", {"riscv64"}, args.qemu, ("-march=rv64im", "-mabi=lp64")),
+        ("riscv64-linux-gnu", {"riscv64"}, args.qemu, ("-march=rv64im", "-mabi=lp64", "-mno-relax")),
     ]
     with tempfile.TemporaryDirectory(prefix="cephyr-c11-bitfields-worker3-") as directory:
         work = Path(directory)
@@ -179,8 +164,7 @@ def main():
                         raise AssertionError((triple, passes, function, accesses, native))
                 check(*cephyr, *passes, "--stdlib=cephyr", volatile, "-o", volatile_exe)
                 run(volatile_exe, hosts, emulator)
-            negatives = NEGATIVE + (AAPCS64_NEGATIVE if triple.startswith("aarch64") else [])
-            for name, text, diagnostic in negatives:
+            for name, text, diagnostic in NEGATIVE:
                 source, output = work / f"{name}.c", work / f"{triple}-{name}.mir"
                 source.write_text(text + "\n", encoding="ascii")
                 check(*cephyr, "--emit-mir", source, "-o", output, expected=diagnostic)

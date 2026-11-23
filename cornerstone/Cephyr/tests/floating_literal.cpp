@@ -139,6 +139,23 @@ int main() {
         integer_to_floating_literal(16777217, false, 32).bits != 0x4b800000 ||
         integer_to_floating_literal(16777219, false, 32).bits != 0x4b800002)
         return 5;
+    // Precision, subnormal rounding and carry use the target format regardless
+    // of the host long double. At 1.0 the target ulps are 2^-63 and 2^-112.
+    for (const bool quad : {false, true}) {
+        const auto parse = [quad](std::string_view s) { return parse_floating_literal(s, !quad, quad); };
+        const auto min = parse(quad ? "0x1p-16494L" : "0x1p-16445L");
+        const auto half = parse(quad ? "0x1p-16495L" : "0x1p-16446L");
+        const auto one = parse("1.0L");
+        const auto next = floating_arithmetic(FloatingOperation::add, one,
+                              parse(quad ? "0x1p-112L" : "0x1p-63L"));
+        const auto max = parse(quad ? "0x1.ffffffffffffffffffffffffffffp+16383L" :
+                                       "0x1.fffffffffffffffep+16383L");
+        if (!min || min.bits != 1 || min.high_word || !half || half.bits || half.high_word ||
+            !next || next.bits != one.bits + 1 || next.high_word != one.high_word ||
+            !max || max.bits != UINT64_MAX ||
+            floating_arithmetic(FloatingOperation::add, max, max).status != FloatingLiteralStatus::overflow)
+            return 13;
+    }
     const auto previous_rounding = std::fegetround();
     if (previous_rounding != -1 && std::fesetround(FE_UPWARD) == 0) {
         const auto tie = parse_floating_literal("1.000000059604644775390625f");

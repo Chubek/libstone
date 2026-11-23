@@ -1,16 +1,8 @@
 #include <cephyr/cache.hpp>
 
 #include <cephyr/diagnostics.hpp>
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <lmdb++.h>
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <filesystem>
@@ -36,9 +28,6 @@ constexpr std::size_t max_path_bytes = 16 * 1024;
 constexpr std::size_t max_path_bytes_total = 64ull * 1024 * 1024;
 constexpr std::size_t max_record_bytes =
     max_output_bytes + max_path_bytes_total + max_files * 12ull + 1024;
-constexpr std::uint64_t map_size_64 = 16ull * 1024 * 1024 * 1024;
-constexpr std::size_t map_size_32 = 1024ull * 1024 * 1024;
-
 class InvalidRecord : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
@@ -264,26 +253,24 @@ GeneratedFiles deserialize(std::string_view record, std::string_view expected_ke
     return files;
 }
 
-std::size_t environment_map_size() {
-    if constexpr (sizeof(std::size_t) >= 8)
-        return static_cast<std::size_t>(map_size_64);
-    return map_size_32;
-}
-
-class DirectoryHandle {
+class Handle {
     int fd_;
 
 public:
-    explicit DirectoryHandle(int fd) : fd_(fd) {}
-    ~DirectoryHandle() {
+    explicit Handle(int fd) : fd_(fd) {}
+    ~Handle() {
         if (fd_ >= 0)
             ::close(fd_);
     }
-    DirectoryHandle(const DirectoryHandle &) = delete;
-    DirectoryHandle &operator=(const DirectoryHandle &) = delete;
-    DirectoryHandle(DirectoryHandle &&other) noexcept
+    Handle(const Handle &) = delete;
+    Handle &operator=(const Handle &) = delete;
+    Handle(Handle &&other) noexcept
         : fd_(std::exchange(other.fd_, -1)) {}
 
+    Handle &operator=(Handle &&other) noexcept {
+        std::swap(fd_, other.fd_);
+        return *this;
+    }
     int get() const { return fd_; }
 };
 
@@ -292,9 +279,10 @@ public:
 }
 
 void validate_cache_node(const struct stat &status, bool directory,
-                         const std::filesystem::path &path) {
+                         const std::filesystem::path &path, bool open_snapshot = false) {
     if ((directory && !S_ISDIR(status.st_mode)) ||
-        (!directory && (!S_ISREG(status.st_mode) || status.st_nlink != 1)))
+        (!directory && (!S_ISREG(status.st_mode) ||
+                        (status.st_nlink != 1 && !(open_snapshot && status.st_nlink == 0)))))
         throw std::invalid_argument("cache path has an unsafe file type or link: " +
                                     path.string());
     if (status.st_uid != ::geteuid())
@@ -315,7 +303,7 @@ void validate_cache_file(int directory, const char *name, bool may_be_absent) {
     validate_cache_node(status, false, name);
 }
 
-DirectoryHandle open_cache_directory(std::filesystem::path path) {
+Handle open_cache_directory(std::filesystem::path path) {
     if (path.native().find('\0') != std::string::npos)
         throw std::invalid_argument("cache directory contains NUL");
     while (!path.has_filename() && path != path.root_path())
@@ -326,15 +314,15 @@ DirectoryHandle open_cache_directory(std::filesystem::path path) {
 
     const auto parent_path = path.has_parent_path() ? path.parent_path() : ".";
     std::filesystem::create_directories(parent_path);
-    const DirectoryHandle parent(
+    const Handle parent(
         ::open(parent_path.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC));
     if (parent.get() < 0)
         filesystem_failure(errno, "open cache parent directory");
 
     if (::mkdirat(parent.get(), name.c_str(), 0700) != 0 && errno != EEXIST)
         filesystem_failure(errno, "create private cache directory");
-    DirectoryHandle directory(
-        ::openat(parent.get(), name.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    Handle directory(
+        ::openat(parent.get(), name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (directory.get() < 0)
         filesystem_failure(errno, "open cache directory without following final symlink");
 
@@ -345,28 +333,76 @@ DirectoryHandle open_cache_directory(std::filesystem::path path) {
     return directory;
 }
 
-// lmdb++'s txn::commit throws before clearing its handle on error. LMDB
-// consumes the transaction even if commit fails, so a local guard has to
-// release the pointer before propagating the error.
-class WriteTransaction : public lmdb::txn {
-public:
-    explicit WriteTransaction(lmdb::env &environment)
-        : lmdb::txn(lmdb::txn::begin(environment)) {}
-
-    void commit() {
-        lmdb::txn_commit(std::exchange(_handle, nullptr));
+// Encode the whole binary fingerprint without collisions or path syntax.
+// Split only unusually long keys, keeping each name within NAME_MAX.
+struct Entry { Handle parent; std::string name; };
+std::optional<Entry> entry(int root, std::string_view key, bool create) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string encoded;
+    for (unsigned char c : key) {
+        encoded += hex[c >> 4];
+        encoded += hex[c & 15];
     }
-};
+    Handle parent(::fcntl(root, F_DUPFD_CLOEXEC, 0));
+    if (parent.get() < 0) filesystem_failure(errno, "duplicate cache directory fd");
+    for (std::size_t offset = 0;; offset += 240) {
+        const auto component = encoded.substr(offset, 240);
+        if (offset + component.size() == encoded.size())
+            return Entry{std::move(parent), "record-" + component};
+        const auto name = "keys-" + component;
+        if (create) {
+            if (::mkdirat(parent.get(), name.c_str(), 0700) == 0) {
+                if (::fsync(parent.get()) < 0) filesystem_failure(errno, "sync cache key directory");
+            } else if (errno != EEXIST) {
+                filesystem_failure(errno, "create cache key directory");
+            }
+        }
+        Handle child(::openat(parent.get(), name.c_str(), O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (child.get() < 0) {
+            if (!create && errno == ENOENT) return std::nullopt;
+            filesystem_failure(errno, "open cache key directory");
+        }
+        struct stat status{};
+        if (::fstat(child.get(), &status) != 0) filesystem_failure(errno, "inspect cache key directory");
+        validate_cache_node(status, true, name);
+        parent = std::move(child);
+    }
+}
+
+void write_record(const Entry &entry, std::string_view record) {
+    const int dir = entry.parent.get();
+    validate_cache_file(dir, entry.name.c_str(), true);
+    static std::atomic<unsigned long long> next{0};
+    std::string tmp;
+    int fd;
+    do {
+        tmp = ".writing-" + std::to_string(::getpid()) + "-" + std::to_string(next++);
+        fd = ::openat(dir, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    } while (fd < 0 && errno == EEXIST);
+    if (fd < 0) filesystem_failure(errno, "create staging record");
+    Handle file(fd);
+    try {
+        while (!record.empty()) {
+            const auto n = ::write(fd, record.data(), record.size());
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) filesystem_failure(n < 0 ? errno : EIO, "write cache record");
+            record.remove_prefix(n);
+        }
+        if (::fsync(fd) < 0) filesystem_failure(errno, "sync cache record");
+        if (::renameat(dir, tmp.c_str(), dir, entry.name.c_str()) < 0)
+            filesystem_failure(errno, "publish cache record");
+        if (::fsync(dir) < 0) filesystem_failure(errno, "sync cache directory");
+    } catch (...) {
+        ::unlinkat(dir, tmp.c_str(), 0);
+        throw;
+    }
+}
 
 } // namespace
 
 struct Cache::Impl {
     Diagnostics &diagnostics;
-    std::optional<DirectoryHandle> directory;
-    std::unique_ptr<lmdb::env> environment;
-    std::optional<lmdb::dbi> database;
-    int max_key_size = 0;
-
+    std::optional<Handle> directory;
     explicit Impl(Diagnostics &value) : diagnostics(value) {}
 
     void warning(std::string_view operation, std::string_view detail) const {
@@ -378,9 +414,9 @@ struct Cache::Impl {
             warning(operation, "empty generation fingerprint; bypassing cache");
             return false;
         }
-        if (key.size() > static_cast<std::size_t>(max_key_size)) {
+        if (key.size() > 511) {
             warning(operation,
-                    "generation fingerprint exceeds LMDB's key limit; bypassing cache");
+                    "generation fingerprint exceeds the key limit; bypassing cache");
             return false;
         }
         return true;
@@ -392,38 +428,12 @@ Cache::Cache(const std::filesystem::path &directory, Diagnostics &diagnostics)
     if (directory.empty())
         return;
     try {
-        auto root = open_cache_directory(directory);
-        validate_cache_file(root.get(), "data.mdb", true);
-        validate_cache_file(root.get(), "lock.mdb", true);
-
-        // LMDB accepts a pathname, not a directory fd. Resolve it through
-        // the pinned root so renaming a parent cannot redirect its opens.
-        const auto native = "/proc/self/fd/" + std::to_string(root.get());
-        auto environment = lmdb::env::create();
-        environment.set_mapsize(environment_map_size());
-        environment.open(native.c_str(), MDB_NOTLS, 0600);
-        validate_cache_file(root.get(), "data.mdb", false);
-        validate_cache_file(root.get(), "lock.mdb", false);
-
-        WriteTransaction transaction(environment);
-        auto database = lmdb::dbi::open(transaction);
-        transaction.commit();
-
-        impl_->max_key_size = ::mdb_env_get_maxkeysize(environment);
-        if (impl_->max_key_size <= 0)
-            throw std::runtime_error("LMDB reported an invalid key limit");
-        impl_->database.emplace(std::move(database));
-        impl_->environment = std::make_unique<lmdb::env>(std::move(environment));
-        impl_->directory.emplace(std::move(root));
+        impl_->directory.emplace(open_cache_directory(directory));
     } catch (const std::exception &error) {
         impl_->warning("disabled", error.what());
-        impl_->database.reset();
-        impl_->environment.reset();
         impl_->directory.reset();
     } catch (...) {
         impl_->warning("disabled", "unknown initialization error");
-        impl_->database.reset();
-        impl_->environment.reset();
         impl_->directory.reset();
     }
 }
@@ -431,15 +441,33 @@ Cache::Cache(const std::filesystem::path &directory, Diagnostics &diagnostics)
 Cache::~Cache() = default;
 
 std::optional<GeneratedFiles> Cache::get(std::string_view key) {
-    if (!impl_->environment || !impl_->database || !impl_->valid_key(key, "read"))
+    if (!impl_->directory || !impl_->valid_key(key, "read"))
         return std::nullopt;
     try {
-        auto transaction = lmdb::txn::begin(*impl_->environment, nullptr, MDB_RDONLY);
-        const lmdb::val cache_key(key.data(), key.size());
-        lmdb::val value;
-        if (!impl_->database->get(transaction, cache_key, value))
-            return std::nullopt; // An ordinary miss is intentionally silent.
-        return deserialize(std::string_view(value.data(), value.size()), key);
+        const auto location = entry(impl_->directory->get(), key, false);
+        if (!location) return std::nullopt;
+        Handle file(::openat(location->parent.get(), location->name.c_str(),
+                             O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+        if (file.get() < 0) {
+            if (errno == ENOENT) return std::nullopt;
+            filesystem_failure(errno, "open cache record");
+        }
+        struct stat status{};
+        if (::fstat(file.get(), &status) < 0) filesystem_failure(errno, "inspect cache record");
+        // Another writer may have just replaced this name. The old inode
+        // remains a complete immutable snapshot while this fd is open.
+        validate_cache_node(status, false, location->name, true);
+        if (status.st_size < 0 || static_cast<std::uintmax_t>(status.st_size) > max_record_bytes)
+            throw InvalidRecord("invalid record size");
+        std::string bytes(static_cast<std::size_t>(status.st_size), '\0');
+        for (std::size_t pos = 0; pos < bytes.size();) {
+            auto n = ::read(file.get(), bytes.data() + pos, bytes.size() - pos);
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0) filesystem_failure(errno, "read cache record");
+            if (n == 0) throw InvalidRecord("truncated cache record");
+            pos += n;
+        }
+        return deserialize(bytes, key);
     } catch (const std::exception &error) {
         impl_->warning("read failed", error.what());
     } catch (...) {
@@ -449,15 +477,11 @@ std::optional<GeneratedFiles> Cache::get(std::string_view key) {
 }
 
 void Cache::put(std::string_view key, const GeneratedFiles &files) {
-    if (!impl_->environment || !impl_->database || !impl_->valid_key(key, "write"))
+    if (!impl_->directory || !impl_->valid_key(key, "write"))
         return;
     try {
         auto record = serialize(key, files);
-        WriteTransaction transaction(*impl_->environment);
-        const lmdb::val cache_key(key.data(), key.size());
-        lmdb::val value(record.data(), record.size());
-        impl_->database->put(transaction, cache_key, value);
-        transaction.commit();
+        write_record(*entry(impl_->directory->get(), key, true), record);
     } catch (const std::exception &error) {
         impl_->warning("write failed", error.what());
     } catch (...) {

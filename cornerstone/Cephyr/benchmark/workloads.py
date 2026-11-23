@@ -63,7 +63,8 @@ def generated(kind: str, width: int, steps: int) -> Workload:
         f"{kind}-{width}x{steps}",
         "\n\n".join(functions) + "\n\nint main(void) {\n" +
         "\n".join(checks) + "\n    return 0;\n}\n",
-        {"canonicalize": kind in ("dense", "sparse"), "strength_reduce": kind == "strength"},
+        {"canonicalize": kind in ("dense", "sparse"), "strength_reduce": kind == "strength",
+         "blackstone": kind in ("dense", "sparse")},
     )
 
 
@@ -154,9 +155,20 @@ def workloads(suite: str) -> list[Workload]:
         )]
     root = Path(__file__).resolve().parent / "fixtures"
     result = [Workload(name, (root / (name + ".c")).read_text(encoding="ascii"),
-                       {"canonicalize": expected})
+                       {"canonicalize": expected, "blackstone": expected})
               for name, expected in FIXTURES.items()]
     result.extend(generated(kind, width, steps)
                   for kind in ("dense", "sparse", "inert", "strength")
                   for width, steps in ((1, 24), (2, 48), (4, 80), (8, 112)))
+    if suite == "blackstone":
+        seed = 0x61F059B2
+        expected = seed
+        for _ in range(1000 * 1000):
+            expected = ((expected + 17) * 3) & MASK
+        driver = ("unsigned long kernel(unsigned long, unsigned long);\n"
+                  f"int main(void) {{ unsigned long x = {seed}UL;\n"
+                  "    for (int i = 0; i < 1000; ++i) x = kernel(x, (unsigned long)i);\n"
+                  f"    return x != 0x{expected:016x}UL;\n}}\n")
+        result.append(Workload("blackstone-loop", (root / "blackstone-loop.c").read_text(encoding="ascii"),
+                               {"blackstone": True}, driver))
     return result

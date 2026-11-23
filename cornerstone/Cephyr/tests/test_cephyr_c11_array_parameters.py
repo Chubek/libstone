@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 
-PROGRAM = Path(__file__).resolve().parent / "fixtures" / "c11_array_parameters.c"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 REJECTS = (
     # §6.7.6.2p1: the bracket qualifiers/static are outer parameter syntax.
@@ -28,13 +28,12 @@ REJECTS = (
     ("void f(void a[1]);", "array element type must be a complete object type"),
     ("struct Incomplete; void f(struct Incomplete a[1]);", "incomplete structure or union"),
     ("void f(int a[1][]);", "array element type must be a complete object type"),
-    # §6.7.6.2p4/p5 and §6.7.6.3p12: stars require prototype scope;
-    # nonconstant bounds of definitions would require entry evaluation.
+    # §6.7.6.2p4/p5 and §6.7.6.3p12: stars require prototype scope.
     ("int a[*];", "at function prototype scope"),
     ("typedef int Array[*];", "at function prototype scope"),
     ("void f(int a[*]) {}", "at function prototype scope"),
-    ("void f(int n, int a[n++]) {}", "nonconstant array parameter bounds in function definitions"),
-    ("int effect(void); void f(int a[static effect()]) {}", "nonconstant array parameter bounds in function definitions"),
+    ("void f(int *p, int a[static p]) {}", "array bound must be a valid integer expression"),
+    ("void f(int a[static n++], int n) {}", "no valid declaration for 'n'"),
     # These would retain a VLA behind the pointer even after adjustment.
     ("void f(int a[1][*]);", "only supported on an outermost array parameter"),
     ("void f(int (*a)[*]);", "only supported on an outermost array parameter"),
@@ -49,6 +48,11 @@ REJECTS = (
     ("void f(register int a[1]) { (void)&a; }", "cannot take the address of a register object"),
     ("void f(int a[const 1]); void f(const int *a);", "conflicting types for 'f'"),
     ("void f(int a[1][2]); void f(int (*a)[3]);", "conflicting types for 'f'"),
+    # §7.16.1.4p4: va_start eligibility uses the type before adjustment.
+    ("#include <stdarg.h>\ntypedef int A[3]; void f(A last, ...) { va_list ap; va_start(ap, last); }",
+     "rightmost eligible named parameter"),
+    ("#include <stdarg.h>\ntypedef int F(int); void f(F last, ...) { va_list ap; va_start(ap, last); }",
+     "rightmost eligible named parameter"),
 )
 
 
@@ -73,13 +77,14 @@ def main() -> None:
         for triple, hosts, emulator in targets:
             command = [args.cephyr.resolve(), "-std=c11", f"--target={triple}"]
             executable = work / triple
-            subprocess.run([*command, PROGRAM, "-o", executable],
-                           cwd=work, env=env, check=True)
-            if host in hosts or emulator:
-                run = [executable] if host in hosts else [emulator, executable]
-                subprocess.run(run, cwd=work, env=env, check=True)
-            else:
-                print(f"{triple}: linked, execution skipped (no emulator)")
+            for program in ("c11_array_parameters.c", "c11_array_parameter_entry.c"):
+                subprocess.run([*command, FIXTURES / program, "-o", executable],
+                               cwd=work, env=env, check=True)
+                if host in hosts or emulator:
+                    run = [executable] if host in hosts else [emulator, executable]
+                    subprocess.run(run, cwd=work, env=env, check=True)
+                else:
+                    print(f"{triple}: linked {program}, execution skipped (no emulator)")
 
             for source, diagnostic in REJECTS:
                 bad.write_text(source + "\n", encoding="ascii")

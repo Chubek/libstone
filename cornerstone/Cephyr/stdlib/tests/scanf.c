@@ -192,15 +192,11 @@ static void failures(void)
     assert(sscanf("1", "%18446744073709551615d", &value) == 1 && value == 1);
 
     long double ld;
-    memset(&ld, 0, sizeof(ld));
+    memset(&ld, 0xa5, sizeof(ld));
+    assert(sscanf("1 2e+", "%d%Lf", &value, &ld) == 1 && value == 1 &&
+           filled_with(&ld, sizeof(ld), 0xa5));
     errno = 0;
-    assert(sscanf("2", "%Lf", &ld) == EOF && errno == ENOSYS &&
-           filled_with(&ld, sizeof(ld), 0));
-    errno = 0;
-    assert(sscanf("1 2", "%d%Lf", &value, &ld) == 1 &&
-           errno == ENOSYS && value == 1 && filled_with(&ld, sizeof(ld), 0));
-    errno = 0;
-    assert(sscanf("1", "%*Lf") == EOF && errno == ENOSYS);
+    assert(sscanf("1e99999 2", "%*Lf%d", &value) == 1 && value == 2 && errno == 0);
 }
 
 static void stream(void)
@@ -233,8 +229,7 @@ static void stream(void)
     assert(fscanf(file, "%c", bytes) == EOF);
     rewind(file);
     errno = 0;
-    assert(fscanf(file, "%*Lf") == EOF && errno == ENOSYS &&
-           ftell(file) == 0 && fgetc(file) == '1');
+    assert(fscanf(file, "%*Lf") == 0 && errno == 0 && ftell(file) == 1 && fgetc(file) == ':');
     assert(fclose(file) == 0);
 
     file = tmpfile();

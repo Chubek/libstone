@@ -37,6 +37,7 @@ typedef void (*__cephyr_atexit_function)(void);
 int atexit(__cephyr_atexit_function);
 int at_quick_exit(__cephyr_atexit_function);
 char *getenv(const char *);
+int system(const char *);
 
 int atoi(const char *);
 long atol(const char *);
@@ -57,7 +58,6 @@ long long strtoll(const char *, char **, int);
 unsigned long long strtoull(const char *, char **, int);
 #endif
 
-/* The bundled runtime does not implement the distinct long double formats. */
 #if !defined(__CEPHYR__) || defined(__CEPHYR_HAS_SCALAR_FP)
 double atof(const char *);
 #if defined(__CEPHYR__)
@@ -66,7 +66,12 @@ double strtod(const char *restrict, __cephyr_end_pointer restrict);
 #else
 float strtof(const char *restrict, char **restrict);
 double strtod(const char *restrict, char **restrict);
+long double strtold(const char *restrict, char **restrict);
 #endif
+#endif
+
+#if defined(__CEPHYR_HAS_BINARY128_ABI) || defined(__CEPHYR_HAS_X87_ABI)
+long double strtold(const char *restrict, __cephyr_end_pointer restrict);
 #endif
 
 int abs(int);

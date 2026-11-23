@@ -29,7 +29,7 @@ struct Number {
 
 inline Number unpack(Format format, FloatingLiteral bits) {
     const bool x87 = format.width == 80;
-    const auto head = x87 ? bits.x87_sign_exponent : bits.bits;
+    const auto head = x87 ? bits.high_word : bits.bits;
     const auto biased = static_cast<int>((head & (format.sign_bit() - 1)) >>
                                          (x87 ? 0 : format.fraction()));
     Number value{(head & format.sign_bit()) != 0, bits.bits & (format.hidden_bit() - 1),
@@ -105,7 +105,7 @@ inline FloatingLiteral pack(Format format, bool negative, Wide significand, int 
 
 inline bool valid_finite(Format format, FloatingLiteral value) {
     if (format.width == 80) {
-        const auto biased = value.x87_sign_exponent & 0x7fff;
+        const auto biased = value.high_word & 0x7fff;
         return value && value.width == 80 && biased != 0x7fff &&
                (value.bits >> 63) == (biased != 0);
     }
@@ -117,7 +117,12 @@ inline bool valid_finite(Format format, FloatingLiteral value) {
 
 } // namespace floating_arithmetic_detail
 
+FloatingLiteral convert_quad_format(FloatingLiteral value, unsigned width);
+FloatingLiteral fold_quad(FloatingOperation op, FloatingLiteral lhs, FloatingLiteral rhs);
+
 inline FloatingLiteral convert_x87_literal(FloatingLiteral value, unsigned width) {
+    if (width == 128 || value.width == 128)
+        return convert_quad_format(value, width);
     using namespace floating_arithmetic_detail;
     if (!valid_finite(Format{value.width}, value) ||
         (width != 32 && width != 64 && width != 80))
@@ -133,13 +138,15 @@ inline FloatingLiteral convert_x87_literal(FloatingLiteral value, unsigned width
 // An unsuccessful result with status "malformed" includes division by zero.
 inline FloatingLiteral floating_arithmetic(
     FloatingOperation operation, FloatingLiteral lhs, FloatingLiteral rhs) {
+    if (lhs.width == 128 && rhs.width == 128)
+        return fold_quad(operation, lhs, rhs);
     using namespace floating_arithmetic_detail;
     const Format format{lhs.width};
     if (!valid_finite(format, lhs) || !valid_finite(format, rhs))
         return {};
     if (operation == FloatingOperation::subtract) {
         if (format.width == 80)
-            rhs.x87_sign_exponent ^= format.sign_bit();
+            rhs.high_word ^= format.sign_bit();
         else
             rhs.bits ^= format.sign_bit();
     }
@@ -197,13 +204,14 @@ inline FloatingLiteral floating_arithmetic(
 // The evaluator supplies finite, same-format operands. Both zero signs compare
 // equal; otherwise the magnitude encoding is monotonic.
 inline int compare_finite_floating(FloatingLiteral lhs, FloatingLiteral rhs) {
-    if (lhs.width == 80) {
-        const auto a = ((floating_arithmetic_detail::Wide(lhs.x87_sign_exponent & 0x7fff)) << 64) | lhs.bits;
-        const auto b = ((floating_arithmetic_detail::Wide(rhs.x87_sign_exponent & 0x7fff)) << 64) | rhs.bits;
+    if (lhs.width == 80 || lhs.width == 128) {
+        const auto sign = UINT64_C(1) << (lhs.width == 128 ? 63 : 15);
+        const auto a = ((floating_arithmetic_detail::Wide(lhs.high_word & (sign - 1))) << 64) | lhs.bits;
+        const auto b = ((floating_arithmetic_detail::Wide(rhs.high_word & (sign - 1))) << 64) | rhs.bits;
         if (!(a | b))
             return 0;
-        const bool lhs_negative = lhs.x87_sign_exponent >> 15;
-        const bool rhs_negative = rhs.x87_sign_exponent >> 15;
+        const bool lhs_negative = lhs.high_word & sign;
+        const bool rhs_negative = rhs.high_word & sign;
         if (lhs_negative != rhs_negative)
             return lhs_negative ? -1 : 1;
         return a == b ? 0 : ((a < b) != lhs_negative) ? -1 : 1;

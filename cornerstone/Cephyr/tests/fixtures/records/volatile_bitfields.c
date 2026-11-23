@@ -43,7 +43,6 @@ static volatile struct NestedPort {
     struct { unsigned value : 7; const unsigned limit : 4; };
 } nested = { .marker = 0x43210u, .value = 125, .limit = 13 };
 
-#ifndef __aarch64__
 struct Split {
     unsigned char prefix;
     volatile unsigned field : 24;
@@ -55,7 +54,17 @@ void volatile_split_sequence(struct Split *p) {
     p->field;
     p->field += 0x102u;
 }
-#endif
+union View { volatile signed field : 5; unsigned int word; };
+void volatile_union_sequence(union View *p) {
+    (void)p->field;
+    p->field = -3;
+    ++p->field;
+}
+
+struct Separate { volatile unsigned a:3; _Bool:0; volatile unsigned b:3; char rest[]; };
+void volatile_separate_sequence(struct Separate *p) {
+    p->b = p->a;
+}
 
 int main(void) {
     volatile struct Port *p = port;
@@ -77,9 +86,19 @@ int main(void) {
         return 27;
     if ((nested.value += 3) != 0 || nested.value || nested.limit != 13 || nested.marker != 0x43210u)
         return 28;
-#ifndef __aarch64__
     if ((split.field += 0x102u) != 0xeedeceu || split.prefix != 0x71 || split.suffix != 0x97)
         return 29;
-#endif
+    union View view = { .word = 0xabcdeff0u };
+    volatile_union_sequence(&view);
+    if (view.field != -2 || view.word != 0xabcdeffeu)
+        return 30;
+    struct Separate separated = { .a = 5, .b = 1 };
+    volatile_separate_sequence(&separated);
+    if (separated.a != 5 || separated.b != 5)
+        return 31;
+    volatile struct Port local = { .delta = 12, .companion = 561, .delta = -13 };
+    struct Port copy = local;
+    if (copy.delta != -13 || copy.companion != 561 || copy.tail || copy.ready || copy.low || copy.full)
+        return 32;
     return 0;
 }

@@ -25,12 +25,13 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
 
     if (stack_align < WordBytes || (stack_align & (stack_align - 1)))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid ABI stack alignment");
-    if (fn->param_count > AN_MAX_PARAMS)
+    if (fn->param_count > AN_MAX_PARAMS || fn->value_count > AN_MAX_VALUE)
         return an_error(ctx, ARCHON_BACKEND_LIMIT, "too many frame parameters");
+    const size_t named = an_argument_slots(fn->types, NULL, fn->param_count);
     /* The first incoming stack word is at frame_size itself. Account for
      * the last named stack word, or the cursor just past it for va_start. */
-    if (fn->param_count > an_abi.argc)
-        last_incoming = (fn->param_count - an_abi.argc - (variadic ? 0 : 1)) * WordBytes;
+    if (named > an_abi.argc)
+        last_incoming = (named - an_abi.argc - (variadic ? 0 : 1)) * WordBytes;
     limit = ((size_t)INT_MAX - last_incoming) & ~(stack_align - 1);
     if (fn->local_count > AN_MAX_VALUE)
         return an_error(ctx, ARCHON_BACKEND_LIMIT, "too many frame objects");
@@ -39,6 +40,14 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     frame->slots_base = (int)size;
     if (!add_words(&size, slots, limit))
         goto too_large;
+    frame->types = fn->types;
+    for (i = 0; i < fn->value_count; ++i) {
+        if (fn->types[i] == ARCHON_MIR_F128) {
+            frame->high_offsets[i] = (int)size;
+            if (!add_words(&size, 1, limit))
+                goto too_large;
+        }
+    }
     frame->phi_base = (int)size;
     if (!add_words(&size, phi_count, limit))
         goto too_large;
@@ -66,8 +75,8 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
         if (!add_words(&size, 1, limit))
             goto too_large;
     }
-    if (variadic && fn->param_count < an_abi.argc) {
-        varargs = an_abi.argc - fn->param_count;
+    if (variadic && named < an_abi.argc) {
+        varargs = an_abi.argc - named;
         if (!add_words(&size, varargs, limit))
             goto too_large;
     }

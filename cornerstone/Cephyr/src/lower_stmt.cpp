@@ -105,6 +105,14 @@ void initialize_scalar(Function &function, LValue object, Node *initializer) {
     store(function, object, lower_expr(function, initializer), initializer);
 }
 
+LValue initializer_lvalue(Function &f, Id base, std::uint64_t offset, CType type,
+                          const std::optional<BitField> &field) {
+    type.is_const = false;
+    if (field && type.is_volatile)
+        offset -= field->byte_in_container;
+    return {type, offset_address(f, base, offset, type), {}, false, nullptr, field};
+}
+
 void initialize_object(Function &function, LValue object, const std::vector<ObjectInitEntry> &plan,
                         std::uint64_t size, Node *at, bool defer_stores = false) {
     // On reaching a compound literal again in the same block activation,
@@ -115,7 +123,7 @@ void initialize_object(Function &function, LValue object, const std::vector<Obje
         values.resize(plan.size());
         for (std::size_t i = 0; i < plan.size(); ++i) {
             const auto &entry = plan[i];
-            if (entry.clear || entry.bytes)
+            if (entry.clear || entry.bytes || (entry.portions && entry.portions->empty()))
                 continue;
             auto *source = entry.type.scalar()
                 ? scalar_initializer_expression(function, entry.source) : entry.source;
@@ -131,43 +139,71 @@ void initialize_object(Function &function, LValue object, const std::vector<Obje
         zero_object(function, object.address, size, align_of(object.type));
     for (std::size_t i = 0; i < plan.size(); ++i) {
         const auto &entry = plan[i];
-        if (entry.clear) {
+        if (entry.portions && entry.portions->empty()) {
+            continue; // Already constraint-checked; no evaluation (6.7.9 fn 151).
+        } else if (entry.clear) {
+            if (entry.bit_field) {
+                auto member = initializer_lvalue(function, object.address, entry.offset, entry.type,
+                                                  entry.bit_field);
+                store(function, member, {entry.type, function.constant(0), 0}, entry.source);
+                continue;
+            }
             const auto address = offset_address(function, object.address, entry.offset, entry.type);
             if (direct)
                 zero_initialized_subobject(function, address, entry.type);
             else
                 zero_object(function, address, *size_of(entry.type), align_of(entry.type));
         } else if (entry.bytes) {
-            auto offset = entry.offset;
             auto element = *entry.type.element;
             element.is_const = false; // This store initializes the element.
             element.is_volatile |= entry.type.is_volatile;
             const auto width = element.bits / 8;
             const auto count = entry.bytes->size() / width;
-            for (std::size_t i = 0; i < count; ++i) {
-                std::uint64_t value = 0;
-                for (unsigned byte = 0; byte < width; ++byte)
-                    value |= std::uint64_t(static_cast<unsigned char>((*entry.bytes)[i * width + byte]))
-                             << (byte * 8);
-                if (direct || value)
-                    store(function, {element, offset_address(function, object.address, offset, element)},
-                          {element, function.constant(value, element), value}, entry.source);
-                offset += width;
-            }
-            if (direct && count < entry.type.count) {
-                auto tail = entry.type;
-                tail.count -= count;
-                zero_initialized_subobject(function,
-                    offset_address(function, object.address, offset, element), tail);
-            }
+            const auto emit_range = [&](std::uint64_t first, std::uint64_t end) {
+                auto index = first;
+                for (; index < count && index < end; ++index) {
+                    std::uint64_t value = 0;
+                    for (unsigned byte = 0; byte < width; ++byte)
+                        value |= std::uint64_t(static_cast<unsigned char>((*entry.bytes)[index * width + byte]))
+                                 << (byte * 8);
+                    if (direct || value)
+                        store(function, {element, offset_address(function, object.address,
+                                                                 entry.offset + index * width, element)},
+                              {element, function.constant(value, element), value}, entry.source);
+                }
+                if (direct && index < end) {
+                    auto tail = entry.type;
+                    tail.count = end - index;
+                    zero_initialized_subobject(function, offset_address(function, object.address,
+                                                entry.offset + index * width, element), tail);
+                }
+            };
+            if (entry.portions) {
+                for (const auto &part : *entry.portions) {
+                    const auto first = (part.offset - entry.offset) / width;
+                    emit_range(first, first + *size_of(part.type) / width);
+                }
+            } else
+                emit_range(0, direct ? entry.type.count : count);
         } else if (entry.type.kind == CType::Kind::record) {
-            const auto address = offset_address(function, object.address, entry.offset, entry.type);
             auto value = defer_stores ? values[i] : lower_expr(function, entry.source);
-            (void)copy_record(function, {entry.type, address}, value,
-                              entry.source, true);
+            if (!entry.portions) {
+                const auto address = offset_address(function, object.address, entry.offset, entry.type);
+                copy_record(function, {entry.type, address}, value, entry.source, true);
+            } else if (value.type.valid()) {
+                for (const auto &part : *entry.portions) {
+                    auto src = initializer_lvalue(function, value.id, part.offset - entry.offset,
+                                                  part.type, part.bit_field);
+                    auto dst = initializer_lvalue(function, object.address, part.offset, part.type,
+                                                  part.bit_field);
+                    if (part.bit_field)
+                        store(function, dst, load(function, src, entry.source), entry.source);
+                    else
+                        copy_initialized_subobject(function, dst.address, src.address, part.type);
+                }
+            }
         } else {
-            const auto address = offset_address(function, object.address, entry.offset, entry.type);
-            LValue member{entry.type, address, {}, false, nullptr, entry.bit_field};
+            auto member = initializer_lvalue(function, object.address, entry.offset, entry.type, entry.bit_field);
             if (defer_stores) {
                 member.type.is_const = false;
                 store(function, member, values[i], entry.source);
@@ -612,6 +648,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
         Node *node;
         std::string name;
         CType object_type;
+        Node *entry_bound;
     };
     std::vector<Parameter> lowered;
     const auto declarations = elements(parameters);
@@ -629,7 +666,8 @@ void lower_parameter_slots(Function &function, Node *parameters) {
             continue;
         }
         auto *parameter = static_cast<cparser::ParmDeclASTNode *>(node);
-        CType type = read_parameter_type(parameter->getType(), parameter_context, true);
+        Node *entry_bound;
+        CType type = read_parameter_type(parameter->getType(), parameter_context, true, &entry_bound);
         if (type.kind == CType::Kind::void_ && declarations.size() == 1 &&
             parameter_types.empty()) {
             if (!identifier(parameter->getName()).empty())
@@ -654,7 +692,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
         if (!name.empty())
             parameter_scope.parameters.emplace(name,
                 TypeBinding{type, (node->getFlags() & SCS_REGISTER) != 0});
-        lowered.push_back({node, std::move(name), std::move(type)});
+        lowered.push_back({node, std::move(name), std::move(type), entry_bound});
     }
     if (lowered.size() != parameter_types.size()) {
         function.error(parameters, "parameter list does not match the function type",
@@ -684,6 +722,10 @@ void lower_parameter_slots(Function &function, Node *parameters) {
                            "cephyr.parameter.name");
             continue;
         }
+        // §6.9.1p10: evaluate the definition's size expression once, with
+        // earlier parameters bound but this declarator's name not yet in scope.
+        if (parameter.entry_bound)
+            (void)lower_expr(function, parameter.entry_bound);
         LValue slot = function.local(parameter.object_type, parameter.node);
         if (slot.address == no_value)
             continue;
@@ -703,7 +745,7 @@ void lower_parameter_slots(Function &function, Node *parameters) {
             }
         } else {
             slot.type.is_const = false; // Bind the incoming value, not a C assignment.
-            store(function, slot, Expr{parameter_types[index], first, std::nullopt},
+            store(function, slot, from_abi_value(function, parameter_types[index], first),
                   parameter.node);
         }
     }
@@ -838,10 +880,14 @@ void lower_function_body(Function &function, Node *parameters, Node *body) {
         if (!declarations.empty() && declarations.back()->getKind() == cparser::NK_PARM_DECL) {
             auto *last = static_cast<cparser::ParmDeclASTNode *>(declarations.back());
             const auto slot = function.find_local(identifier(last->getName()));
-            const auto declared = read_type(last->getType(), TypeContext(function.unit, &function), true);
-            if (slot && !slot->register_object && declared.scalar() &&
-                (!declared.integer() || declared.bits >= 32) &&
-                (!declared.real() || declared.bits == 64))
+            // The parser expands typedefs, so this is the declared type's
+            // kind before array/function adjustment, including typedef names.
+            // Do not re-read an array bound here after its declarator's scope.
+            const auto kind = last->getType()->getKind();
+            if (slot && !slot->register_object && kind != cparser::NK_ARRAY_TYPE &&
+                kind != cparser::NK_FUNCTION_TYPE && slot->type.scalar() &&
+                (!slot->type.integer() || slot->type.bits >= 32) &&
+                (!slot->type.real() || slot->type.bits != 32))
                 function.va_start_parameter = slot->address;
         }
     }

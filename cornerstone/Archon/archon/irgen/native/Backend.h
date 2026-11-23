@@ -18,7 +18,7 @@ extern "C" {
 typedef uint32_t ArchonValue;
 typedef enum {
     ARCHON_MIR_VOID = 0, ARCHON_MIR_I64, ARCHON_MIR_PTR, ARCHON_MIR_FUNC_PTR,
-    ARCHON_MIR_F32, ARCHON_MIR_F64
+    ARCHON_MIR_F32, ARCHON_MIR_F64, ARCHON_MIR_F80, ARCHON_MIR_F128
 } ArchonMIRType;
 typedef enum {
     ARCHON_MIR_CONST = 1, ARCHON_MIR_COPY,
@@ -61,7 +61,10 @@ typedef enum {
     ARCHON_MIR_AMD64_X87_FROM_SI, ARCHON_MIR_AMD64_X87_FROM_UI,
     ARCHON_MIR_AMD64_X87_TO_SI, ARCHON_MIR_AMD64_X87_TO_UI,
     /* RV64IM LP64: initialize a va_list cursor at pointer a. */
-    ARCHON_MIR_RV64_VA_START
+    ARCHON_MIR_RV64_VA_START,
+    /* Lossless transport between x87 ABI values and their 64+16 value bits. */
+    ARCHON_MIR_AMD64_X87_PACK, ARCHON_MIR_AMD64_X87_LOW, ARCHON_MIR_AMD64_X87_HIGH,
+    ARCHON_MIR_F128_PACK, ARCHON_MIR_F128_LOW, ARCHON_MIR_F128_HIGH
 } ArchonMIROpcode;
 typedef struct {
     ArchonMIROpcode op;

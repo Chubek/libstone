@@ -10,7 +10,7 @@ import tempfile
 from test_cephyr_floating import EMULATIONS, START, run
 
 
-SOURCE = """
+SOURCE = r"""
 extern int late_bound[];
 static int private_object = 3;
 static int completed_private[1] = {1};
@@ -39,7 +39,38 @@ extern inline int extern_inline(int n) { return n + private_object; }
 int (*inline_address(void))(int) { return &shared_inline; }
 int compare_address(void);
 
+/* Neither declaration alone supplies both the table and result bounds. */
+extern int (*(*table[])(int (*)[]))[5];
+extern int (*(*table[3])(int (*)[2]))[];
+_Static_assert(sizeof table == 3 * sizeof(*table), "composite table");
+_Static_assert(sizeof *table[0](0) == 5 * sizeof(int), "composite return");
+extern int (*(*wide)())[5];
+extern int (*(*proto)(int))[];
+_Static_assert(sizeof *(1 ? wide : proto)(1) == 5 * sizeof(int),
+               "merge prototype and result of conditional function pointer");
+
+static int \u03b1 = 17;
+static int f\u03b1(int n) { return n + α; }
+static int f_u03b1(int n) { return n - 1; }
+int \u00e9 = 11;
+int e\u0301 = 13; /* distinct code-point sequences, no normalization */
+int ceph\u03c6(int n) { return fα(n) + f_u03b1(n); }
+extern int \U0001D6C2;
+extern int remote\u03b2(int);
+static int *remote_address = &𝛂;
+static int (*callback)(int) = &remoteβ;
+
 int test_main(void) {
+    extern int α;
+    int fα(int);
+    if (α != 17 || fα(1) != 18 || *remote_address != 31 ||
+        callback(1) != 75 || remoteβ(2) != 77) return 11;
+    {
+        extern int (*incomplete)[];
+        extern int (*complete)[3];
+        _Static_assert(sizeof **(1 ? &incomplete : &complete) == 3 * sizeof(int),
+                       "conditional composite of nested pointers");
+    }
     extern int remote;
     extern int remote;
     extern int shared_inline(int); /* not a file-scope declaration */
@@ -83,7 +114,13 @@ int late_bound[3] = {6, 7, 8};
 int (*pointer_to_array)[3] = &late_bound;
 """
 
-DEFINITIONS = """
+DEFINITIONS = r"""
+static int α = 19;
+static int fα(int n) { return α - n; }
+extern int é, e\u0301;
+int cephφ(int);
+int 𝛂 = 31;
+int remoteβ(int n) { return cephφ(n) + fα(0) + é + é + 14; }
 int remote = 11;
 int shadow = 9;
 int nested_only[2] = {0, 42};
@@ -99,6 +136,16 @@ int compare_address(void) {
 """
 
 NEGATIVE = {
+    "nested-array-conflict": ("extern int (*(*table[])(int (*)[2]))[5];"
+                              "extern int (*(*table[3])(int (*)[]))[];"
+                              "extern int (*(*table[])(int (*)[4]))[];", "conflicting types"),
+    "nested-prototype-conflict": ("int visit(int (*)(), double (*)[3]);"
+                                  "int visit(int (*)(int), double (*)[]);"
+                                  "int visit(int (*)(long), double (*)[]);", "conflicting types"),
+    "nested-composite-call": ("extern int (*visit)(int (*)[2], int (*)[]);"
+                              "extern int (*visit)(int (*)[], int (*)[4]);"
+                              "int f(void) { int a[3], b[4]; return visit(&a, &b); }",
+                              "incompatible object-pointer conversion"),
     "block-initializer": ("void f(void) { extern int x = 1; }", "cannot have an initializer"),
     "block-static-function": ("void f(void) { static int g(void); }", "invalid storage class"),
     "block-conflict": ("void f(void) { int x; extern int x; }", "redeclaration"),
@@ -158,8 +205,8 @@ def main():
             return run(*command, work=work, env=env, expected=expected)
 
         source, definitions = work / "use.c", work / "definitions.c"
-        source.write_text(SOURCE, encoding="ascii")
-        definitions.write_text(DEFINITIONS, encoding="ascii")
+        source.write_text(SOURCE, encoding="utf-8")
+        definitions.write_text(DEFINITIONS, encoding="utf-8")
         starts = {**START, "riscv64": ("call test_main", "li a7, 93", "ecall")}
         emulations = {**EMULATIONS, "riscv64": "elf64lriscv"}
         emulators = {"aarch64": args.qemu_aarch64, "riscv64": args.qemu_riscv64}
@@ -168,7 +215,7 @@ def main():
             target = f"--target={triple}"
             native, provider, entry, exe = (work / f"{arch}.{suffix}" for suffix in
                                             ("use.o", "definitions.o", "start.o", "elf"))
-            check(*cephyr, target, "-c", source, "-o", native)
+            check(*cephyr, target, "-fPIC", "-c", source, "-o", native)
             check(*cephyr, target, "-c", definitions, "-o", provider)
             start = work / "start.s"
             start.write_text("\n".join((".text", ".globl _start", "_start:", *start_code,
@@ -177,13 +224,19 @@ def main():
             check(args.clang, target, *abi, "-c", start, "-o", entry)
             link = (args.lld, "-m", emulations[arch], "-static", entry, native)
             check(*link, "-o", exe, expected="undefined symbol: shared_inline")
-            check(*link, provider, "-o", exe)
-            if host == arch or (host, arch) in (("amd64", "x86_64"), ("arm64", "aarch64")):
-                check(exe)
-            elif emulators.get(arch):
-                check(emulators[arch], exe)
-            else:
-                print(f"{triple}: linked; execution skipped (no emulator)")
+            # Both TUs export and import UTF-8 names. Replacing the provider
+            # with independent C code tests the actual ELF spelling both ways.
+            foreign = work / f"{arch}.clang.o"
+            check(args.clang, target, *abi, "-std=c11", "-ffreestanding", "-fPIC", "-c",
+                  definitions, "-o", foreign)
+            for obj in (provider, foreign):
+                check(*link, obj, "-o", exe)
+                if host == arch or (host, arch) in (("amd64", "x86_64"), ("arm64", "aarch64")):
+                    check(exe)
+                elif emulators.get(arch):
+                    check(emulators[arch], exe)
+                else:
+                    print(f"{triple} ({obj.name}): linked; execution skipped (no emulator)")
 
         for name, (text, diagnostic) in NEGATIVE.items():
             source, output = work / f"{name}.c", work / f"{name}.s"

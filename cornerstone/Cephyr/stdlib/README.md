@@ -5,7 +5,7 @@ and RV64IM Linux LP64 programs. `build.sh` uses an independently configured
 trusted target compiler; the library never falls back to host headers or host libc.
 
 ```sh
-CC=/path/to/clang AR=/path/to/llvm-ar \
+CC=/path/to/riscv64-linux-gnu-gcc AR=/path/to/ar \
   CEPHYR_LIBC_TARGET=riscv64-linux-gnu \
   CEPHYR_LIBC_TARGET_FLAGS='-march=rv64im -mabi=lp64' \
   ./build.sh /path/to/output
@@ -13,9 +13,8 @@ CC=/path/to/clang AR=/path/to/llvm-ar \
 
 Without a target override, `build.sh` builds for `x86_64-linux-gnu`.
 The output is `libc.a` plus a separate `crt0.o`. All C sources are compiled
-with `-ffreestanding -fno-builtin -nostdinc`. For a dedicated cross compiler
-that does not accept Clang's `--target=...` flag, set
-`CEPHYR_LIBC_TARGET_OPTION=''`.
+with `-ffreestanding -fno-builtin -nostdinc`. The bootstrap compiler emits
+freestanding objects only; none of its runtime libraries are linked.
 
 ## Implemented surface
 
@@ -23,8 +22,9 @@ that does not accept Clang's `--target=...` flag, set
   floating-point format limits in `<float.h>`, and the alternative spellings
   from `<iso646.h>`. A format reported by `<float.h>` is not a frontend
   code-generation guarantee. `FLT_ROUNDS` reflects the hardware rounding mode
-  on AMD64 and AArch64; on RV64IM it is indeterminable.
-- C11 §7.6 `<fenv.h>` on Linux AMD64 and little-endian AArch64. This does
+  on AMD64 and AArch64; RV64IM uses fixed round-to-nearest (`FLT_ROUNDS == 1`).
+- C11 §7.6 `<fenv.h>` on all three targets. RV64IM supports only
+  `FE_TONEAREST` and has no exception flags (`FE_ALL_EXCEPT == 0`). This does
   not enable `#pragma STDC FENV_ACCESS` or Annex F in the frontend.
 - ASCII `ctype` functions and the §7.30 wide classification and mapping
   functions (`<wctype.h>`) in the C locale.
@@ -53,16 +53,17 @@ that does not accept Clang's `--target=...` flag, set
   No POSIX signal APIs are exposed. See [signal details](RUNTIME.md#signals).
 - §7.22 general utilities: integer text conversion with base detection and
   `ERANGE`, integer absolute value/division, `qsort`, `bsearch`, deterministic
-  `rand`/`srand`, `getenv`, `aligned_alloc` and the other allocation functions,
+  `rand`/`srand`, `getenv`, `system`, `aligned_alloc` and the other allocation functions,
   and separate `atexit`/`at_quick_exit` handler lists. The shared integer
    parser also handles `wcstol`, `wcstoll`, `wcstoul`, `wcstoull`, `wcstoimax`,
    and `wcstoumax` (§7.29.4.1.2 and §7.8.2.4).
 - Floating text conversion (§§7.22.1.1, 7.22.1.3, 7.29.4.1.1):
-  `atof`, `strtof`, `strtod`, `wcstof`, and `wcstod` accept decimal and
-  hexadecimal forms, infinity, and quiet NaN in the C locale. Each conversion
-  rounds directly to its destination format. External callers have all five
-  functions on the three runtime targets; Cephyr declarations require native
-  scalar floating-point calls. See [range and rounding details](RUNTIME.md#floating-text-conversion).
+  `atof`, `strtof`, `strtod`, `strtold`, and the corresponding wide `wcsto*`
+  functions accept decimal and hexadecimal forms, infinity, and quiet NaN
+  in the C locale. Each conversion rounds directly to its destination
+  format. The archive supplies them on all three targets. Cephyr's headers
+  expose only the supported return types for its native ABI.
+  See [range and rounding details](RUNTIME.md#floating-text-conversion).
 - §7.21 narrow streams: standard streams, `fopen`, `freopen`, `fclose`, file
   positioning, one byte of `ungetc`, and character, line, and block I/O.
   The Linux text and binary modes both transfer bytes without translation.
@@ -87,6 +88,12 @@ that does not accept Clang's `--target=...` flag, set
   in the C locale; unrepresentable values give `-1` with `EILSEQ`. For
   `%ls`, the precision bounds the bytes converted, and `snprintf` still
   counts the complete result even if its output buffer is too small.
+- Narrow and wide formatted output support `%a`, `%e`, `%f`, `%g` and their
+  uppercase forms for `double` (including promoted `float`). `l` has no
+  effect. `wprintf`, `fwprintf`, `swprintf` and their `v` forms use the
+  same rounding, flags and field layout as `printf`. `swprintf` counts wide
+  characters; if the field and terminating null do not fit, it returns `-1`
+  with `EOVERFLOW`. Wide output with `L` reports `ENOSYS`.
 - §7.21.6 formatted input (`scanf`, `fscanf`, `sscanf`, and their `v` forms)
   for `%d`, `%i`, `%u`, `%o`, `%x`, `%X`, `%c`, `%s`, `%[`, `%p`, `%n`,
   and `%%`. Includes field widths, assignment suppression, integer length
@@ -97,7 +104,7 @@ that does not accept Clang's `--target=...` flag, set
   Scansets support ascending byte ranges, parsed left to right; a hyphen
   that cannot form such a range is literal.
 - §7.29.2 wide formatted input (`wscanf`, `fwscanf`, `swscanf`, and their
-  `v` forms) supports the same nonfloating conversion specifiers. Field widths and
+  `v` forms) supports the same conversions as narrow input. Field widths and
   `%n` count wide characters. `%c`, `%s`, and `%[` without `l` encode
   their input with `wcrtomb` in the ASCII C locale; with `l` they copy wide
   characters directly. Scansets interpret ascending wide-character ranges
@@ -107,9 +114,11 @@ that does not accept Clang's `--target=...` flag, set
 An unsupported narrow formatted-output conversion returns `-1` with
 `EINVAL`; a result larger than `INT_MAX` fails with `EOVERFLOW`.
 
-Narrow formatted input supports `aAeEfFgG` for `float *` and, with `l`,
-`double *`. Wide floating input and narrow `long double` input stop with
-`ENOSYS`. Malformed directives stop with `EINVAL`; a width larger than
+Narrow and wide formatted input support `aAeEfFgG` for `float *`, `double *`
+(`l`), and `long double *` (`L`). Each rounds directly to the target
+precision, including AMD64 extended precision and AArch64/RV64IM binary128. An
+incomplete input item such as `1e+` is consumed but makes no assignment.
+Malformed directives stop with `EINVAL`; a width larger than
 `SIZE_MAX` stops with `EOVERFLOW`. Integer values outside the destination
 range stop with `ERANGE` rather than writing the result (C11 does not define
 out-of-range assignments). Wide stream decoding and text fields that convert
@@ -127,13 +136,13 @@ This inventory is not a conformance claim. In particular:
 
 | Clauses | Known blockers |
 | --- | --- |
-| §4¶6, §§5.2.4.2.2, 7.7, 7.16 | The bundled tree contains all nine freestanding headers. Native `<stdarg.h>` supports scalar arguments on SysV AMD64 and little-endian AAPCS64; RV64IM still needs a `va_list` ABI. AMD64 supports `long double` scalar arithmetic, but not by-value calls. RV64IM binary32/binary64 arithmetic and conversions use compiler-runtime helpers. `<float.h>` ABI format limits do not imply native compiler support. |
-| §5.1.2.2, §7.22.4 | The Linux CRT supports ordinary hosted `main` and normal termination; it is not a general platform CRT. `system` is missing. See [startup details](RUNTIME.md). |
-| §§7.3, 7.6, 7.12, 7.25 | No complex arithmetic library, math library, or type-generic math. RV64IM has no `<fenv.h>` implementation. |
-| §§7.8, 7.22 | APIs returning `imaxdiv_t`, `div_t`, `ldiv_t`, and `lldiv_t` by value are also exposed to native Cephyr callers on bundled RV64IM LP64. Other Cephyr targets lack the required aggregate ABI. `strtold` is not implemented or declared. |
+| §4¶6, §§5.2.4.2.2, 7.7, 7.16 | The bundled tree contains all nine freestanding headers. Native `<stdarg.h>` supports promoted integer, pointer and `double` arguments on SysV AMD64, little-endian AAPCS64 and RV64IM LP64. AMD64 supports `long double` scalar arithmetic, fixed parameters, and return values. RV64IM binary32/binary64 arithmetic and conversions use compiler-runtime helpers. `<float.h>` ABI format limits do not imply native compiler support. |
+| §5.1.2.2, §7.22.4 | The Linux CRT supports ordinary hosted `main` and normal termination; it is not a general platform CRT. `system` invokes `/bin/sh` if available. See [startup details](RUNTIME.md). |
+| §§7.3, 7.12, 7.25 | No complex arithmetic library, math library, or type-generic math. |
+| §§7.8, 7.22 | APIs returning `imaxdiv_t`, `div_t`, `ldiv_t`, and `lldiv_t` by value are also exposed to native Cephyr callers on bundled RV64IM LP64. Other Cephyr targets lack the required aggregate ABI. The runtime implements `strtold` and `wcstold`; direct calls require a compiler that supports the target's `long double` return ABI. |
 | §7.13 | The runtime contains `setjmp` and `longjmp`, but Cephyr still lacks the returns-twice call semantics required to expose these to native callers. |
 | §§7.17, 7.26 | Atomics and threads are outside the advertised C11 conditional feature set. |
-| §§7.21.6, 7.29.2, 7.29.4.1.1 | Narrow formatted I/O lacks `long double` conversions; wide formatted I/O lacks floating conversions. `wcstold` is missing. Native access to the `v` interfaces requires target `va_list` support and declarations. |
+| §§7.21.6, 7.29.2 | Narrow and wide formatted output still lack `long double` conversions. Wide `v` interfaces are declared for external callers and native AMD64 and RV64IM LP64 callers; AAPCS64 would require passing its `va_list` structure by value. |
 
 ## Variadic ABI boundary
 
@@ -141,7 +150,7 @@ The library sources are compiled by the external target compiler, whose target
 variadic ABI is trusted. Cephyr-generated calls are a separate capability.
 When the driver defines `__CEPHYR_HAS_VARIADIC_CALLS`, Cephyr's `stdio.h`
 declares the non-`v` formatted input and output functions for direct calls with
-supported integer and pointer arguments. Without that macro it defines
+supported integer, pointer and promoted floating arguments. Without that macro it defines
 `__CEPHYR_VARIADIC_IO_UNAVAILABLE` instead. The ability to make direct
 variadic calls does not itself imply support for variadic definitions,
 `va_list`, or the `v` forms.
@@ -161,7 +170,7 @@ on all targets because ordinary native MIR calls do not model returns-twice
 semantics. External compilation sees both `difftime` and the returns-twice
 `setjmp` declaration.
 
-Run `sh tests/run.sh /path/to/build-dir` with Clang, `llvm-ar`, and `ld.lld`
+Run `sh tests/run.sh /path/to/build-dir` with GNU target compilers and `ar`
 to statically link and test the packaged library without host headers or libc.
 It checks the stream lifecycle, buffering, file operations, pipe behavior,
 locale, allocation, startup environment, termination, calendar and clock

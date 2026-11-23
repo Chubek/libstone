@@ -1,0 +1,247 @@
+{
+  "schema": "cephyr-blackstone-c11-fixtures.v1",
+  "assumptions": [
+    "C11",
+    "LP64 (unsigned long 64 bits)",
+    "no standard library required",
+    "no undefined signed overflow or invalid shifts"
+  ],
+  "fixtures": [
+    {
+      "name": "algebraic",
+      "category": "local",
+      "description": "Classical algebraic identities and cancellation.",
+      "expected_opportunities": [
+        "add_zero",
+        "mul_one",
+        "xor_self",
+        "and_zero",
+        "sub_zero"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "constant_fold",
+      "category": "local",
+      "description": "Fold constants introduced by simple definitions.",
+      "expected_opportunities": [
+        "fold_add",
+        "fold_mul",
+        "fold_xor",
+        "fold_or",
+        "fold_and"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "copy_propagation",
+      "category": "local",
+      "description": "Chains of copies, constants and zero-valued additions.",
+      "expected_opportunities": [
+        "copy_propagation",
+        "constant_propagation",
+        "add_zero"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "cse_local",
+      "category": "cse",
+      "description": "Repeated pure expressions within one basic block.",
+      "expected_opportunities": [
+        "cse_integer_arithmetic",
+        "cse_integer_bitwise"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "cse_dominance",
+      "category": "cse-cfg",
+      "description": "Dominating expression reused across two branch successors.",
+      "expected_opportunities": [
+        "cse_integer_arithmetic",
+        "dominators",
+        "cfg"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "bitwise_factor",
+      "category": "extended",
+      "description": "Absorption, factoring and cancellation in integer bitwise DAGs.",
+      "expected_opportunities": [
+        "and_absorption",
+        "ext_factor_bitwise_or_of_ands",
+        "xor_cancel"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "reassociation",
+      "category": "extended",
+      "description": "Modular integer reassociation with constant operands.",
+      "expected_opportunities": [
+        "add_associate_constants",
+        "mul_associate_constants",
+        "xor_associate_constants"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "phi_join",
+      "category": "cfg",
+      "description": "Same-constant and distinct-value paths through SSA join parameters.",
+      "expected_opportunities": [
+        "phi_constant",
+        "cfg",
+        "copy_propagation"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "loop_induction",
+      "category": "loop",
+      "description": "Induction-value multiply by constant with a single latch.",
+      "expected_opportunities": [
+        "strength_reduction",
+        "loop_info",
+        "phi"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "loop_multilatch",
+      "category": "loop",
+      "description": "Induction-value multiply by constant with multiple latch edges.",
+      "expected_opportunities": [
+        "strength_reduction",
+        "loop_info",
+        "phi"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "unsigned_rem_mask",
+      "category": "qml-overlap",
+      "description": "Unsigned power-of-two remainder and guarded masking.",
+      "expected_opportunities": [
+        "integer_reduce",
+        "canonicalize",
+        "blackstone_algebraic"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "unsigned_wrap",
+      "category": "semantics",
+      "description": "Unsigned modular wraparound at 64-bit boundary.",
+      "expected_opportunities": [
+        "modular_semantics",
+        "reassociation",
+        "xor_self"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "signed_near_miss",
+      "category": "negative-control",
+      "description": "Signed division/remainder: do not apply unsigned identities.",
+      "expected_opportunities": [
+        "do_not_rewrite_signed_rem_as_unsigned",
+        "respect_traps"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "dynamic_divisor",
+      "category": "negative-control",
+      "description": "Runtime-dependent nonzero divisor must not become a bit mask.",
+      "expected_opportunities": [
+        "do_not_replace_dynamic_remainder",
+        "mask_near_miss"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "memory_effects",
+      "category": "effects",
+      "description": "Volatile reads/writes and side-effecting calls must stay observable.",
+      "expected_opportunities": [
+        "do_not_eliminate_volatile",
+        "do_not_cse_calls",
+        "preserve_effects"
+      ],
+      "checks": 14
+    },
+    {
+      "name": "pointer_alias",
+      "category": "effects",
+      "description": "Aliased/nonaliased reads across intervening writes.",
+      "expected_opportunities": [
+        "no_memory_cse_without_alias_proof",
+        "preserve_stores"
+      ],
+      "checks": 14
+    },
+    {
+      "name": "shift_near_miss",
+      "category": "negative-control",
+      "description": "Different logical shift counts from runtime operands.",
+      "expected_opportunities": [
+        "valid_shift_bounds",
+        "no_invalid_strength_reduction"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "stress_dense",
+      "category": "stress",
+      "description": "Generated 4x64 basic-block operations; dense optimizer match density.",
+      "expected_opportunities": [
+        "algebraic-density-dense",
+        "compile-overhead-control"
+      ],
+      "checks": 20
+    },
+    {
+      "name": "stress_sparse",
+      "category": "stress",
+      "description": "Generated 4x64 basic-block operations; sparse optimizer match density.",
+      "expected_opportunities": [
+        "algebraic-density-sparse",
+        "compile-overhead-control"
+      ],
+      "checks": 20
+    },
+    {
+      "name": "stress_inert",
+      "category": "stress",
+      "description": "Generated 4x64 basic-block operations; inert optimizer match density.",
+      "expected_opportunities": [
+        "algebraic-density-inert",
+        "compile-overhead-control"
+      ],
+      "checks": 20
+    },
+    {
+      "name": "sandslab_literals",
+      "category": "machine-code",
+      "description": "Narrow literal materialization across volatile accesses.",
+      "expected_opportunities": [
+        "narrow_immediate",
+        "preserve_flags_and_memory"
+      ],
+      "checks": 7
+    },
+    {
+      "name": "sandslab_wide",
+      "category": "machine-code",
+      "description": "Wide immediates and relocatable data address.",
+      "expected_opportunities": [
+        "keep_wide_immediate",
+        "preserve_relocation"
+      ],
+      "checks": 7
+    }
+  ]
+}

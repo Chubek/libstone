@@ -99,7 +99,9 @@ int main(void)
     const ArchonValue params[] = { 0, 1 }, swap[] = { 1, 0 };
     const ArchonValue yes[] = { 3, 4 }, no[] = { 4, 3 };
     const ArchonMIRBlock blocks[] = { {0}, { .params = params, .param_count = 2 } };
-    const ArchonMIRFunction fn = { .blocks = blocks, .block_count = 2 };
+    const ArchonMIRType types[5] = { ARCHON_MIR_I64, ARCHON_MIR_I64, ARCHON_MIR_I64,
+                                     ARCHON_MIR_I64, ARCHON_MIR_I64 };
+    const ArchonMIRFunction fn = { .types = types, .value_count = 5, .blocks = blocks, .block_count = 2 };
     const ANFrame frame = { .phi_base = 2048 };
     const ANHome homes[5] = {{0}};
     ANContext ctx = { .function = 7 };

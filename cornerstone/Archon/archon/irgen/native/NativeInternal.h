@@ -89,7 +89,7 @@ static inline int an_is_float(ArchonMIRType type)
 static inline int an_is_value_type(ArchonMIRType type)
 {
     return type == ARCHON_MIR_I64 || type == ARCHON_MIR_PTR ||
-        type == ARCHON_MIR_FUNC_PTR || an_is_float(type);
+        type == ARCHON_MIR_FUNC_PTR || an_is_float(type) || type == ARCHON_MIR_F80 || type == ARCHON_MIR_F128;
 }
 
 typedef enum {
@@ -157,7 +157,34 @@ typedef struct {
     int frame_size, slots_base, phi_base, return_offset;
     int va_start_offset; /* -1 if unused, otherwise relative to adjusted SP. */
     int local_offsets[AN_MAX_VALUE];
+    const ArchonMIRType *types;
+    int high_offsets[AN_MAX_VALUE]; /* Private high words of f128 values. */
 } ANFrame;
+
+/* Fixed-prototype LP64 argument cursor, in XLEN slots. A quad can split
+ * across a7 and the stack; only an entirely stacked quad needs alignment. */
+static inline size_t an_arg_slot(size_t *cursor, int wide)
+{
+    size_t first = *cursor;
+    if (wide && first >= an_abi.argc)
+        first = (first + 1) & ~(size_t)1;
+    *cursor = first + 1 + wide;
+    return first;
+}
+static inline size_t an_argument_slots(const ArchonMIRType *types, const ArchonValue *args, size_t count)
+{
+    size_t i, cursor = 0;
+    for (i = 0; i < count; ++i)
+        an_arg_slot(&cursor, types && types[args ? args[i] : i] == ARCHON_MIR_F128);
+    return cursor;
+}
+static inline size_t an_edge_words(const ArchonMIRType *types, const ArchonValue *args, size_t count)
+{
+    size_t i, words = count;
+    for (i = 0; i < count; ++i)
+        words += types[args[i]] == ARCHON_MIR_F128;
+    return words;
+}
 int an_frame(ANContext *, const ArchonMIRFunction *, size_t slots,
     size_t phi_count, size_t outgoing_words, int calls, int variadic, ANFrame *);
 int an_verify_frame(ANContext *, const ArchonMIRFunction *, size_t slots,

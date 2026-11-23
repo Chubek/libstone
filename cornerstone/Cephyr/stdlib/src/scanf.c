@@ -218,10 +218,9 @@ static enum scan_result scan_spec(struct scan_format *format,
         break;
     case 'a': case 'A': case 'e': case 'E':
     case 'f': case 'F': case 'g': case 'G':
-        if (conversion->length == SCAN_LD)
-            return scan_error(ENOSYS);
-        if (conversion->length == SCAN_INT || conversion->length == SCAN_L)
-            return format->wide ? scan_error(ENOSYS) : SCAN_OK;
+        if (conversion->length == SCAN_INT || conversion->length == SCAN_L ||
+            conversion->length == SCAN_LD)
+            return SCAN_OK;
         break;
     }
     return scan_error(EINVAL);
@@ -504,7 +503,8 @@ struct scan_fp_item {
     enum scan_result result;
 };
 
-/* Fold ASCII for the C-locale grammar, but save the original byte for strtofp. */
+/* Match full input characters before narrowing: the C-locale floating
+   grammar accepts only ASCII, so byte and wide input can share strtofp. */
 static wint_t scan_fp_peek(struct scan_fp_item *item)
 {
     if (item->left == 0 || item->result != SCAN_OK)
@@ -620,7 +620,9 @@ static enum scan_result scan_float(struct scan_input *input,
             const unsigned char *bytes = item.field.heap != NULL ? item.field.heap : item.field.local;
             const char *text = (const char *)bytes;
             /* Convert at the destination precision to avoid double rounding. */
-            if (conversion->length == SCAN_L)
+            if (conversion->length == SCAN_LD)
+                *va_arg(*args, long double *) = strtold(text, NULL);
+            else if (conversion->length == SCAN_L)
                 *va_arg(*args, double *) = strtod(text, NULL);
             else
                 *va_arg(*args, float *) = strtof(text, NULL);

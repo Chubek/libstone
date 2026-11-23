@@ -34,7 +34,7 @@ typedef enum cephyr_status {
 
 unsigned cephyr_abi_version(void);
 const char *cephyr_version(void);
-/* CPython build version, packed as (major << 16) | minor. */
+/* Embedded CPython ABI if present (major << 16 | minor); zero without libpython. */
 unsigned cephyr_python_version(void);
 
 /*

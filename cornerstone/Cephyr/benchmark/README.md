@@ -1,169 +1,100 @@
-# Cephyr rewrite benchmark
+# Cephyr / Blackstone — C11 optimization fixtures
 
-Build a Release compiler with `-DCEPHYR_ENABLE_MOONSTONE=ON`. Run the
-benchmark on Linux with Cephyr's target assembler/linker and `llvm-objdump`
-available:
+For the two additional native AMD64 constant-materialization fixtures, see
+[SandSLAB results and reproduction commands](../docs/SandSLAB.md).
 
-```sh
-python3 cornerstone/Cephyr/benchmark/run.py \
-  --cephyr build-cephyr/cephyr --output /path/to/new/cephyr-results \
-  --repeat 7 --assert-rewrites
-```
+The original Blackstone suite has **20 standalone C11 programs**, each with an independent `main` that returns zero if its known-answer tests pass. It targets Cephyr's **LP64** C model (64-bit `unsigned long`) and uses no libc functions, inline assembly, compiler intrinsics or undefined signed overflow. Every program must be compiled separately because each has its own `main`.
 
-The default suite compares the baseline (no QML) with the built-in
-`canonicalize` pass. Its six handwritten and sixteen deterministic generated
-cases exercise joins, loops, integer promotions, memory and calls, varying
-canonicalization match density, and multiplication by two. Use
-`--fixture 'dense|inert'` to select names by regular expression.
+The goal is to measure potential Blackstone integration against Cephyr's baseline and to catch **wrong-code bugs**. Blackstone is **not yet integrated into Cephyr** in the repository version inspected; these fixtures are intended for the future adapter, and can already compare existing QML passes.
 
-### Guarded integer reduction
+## Fixture coverage
 
-`--suite integer-reduce` runs six pipelines in one comparison: baseline,
-`canonicalize`, `strength_reduce`, the two together in that order,
-`integer_reduce` alone, and all three in that order. It includes unsigned
-remainder by powers of two (including 1 and `1UL << 63`), redundant masks,
-and a mixed workload where all three passes apply. Near-misses use odd
-non-power-of-two and input-dependent divisors, signed remainder, and masks
-that actually clear bits. No divisor is zero. Each workload has four kernels
-with 48 opportunities or near-misses each, and a separate driver checks six
-seed or boundary inputs per kernel against an independent Python LP64 model.
-Only the kernel objects contribute to the code metrics for this suite.
+| Program | Category / target | Main expected opportunities |
+|---|---|---|
+| `algebraic.c` | local identities | add-zero, multiply-one, XOR-self |
+| `constant_fold.c` | local folding | integer constant folding |
+| `copy_propagation.c` | SSA propagation | copies, constant propagation |
+| `cse_local.c` | local CSE | duplicate pure ALU operations |
+| `cse_dominance.c` | cross-block CSE | dominance and CFG |
+| `bitwise_factor.c` | extended patterns | factoring, absorption, cancellation |
+| `reassociation.c` | reassociation | modular integer constant grouping |
+| `phi_join.c` | SSA joins | block parameters / phi interoperability |
+| `loop_induction.c` | loops | induction-based strength reduction |
+| `loop_multilatch.c` | loops | recurrence across multiple loop backedges |
+| `unsigned_rem_mask.c` | QML overlap | guarded unsigned modulo and bit masks |
+| `unsigned_wrap.c` | semantic boundary | modulo-2^64 wraparound |
+| `signed_near_miss.c` | negative control | signed division/remainder vs. unsigned simplification |
+| `dynamic_divisor.c` | negative control | dynamic nonzero divisor, mask near-miss |
+| `memory_effects.c` | effects / safety | volatile access and effectful calls |
+| `pointer_alias.c` | effects / safety | aliased read/store/read sequence |
+| `shift_near_miss.c` | negative control | runtime-dependent but valid shift amounts |
+| `stress_dense.c` | scale | 4 × 64 identity-heavy steps |
+| `stress_sparse.c` | scale | 4 × 64 steps with sparse identities |
+| `stress_inert.c` | scale | 4 × 64 steps with no intentional identity matches |
 
-For example, from an AMD64 host (each destination must be new):
+The program names describe the **intended pressure point**, not an assertion that the current Cephyr lowerer emits a particular kernel pattern or that a future Blackstone adapter can legally consume it. Inspect emitted MIR before claiming a kernel match. All expected values are generated from independent Python arithmetic in `tools/generate.py` and materialized in the C sources.
 
-```sh
-bench=cornerstone/Cephyr/benchmark/run.py
-cephyr=build-cephyr/cephyr
-qemu_bin=/path/to/qemu/bin
-taskset -c 6 python3 -B "$bench" --cephyr "$cephyr" \
-  --output /path/to/new/amd64 --target x86_64-linux-gnu \
-  --suite integer-reduce --repeat 12 --warmup 2 --assert-rewrites
-taskset -c 6 python3 -B "$bench" --cephyr "$cephyr" \
-  --output /path/to/new/aarch64 --target aarch64-linux-gnu \
-  --runner "$qemu_bin/qemu-aarch64-static" \
-  --suite integer-reduce --repeat 12 --warmup 2 --assert-rewrites
-taskset -c 6 python3 -B "$bench" --cephyr "$cephyr" \
-  --output /path/to/new/rv64 --target riscv64-linux-gnu \
-  --runner "$qemu_bin/qemu-riscv64-static" \
-  --suite integer-reduce --repeat 12 --warmup 2 --assert-rewrites
-```
+## Run tests with Cephyr
 
-Choose an available CPU in place of `6`; run targets serially for timing.
-To compare a named profile instead of the suite's built-in candidate
-pipelines, supply candidate-only arguments and a config with no active
-default profile:
+From a LibStone checkout, put this package alongside the repository or update the fixture paths below. Assuming Cephyr is already built:
 
 ```sh
-python3 cornerstone/Cephyr/benchmark/run.py \
-  --cephyr build-cephyr/cephyr --output /path/to/new/profile-results \
-  --config path/to/Cephyr.toml --candidate-arg=--profile=my_profile
+cephyr=./build-cephyr/cephyr
+"$cephyr" --no-factir cephyr-blackstone-c11/fixtures/algebraic.c -o /tmp/algebraic
+/tmp/algebraic  # exit status 0 means pass
 ```
 
-### Reading results
+Each C file is also directly compilable with a conventional LP64 C11 compiler:
 
-For each workload the runner measures `--emit-mir --no-cache` with Prolific.
-It rotates mode order each round and discards warmups. `MIR ms` is elapsed
-compiler invocation time (including startup and trace writing); `QML ms` is
-only the instrumented rewrite span. Inclusive phase timings must not be
-summed. `summary.json` retains per-run samples, wall min/median/max, phase
-medians, MIR bytes/opcode counts, and native object metrics. Per-run MIR and
-Prolific traces are also retained. The runner requires byte-for-byte
-deterministic MIR within each mode; `--assert-rewrites` checks the expected
-MIR changes and unchanged controls for built-in pipelines. The integer
-suite also asserts how many guarded `rem_u` or `and` operations disappear.
+```sh
+cc -std=c11 -O0 cephyr-blackstone-c11/fixtures/pointer_alias.c -o /tmp/pointer_alias
+/tmp/pointer_alias
+```
 
-Outside the timed section, Cephyr produces a relocatable object for each
-mode. The runner reports decoded `.text` instructions (including any decoded
-padding), `.text` bytes including padding, and whole-object file bytes.
-Deltas are against the same workload and target's baseline. Disassemblies
-are retained. The runner links statically using a small Linux entry point,
-without libc, and checks every mode by exit status. Results are labeled
-`native`, `runner`, `compile-only` (no cross-target runner or `--no-verify`),
-or `mir-only` (`--mir-only`, useful without target assembly/disassembly
-tools). Failed compilation, linking, or execution is an error, not a skip.
+## Compare baseline and candidate
 
-Timings are descriptive, not pass/fail thresholds. They do not cover target
-code generation, linking, or generated program runtime. Static instruction
-counts are not dynamic counts or speed estimates; QEMU is used for result
-verification, not timing.
+The included Python 3 benchmark runner compiles baseline and candidate MIR several times, checks deterministic output, records opcode counts, produces object files, and **builds and executes both versions** unless you request `--skip-run`. It emits a JSON summary plus the final MIR and object for each program/mode.
 
-## Recorded integer reduction run
+Use an *existing* QML pass as a demonstration:
 
-Release Cephyr 0.1.0 with Prolific, built with GCC 16.2.1; target assembly,
-linking, and disassembly used LLVM 22.1.8. The host was Linux 6.18.52 on a
-Core i7-11700K, pinned to logical CPU 6. The commands above used 12 measured
-repetitions after two warmups, with targets measured serially. All 48
-workload/mode pairs per target passed their result checks: AMD64 natively,
-AArch64 and RV64 under QEMU user-mode 11.1.3. The suite's MIR assertions
-also passed.
+```sh
+python3 cephyr-blackstone-c11/benchmark.py \
+  --compiler ./build-cephyr/cephyr \
+  --output /tmp/cephyr-compare-01 \
+  --target x86_64-linux-gnu \
+  --candidate-arg=--qml-pass=canonicalize \
+  --repeat 7 --warmup 2
+```
 
-Static deltas (instructions / `.text` bytes) for `integer_reduce` alone
-relative to baseline:
+Use a QML pipeline:
 
-| Workload (`ir-…-4x48`) | AMD64 | AArch64 | RV64 |
-| --- | ---: | ---: | ---: |
-| `remainder` | −960 / −2,877 | −384 / −1,536 | **+192 / +768** |
-| `remainder-high` | −960 / −3,261 | −384 / −1,536 | **+192 / +768** |
-| `remainder-one` | −1,344 / −4,026 | −576 / −2,304 | −384 / −1,536 |
-| `mask` | −381 / −2,061 | −384 / −1,536 | −384 / −1,536 |
-| `mixed` | −960 / −2,880 | −384 / −1,536 | **+192 / +768** |
-| `remainder-near`, `signed-near`, `mask-near` (each) | 0 / 0 | 0 / 0 | 0 / 0 |
+```sh
+python3 cephyr-blackstone-c11/benchmark.py \
+  --compiler ./build-cephyr/cephyr \
+  --output /tmp/cephyr-compare-02 \
+  --candidate-arg=--qml-pass=canonicalize \
+  --candidate-arg=--qml-pass=strength_reduce \
+  --candidate-arg=--qml-pass=integer_reduce
+```
 
-On RV64, removing 192 `remu` instructions still made these three workloads
-larger: in `remainder`, the disassembly drops 192 `remu` and 192 `mv` but
-adds 192 each of `li`, `slli`, and `srl`. This is a code-size regression,
-not evidence of a runtime regression.
+Once a Blackstone adapter exposes its own Cephyr driver flags, pass those through the same `--candidate-arg=...` mechanism. The runner does **not** assume or invent Blackstone CLI options.
 
-The other passes only changed the `mixed` fixture in this suite. Compared
-with baseline, all mode deltas for `mixed` were:
+Use `--fixture '^(cse_|phi_|loop_)'` to select a group. For a target that cannot execute natively, pass `--runner /path/to/qemu-riscv64` (or equivalent), or `--skip-run` for compile-only measurements. Pass `--with-factir` if you want FactIR present in *both* configurations; by default it is off to isolate the selected rewrites. Use `--objdump /path/to/llvm-objdump` for optional `.text` byte counts (object bytes are always recorded).
 
-| Pipeline | AMD64 | AArch64 | RV64 |
-| --- | ---: | ---: | ---: |
-| `canonicalize` | −384 / −2,109 | −384 / −1,536 | −384 / −1,536 |
-| `strength_reduce` | 0 / −192 | 0 / 0 | 0 / 0 |
-| `canonicalize` + `strength_reduce` | −384 / −2,301 | −384 / −1,536 | −384 / −1,536 |
-| `integer_reduce` | −960 / −2,880 | −384 / −1,536 | **+192 / +768** |
-| All three | −1,344 / −5,181 | −768 / −3,072 | −192 / −768 |
+**Interpretation:** The runner's time measurements are MIR compiler invocations (including process startup), not runtime performance of the produced binaries. Object-size deltas are not necessarily instruction-count or `.text`-size deltas. A changed MIR does not establish a speedup. The self-check cases establish only sampled functional equality, not formal equivalence. An optimizer may pass all samples while still being wrong for other inputs.
 
-Outside `mixed`, selecting all three produced the same static deltas as
-`integer_reduce` alone.
+## Regenerate / audit the expected results
 
-Representative compiler-only timings, in ms. Parentheses show observed
-min–max over the 12 samples; the rewrite column is the instrumented median
-for `integer_reduce`. Even the unchanged mask control incurred rewrite
-work. Long tails and overlapping ranges limit conclusions about the
-magnitude of compile-time overhead; the host was pinned, not isolated.
+```sh
+python3 cephyr-blackstone-c11/tools/generate.py
+```
 
-| Target / workload | Baseline MIR | `integer_reduce` MIR | Rewrite |
-| --- | ---: | ---: | ---: |
-| AMD64 `remainder` | 4.07 (3.81–4.51) | 4.67 (4.51–5.12) | 0.25 |
-| AMD64 `mask-near` | 3.81 (3.69–4.23) | 4.13 (4.02–4.45) | 0.23 |
-| AArch64 `remainder` | 6.87 (5.23–8.80) | 7.66 (6.00–10.03) | 0.35 |
-| AArch64 `mask-near` | 4.63 (4.45–18.07) | 5.20 (4.73–17.23) | 0.25 |
-| RV64 `remainder` | 5.61 (5.42–10.39) | 6.47 (6.24–10.29) | 0.31 |
-| RV64 `mask-near` | 4.42 (4.11–17.91) | 4.72 (4.42–14.79) | 0.25 |
+This rewrites the fixtures and `manifest.json` deterministically. The generator uses Python integers masked to 64 bits and an explicit truncation-toward-zero model for signed division/remainder. Review its oracle functions independently when expanding the suite.
 
-## Historical canonicalization Prolific run
+## Suggested CI matrix
 
-Release build on Linux AMD64 (Intel i7-11700K), pinned to CPU 6, with seven
-samples after one warmup. All 22 fixtures compiled and passed native
-self-checks in both modes. The initial integration verified the original
-and final MIR on every QML invocation. The tuned path reads the lowerer's
-canonical MIR directly, still verifies changed output, and adds more
-integer identities to the built-in pass.
-
-| Workload | Initial rewrite span | Tuned rewrite span | Tuned verifier span |
-| --- | ---: | ---: | ---: |
-| `dense-8x112` | 1.788 ms | 0.737 ms | 0.950 ms |
-| `sparse-8x112` | 1.641 ms | 0.553 ms | 0.886 ms |
-| `inert-8x112` | 1.664 ms | 0.523 ms | not needed |
-
-The dense fixture went from 1,792 ALU operations to zero and from 200,224 to
-180,128 object bytes. The inert fixture's MIR and object size were unchanged;
-its initial post-rewrite verification alone took 0.977 ms. These are
-observed medians, not guarantees about compilation or runtime speed.
-
-With both passes selected, all four `strength-*` fixtures passed their
-native checks. `strength-8x112` replaced all 896 MIR multiplications with
-additions. Its total ALU count stayed at 1,792, while the object fell from
-200,608 to 199,712 bytes.
+1. Compile and run every program with a reference C11 compiler at `-O0` and `-O2`.
+2. Compile and run every program with Cephyr at baseline, QML-only, Blackstone-only, and combined configurations when supported.
+3. Execute native AMD64 and AArch64/RV64 under the appropriate emulator.
+4. Reject failed self-checks, malformed MIR, or nondeterministic MIR; record but do not fail solely on code-size/timing regressions.
+5. Review negative controls in particular: signed remainder, aliasing, volatile accesses, calls and multiple loop latches.

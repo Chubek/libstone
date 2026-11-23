@@ -121,6 +121,37 @@ static void text(void)
     assert(swscanf(input, L"%s", narrow) == 1 && strlen(narrow) == 269 && narrow[268] == 'a');
 }
 
+static void floating(void)
+{
+    float f;
+    double d;
+    int n;
+    wchar_t tail;
+    /* The low byte of U+0132 is an ASCII digit. It must still end the item. */
+    assert(scan_text(L"nan(tag) -0X1.8P1 1.25\u0132", L"%*G %la %F%n%lc",
+                     &d, &f, &n, &tail) == 3);
+    uint64_t dbits;
+    uint32_t bits;
+    memcpy(&dbits, &d, sizeof dbits);
+    memcpy(&bits, &f, sizeof bits);
+    assert(dbits == UINT64_C(0xc008000000000000) && bits == UINT32_C(0x3fa00000) &&
+           n == 22 && tail == 0x132);
+    assert(swscanf(L"1.000000059604644775390626", L"%e", &f) == 1);
+    memcpy(&bits, &f, sizeof bits);
+    assert(bits == UINT32_C(0x3f800001)); /* Direct binary32 rounding. */
+
+    FILE *file = tmpfile();
+    assert(file != NULL && fputws(L"1e+! 12.5e3;", file) >= 0);
+    rewind(file);
+    assert(scan_file(file, L"%lE", &d) == 0 && getwc(file) == L'!');
+    memcpy(&dbits, &d, sizeof dbits);
+    assert(dbits == UINT64_C(0xc008000000000000));
+    assert(fwscanf(file, L"%4lg", &d) == 1 && getwc(file) == L'e');
+    memcpy(&dbits, &d, sizeof dbits);
+    assert(dbits == UINT64_C(0x4029000000000000));
+    assert(fclose(file) == 0);
+}
+
 static void failures(void)
 {
     int value = 23, n = -1;
@@ -147,12 +178,6 @@ static void failures(void)
            errno == EOVERFLOW && value == 1);
     errno = 0;
     assert(swscanf(L"2147483648", L"%d", &value) == EOF && errno == ERANGE && value == 1);
-    float f;
-    memset(&f, 0, sizeof(f));
-    errno = 0;
-    assert(swscanf(L"1", L"%f", &f) == EOF && errno == ENOSYS);
-    for (size_t i = 0; i < sizeof(f); ++i)
-        assert(((unsigned char *)&f)[i] == 0);
 }
 
 static void streams(void)
@@ -187,7 +212,7 @@ static void streams(void)
     assert(fwscanf(file, L"%c", &narrow) == EOF && errno == EILSEQ && narrow == 'x');
     rewind(file);
     errno = 0;
-    assert(fwscanf(file, L"%*Lg") == EOF && errno == ENOSYS && getwc(file) == L'1');
+    assert(fwscanf(file, L"%*Lg") == 0 && errno == 0 && getwc(file) == L':');
     assert(fclose(file) == 0);
 
     file = tmpfile();
@@ -218,6 +243,7 @@ static void streams(void)
 int main(void)
 {
     numbers();
+    floating();
     text();
     failures();
     streams();

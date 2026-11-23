@@ -5,9 +5,9 @@ return {
     abi = "SysVAMD64",
     os = "linux",
     specification = "@archon/stdspec/amd64/root.arch",
-    assembler = { "clang" },
-    assemble_flags = { "--target=x86_64-linux-gnu" },
-    linker = { "ld.lld" },
+    assembler = { "@package/sandstone-as" },
+    assemble_flags = { "--bank", "@bank/amd64.symas", "-f", "elf", "-s", "att" },
+    linker = { "@package/qobjld" },
     link_flags = { "-m", "elf_x86_64" },
-    archiver = { "llvm-ar" },
+    archiver = { "ar" },
 }

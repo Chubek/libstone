@@ -2,27 +2,27 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 
+#ifndef CEPHYR_LITERAL_PARSER
 _Static_assert(__FLT_RADIX__ == 2 && __FLT_MANT_DIG__ == 24 &&
                __FLT_MAX_EXP__ == 128 && sizeof(float) == 4 &&
                __DBL_MANT_DIG__ == 53 && __DBL_MAX_EXP__ == 1024 &&
                sizeof(double) == 8, "expected binary32 and binary64");
-
-/* Every binary64 rounding boundary (including midpoints) is a dyadic with
-   at most 54 significant bits and denominator at most 2^1075. Its terminating
-   decimal has at most 768 significant digits: 2^54 * 5^1075 < 10^768.
-   Retaining 800 digits puts any boundary outside the discarded interval,
-   except possibly at its lower endpoint, where a sticky bit resolves it.
-   Sixteen significant hex digits likewise suffice for the dyadic boundaries. */
-enum { decimal_digits = 800, hex_digits = 16, limbs = 96 };
+#endif
 
 typedef struct {
-    uint32_t data[limbs];
+    uint32_t *data;
     unsigned used;
 } bigint;
 
-/* Only used with small multipliers (at most 16). */
+static void copy(bigint *dst, const bigint *src)
+{
+    dst->used = src->used;
+    memcpy(dst->data, src->data, src->used * sizeof(*src->data));
+}
+
 static void append_digit(bigint *a, unsigned base, unsigned digit)
 {
     uint64_t carry = digit;
@@ -98,12 +98,22 @@ static void subtract(bigint *a, const bigint *b)
 
 enum rounding { nearest, upward, downward, toward_zero };
 
-static enum rounding current_rounding(void)
+static enum rounding current_rounding(int extended)
 {
-#if defined(__x86_64__)
-    unsigned csr;
-    __asm__ volatile ("stmxcsr %0" : "=m"(csr));
-    switch ((csr >> 13) & 3) {
+#if defined(CEPHYR_LITERAL_PARSER)
+    (void)extended;
+#elif defined(__x86_64__)
+    unsigned direction;
+    if (extended) {
+        unsigned short control;
+        __asm__ volatile ("fnstcw %0" : "=m"(control));
+        direction = control >> 10;
+    } else {
+        unsigned csr;
+        __asm__ volatile ("stmxcsr %0" : "=m"(csr));
+        direction = csr >> 13;
+    }
+    switch (direction & 3) {
     case 1: return downward;
     case 2: return upward;
     case 3: return toward_zero;
@@ -117,25 +127,48 @@ static enum rounding current_rounding(void)
     case 3: return toward_zero;
     }
 #endif
+    (void)extended;
     /* The bundled RV64IM profile has no floating-point control register. */
     return nearest;
 }
 
+/* Work with packed sign/exponent/fraction bits; the x87 explicit integer
+   bit is supplied when materializing a long double. No wide division needed. */
+typedef unsigned __int128 fpbits;
+#define ONE ((fpbits)1)
 typedef struct {
     int fraction, emin, emax;
-    uint64_t infinity, sign;
+    int max_order10, min_order10;
+    unsigned decimal_digits, limbs;
 } format;
 
-static const format binary32 = {23, -126, 127, UINT32_C(0x7f800000), UINT32_C(0x80000000)};
-static const format binary64 = {52, -1022, 1023, UINT64_C(0x7ff0000000000000),
-                                 UINT64_C(0x8000000000000000)};
+/* Midpoints have at most (p+1) significant bits. For binary64 their
+   terminating decimals need <800 digits (2^54 * 5^1075 < 10^800); for
+   binary128, 2^114 * 5^16495 < 10^11600, which also covers x87.
+   Thus a discarded nonzero suffix can break a tie but cannot cross a
+   boundary in the interior of the retained interval. Positive binary
+   exponents need at most 4933 integer digits even for binary128.
 
-static uint64_t overflow(const format *f, enum rounding mode, int negative)
+   For the larger workspace A starts below 10^11600; for negative decimal
+   powers B <= 5^(5000+11599). For positive powers A <= 10^5001.
+   Normalization and division add at most 114 bits to the larger bit length:
+   both temporaries still fit in 1220 * 32 bits. */
+static const format binary32 = {23, -126, 127, 39, -46, 800, 96};
+static const format binary64 = {52, -1022, 1023, 309, -325, 800, 96};
+static const format extended = {__LDBL_MANT_DIG__ - 1, -16382, 16383, 5000, -5000,
+                                11600, 1220};
+
+static fpbits infinity(const format *f)
+{
+    return (fpbits)(f->emax * 2 + 1) << f->fraction;
+}
+
+static fpbits overflow(const format *f, enum rounding mode, int negative)
 {
     errno = ERANGE;
     if (mode == toward_zero || mode == (negative ? upward : downward))
-        return f->infinity - 1;
-    return f->infinity;
+        return infinity(f) - 1;
+    return infinity(f);
 }
 
 static uint64_t tiny(int away_from_zero)
@@ -144,34 +177,36 @@ static uint64_t tiny(int away_from_zero)
     return (uint64_t)away_from_zero;
 }
 
-/* Return the rounded magnitude of a * base^power. The caller has already
-   bounded the scientific exponent, so -1124 <= power <= 309 for decimal.
-   A fits initially in 2658 bits (or after positive powers of five well under
-   that, since decimal digit count + power <= 310); B fits in 2610 bits.
-   Normalization and division need at most 54 extra bits beyond these bounds. */
-static uint64_t convert(bigint *a, int base, int power, int sticky,
-                        const format *f, int negative)
+/* Return the rounded magnitude of a * base^power. */
+static fpbits convert(bigint *a, int base, int power, int sticky,
+                      const format *f, int negative)
 {
-    enum rounding mode = current_rounding();
+    enum rounding mode = current_rounding(f == &extended);
     int away_from_zero = mode == (negative ? downward : upward);
-    bigint b = {{1}, 1};
+    uint32_t denominator[f->limbs], scratch[f->limbs];
+    bigint b = {denominator, 1};
+    denominator[0] = 1;
     if (base == 10) {
         bigint *scaled = power < 0 ? &b : a;
         int count = power < 0 ? -power : power;
+        while (count >= 13) {
+            append_digit(scaled, 1220703125U, 0); /* 5^13 */
+            count -= 13;
+        }
         while (count--)
             append_digit(scaled, 5, 0);
     }
     /* base 16 supplies power in bits already; decimal contributes 2^power
        after putting the 5^power factor into A or B. */
     int log_ratio = (int)bit_length(a) - (int)bit_length(&b);
-    bigint trial;
+    bigint trial = {scratch, 0};
     int cmp;
     if (log_ratio >= 0) {
-        trial = b;
+        copy(&trial, &b);
         shift_left(&trial, (unsigned)log_ratio);
         cmp = compare(a, &trial);
     } else {
-        trial = *a;
+        copy(&trial, a);
         shift_left(&trial, (unsigned)-log_ratio);
         cmp = compare(&trial, &b);
     }
@@ -190,14 +225,14 @@ static uint64_t convert(bigint *a, int base, int power, int sticky,
     /* Divide A by B, leaving the exact remainder in A. The quotient fits
        in at most fraction+1 bits before rounding. */
     int bit = (int)bit_length(a) - (int)bit_length(&b);
-    uint64_t significand = 0;
+    fpbits significand = 0;
     if (bit >= 0) {
-        trial = b;
+        copy(&trial, &b);
         shift_left(&trial, (unsigned)bit);
         for (; bit >= 0; --bit) {
             if (compare(a, &trial) >= 0) {
                 subtract(a, &trial);
-                significand |= UINT64_C(1) << bit;
+                significand |= ONE << bit;
             }
             shift_right_one(&trial);
         }
@@ -211,7 +246,7 @@ static uint64_t convert(bigint *a, int base, int power, int sticky,
     } else if (away_from_zero && inexact) {
         ++significand;
     }
-    uint64_t hidden = UINT64_C(1) << f->fraction;
+    fpbits hidden = ONE << f->fraction;
     if (significand >= hidden * 2) {
         significand >>= 1;
         ++exponent;
@@ -225,7 +260,7 @@ static uint64_t convert(bigint *a, int base, int power, int sticky,
     }
     if (exponent < f->emin)
         exponent = f->emin;
-    return ((uint64_t)(exponent - f->emin + 1) << f->fraction) |
+    return ((fpbits)(exponent - f->emin + 1) << f->fraction) |
            (significand - hidden);
 }
 
@@ -298,7 +333,7 @@ static long long scan_exponent(cursor *c, int marker)
     return sign == '-' ? -value : value;
 }
 
-static uint64_t parse(const void *text, int wide, size_t *end, const format *f)
+static fpbits parse(const void *text, int wide, size_t *end, const format *f)
 {
     cursor c = {text, 0, wide};
     *end = 0;
@@ -308,13 +343,13 @@ static uint64_t parse(const void *text, int wide, size_t *end, const format *f)
         ch = peek(c);
     }
     int negative = ch == '-';
-    uint64_t sign = negative ? f->sign : 0;
+    fpbits sign = negative ? (fpbits)(2 * f->emax + 2) << f->fraction : 0;
     if (negative || ch == '+')
         ++c.pos;
     if (accept(&c, "inf")) {
         accept(&c, "inity");
         *end = c.pos;
-        return sign | f->infinity;
+        return sign | infinity(f);
     }
     if (accept(&c, "nan")) {
         cursor scan = c;
@@ -328,7 +363,7 @@ static uint64_t parse(const void *text, int wide, size_t *end, const format *f)
         }
         *end = c.pos;
         /* The optional payload is accepted, but does not change the NaN. */
-        return sign | f->infinity | (UINT64_C(1) << (f->fraction - 1));
+        return sign | infinity(f) | (ONE << (f->fraction - 1));
     }
 
     int base = 10;
@@ -342,8 +377,9 @@ static uint64_t parse(const void *text, int wide, size_t *end, const format *f)
             c = hex;
         }
     }
-    unsigned max_digits = base == 10 ? decimal_digits : hex_digits;
-    bigint a = {{0}, 0};
+    unsigned max_digits = base == 10 ? f->decimal_digits : (unsigned)f->fraction / 4 + 3;
+    uint32_t numerator[f->limbs];
+    bigint a = {numerator, 0};
     unsigned kept = 0;
     int seen_digit = 0, point = 0, sticky = 0;
     long long order = 0;
@@ -382,14 +418,37 @@ static uint64_t parse(const void *text, int wide, size_t *end, const format *f)
         return sign;
     int stride = base == 10 ? 1 : 4;
     order = order * stride + power;
-    if (order > (base == 10 ? 309 : 1024))
-        return sign | overflow(f, current_rounding(), negative);
-    if (order < (base == 10 ? -325 : -1078))
-        return sign | tiny(current_rounding() == (negative ? downward : upward));
+    if (order > (base == 10 ? f->max_order10 : f->emax))
+        return sign | overflow(f, current_rounding(f == &extended), negative);
+    if (order < (base == 10 ? f->min_order10 : f->emin - f->fraction - 4))
+        return sign | tiny(current_rounding(f == &extended) == (negative ? downward : upward));
     power = order - stride * (kept - 1);
     return sign | convert(&a, base, (int)power, sticky, f, negative);
 }
 
+#ifdef CEPHYR_LITERAL_PARSER
+/* Compiler-facing entry: parse validated tokens directly to target bits,
+   independent of the host FP formats, locale and runtime rounding mode. */
+int cephyr_literal_bits(const char *text, unsigned width, uint64_t *low, uint64_t *high)
+{
+    static const format x87 = {63, -16382, 16383, 5000, -5000, 11600, 1220};
+    static const format quad = {112, -16382, 16383, 5000, -5000, 11600, 1220};
+    const format *f = width == 32 ? &binary32 : width == 64 ? &binary64 : width == 80 ? &x87 : &quad;
+    size_t end;
+    int saved_errno = errno;
+    fpbits parsed = parse(text, 0, &end, f);
+    errno = saved_errno;
+    if (text[end] || parsed >= infinity(f)) return 0;
+    if (width == 80) {
+        *high = (uint64_t)(parsed >> 63);
+        *low = (uint64_t)(parsed & ((ONE << 63) - 1)) | ((uint64_t)(*high != 0) << 63);
+    } else {
+        *high = (uint64_t)(parsed >> 64);
+        *low = (uint64_t)parsed;
+    }
+    return 1;
+}
+#else
 float strtof(const char *restrict text, char **restrict end)
 {
     size_t pos;
@@ -434,3 +493,42 @@ double wcstod(const wchar_t *restrict text, wchar_t **restrict end)
         *end = (wchar_t *)text + pos;
     return result.value;
 }
+
+static long double unpack_extended(fpbits bits)
+{
+    _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ &&
+                   sizeof(long double) == 16 && __LDBL_MAX_EXP__ == 16384,
+                   "expected a bundled long double ABI");
+    union { fpbits bits; long double value; } result;
+#if defined(__x86_64__)
+    _Static_assert(__LDBL_MANT_DIG__ == 64, "expected padded x87 extended");
+    unsigned sign_exponent = (unsigned)(bits >> 63);
+    result.bits = ((fpbits)sign_exponent << 64) | (bits & ((ONE << 63) - 1));
+    if (sign_exponent & 0x7fff)
+        result.bits |= ONE << 63;
+#else
+    _Static_assert(__LDBL_MANT_DIG__ == 113, "expected IEEE binary128");
+    result.bits = bits;
+#endif
+    return result.value;
+}
+
+long double strtold(const char *restrict text, char **restrict end)
+{
+    size_t pos;
+    fpbits bits = parse(text, 0, &pos, &extended);
+    if (end)
+        *end = (char *)text + pos;
+    return unpack_extended(bits);
+}
+
+long double wcstold(const wchar_t *restrict text, wchar_t **restrict end)
+{
+    size_t pos;
+    fpbits bits = parse(text, 1, &pos, &extended);
+    if (end)
+        *end = (wchar_t *)text + pos;
+    return unpack_extended(bits);
+}
+
+#endif

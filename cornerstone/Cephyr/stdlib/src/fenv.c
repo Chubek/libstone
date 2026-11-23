@@ -1,7 +1,8 @@
-/* ISO C11 §7.6. Use the thread's hardware state, not a library shadow. */
+/* ISO C11 §7.6. Use hardware state where present, with no library shadow. */
 #include <fenv.h>
 #include <float.h>
 
+#if FE_ALL_EXCEPT
 /* Evaluate only for enabled hardware traps. In non-stop mode the flags can
    be set exactly without an extra inexact from overflow or underflow. */
 static const struct {
@@ -229,6 +230,22 @@ int feholdexcept(fenv_t *envp) {
     return (read_fpcr() & FPCR_TRAPS) != 0;
 }
 #endif
+#else /* RV64IM: one immutable environment, already in non-stop mode. */
+const fenv_t __cephyr_fe_dfl_env = 0;
+
+static void write_flags(unsigned int mask, unsigned int flags) {
+    (void)mask;
+    (void)flags;
+}
+
+int fetestexcept(int excepts) { (void)excepts; return 0; }
+int feraiseexcept(int excepts) { (void)excepts; return 0; }
+int fegetround(void) { return FE_TONEAREST; }
+int fesetround(int round) { return round != FE_TONEAREST; }
+int fegetenv(fenv_t *envp) { *envp = __cephyr_fe_dfl_env; return 0; }
+int feholdexcept(fenv_t *envp) { return fegetenv(envp); }
+int fesetenv(const fenv_t *envp) { (void)envp; return 0; }
+#endif
 
 int feclearexcept(int excepts) {
     unsigned int mask = excepts & FE_ALL_EXCEPT;
@@ -256,6 +273,7 @@ int feupdateenv(const fenv_t *envp) {
     return feraiseexcept(raised);
 }
 
+#if FE_ALL_EXCEPT
 int __cephyr_flt_rounds(void) {
     switch (fegetround()) {
     case FE_TOWARDZERO: return 0;
@@ -265,3 +283,4 @@ int __cephyr_flt_rounds(void) {
     default:           return -1;
     }
 }
+#endif

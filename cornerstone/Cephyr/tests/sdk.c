@@ -176,7 +176,8 @@ static uint32_t assemble(const cephyr_sdk_input *in, const cephyr_sdk_output *ou
     CHECK(ctx->step++ == 4);
     CHECK(in->flags == CEPHYR_SDK_POSITION_INDEPENDENT);
     CHECK(find(in->text, "function " LOCAL " "));
-    CHECK(find(in->text, MIR_FOLDED));
+    /* Blackstone can remove the operand definitions and renumber the result. */
+    CHECK(find(in->text, " 42\nret "));
     CHECK(!find(in->text, MIR_MUL));
     CHECK(find(in->text, "global shared 1 init 5\n"));
     CHECK(find(in->text, "global sidecar 0 "));
@@ -367,7 +368,7 @@ static void test_pipeline(void)
     ctx.step = 0;
     result = compile(&sdk, SOURCE, AMD64, "--emit-mir", "-", NULL, CEPHYR_OK);
     CHECK(ctx.step == 4);
-    CHECK(strstr(cephyr_result_output(result, NULL), MIR_FOLDED));
+    CHECK(strstr(cephyr_result_output(result, NULL), " 42\nret "));
     CHECK(!strstr(cephyr_result_output(result, NULL), MIR_MUL));
     cephyr_result_destroy(result);
 
@@ -570,8 +571,10 @@ int main(int argc, char **argv)
     test_invalid_callbacks();
     test_custom_object();
     /* Request-local hooks must not affect later requests. */
-    cephyr_result *result = compile(NULL, C_SOURCE, AMD64, "--emit-mir", "-", NULL, CEPHYR_OK);
-    CHECK(strstr(cephyr_result_output(result, NULL), MIR_MUL));
+    cephyr_result *result = compile(NULL, "unsigned long fresh(void) { return 6UL * 8UL; }\n",
+                                    AMD64, "--emit-mir", "-", NULL, CEPHYR_OK);
+    CHECK(strstr(cephyr_result_output(result, NULL), "function fresh "));
+    CHECK(strstr(cephyr_result_output(result, NULL), " 48\nret "));
     cephyr_result_destroy(result);
     return 0;
 }

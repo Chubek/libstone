@@ -40,6 +40,29 @@ static void mark_abort(int sig)
 /* Test-only use of the packaged Linux mask wrapper. */
 int __cephyr_rt_sigprocmask(int, const unsigned long *, unsigned long *, size_t);
 
+static int test_system(void)
+{
+    unsigned long before, after;
+    if (!system(NULL) || system("") ||
+        system("test \"$CEPHYR_STDLIB_TEST\" = value=1 && exit 37") != (37 << 8) ||
+        system("exec 2>/dev/null; /cephyr-no-such-command") != (127 << 8))
+        return 20;
+    if (signal(SIGINT, remember) == SIG_ERR ||
+        __cephyr_rt_sigprocmask(0, NULL, &before, sizeof before))
+        return 21;
+    received = 0;
+    /* Parent ignores SIGINT while waiting; the shell gets the default. */
+    if (system("kill -INT \"$PPID\"; kill -INT $$; exit 99") != SIGINT ||
+        received || raise(SIGINT) || received != SIGINT ||
+        __cephyr_rt_sigprocmask(0, NULL, &after, sizeof after) || before != after)
+        return 22;
+    if (signal(SIGINT, SIG_IGN) != remember ||
+        system("kill -INT $$; exit 23") != (23 << 8) ||
+        signal(SIGINT, SIG_DFL) != SIG_IGN)
+        return 23;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2) {
@@ -113,5 +136,5 @@ int main(int argc, char **argv)
     errno = 0;
     if (raise(65) == 0 || errno != EINVAL)
         return 18;
-    return 0;
+    return test_system();
 }

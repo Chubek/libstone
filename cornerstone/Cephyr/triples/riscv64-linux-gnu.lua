@@ -7,13 +7,9 @@ return {
     os = "linux",
     specification = "@archon/stdspec/riscv/rv64im.arch",
 
-    assembler = { "clang" },
-    assemble_flags = {
-        "--target=riscv64-linux-gnu",
-        "-march=rv64im",
-        "-mabi=lp64",
-    },
-    linker = { "ld.lld" },
-    link_flags = { "-m", "elf64lriscv" },
-    archiver = { "llvm-ar" },
+    assembler = { "@package/sandstone-as" },
+    assemble_flags = { "--bank", "@bank/rv64im.symas", "-f", "elf" },
+    linker = { "@package/qobjld" },
+    link_flags = { "--format=elf" },
+    archiver = { "ar" },
 }

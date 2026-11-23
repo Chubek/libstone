@@ -49,7 +49,10 @@ class FactIRTests(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if k != "CEPHYR_CONFIG"}
         self.env.update(TMPDIR=str(self.scratch), XDG_CACHE_HOME=str(self.path / "cache"))
         (self.path / "run.c").write_text(SOURCE, encoding="ascii")
-        (self.path / "off.toml").write_text("[factir]\nenabled = false\n", encoding="ascii")
+        # Exercise FactIR's own add-zero rewrite and downstream scheduling hints.
+        baseline = "[blackstone]\nenabled = false\n"
+        (self.path / "Cephyr.toml").write_text(baseline, encoding="ascii")
+        (self.path / "off.toml").write_text(baseline + "[factir]\nenabled = false\n", encoding="ascii")
 
     def cli(self, *args, ok=True):
         result = subprocess.run([CEPHYR, "--no-cache", *args], cwd=self.path, env=self.env,
@@ -67,6 +70,9 @@ class FactIRTests(unittest.TestCase):
         self.assertEqual(cli_off.stdout, toml_off.stdout)
         self.assertEqual(cli_off.stderr, toml_off.stderr)
         self.assertEqual(len(re.findall(r"(?m)^add ", cli_off.stdout)), 4)
+        # A per-TU fact result needs no temporary database or writable TMPDIR.
+        enabled = self.mir("--factir")
+        self.assertEqual(len(re.findall(r"(?m)^add ", enabled.stdout)), 2)
         for mode in ("--no-factir", "--config=off.toml"):
             rejected = self.mir(mode, "--factir-smtlib=unused.smt2", ok=False)
             self.assertIn("require enabled FactIR", rejected.stderr)
@@ -113,6 +119,34 @@ class FactIRTests(unittest.TestCase):
         self.assertNotIn(transitive, sections["flow"])
         self.assertIn(f"(0, {call_id})", sections["observable_input"])
         self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_double_zero_test_requires_boolean_input(self):
+        (self.path / "bool.c").write_text("""\
+extern unsigned long input(volatile unsigned long *);
+int canon(volatile unsigned long *p) { if (input(p) & 1UL) return 2; return 3; }
+int near(volatile unsigned long *p) { if (input(p) & 3UL) return 2; return 3; }
+""", encoding="ascii")
+        args = ("--emit-mir", "-o", "-", "bool.c")
+        before = self.cli(*args, "--no-factir").stdout.splitlines()
+        after = self.cli(*args, "--factir", "--factir-smtlib=bool.smt2").stdout.splitlines()
+        self.assertEqual(len(before), len(after))
+        diffs = [(a.split(), b.split()) for a, b in zip(before, after) if a != b]
+        self.assertEqual(len(diffs), 1)
+        eq, copy = diffs[0]
+        self.assertEqual((eq[0], eq[1]), ("eq", copy[1]))
+        self.assertEqual(copy[0], "copy")
+        canon = after[:next(i for i, line in enumerate(after) if line.startswith("function near "))]
+        self.assertIn(" ".join(copy), canon)
+        self.assertTrue(any(line.startswith(f"and {copy[2]} ") for line in canon))
+        self.assertIn("Satie: unsat; applied to 1 instruction", (self.path / "bool.smt2").read_text())
+        # Both obligations must be independently replayable in the same artifact.
+        with (self.path / "bool.c").open("a") as file:
+            file.write("unsigned long plus_zero(unsigned long x) { return x + 0UL; }\n")
+        self.cli(*args, "--factir", "--factir-smtlib=mixed.smt2")
+        if z3 := shutil.which("z3"):
+            proof = subprocess.run([z3, "mixed.smt2"], cwd=self.path, check=True,
+                                   text=True, capture_output=True, timeout=5)
+            self.assertEqual(proof.stdout.splitlines(), ["unsat", "unsat"])
 
     def test_rv64_stage_consumes_a_preference_without_any_rewrite(self):
         (self.path / "order.c").write_text(

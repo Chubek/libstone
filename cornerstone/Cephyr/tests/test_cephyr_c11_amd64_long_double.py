@@ -139,6 +139,31 @@ unsigned long long wide = (unsigned long long)(0x1.fffffffffffffffep63L - 1.L);
 double narrow = 0x1.0000000000000802p0L;
 float single = 0x1.0000010000000002p0L;
 int consume(const volatile long double *, const struct Packet *);
+typedef long double (*Callback)(long double, int);
+extern long double external_value(long double, int);
+#include <stdarg.h>
+extern long double external_var(int, ...);
+long double native_var(long double x, ...) {
+    va_list ap;
+    va_start(ap, x);
+    double d = va_arg(ap, double);
+    va_end(ap);
+    return d == 2.5 ? x : 0.L;
+}
+long double call_var(void) { return external_var(3, 2.5); }
+long double invoke(Callback cb, long double x) {
+    /* A discarded result must pop ST(0); repeat beyond the x87 stack depth. */
+    for (int i = 0; i < 16; ++i) external_value(x, i);
+    return cb(external_value(x, 0), 0);
+}
+/* The seventh GP argument occupies the first stack word. The x87 argument
+   after it needs an alignment gap; a later double overflows the SSE bank. */
+#define PARAMS long a,long b,long c,long d,long e,long f,long g,long double x, \
+    double d0,double d1,double d2,double d3,double d4,double d5,double d6,double d7,double d8
+extern long double external_many(PARAMS);
+long double native_many(PARAMS) {
+    return external_many(a,b,c,d,e,f,g,x,d0,d1,d2,d3,d4,d5,d6,d7,d8);
+}
 int probe(void) {
     static const long double local_static = -LDBL_MAX;
     _Alignas(16) volatile long double local = 1.L / 3.L;
@@ -164,6 +189,24 @@ extern unsigned long long wide;
 extern double narrow;
 extern float single;
 extern int probe(void);
+extern long double invoke(long double (*)(long double, int), long double);
+#include <stdarg.h>
+extern long double native_var(long double, ...), call_var(void);
+long double external_var(int n, ...) {
+    va_list ap;
+    va_start(ap, n);
+    double d = va_arg(ap, double);
+    va_end(ap);
+    return n == 3 && d == 2.5 ? 0x1.0000000000000002p6000L : 0.L;
+}
+static int count;
+long double external_value(long double x, int n) { ++count; return n ? n : x; }
+#define PARAMS long a,long b,long c,long d,long e,long f,long g,long double x, \
+    double d0,double d1,double d2,double d3,double d4,double d5,double d6,double d7,double d8
+extern long double native_many(PARAMS);
+long double external_many(PARAMS) {
+    return a+b+c+d+e+f+g == 28 && d0+d1+d2+d3+d4+d5+d6+d7+d8 == 36 ? x : 0.L;
+}
 void transfer(volatile long double *, const volatile long double *, unsigned *);
 void reference_transfer(volatile long double *, const volatile long double *, unsigned *);
 typedef void Calc(volatile long double *, const volatile long double *);
@@ -285,6 +328,14 @@ static int check_operations(void) {
 
 int main(void) {
     static const long double expect[] = { VALUES };
+    if (native_var(call_var(), 2.5) != 0x1.0000000000000002p6000L) return 151;
+    for (size_t i = 0; i < sizeof expect / sizeof *expect; ++i) {
+        long double x = invoke(external_value, expect[i]);
+        long double y = native_many(1,2,3,4,5,6,7,x,0,1,2,3,4,5,6,7,8);
+        if (memcmp(&x, &expect[i], 10) || memcmp(&y, &expect[i], 10) || count != 18)
+            return 150;
+        count = 0;
+    }
     for (size_t i = 0; i < sizeof expect / sizeof *expect; ++i)
         if (memcmp(&table[i], &expect[i], 10) != 0)
             return (int)i + 1;
@@ -323,10 +374,6 @@ int main(void) {
 """.replace("VALUES", VALUES)
 
 NEGATIVE = {
-    "return": "long double f(void) { return 1.L; }",
-    "parameter": "int f(long double x) { return 1; }",
-    "call": "extern int g(long double); int f(void) { return g(1.L); }",
-    "indirect": "int f(int (*g)(long double)) { return g(1.L); }",
     "pointer_to_real": "void f(long double *x, void *p) { *x = (long double)p; }",
     "real_to_pointer": "void *f(const long double *x) { return (void *)*x; }",
     "remainder": "void f(long double *x) { *x %= 2; }",
@@ -387,12 +434,6 @@ def main():
             run(*cephyr, amd64, "-S", filename, "-o", "rejected.s",
                 expected=expected.get(name, "long double"))
             assert not (work / "rejected.s").exists()
-        # The identical spelling requires a different, unsupported quad
-        # representation on AArch64 and RV64; do not give it x87 bytes.
-        for triple in ("aarch64-linux-gnu", "riscv64-linux-gnu"):
-            (work / "other.c").write_text("long double x = 1.L;\n", encoding="ascii")
-            run(*cephyr, f"--target={triple}", "-S", "other.c", "-o", "rejected.s",
-                expected="long double")
 
 
 if __name__ == "__main__":

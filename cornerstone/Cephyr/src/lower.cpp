@@ -40,10 +40,11 @@ std::string number(Id id)
     return id == no_value ? "-" : std::to_string(id);
 }
 
-bool symbol_name(std::string_view name)
+bool symbol_name(std::string_view name, bool extended = false)
 {
-    const auto head = [](unsigned char c) {
-        return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    const auto head = [extended](unsigned char c) {
+        return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (extended && c >= 0x80); // parser already validated/canonicalized the code points
     };
     return !name.empty() && name.size() <= 255 && head(name.front()) &&
         std::all_of(name.begin() + 1, name.end(), [&](unsigned char c) {
@@ -88,30 +89,10 @@ bool valid_main(const CType &type, const Preprocessed &source)
         compatible(argv, pointer_type(pointer_type(plain_char_type(source))));
 }
 
-// C11 6.2.7: retain known array bounds recursively and prefer a prototype.
-CType composite_linkage_type(const CType &prior, CType next)
-{
-    if (!next.enum_identity)
-        next.enum_identity = prior.enum_identity;
-    if (next.kind == CType::Kind::array && !next.count)
-        next.count = prior.count;
-    if (next.kind == CType::Kind::function && prior.prototype && !next.prototype) {
-        next.prototype = true;
-        next.params = prior.params;
-        next.variadic = prior.variadic;
-    } else if (next.kind == CType::Kind::function && prior.prototype && next.prototype) {
-        for (std::size_t i = 0; i < next.params.size(); ++i)
-            next.params[i] = composite_linkage_type(prior.params[i], std::move(next.params[i]));
-    }
-    if (prior.element && next.element)
-        next.element = std::make_shared<CType>(composite_linkage_type(*prior.element, *next.element));
-    return next;
-}
-
 Symbol *linkage_entity(Unit &unit, const std::string &name, Node *declaration, Node *name_node,
                        const CType &type, bool internal)
 {
-    if (!symbol_name(name) || name.starts_with(reserved_prefix)) {
+    if (!symbol_name(name, true) || name.starts_with(reserved_prefix)) {
         unit.error(name_node, "unsupported or reserved C identifier for native output");
         return nullptr;
     }
@@ -127,7 +108,12 @@ Symbol *linkage_entity(Unit &unit, const std::string &name, Node *declaration, N
         }
         return &symbol;
     }
-    std::string native_name = internal ? std::string(reserved_prefix) + "local_" + name : name;
+    // Keep backend tokens ASCII. This namespace is reserved above, even for
+    // block-scope externs, so no spelling of a user identifier can alias it.
+    const bool extended = std::any_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0x80; });
+    std::string native_name = extended ? std::string(reserved_prefix) + "unicode_" +
+        std::to_string(unit.symbols.size()) :
+        internal ? std::string(reserved_prefix) + "local_" + name : name;
     if (!symbol_name(native_name)) {
         unit.error(name_node, "identifier exceeds the native backend's symbol limit");
         return nullptr;
@@ -181,8 +167,8 @@ Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
         unit.error(name_node, "redefinition of '" + name + "'");
         return nullptr;
     }
-    symbol.linkage_type = composite_linkage_type(symbol.linkage_type, type);
-    symbol.type = prior ? composite_linkage_type(symbol.type, std::move(type)) : std::move(type);
+    symbol.linkage_type = composite_type(symbol.linkage_type, type);
+    symbol.type = prior ? composite_type(symbol.type, std::move(type)) : std::move(type);
     symbol.file_scope = true;
     if (flags & FS_INLINE)
         symbol.inline_declaration = name_node;
@@ -389,7 +375,8 @@ class ObjectInitPlanner {
         std::optional<BitField> bit_field = std::nullopt;
     };
     struct Coverage {
-        bool whole = false;
+        std::optional<std::size_t> entry;
+        bool reset = false;
         std::map<std::uint64_t, Coverage> children;
     };
 
@@ -401,14 +388,19 @@ public:
 
     bool initialize(CType &type, Node *node)
     {
-        if (direct && object_contains_bit_field(type))
-            return error(node, "volatile automatic initialization of an aggregate containing bit-fields is not supported");
         if (!initialize(Cursor{type, 0}, node, {}))
             return false;
         if (type.kind == CType::Kind::array && !type.count)
             type.count = inferred;
-        if (direct && size_of(type))
-            append_omitted({type, 0}, &coverage, node);
+        if (direct && size_of(type)) {
+            for (auto &entry : entries)
+                entry.portions.emplace();
+            resolve({type, 0}, &coverage, {}, node);
+            for (const auto &entry : entries)
+                if (entry.portions && entry.portions->empty() && !entry.bytes &&
+                    !check_unevaluated_initializer(context, entry))
+                    return false;
+        }
         return true;
     }
 
@@ -419,8 +411,7 @@ private:
         const auto &[type, offset, bit_field] = object;
         const bool braced = node->getKind() == cparser::NK_LIST;
         if (type.scalar() || (type.kind == CType::Kind::record && !braced)) {
-            if (!cover(path, node))
-                return false;
+            cover(path);
             entries.push_back({offset, type, node, {}, false, bit_field});
             clear_active(path);
             return true;
@@ -445,8 +436,8 @@ private:
                 bytes.resize(bytes.size() - literal.element->bits / 8); // Omit only the final code unit.
             if (!type.count)
                 inferred = count;
-            if (!reset(object, first, path) || !cover(path, first))
-                return false;
+            reset(object, first, path);
+            cover(path);
             auto string_type = type;
             if (direct)
                 string_type.count = count;
@@ -458,8 +449,7 @@ private:
         if (children.empty())
             return error(node, "aggregate initializer list must not be empty");
 
-        if (!reset(object, node, path))
-            return false;
+        reset(object, node, path);
         // Each pair of braces defines a current object (6.7.9p17–20).
         // Maintain the next relative path, descending into brace-elided
         // aggregates and advancing through enclosing aggregates on exhaustion.
@@ -542,73 +532,73 @@ private:
         return {};
     }
 
-    Coverage *covered(const Path &path, bool insert)
+    Coverage &covered(const Path &path)
     {
         auto *node = &coverage;
-        for (auto index : path) {
-            if (node->whole)
-                return node; // An ancestor initialized the entire subobject.
-            if (insert) {
-                node = &node->children[index];
-            } else {
-                const auto found = node->children.find(index);
-                if (found == node->children.end())
-                    return nullptr;
-                node = &found->second;
-            }
-        }
-        return node;
+        for (auto index : path)
+            node = &node->children[index];
+        return *node;
     }
 
-    bool cover(const Path &path, Node *at)
+    void cover(const Path &path)
     {
         if (!direct)
-            return true;
-        auto &node = *covered(path, true);
-        if (node.whole || !node.children.empty())
-            return error(at, "overlapping designators in volatile automatic initialization are not supported");
-        node.whole = true;
-        return true;
+            return;
+        auto &node = covered(path);
+        node.children.clear();
+        node.entry = entries.size();
     }
 
-    void append_omitted(const Cursor &object, const Coverage *explicit_init, Node *at)
+    // Map each final subobject to the last initializer covering it, or to
+    // implicit zero. In particular, .t = x, .t.a = y retains x.b (DR 413).
+    // Keep the original entries in list order for single evaluation and group
+    // contiguous array portions so sparse designators stay cheap.
+    void resolve(const Cursor &object, const Coverage *node, std::optional<std::size_t> owner, Node *at)
     {
         const auto &type = object.type;
         const auto offset = object.offset;
-        if (!explicit_init) {
-            entries.push_back({offset, type, at, {}, true});
+        if (node && (node->reset || node->entry))
+            owner = node->entry;
+        if (!node || node->children.empty()) {
+            if (!owner)
+                entries.push_back({offset, type, at, {}, true, object.bit_field});
+            else if (node && node->entry)
+                entries[*owner].portions.reset();
+            else
+                entries[*owner].portions->push_back({offset, type, object.bit_field});
             return;
         }
-        if (explicit_init->whole)
-            return;
         if (type.kind == CType::Kind::array) {
             const auto stride = *size_of(*type.element);
             const auto gap = [&](std::uint64_t first, std::uint64_t end) {
                 if (first < end) {
                     auto missing = type;
                     missing.count = end - first;
-                    entries.push_back({offset + first * stride, std::move(missing), at, {}, true});
+                    resolve({std::move(missing), offset + first * stride}, nullptr, owner, at);
                 }
             };
             std::uint64_t next = 0;
-            for (const auto &[index, child] : explicit_init->children) {
+            for (const auto &[index, child] : node->children) {
                 gap(next, index);
-                append_omitted({child_type(type, index), offset + index * stride}, &child, at);
+                resolve({child_type(type, index), offset + index * stride}, &child, owner, at);
                 next = index + 1;
             }
             gap(next, type.count);
         } else if (type.record->is_union) {
             // Only the designated (or first) member is initialized.
-            const auto &[index, child] = *explicit_init->children.begin();
-            append_omitted({child_type(type, index), offset}, &child, at);
+            const auto &[index, child] = *node->children.begin();
+            resolve({child_type(type, index), offset, type.record->members[index].bit_field},
+                    &child, owner, at);
         } else {
             for (std::size_t i = 0; i < type.record->members.size(); ++i) {
                 const auto &member = type.record->members[i];
                 if (member.flexible_array())
                     break;
-                const auto found = explicit_init->children.find(i);
-                append_omitted({child_type(type, i), offset + member.offset},
-                               found == explicit_init->children.end() ? nullptr : &found->second, at);
+                if (member.unnamed_bit_field())
+                    continue;
+                const auto found = node->children.find(i);
+                resolve({child_type(type, i), offset + member.offset, member.bit_field},
+                        found == node->children.end() ? nullptr : &found->second, owner, at);
             }
         }
     }
@@ -658,9 +648,8 @@ private:
                 return error(at, "a flexible array member cannot be initialized");
             if (type.record->is_union) {
                 if (const auto active = active_unions.find(path);
-                    active != active_unions.end() && active->second != index &&
-                    !reset(object, at, path, true))
-                    return false;
+                    active != active_unions.end() && active->second != index)
+                    reset(object, at, path, true);
                 active_unions[path] = index;
             }
             object.offset += member.offset;
@@ -716,21 +705,20 @@ private:
             it = active_unions.erase(it);
     }
 
-    bool reset(const Cursor &object, Node *node, const Path &path, bool switch_union = false)
+    void reset(const Cursor &object, Node *node, const Path &path, bool switch_union = false)
     {
         // Re-initializing a complete subaggregate also zeroes its omitted
         // subobjects; switching union members discards the previous member.
         // Initially the root is zeroed by the caller, but it still needs a
         // reset when a later initializer switches between union members.
         if (direct) {
-            const auto *prior = covered(path, false);
-            if (switch_union || (prior && (prior->whole || !prior->children.empty())))
-                return error(node, "overlapping designators in volatile automatic initialization are not supported");
+            auto &current = covered(path);
+            current = {};
+            current.reset = true;
         } else if (overriding && (switch_union || !path.empty())) {
             entries.push_back({object.offset, object.type, node, {}, true});
         }
         clear_active(path);
-        return true;
     }
 
     bool error(Node *node, std::string_view message)
@@ -748,13 +736,25 @@ private:
     std::map<Path, std::uint64_t> active_unions;
 };
 
+unsigned rv64_argument_words(const std::vector<CType> &parameters)
+{
+    unsigned cursor = 0;
+    for (const auto &type : parameters) {
+        if (type.real() && type.bits == 128)
+            cursor = (cursor >= 8 ? (cursor + 1) & ~1u : cursor) + 2;
+        else
+            ++cursor;
+    }
+    return cursor;
+}
+
 } // namespace
 
 std::string_view record_abi_error(const Preprocessed &source, const CType &signature)
 {
     const auto check = [&](const CType &type) -> std::string_view {
-        if (type.extended_real())
-            return "by-value long double parameters and results are not supported";
+        if (type.extended_real() && !source.native_binary128 && !source.native_amd64_x87)
+            return "by-value long double requires the SysV AMD64 x87 ABI";
         if (type.kind != CType::Kind::record)
             return {};
         // Keep language-side anonymous layouts out of the native ABI until
@@ -814,6 +814,12 @@ std::string_view record_abi_error(const Preprocessed &source, const CType &signa
     }
     if (aggregate && slots > ARCHON_MIR_MAX_PARAMS)
         return "by-value aggregate ABI exceeds the native argument slot limit";
+    if (result == RecordABI::pair) {
+        // The assembly thunk uses 12-bit stack displacements for both
+        // private parameters and the public argument area.
+        if (rv64_argument_words(abi_parameter_types(signature)) + 2 > ARCHON_MIR_MAX_PARAMS)
+            return "by-value aggregate ABI exceeds the native argument slot limit";
+    }
     return {};
 }
 
@@ -940,12 +946,12 @@ private:
 std::string Unit::require_record_pair_call(const CType &type)
 {
     auto params = abi_parameter_types(type);
-    const auto args = params.size();
+    const auto args = rv64_argument_words(params);
     if (const auto found = record_pair_calls.find(args); found != record_pair_calls.end()) {
         // Preserve actual scalar MIR types for verification. Distinct call
         // signatures of the same word count may share the machine thunk.
         for (const auto &[name, signature] : signatures)
-            if (name.starts_with(found->second + "_") &&
+            if (name.starts_with(found->second + "_") && signature.params.size() == params.size() + 2 &&
                 std::equal(params.begin(), params.end(), signature.params.begin(),
                            [](const CType &a, const CType &b) { return mir_type(a) == mir_type(b); }))
                 return name;
@@ -967,7 +973,7 @@ std::string Unit::require_record_pair_call(const CType &type)
 std::string Unit::add_record_pair_definition(const Symbol &symbol)
 {
     const auto body = std::string(reserved_prefix) + "record_pair_body_" + std::to_string(signatures.size());
-    const auto args = abi_parameter_types(symbol.type).size();
+    const auto args = rv64_argument_words(abi_parameter_types(symbol.type));
     signatures.emplace_back(symbol.name, symbol.type); // func_addr uses the ABI entry point.
     data_assembly += RecordPairThunk(symbol.name, symbol.internal, args, args + 1, 24)
                          .definition(symbol.name, body, args);
@@ -1108,8 +1114,11 @@ CType read_record_type(Node *node, const TypeContext &context)
             if (!name.empty() && !add_path(name, {}))
                 return error(where, "duplicate record member: " + name);
             contains_bit_field = true;
-            const auto access = structure && context.source.bit_field_abi == Preprocessed::BitFieldABI::sysv_rv64
-                ? BitField::VolatileAccess::narrow : BitField::VolatileAccess::unsupported;
+            // Union alternatives share storage, so the full container is safe
+            // on AArch64. For structures, prove that below after layout.
+            const auto access = context.source.bit_field_abi == Preprocessed::BitFieldABI::sysv_rv64
+                ? BitField::VolatileAccess::narrow
+                : structure ? BitField::VolatileAccess::narrow_aapcs : BitField::VolatileAccess::container;
             members.push_back({std::move(name), std::move(member_type), offset,
                                BitField{bits, shift, static_cast<unsigned>(offset % alignment), access}});
             continue;
@@ -1311,8 +1320,7 @@ std::string Unit::require_signature(const CType &type)
 
 std::string Unit::require_variadic_call(const Symbol &symbol, const std::vector<CType> &args)
 {
-    // RV64IM LP64 passes every supported scalar in one XLEN slot, named
-    // or unnamed. The separate native MIR import records the promoted
+    // The separate native MIR import records the promoted
     // call shape; GAS resolves its alias to the actual function. AMD64
     // also sets the SysV vector-register count in its normal emitter.
     CType signature = symbol.type;
@@ -1514,21 +1522,6 @@ void copy_chunk(Function &f, Id dest, Id src, Id offset, unsigned width)
     store_chunk(f, byte_address(f, dest, offset), data, width);
 }
 
-bool has_volatile_union_member(const CType &type, unsigned depth = 0)
-{
-    const AnalysisDepth guard(depth);
-    if (type.kind == CType::Kind::array)
-        return type.count && has_volatile_union_member(*type.element, depth);
-    if (type.kind != CType::Kind::record || !type.record->has_volatile_member)
-        return false;
-    if (type.record->is_union)
-        return true;
-    for (const auto &member : type.record->members)
-        if (has_volatile_union_member(member.type, depth))
-            return true;
-    return false;
-}
-
 void zero_padding(Function &f, Id dest, const CType &type, std::uint64_t start, std::uint64_t end)
 {
     if (start == end)
@@ -1542,8 +1535,8 @@ void zero_padding(Function &f, Id dest, const CType &type, std::uint64_t start, 
 // The aggregate volatile access policy (C11 5.1.2.3, 6.7.3): visit fixed
 // structure members/array elements in increasing address order, without
 // widening accesses across member boundaries or reading/writing structure
-// padding. A union's active member is not tracked, so a whole volatile union
-// with no explicitly volatile members uses aligned representation chunks.
+// padding. A whole union value does not identify an active member: transfer
+// its representation once, including when alternatives are volatile.
 // With no source, initialize wholly omitted subobjects as at static duration
 // (6.7.9p10,p19), selecting a union's first named member and zeroing padding.
 // Zero representation is scalar zero/null on the native targets.
@@ -1560,17 +1553,45 @@ void transfer_subobjects(Function &f, Id dest, Id src, const CType &type, unsign
         });
     } else if (type.kind == CType::Kind::record && (!type.record->is_union || src == no_value)) {
         std::uint64_t end = 0;
-        for (const auto &member : type.record->members) {
+        const auto &members = type.record->members;
+        for (std::size_t i = 0; i < members.size(); ++i) {
+            const auto &member = members[i];
             if (member.flexible_array())
                 break;
+            if (member.unnamed_bit_field())
+                continue;
             if (src == no_value)
                 zero_padding(f, dest, type, end, member.offset);
-            transfer_subobjects(f, offset_address(f, dest, member.offset, member.type),
-                                src == no_value ? no_value :
-                                    offset_address(f, src, member.offset, member.type),
-                                member.type, depth);
-            if (src == no_value)
+            if (member.bit_field) {
+                // A whole value transfers a run of fields as storage, once,
+                // rather than separately reading/modifying overlapping units.
+                const auto start = member.offset;
+                end = start + member.bit_field->bytes();
+                while (!type.record->is_union && i + 1 < members.size()) {
+                    const auto &next = members[i + 1];
+                    if (!next.bit_field || !next.bit_field->width || next.offset > end)
+                        break;
+                    end = std::max(end, next.offset + next.bit_field->bytes());
+                    ++i;
+                }
+                if (src == no_value)
+                    zero_padding(f, dest, type, start, end);
+                else
+                    for (auto offset = start; offset < end;) {
+                        auto width = std::min(align_of(type), 8u);
+                        while (width > end - offset || offset % width)
+                            width /= 2;
+                        copy_chunk(f, dest, src, offset ? f.constant(offset, integer_type(64, false)) : no_value,
+                                   width);
+                        offset += width;
+                    }
+            } else {
+                transfer_subobjects(f, offset_address(f, dest, member.offset, member.type),
+                                    src == no_value ? no_value :
+                                        offset_address(f, src, member.offset, member.type),
+                                    member.type, depth);
                 end = member.offset + *size_of(member.type);
+            }
             if (type.record->is_union)
                 break;
         }
@@ -1584,7 +1605,7 @@ void transfer_subobjects(Function &f, Id dest, Id src, const CType &type, unsign
             // copies; the trailing six bytes are not part of the value.
             copy_chunk(f, dest, src, no_value, 8);
             const auto offset = f.constant(8);
-            copy_chunk(f, dest, src, offset, 2);
+            copy_chunk(f, dest, src, offset, type.bits == 128 ? 8 : 2);
         }
     } else if (src == no_value) {
         store_chunk(f, dest, f.constant(0), static_cast<unsigned>(*size_of(type)));
@@ -1612,6 +1633,11 @@ void zero_object(Function &function, Id dest, std::uint64_t size, unsigned align
 void zero_initialized_subobject(Function &function, Id dest, const CType &type)
 {
     transfer_subobjects(function, dest, no_value, type);
+}
+
+void copy_initialized_subobject(Function &function, Id dest, Id src, const CType &type)
+{
+    transfer_subobjects(function, dest, src, type);
 }
 
 // The RV64 integer calling convention passes an aggregate up to 2 * XLEN
@@ -1677,14 +1703,6 @@ bool copy_record(Function &function, LValue target, Expr value, Node *at, bool i
     }
     if (object_has_qualifier(target.type, &CType::is_volatile) ||
         object_has_qualifier(value.type, &CType::is_volatile)) {
-        if (object_contains_bit_field(target_type)) {
-            function.error(at, "whole-object volatile copy of a record containing bit-fields is not supported");
-            return false;
-        }
-        if (has_volatile_union_member(target_type) || has_volatile_union_member(source_type)) {
-            function.error(at, "whole-object copy of a union with volatile members is not supported");
-            return false;
-        }
         // An evaluated record lvalue is first copied to a temporary by load().
         // Thus all source-object reads precede destination-object writes, even
         // with exact overlap, and an assignment result never rereads its lhs.
@@ -1770,9 +1788,9 @@ void declare_block_linkage(Function &function, Node *declaration, Node *name_nod
                                   prior && prior->linked->internal);
     if (!entity)
         return;
-    entity->linkage_type = composite_linkage_type(entity->linkage_type, type);
+    entity->linkage_type = composite_type(entity->linkage_type, type);
     if (prior)
-        type = composite_linkage_type(prior->type, std::move(type));
+        type = composite_type(prior->type, std::move(type));
     if (alignment)
         entity->alignment_declarations.emplace_back(*alignment, name_node);
     if (flags & FS_INLINE)
@@ -1848,6 +1866,52 @@ std::vector<bool> reachable_blocks(const std::vector<Block> &blocks)
 } // namespace cephyr::detail
 
 namespace cephyr {
+
+void LoweredUnit::apply_elf_names(std::string &assembly) const
+{
+    if (elf_names.empty())
+        return;
+    // Replace whole symbols, including .quad/.set and GOT/PLT operands.
+    // AArch64 quotes symbolic instruction operands even for ASCII names.
+    // The frontend emits user string data as byte directives.
+    constexpr std::string_view token_chars =
+        "_.0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const std::string_view text = assembly;
+    std::string output;
+    std::size_t copied = 0;
+    const auto replace = [&](std::size_t start, std::size_t end, std::string_view token) {
+        if (const auto found = elf_names.find(token); found != elf_names.end()) {
+            const auto before = text.substr(copied, start - copied);
+            // Frontend validation admits C identifiers, not arbitrary assembler
+            // expressions. Preserve their UTF-8 bytes as ELF symbol names.
+            output.append(before);
+            output += found->second;
+            copied = end;
+        }
+    };
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] == '"') {
+            const auto start = i;
+            for (++i; i < text.size();) {
+                const char c = text[i++];
+                if (c == '"') {
+                    replace(start, i, text.substr(start + 1, i - start - 2));
+                    break;
+                }
+                if (c == '\\' && i < text.size())
+                    ++i;
+            }
+        } else if (token_chars.find(text[i]) != std::string_view::npos) {
+            const auto start = i;
+            i = std::min(text.find_first_not_of(token_chars, i), text.size());
+            replace(start, i, text.substr(start, i - start));
+        } else {
+            ++i;
+        }
+    }
+    output.append(text.substr(copied));
+    assembly = std::move(output);
+}
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
                                  Diagnostics &diagnostics, bool hosted, detail::MoonstoneAnalysis *analysis)
@@ -2004,7 +2068,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     if (!compatible(symbol->linkage_type, symbol->type))
                         unit.error(decl.getName(), "conflicting types for '" + identifier(decl.getName()) + "'");
                     else
-                        symbol->linkage_type = composite_linkage_type(symbol->linkage_type, symbol->type);
+                        symbol->linkage_type = composite_type(symbol->linkage_type, symbol->type);
                 }
                 continue;
             }
@@ -2017,7 +2081,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
         }
 
         std::vector<std::pair<std::string, CType>> imports = unit.signatures;
-        for (const auto &[name, type] : unit.rv64_soft_fp_helpers) {
+        for (const auto &[name, type] : unit.soft_fp_helpers) {
             // Compiler-runtime names occupy the implementation namespace.
             // Do not let a source declaration or definition change this ABI.
             if (const auto found = unit.symbols.find(name);
@@ -2083,7 +2147,11 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
         auto mir = out.str();
         if (mir.size() > max_mir)
             throw std::length_error("native MachineIR text limit exceeded");
-        return LoweredUnit{std::move(mir), std::move(unit.locals), std::move(unit.data_assembly)};
+        LoweredUnit lowered{std::move(mir), std::move(unit.locals), std::move(unit.data_assembly), {}};
+        for (const auto &[source_name, symbol] : unit.symbols)
+            if (!symbol.internal && source_name != symbol.name)
+                lowered.elf_names.emplace(symbol.name, source_name);
+        return lowered;
     } catch (const std::length_error &err) {
         unit.error(at, err.what(), "cephyr.limit");
     } catch (const std::logic_error &err) {

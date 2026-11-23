@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--cephyr", type=Path, required=True)
     parser.add_argument("--qemu-amd64", type=Path)
     parser.add_argument("--qemu-aarch64", type=Path)
-    parser.add_argument("--qemu", type=Path, help="Unused: RV64IM soft-float has no fenv.h")
+    parser.add_argument("--qemu", type=Path, help="RV64 user-mode QEMU")
     args = parser.parse_args()
 
     source = Path(__file__).resolve().parents[1] / "stdlib/tests/fenv-cephyr.c"
@@ -22,6 +22,7 @@ def main():
     targets = [
         ("x86_64-linux-gnu", {"x86_64", "amd64"}, args.qemu_amd64),
         ("aarch64-linux-gnu", {"aarch64", "arm64"}, args.qemu_aarch64),
+        ("riscv64-linux-gnu", {"riscv64"}, args.qemu),
     ]
     with tempfile.TemporaryDirectory(prefix="cephyr-fenv-") as directory:
         work = Path(directory)
@@ -41,14 +42,6 @@ def main():
                 continue
             subprocess.run([*runner, executable], cwd=work, check=True, timeout=10)
             print(f"{triple}: native fenv library calls passed")
-
-        unsupported = work / "unsupported.c"
-        unsupported.write_text("#include <fenv.h>\n", encoding="ascii")
-        result = subprocess.run([*driver, "--target=riscv64-linux-gnu", "-c",
-                                 unsupported, "-o", work / "unsupported.o"],
-                                cwd=work, env=env, capture_output=True, text=True, timeout=10)
-        assert result.returncode and "Cephyr libc fenv.h is supported only" in result.stderr, result
-        assert not (work / "unsupported.o").exists()
 
 
 if __name__ == "__main__":

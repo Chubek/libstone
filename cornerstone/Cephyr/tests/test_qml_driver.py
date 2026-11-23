@@ -64,6 +64,8 @@ class QmlDriverTests(unittest.TestCase):
         self.env = os.environ.copy()
         self.env.pop("CEPHYR_CONFIG", None)
         self.env["XDG_CACHE_HOME"] = str(self.work / "cache")
+        # The baseline and profile comparisons measure only QML rewrites.
+        self.file("Cephyr.toml", "[blackstone]\nenabled = false\n")
         self.file("input.c", SOURCE)
 
     def file(self, name, text):
@@ -247,6 +249,9 @@ int main(void) {
 
     def test_profile_file_paths_merge_and_refresh(self):
         profile = self.file("cfg/Cephyr.toml", """
+[blackstone]
+enabled = false
+
 [qml]
 profile = "local"
 
@@ -325,10 +330,16 @@ parameters = { canonicalize = { unknown = 3 } }
         args = ("-S", "-o", "-", "-v", "--cache", "--qml-pass=local",
                 "--qml-file=rules.qpass", "input.c")
         first = self.run_cephyr(*args)
-        self.assertNotIn("Archon IRGen cache hit", first.stderr)
+        self.assertIn("loading packaged Archon backend", first.stderr)
         self.file("rules.qpass", rule.format(8))
         second = self.run_cephyr(*args)
-        self.assertIn("Archon IRGen cache hit", second.stderr)
+        # Packaged backends bypass the generated-source cache. Both invocations
+        # should reuse the same provider but still emit the edited QML rule.
+        package = re.search(r"loading packaged Archon backend [^\n]+", first.stderr)
+        if package:
+            self.assertIn(package[0], second.stderr)
+        else:
+            self.assertIn("loading packaged Archon backend", second.stderr)
         self.assertNotEqual(first.stdout, second.stdout)
 
     def test_multifile_configuration_and_timing(self):

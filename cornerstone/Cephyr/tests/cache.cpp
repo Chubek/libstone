@@ -1,15 +1,6 @@
 #include <cephyr/cache.hpp>
 #include <cephyr/diagnostics.hpp>
 
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <lmdb++.h>
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -56,19 +47,21 @@ std::string diagnostics_text(const cephyr::Diagnostics &diagnostics) {
 }
 
 void corrupt_record(const std::filesystem::path &directory, std::string_view key) {
-    auto environment = lmdb::env::create();
-    environment.open(directory.string().c_str(), MDB_NOTLS, 0600);
-    auto transaction = lmdb::txn::begin(environment);
-    auto database = lmdb::dbi::open(transaction);
-    const lmdb::val cache_key(key.data(), key.size());
-    lmdb::val stored;
-    assert(database.get(transaction, cache_key, stored));
-    std::string bytes(stored.data(), stored.size());
-    assert(!bytes.empty());
-    bytes.back() ^= 1; // Preserve all envelope lengths but invalidate its checksum.
-    lmdb::val value(bytes.data(), bytes.size());
-    database.put(transaction, cache_key, value);
-    transaction.commit();
+    // Locate the record by its stored key, independently of the filename layout.
+    for (const auto &file : std::filesystem::directory_iterator(directory)) {
+        std::fstream io(file.path(), std::ios::binary | std::ios::in | std::ios::out);
+        io.seekg(24);
+        std::string found(key.size(), '\0');
+        if (!io.read(found.data(), found.size()) || found != key) continue;
+        io.seekg(-1, std::ios::end);
+        char byte;
+        io.get(byte);
+        io.seekp(-1, std::ios::end);
+        io.put(byte ^ 1);
+        assert(io.good());
+        return;
+    }
+    throw std::runtime_error("missing record to corrupt");
 }
 
 } // namespace
@@ -112,6 +105,8 @@ int main() {
 
         const cephyr::GeneratedFiles changed{{"IR.c", "changed\n"}};
         cache.put(second_key, changed);
+        // Invalid replacements must not discard the previous complete tree.
+        cache.put(second_key, {{"../bad", "ignored"}});
         assert(cache.get(first_key) == files);
         assert(cache.get(second_key) == changed);
     }
@@ -119,9 +114,9 @@ int main() {
 #ifdef __linux__
     constexpr auto others = std::filesystem::perms::group_all |
                             std::filesystem::perms::others_all;
-    for (const auto &path : {directory, directory / "data.mdb", directory / "lock.mdb"})
-        assert((std::filesystem::status(path).permissions() & others) ==
-               std::filesystem::perms::none);
+    assert((std::filesystem::status(directory).permissions() & others) == std::filesystem::perms::none);
+    for (const auto &file : std::filesystem::directory_iterator(directory))
+        assert((file.status().permissions() & others) == std::filesystem::perms::none);
 
     const auto expect_disabled = [&](const std::filesystem::path &path, std::string_view reason) {
         cephyr::Diagnostics diagnostics;
@@ -139,19 +134,20 @@ int main() {
     std::filesystem::permissions(unsafe, std::filesystem::perms::group_write,
                                  std::filesystem::perm_options::add);
     expect_disabled(unsafe, "group/world-writable");
-    assert(!std::filesystem::exists(unsafe / "data.mdb"));
+    assert(std::filesystem::is_empty(unsafe));
     std::filesystem::permissions(unsafe, std::filesystem::perms::group_write,
                                  std::filesystem::perm_options::remove);
 
     const auto unrelated = temporary.path / "unrelated";
     std::ofstream(unrelated) << "not cache data";
-    for (const char *name : {"data.mdb", "lock.mdb"}) {
-        const auto cache_file = unsafe / name;
-        std::filesystem::create_symlink(unrelated, cache_file);
-        expect_disabled(unsafe, "unsafe file type or link");
-        std::filesystem::remove(cache_file);
-    }
-    std::filesystem::create_hard_link(unrelated, unsafe / "lock.mdb");
+    // Use the actual destination of first_key for the substitution tests.
+    { cephyr::Diagnostics d; cephyr::Cache cache(unsafe, d); cache.put(first_key, files); }
+    const auto record = std::filesystem::directory_iterator(unsafe)->path();
+    std::filesystem::remove(record);
+    std::filesystem::create_symlink(unrelated, record);
+    expect_disabled(unsafe, "unsafe file type or link");
+    std::filesystem::remove(record);
+    std::filesystem::create_hard_link(unrelated, record);
     expect_disabled(unsafe, "unsafe file type or link");
     assert(std::filesystem::file_size(unrelated) == std::string_view("not cache data").size());
 #endif
@@ -178,10 +174,16 @@ int main() {
         assert(warning.find("checksum mismatch") != std::string::npos);
     }
 
-    // LMDB keys are never truncated to fit and therefore cannot alias.
+    // Keys are never truncated to fit and therefore cannot alias.
     {
         cephyr::Diagnostics diagnostics;
         cephyr::Cache cache(directory, diagnostics);
+        std::string binary(511, '/');
+        binary[0] = '\0';
+        cache.put(binary, files);
+        assert(cache.get(binary) == files);
+        binary.back() = '.';
+        assert(!cache.get(binary));
         const std::string oversized_key(4096, 'x');
         cache.put(oversized_key, files);
         assert(!cache.get(oversized_key));
@@ -189,7 +191,7 @@ int main() {
     }
 
 #if defined(__unix__) || defined(__APPLE__)
-    // LMDB serializes writers from independent processes without exposing a
+    // Atomic replacement permits independent writers without exposing a
     // partially written generation.
     constexpr std::string_view process_keys[] = {"process-0", "process-1"};
     pid_t children[2]{};
@@ -203,6 +205,13 @@ int main() {
                 cephyr::Cache cache(directory, diagnostics);
                 const cephyr::GeneratedFiles output{
                     {"process.txt", std::to_string(index) + "\n"}};
+                const cephyr::GeneratedFiles payload{{"a", std::string(8192, char('a' + index))},
+                                                    {"b", std::string(8192, char('a' + index))}};
+                for (unsigned round = 0; round < 20; ++round) {
+                    cache.put("contended", payload);
+                    auto snapshot = cache.get("contended");
+                    if (!snapshot || snapshot->at("a") != snapshot->at("b")) ::_exit(2);
+                }
                 cache.put(process_keys[index], output);
                 const auto hit = cache.get(process_keys[index]);
                 result = hit && *hit == output ? 0 : 1;

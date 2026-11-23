@@ -159,8 +159,7 @@ class Compiler:
 
     def __init__(self, library: _PathArg | None = None) -> None:
         _require_main_interpreter()
-        # CDLL releases the GIL during native calls. The backend acquires it
-        # only around the portions of code generation that call CPython.
+        # CDLL releases the GIL during native calls.
         self._library = native = _open_library(library)
         abi = _function(native, "cephyr_abi_version", _ct.c_uint)()
         if abi != ABI_VERSION:
@@ -171,7 +170,7 @@ class Compiler:
 
         major, minor = sys.version_info[:2]
         python_version = _function(native, "cephyr_python_version", _ct.c_uint)()
-        if python_version != ((major << 16) | minor):
+        if python_version and python_version != ((major << 16) | minor):
             raise RuntimeError(
                 f"Cephyr library {native._name!r} was built for CPython "
                 f"{python_version >> 16}.{python_version & 0xffff}, not {major}.{minor}"

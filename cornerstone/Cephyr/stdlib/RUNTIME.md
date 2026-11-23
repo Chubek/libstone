@@ -22,6 +22,15 @@ run in reverse order, and the two lists never mix. `exit` calls the weak stdio
 flush hook after running the handlers. `quick_exit` and `_Exit` do not flush
 stdio. Linux closes the process's descriptors at termination.
 
+`system(command)` runs `/bin/sh -c -- command` with the calling process's
+environment and waits for that shell. The result is a Linux wait status (e.g.
+`37 << 8` for `exit 37`, or the signal number in the low seven bits for signal
+termination). Failure to execute the shell looks like `exit 127`; inability
+to create the child or obtain its status returns `-1` with `errno` set.
+`system(NULL)` actually runs `:` to check whether the shell is available.
+While waiting, the runtime ignores `SIGINT` and `SIGQUIT` and blocks `SIGCHLD`;
+the shell inherits the original mask and any ignored dispositions.
+
 `src/allocator.c` provides `malloc`, `aligned_alloc`, `calloc`, `realloc`, and
 `free` using one anonymous mapping per allocation. `aligned_alloc` accepts
 power-of-two alignments and requires the requested size to be a multiple of
@@ -79,23 +88,38 @@ from asynchronous handlers and returning from handlers for computational
 exceptions. No POSIX `sigaction`, public signal-mask API, alternate signal
 stack, or threaded signal semantics are provided.
 
+## Floating environment
+
+On AMD64 and AArch64, `<fenv.h>` reads and writes hardware state. RV64IM LP64
+uses Libstone's integer-only arithmetic in `src/real_bits.c`, with the target
+calling conventions implemented in `src/real_abi.c`. Operations round once,
+to nearest with ties to even, and do not record floating exception flags.
+Consequently RV64IM advertises only `FE_TONEAREST`, with `FLT_ROUNDS == 1`
+and `FE_ALL_EXCEPT == 0`. There are no exception-flag macros, mutable rounding
+modes or hardware FP registers in this profile. Saving, holding, restoring and
+updating the one non-stop environment all succeed. This is the C11 §7.6
+library interface, not an Annex F or frontend `FENV_ACCESS` claim.
+
 ## Floating text conversion
 
-`src/strtofp.c` converts directly to IEEE binary32 or binary64 using only
-integer operations and fixed-size stack storage. It recognizes the ASCII `C`
+`src/strtofp.c` converts directly to binary32, binary64, AMD64 x87 extended
+or AArch64/RV64IM binary128 using integer operations and bounded stack
+storage. It recognizes the ASCII `C`
 locale (`POSIX` is an alias), including `.` as the radix character. The
 optional `nan(...)` payload is consumed when syntactically valid but does not
 affect the quiet NaN representation. End pointers refer to the original
 narrow or wide string. `atof` uses the same conversion as `strtod`.
 
-The parser rounds to nearest, ties to even by default, and honors the AMD64
-SSE rounding direction and the AArch64 FPCR direction. The soft-float RV64IM
-profile only supports nearest-even. The parser does not raise floating-point
-exceptions or provide a public `fenv.h`. It sets `ERANGE` on overflow and on
+The parser rounds to nearest, ties to even by default, and honors AMD64's
+x87 rounding direction for `long double`, SSE direction for `float` and
+`double`, and the AArch64 FPCR direction. The soft-float RV64IM profile only
+supports nearest-even. The parser does not explicitly raise floating-point
+exceptions. It sets `ERANGE` on overflow and on
 inexact results rounded to a subnormal or zero, but not for exact subnormals,
-literal infinities, or a failed match. The runtime neither declares nor
-implements `strtold` or `wcstold`; all three supported ABIs have distinct
-`long double` formats.
+literal infinities, or a failed match. The target-compiler ABI exposes
+`strtold` and `wcstold`; native AMD64, AArch64 and RV64IM Cephyr expose both in the standard headers.
+Narrow and wide `scanf` use the same converter for `%L` floating fields.
+All three native profiles can pass their `long double *` destination.
 
 ## Other boundaries
 

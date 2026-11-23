@@ -218,10 +218,12 @@ static int test_native_artifacts(void)
     /* Binary capture is valid for cross targets; loading into this host is not. */
 #if defined(__x86_64__)
     const char *foreign_target = "--target=aarch64-linux-gnu";
+    const char *cross_config = CEPHYR_TEST_FIXTURES "/aarch64-cross-dso.toml";
 #else
     const char *foreign_target = "--target=x86_64-linux-gnu";
+    const char *cross_config = CEPHYR_TEST_FIXTURES "/x86_64-cross-dso.toml";
 #endif
-    const char *cross_args[] = {foreign_target, "-shared", "--stdlib=none", "-nostdlib",
+    const char *cross_args[] = {"--config", cross_config, foreign_target, "-shared", "--stdlib=none", "-nostdlib",
                                 "-x", "assembler", "-", "-o", "-"};
     request.argc = sizeof(cross_args) / sizeof(*cross_args);
     request.argv = cross_args;
@@ -313,7 +315,8 @@ static int test_units(void)
     CHECK(cephyr_context_add_translation_unit(context, "two.c", provider, sizeof(provider) - 1) ==
           CEPHYR_OK);
     CHECK(cephyr_context_link(context, NULL, &details) == CEPHYR_COMPILE_ERROR && details);
-    CHECK(strstr(cephyr_result_diagnostics(details, NULL), "duplicate symbol"));
+    CHECK(strstr(cephyr_result_diagnostics(details, NULL), "multiple definition") ||
+          strstr(cephyr_result_diagnostics(details, NULL), "duplicate symbol"));
     cephyr_result_destroy(details);
     CHECK(cephyr_context_reset(context) == CEPHYR_OK);
     cephyr_context_destroy(context);
@@ -425,7 +428,7 @@ int main(void)
     cephyr_result *result = NULL;
     CHECK(cephyr_abi_version() == 1);
     CHECK(cephyr_version() && cephyr_version()[0]);
-    CHECK((cephyr_python_version() >> 16) == 3);
+    CHECK(cephyr_python_version() == 0);
     CHECK(cephyr_result_output(NULL, &size) == NULL && size == 0);
     CHECK(cephyr_result_diagnostics(NULL, NULL) == NULL);
     cephyr_result_destroy(NULL);

@@ -1,4 +1,4 @@
-"""RV64IM LP64 soft-float arithmetic and fixed-prototype ABI against Clang."""
+"""RV64IM LP64 soft-float arithmetic and fixed-prototype ABI against GCC."""
 
 import argparse
 import os
@@ -13,7 +13,6 @@ import tempfile
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "rv64_soft_fp"
 TRIPLE = "riscv64-linux-gnu"
 NEGATIVE = (
-    ("long double f(long double x) { return x; }", "long double"),
     ("float __addsf3(float, float); float f(float x) { return x + x; }",
      "reserved for the RV64 soft-float runtime"),
 )
@@ -22,7 +21,7 @@ NEGATIVE = (
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cephyr", type=Path)
-    parser.add_argument("--clang", default="clang")
+    parser.add_argument("--cc", default=os.environ.get("CEPHYR_TEST_CC_RV64") or "riscv64-linux-gnu-gcc")
     parser.add_argument("--qemu", default=shutil.which("qemu-riscv64") or
                         shutil.which("qemu-riscv64-static"))
     args = parser.parse_args()
@@ -42,13 +41,13 @@ def main():
                 raise AssertionError((command, p.returncode, p.stdout, p.stderr))
 
         cephyr = (str(args.cephyr.resolve()), "-std=c11", f"--target={TRIPLE}")
-        clang = (args.clang, f"--target={TRIPLE}", "-march=rv64im", "-mabi=lp64")
+        cc = (args.cc, "-march=rv64im", "-mabi=lp64", "-mno-relax", "-fno-pic")
         asm, native, harness, exe = (work / name for name in
                                      ("native.s", "native.o", "harness.o", "test"))
         start = work / "start.s"
         start.write_text('.text\n.globl _start\n_start:\ncall test_main\nli a7,93\necall\n'
                          '.section .note.GNU-stack,"",@progbits\n', encoding="ascii")
-        check(*clang, "-std=c11", "-O2", "-ffreestanding", "-fno-pie", "-fno-stack-protector",
+        check(*cc, "-std=c11", "-O2", "-ffreestanding", "-fno-pie", "-fno-stack-protector",
               "-c", FIXTURES / "harness.c", "-o", harness)
 
         def run_binary():
@@ -65,7 +64,7 @@ def main():
                                  (("-fPIC",), ())):
             check(*cephyr, *options, "-S", FIXTURES / "native.c", "-o", asm)
             # Assembly must be accepted by a strict RV64IM assembler.
-            check(*clang, "-c", asm, "-o", native)
+            check(*cc, "-c", asm, "-o", native)
             check(*cephyr, *options, "-c", FIXTURES / "native.c", "-o", native)
             # ELF64 little-endian e_flags: RVC and floating ABI bits must be clear.
             (flags,) = struct.unpack_from("<I", native.read_bytes(), 48)

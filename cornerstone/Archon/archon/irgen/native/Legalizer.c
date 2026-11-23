@@ -45,6 +45,10 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_AMD64_X87_TO_FP:
     case ARCHON_MIR_AMD64_X87_TO_SI:
     case ARCHON_MIR_AMD64_X87_TO_UI:
+    case ARCHON_MIR_F128_LOW:
+    case ARCHON_MIR_F128_HIGH:
+    case ARCHON_MIR_AMD64_X87_LOW:
+    case ARCHON_MIR_AMD64_X87_HIGH:
     case ARCHON_MIR_CALL_INDIRECT: /* Optional destination, func_ptr callee in a. */
         return HAS_DST | HAS_A;
     case ARCHON_MIR_AMD64_VA_START:
@@ -97,6 +101,8 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_AMD64_X87_EQ:
     case ARCHON_MIR_AMD64_X87_LT:
     case ARCHON_MIR_AMD64_X87_LE:
+    case ARCHON_MIR_F128_PACK:
+    case ARCHON_MIR_AMD64_X87_PACK:
         return HAS_DST | HAS_A | HAS_B;
     default:
         return 0;
@@ -111,6 +117,14 @@ static ArchonMIRType value_type(const ArchonMIRFunction *fn, ArchonValue value)
 
 int an_target_type(ANContext *ctx, ArchonMIRType type)
 {
+#if !defined(AN_GENERIC_MIR_VERIFY) && !defined(AN_AAPCS64) && !defined(AN_RV64_SOFT_FP_TRANSPORT)
+    if (type == ARCHON_MIR_F128)
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "f128 MIR requires AAPCS64 or RV64IM LP64");
+#endif
+#if !defined(AN_GENERIC_MIR_VERIFY) && !defined(AN_SYSV_AMD64)
+    if (type == ARCHON_MIR_F80)
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "f80 MIR requires SysV AMD64");
+#endif
 #if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SCALAR_GAS_FP) || defined(AN_RV64_SOFT_FP_TRANSPORT)
     (void)ctx;
     (void)type;
@@ -257,6 +271,18 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     b = (shape & HAS_B) != 0 ? value_type(fn, inst->b) : ARCHON_MIR_VOID;
 
     switch (op) {
+    case ARCHON_MIR_F128_PACK:
+        return (a == ARCHON_MIR_I64 && b == ARCHON_MIR_I64 && dst == ARCHON_MIR_F128) ||
+            an_error(ctx, ARCHON_BACKEND_INVALID, "f128_pack requires two i64 words and an f128 result");
+    case ARCHON_MIR_F128_LOW:
+    case ARCHON_MIR_F128_HIGH:
+        return (a == ARCHON_MIR_F128 && dst == ARCHON_MIR_I64) ||
+            an_error(ctx, ARCHON_BACKEND_INVALID, "f128 word extraction requires f128 input and i64 result");
+    case ARCHON_MIR_AMD64_X87_PACK:
+        return legal_x87(ctx, a == ARCHON_MIR_I64 && b == ARCHON_MIR_I64 && dst == ARCHON_MIR_F80);
+    case ARCHON_MIR_AMD64_X87_LOW:
+    case ARCHON_MIR_AMD64_X87_HIGH:
+        return legal_x87(ctx, a == ARCHON_MIR_F80 && dst == ARCHON_MIR_I64);
     case ARCHON_MIR_AMD64_X87_ADD:
     case ARCHON_MIR_AMD64_X87_SUB:
     case ARCHON_MIR_AMD64_X87_MUL:

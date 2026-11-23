@@ -1,3 +1,5 @@
+#include "sandslab_opt.hpp"
+#include "blackstone_opt.hpp"
 #include "driver.hpp"
 #include "driver_io.hpp"
 #include "embedding_internal.hpp"
@@ -75,6 +77,7 @@ struct Options {
     PreprocessOptions preprocess;
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
     std::optional<bool> factir_enabled;
+    std::optional<bool> sandslab_enabled;
     bool no_headers = false, no_start = false, no_libraries = false, shared = false;
     bool verbose = false, sarif = false, werror = false, help = false, version = false;
     bool moonstone_analysis = false;
@@ -117,6 +120,7 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --target TRIPLE|auto      Select a Lua target or a supported native host target
   --config FILE             Read FILE instead of ./Cephyr.toml
   --no-factir, --factir      Disable or enable verified FactIR (default: on)
+  --sandslab, --no-sandslab  Toggle late native AMD64 constant shortening (default: off)
   --factir-smtlib FILE      Write the SMT-LIB obligation (one C input)
   --factir-facts FILE       Write the committed Datalog facts (one C input)
   --profile NAME            Select a QML profile from the configuration
@@ -124,7 +128,7 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --qml-file PATH           Load a QML rule fragment (repeatable)
   --qml-fuel N              Set the QML rewrite fuel limit
   --qml-param PHASE.KEY=N   Set a phase parameter (repeatable; KEY may be fuel)
-  --no-cache                Regenerate the Archon backend without using LMDB
+  --no-cache                Compatibility option (packaged backends need no cache)
   --diagnostics-format=FMT  text or sarif
   --moonstone-analyze       Inspect supported typed MIR (optional build)
   --moonstone-profile=FILE  Write a compiler phase profile (optional build)
@@ -353,6 +357,8 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
                 diag.error("cephyr.moonstone.profile", "Cephyr was built without Prolific profiling support");
             if (opts.profile_output == "-")
                 diag.error("cephyr.moonstone.profile", "profiling requires a file, not standard output");
+        } else if (token == "--sandslab" || token == "--no-sandslab") {
+            opts.sandslab_enabled = token == "--sandslab";
         } else if (token == "--no-factir" || token == "--factir") {
             opts.factir_enabled = token == "--factir";
         } else if (option("--factir-smtlib")) {
@@ -480,26 +486,19 @@ const fs::path module_directory = []() noexcept -> fs::path {
                 return object.parent_path();
         }
     } catch (...) {
-        // Fall back to compile-time paths if discovery fails.
+        // Report a resource error on the first compilation request.
     }
     return {};
 }();
 
 std::pair<fs::path, fs::path> resources()
 {
-    auto cephyr = fs::path(CEPHYR_SOURCE_RESOURCES);
-    auto archon = fs::path(CEPHYR_SOURCE_ARCHON);
-    if (!module_directory.empty()) {
-#ifdef CEPHYR_LIB_RELATIVE_RESOURCES
-        auto installed_cephyr = module_directory / CEPHYR_LIB_RELATIVE_RESOURCES;
-        auto installed_archon = module_directory / CEPHYR_LIB_RELATIVE_ARCHON;
-        if (path_exists(installed_cephyr / "triples"))
-            cephyr = installed_cephyr.lexically_normal();
-        if (path_exists(installed_archon / "archon"))
-            archon = installed_archon.lexically_normal();
-#endif
-    }
-    return {std::move(cephyr), std::move(archon)};
+    if (module_directory == fs::path(CEPHYR_BUILD_LIBDIR))
+        return {CEPHYR_SOURCE_RESOURCES, CEPHYR_SOURCE_ARCHON};
+    if (module_directory.empty())
+        throw std::runtime_error("cannot locate libcephyr resource directory");
+    return {(module_directory / CEPHYR_LIB_RELATIVE_RESOURCES).lexically_normal(),
+            (module_directory / CEPHYR_LIB_RELATIVE_ARCHON).lexically_normal()};
 }
 
 fs::path config_path(const Options &opts)
@@ -515,6 +514,8 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
 {
     const auto [cephyr, archon] = resources();
     Config config = default_config(cephyr, archon);
+    config.package_root = cephyr == fs::path(CEPHYR_SOURCE_RESOURCES) ?
+        fs::path(CEPHYR_BUILD_PACKAGES) : cephyr / "native-packages";
     const auto config_file = config_path(opts);
     if (!config_file.empty() && !load_config(config, config_file, diag))
         return std::nullopt;
@@ -538,6 +539,8 @@ std::optional<Config> configure(const Options &opts, const cephyr_request &reque
         config.cache_enabled = *opts.use_cache;
     if (opts.factir_enabled)
         config.factir_enabled = *opts.factir_enabled;
+    if (opts.sandslab_enabled)
+        config.sandslab_enabled = *opts.sandslab_enabled;
     if (opts.static_link)
         config.static_link = *opts.static_link;
     if (opts.shared)
@@ -573,12 +576,16 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
     };
     if (native_scalar_fp && !assembler)
         builtins.emplace_back(true, "__CEPHYR_HAS_SCALAR_FP=1");
+    if (!assembler && (native_rv64_lp64 || (native_scalar_fp && provider->architecture == "AArch64")))
+        builtins.emplace_back(true, "__CEPHYR_HAS_BINARY128_ABI=1");
     if (native_rv64_lp64 && !assembler) {
         builtins.emplace_back(true, "__CEPHYR_HAS_NATIVE_DIVISION_API=1");
         builtins.emplace_back(true, "__CEPHYR_HAS_RV64_STDARG=1");
     }
-    if (native_scalar_fp && provider->architecture == "AMD64" && !assembler)
+    if (native_scalar_fp && provider->architecture == "AMD64" && !assembler) {
         builtins.emplace_back(true, "__CEPHYR_HAS_AMD64_STDARG=1");
+        builtins.emplace_back(true, "__CEPHYR_HAS_X87_ABI=1");
+    }
     if (native_scalar_fp && provider->architecture == "AArch64" && !assembler)
         builtins.emplace_back(true, "__CEPHYR_HAS_AARCH64_STDARG=1");
     if (provider && provider->architecture == "RISCV64IM")
@@ -1058,8 +1065,7 @@ struct ToolArtifact {
 bool anonymous_assembly(const Config &config, const Target &target, const Options &opts)
 {
     return config.assembler.empty() && config.triple_script.empty() &&
-        config.assembler_style == "driver" &&
-        !target.assembler.empty() && target.assembler.front() == "clang" &&
+        !target.assembler.empty() && fs::path(target.assembler.front()).filename() == "sandstone-as" &&
         config.assemble_flags.empty() && opts.assembler_options.empty();
 }
 
@@ -1079,98 +1085,20 @@ bool compiler_driver_link(const Config &config)
     });
 }
 
-const Command &runtime_compiler(const Config &config, const Target &target)
+std::optional<Runtime> packaged_runtime(const Options &opts, const Config &config,
+                                        const Target &target, Diagnostics &diag)
 {
-    if (!config.runtime_cc.empty())
-        return config.runtime_cc;
-    if (config.assembler_style != "driver") {
-        static const Command unavailable;
-        return unavailable;
-    }
-    return config.assembler.empty() ? target.assembler : config.assembler;
-}
-
-std::optional<Runtime> build_runtime(const Options &opts, const Config &config, const Target &target,
-                                     const fs::path &workspace, Diagnostics &diag)
-{
-    Runtime runtime;
-    if (opts.no_start && opts.no_libraries)
-        return runtime;
-
-    const auto &root = config.stdlib_root;
-    if (root.empty() || !path_exists(root / "include") || !path_exists(root / "src")) {
-        diag.error("cephyr.stdlib", "bundled C library headers or sources are missing", Location{root.string()});
-        return std::nullopt;
-    }
-    Command compiler = runtime_compiler(config, target);
-    if (compiler.empty()) {
-        diag.error("cephyr.stdlib", "a raw assembler requires [tools].runtime_cc to build Cephyr libc");
-        return std::nullopt;
-    }
-    if (config.runtime_cc.empty()) {
-        if (config.assembler.empty())
-            extend(compiler, target.assemble_flags);
-        extend(compiler, config.assemble_flags);
-    }
-    extend(compiler, config.runtime_flags);
-    sysroot(compiler, config);
-    extend(compiler, {"-ffreestanding", "-fno-builtin", "-fno-stack-protector",
-                     "-fno-pic", "-fno-pie", "-nostdinc", "-I", (root / "include").string(), "-O2"});
-    const auto compile = [&](std::string_view source, const fs::path &output) {
-        auto command = compiler;
-        const char *lang = source.ends_with(".c") ? "c" : "assembler-with-cpp";
-        if (source.ends_with(".c"))
-            command.push_back("-std=c11");
-        if (source.starts_with("softfloat/"))
-            extend(command, {"-fno-lto", "-fno-fast-math", "-fvisibility=hidden",
-                             "-include", (root / "src/softfloat/cephyr-rv64im.h").string()});
-        extend(command, {"-c", "-x", lang, (root / "src" / source).string(), "-o", output.string()});
-        return execute(command, opts, diag);
-    };
-    const bool amd64 = target.architecture == "AMD64";
-    const bool aarch64 = target.architecture == "AArch64";
-    if (!opts.no_start) {
-        runtime.startup = workspace / "cephyr-crt0.o";
-        if (!compile(amd64 ? "start-amd64.S" : aarch64 ? "start-aarch64.S" : "start.S", runtime.startup))
+    Runtime result;
+    const auto directory = config.package_root / target.architecture;
+    if (!opts.no_start) result.startup = directory / "crt0.o";
+    if (!opts.no_libraries) result.library = directory / "libc.a";
+    for (const auto &path : {result.startup, result.library}) {
+        if (!path.empty() && !fs::is_regular_file(path)) {
+            diag.error("cephyr.stdlib", "missing packaged target runtime: " + path.string());
             return std::nullopt;
+        }
     }
-    if (!opts.no_libraries) {
-        auto command = config.archiver.empty() ? target.archiver : config.archiver;
-        runtime.library = workspace / "libcephyr-c.a";
-        extend(command, {"rcs", runtime.library.string()});
-        for (const char *source : {amd64 ? "syscall-amd64.S" : aarch64 ? "syscall-aarch64.S" : "syscall.S",
-                                   amd64 ? "setjmp-amd64.S" : aarch64 ? "setjmp-aarch64.S" : "setjmp.S",
-                                   "runtime.c", "allocator.c", "assert.c",
-                                    "ctype.c", "stdlib.c", "stdio.c", "scanf.c", "stream.c", "string.c",
-                                    "time.c", "multibyte.c", "strtofp.c", "wideprintf.c"}) {
-            const auto object = workspace / ("libc-" + fs::path(source).stem().string() + ".o");
-            if (!compile(source, object))
-                return std::nullopt;
-            command.push_back(object.string());
-        }
-        if (target.is_linux && (amd64 || aarch64)) {
-            const auto object = workspace / "libc-fenv.o";
-            if (!compile("fenv.c", object))
-                return std::nullopt;
-            command.push_back(object.string());
-        }
-        if (target.architecture == "RISCV64IM" && target.abi == "LP64") {
-            for (const std::string_view name : {"addsf3", "adddf3", "subsf3", "subdf3",
-                                               "mulsf3", "muldf3", "divsf3", "divdf3",
-                                               "extendsfdf2", "truncdfsf2",
-                                               "floatdisf", "floatdidf", "floatundisf", "floatundidf",
-                                               "fixsfdi", "fixdfdi", "fixunssfdi", "fixunsdfdi",
-                                               "fp_mode", "clzdi2", "clzsi2"}) {
-                const auto object = workspace / ("softfloat-" + std::string(name) + ".o");
-                if (!compile("softfloat/" + std::string(name) + ".c", object))
-                    return std::nullopt;
-                command.push_back(object.string());
-            }
-        }
-        if (!execute(command, opts, diag))
-            return std::nullopt;
-    }
-    return runtime;
+    return result;
 }
 
 bool link(const Config &config, const Target &target, const Options &opts,
@@ -1192,12 +1120,13 @@ bool link(const Config &config, const Target &target, const Options &opts,
     const bool driver = compiler_driver_link(config);
     const auto linker_name = cmd.empty() ? std::string{} : fs::path(cmd.front()).filename().string();
     const bool lld = !driver && linker_name == "ld.lld";
-    if (!opts.shared)
+    const bool qld = !driver && linker_name == "qobjld";
+    if (!opts.shared && !qld)
         cmd.push_back(driver ? "-Wl,--fatal-warnings" : "--fatal-warnings");
 
     Runtime runtime;
     if (config.stdlib == "cephyr" && !(opts.no_start && opts.no_libraries)) {
-        auto built = build_runtime(opts, config, target, workspace(), diag);
+        auto built = packaged_runtime(opts, config, target, diag);
         if (!built)
             return false;
         runtime = std::move(*built);
@@ -1220,8 +1149,8 @@ bool link(const Config &config, const Target &target, const Options &opts,
 #else
         const bool host_target = false;
 #endif
-        if (!host_target || !lld || opts.pic == false) {
-            diag.error("cephyr.host_symbol", "host registration requires AMD64 Linux host and target, PIC, and a direct ld.lld linker");
+        if (!host_target || (!lld && !qld) || opts.pic == false) {
+            diag.error("cephyr.host_symbol", "host registration requires AMD64 Linux host and target, PIC, and a direct qobjld or ld.lld linker");
             return false;
         }
         std::ostringstream bridge;
@@ -1231,11 +1160,11 @@ bool link(const Config &config, const Target &target, const Options &opts,
         // hidden absolute symbol if GOT-to-PC-relative relaxation is disabled.
         // A function trampoline tail-jumps with all ABI arguments intact
         // (including %al for variadics). Neither kind is exported by the DSO.
-        cmd.emplace_back("--no-relax");
+        if (lld) cmd.emplace_back("--no-relax");
         for (const auto &[name, symbol] : *invocation.symbols) {
-            const auto wrapped = "__wrap_" + name;
+            const auto wrapped = lld ? "__wrap_" + name : name;
             const auto address = reinterpret_cast<std::uintptr_t>(symbol.address);
-            cmd.emplace_back("--wrap=" + name);
+            if (lld) cmd.emplace_back("--wrap=" + name);
             bridge << ".globl " << wrapped << "\n.hidden " << wrapped << '\n';
             if (symbol.kind == CEPHYR_HOST_FUNCTION) {
                 bridge << ".type " << wrapped << ",@function\n" << wrapped
@@ -1265,12 +1194,13 @@ bool link(const Config &config, const Target &target, const Options &opts,
     const bool passthrough = std::any_of(opts.inputs.begin(), opts.inputs.end(), [](const Input &input) {
         return input.language == Language::link_option;
     });
-    const bool anonymous = lld && config.linker.empty() && config.link_flags.empty() &&
+    const bool anonymous = (lld || qld) && config.linker.empty() && config.link_flags.empty() &&
         config.triple_script.empty() &&
         output == "-" && !passthrough;
     const ToolArtifact temporary(anonymous, "link-result", workspace);
-    extend(cmd, {"-o", temporary.memory ? "-" : temporary.path.string()});
-    if (!execute(cmd, opts, diag, descriptors, temporary.memory ? temporary.memory->fd() : -1) ||
+    if (qld) temporary.inherit(descriptors);
+    extend(cmd, {"-o", temporary.memory && lld ? "-" : temporary.path.string()});
+    if (!execute(cmd, opts, diag, descriptors, temporary.memory && lld ? temporary.memory->fd() : -1) ||
         !publish_native(output, temporary.path, opts, invocation, diag,
                         temporary.memory ? &*temporary.memory : nullptr))
         return false;
@@ -1280,33 +1210,21 @@ bool link(const Config &config, const Target &target, const Options &opts,
 }
 
 bool check_auto_tools(const Options &opts, const Config &config, const Target &target,
-                      bool sdk_backend, Diagnostics &diag)
+                      Diagnostics &diag)
 {
     if (opts.stage == Stage::preprocess || opts.stage == Stage::syntax || opts.stage == Stage::mir)
         return true;
     const auto check = [&](std::string_view role, const Command &command) {
         return check_auto_tool(target, role, command, diag);
     };
-    const bool has_c = std::any_of(opts.inputs.begin(), opts.inputs.end(),
-                                  [](const Input &input) { return c_input(input.language); });
     const bool has_source = std::any_of(opts.inputs.begin(), opts.inputs.end(),
                                   [](const Input &input) { return source_input(input.language); });
-    if (has_c && !sdk_backend &&
-        !check("a host C compiler to build the Archon backend", config.host_cc))
-        return false;
     if (has_source && (opts.stage == Stage::object || opts.stage == Stage::link) &&
         !check("a target assembler", config.assembler.empty() ? target.assembler : config.assembler))
         return false;
     if (opts.stage != Stage::link)
         return true;
-    if (!check("a target linker", config.linker.empty() ? target.linker : config.linker))
-        return false;
-    if (config.stdlib != "cephyr" || (opts.no_start && opts.no_libraries))
-        return true;
-    return check("a target compiler ([tools].runtime_cc or the assembler driver) to build Cephyr libc",
-                 runtime_compiler(config, target)) &&
-           (opts.no_libraries ||
-            check("a target archiver", config.archiver.empty() ? target.archiver : config.archiver));
+    return check("a target linker", config.linker.empty() ? target.linker : config.linker);
 }
 
 bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag,
@@ -1334,8 +1252,6 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             return configure_qml(opts, config, qml_pipeline, diag);
         }))
             return false;
-        // The LMDB cache stores only generated target backend source, never
-        // rewritten MIR, assembly, or objects. It does not depend on QML.
     }
     const bool automatic = config.target == "auto" && config.triple_script.empty();
     std::optional<Target> target;
@@ -1351,6 +1267,18 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     }
     if (!target)
         return false;
+    // Package references in the target bank resolve beside this loaded copy
+    // of libcephyr. Explicit [tools] overrides are never rewritten.
+    if (target->assembler.front() == "@package/sandstone-as") {
+        target->assembler.front() = (config.package_root / "tools/sandstone-as").string();
+        if (config.assembler.empty()) config.assembler_style = "as";
+    }
+    for (auto &arg : target->assemble_flags) {
+        if (arg.starts_with("@bank/") && fs::path(arg.substr(6)).filename() == arg.substr(6))
+            arg = (config.package_root / "banks" / arg.substr(6)).string();
+    }
+    if (target->linker.front() == "@package/qobjld")
+        target->linker.front() = (config.package_root / "tools/qobjld").string();
     const auto *provider = native_lowering_provider(target->architecture, target->abi);
     if (provider) {
         std::error_code error;
@@ -1377,7 +1305,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             return false;
         }
     }
-    if (automatic && !check_auto_tools(opts, config, *target, sdk_backend, diag))
+    if (automatic && !check_auto_tools(opts, config, *target, diag))
         return false;
     if (opts.verbose)
         diag.note("cephyr.target", target->triple + " (" + target->architecture + "/" + target->abi + ")" +
@@ -1514,6 +1442,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             prep->wchar_signed = !provider || provider->wchar_signed;
             prep->native_scalar_fp = native_scalar_fp;
             prep->native_rv64_soft_fp = native_rv64_lp64;
+            prep->native_binary128 = native_rv64_lp64 || (native_scalar_fp && provider->architecture == "AArch64");
             prep->native_amd64_stdarg = native_scalar_fp && provider->architecture == "AMD64";
             prep->native_amd64_x87 = native_scalar_fp && provider->architecture == "AMD64";
             prep->native_aarch64_stdarg = native_scalar_fp && provider->architecture == "AArch64";
@@ -1558,10 +1487,17 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             if ((rewritten || (custom_backend && !qml_pipeline)) &&
                 !verify_mir(lowered->mir, diag, name, "cephyr.sdk.mir"))
                 return false;
+            if (config.blackstone_enabled) {
+                bool changed = false;
+                if (!measured(profile, "blackstone", name, [&] {
+                    return blackstone_opt::rewrite(lowered->mir, diag, name, changed);
+                }))
+                    return false;
+            }
             std::optional<factir::Result> facts;
             if (config.factir_enabled && !custom_backend) {
                 facts = measured(profile, "factir", name, [&] {
-                    return factir::run(lowered->mir, *target, name, temporary(), diag);
+                    return factir::run(lowered->mir, *target, name, diag);
                 });
                 if (!facts)
                     return false;
@@ -1587,7 +1523,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
             } else {
                 result = measured(profile, "native_backend", name, [&] {
                     if (!backend)
-                        backend.emplace(config, *target, temporary() / "backend", diag);
+                        backend.emplace(config, *target, diag);
                     return backend->compile(lowered->mir, name, pic, facts ? &*facts : nullptr);
                 });
             }
@@ -1595,6 +1531,8 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
                 return false;
             retain_factir_artifacts();
             assembly = std::move(*result);
+            if (config.sandslab_enabled && provider && !sdk_backend && provider->architecture == "AMD64")
+                measured(profile, "sandslab", name, [&] { shorten_amd64_constants(assembly); });
             // Native MIR v1 does not carry C linkage. Change the single
             // binding directive at each definition, rather than emitting a
             // second conflicting directive (rejected by LLVM's assembler).
@@ -1610,6 +1548,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
                 assembly.replace(offset, global.size(), "\t.local " + symbol + "\n");
             }
             assembly += lowered->data_assembly;
+            lowered->apply_elf_names(assembly);
         } else {
             assembly = prep ? std::move(prep->text) : std::move(*source);
         }

@@ -1,0 +1,3 @@
+# Explicit GNU dynamic ELF linker for cross-DSO interoperability tests.
+[tools]
+linker = "x86_64-linux-gnu-ld"

@@ -501,6 +501,7 @@ class _ScalarGasTests:
         self.assertEqual(manifest["abi_facts_v2"], self.db["abi_facts_v2"])
         self.assertEqual(manifest["artifact"], ["ELF-oriented GAS assembly (default or PIC)"])
         self.assertEqual(manifest["floating_point"]["formats"], ["IEEE binary32", "IEEE binary64"])
+        self.assertEqual("f80_transport" in manifest["floating_point"], self.arch == "amd64")
         self.assertEqual(self.run_ok(self.driver, "--list-capabilities"),
                          (f"{target}/{abi}: canonical-mir-v1 -> "
                            "ELF GAS assembly only (default or PIC)\n").encode())
@@ -580,6 +581,29 @@ ret -"""
             result = self.invoke(self.driver, "--input", "-", data=module(fn))
             self.assertEqual((result.returncode, result.stdout), (1, b""))
             self.assertIn(b"incorrect operand types for AMD64 x87 operation", result.stderr)
+
+    def test_x87_value_copy_across_block_edges(self):
+        fn = """function select_x87 f80 3 6 2 0
+types f80 f80 i64 f80 i64 f80
+block 0 0
+params
+cbr 2 1 2 0 2 1 2 1 2
+block 2 1
+params 3 4
+copy 5 3
+ret 5"""
+        if self.arch != "amd64":
+            res = self.invoke(self.driver, "--input", "-", data=module(fn))
+            self.assertEqual((res.returncode, res.stdout), (1, b""))
+            self.assertIn(b"f80 MIR requires SysV AMD64", res.stderr)
+            return
+        exe = self.link(self.root, [module(fn)], """
+extern long double select_x87(long double, long double, long);
+int test_main(void) {
+    long double a = 0x1.0000000000000002p6000L, b = -0x1p-12000L;
+    return select_x87(a, b, 0) != b || select_x87(a, b, 1) != a;
+}""")
+        self.run_ok(exe)
 
     def test_in_memory_runtime_abi(self):
         source, out = self.root / "client.c", self.root / "client"

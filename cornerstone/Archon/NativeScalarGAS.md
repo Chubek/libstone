@@ -65,7 +65,8 @@ library build for either new provider compiles the shared `Backend.c`,
 
 ## Stack and symbols
 
-Each SSA value has an 8-byte stack home. Edge copies first stage every source
+Each SSA value has an 8-byte stack home, or 16 bytes for AMD64 `f80`.
+Edge copies first stage every source
 in a dedicated frame area. The frame also reserves the largest outgoing
 stack-argument area starting at pre-call SP. Homes, staging, locals, and
 saved frame/return slots do not overlap. Fixed frames are limited to 64 KiB;
@@ -78,12 +79,13 @@ locals may require up to 16-byte alignment.
 | First overflow argument, relative to incoming SP | `rsp + 8` | `sp` |
 | Call boundary | `rsp` aligned to 16 before `call`; callee entry has residue 8 | `sp` aligned to 16 before and after `bl`/`blr` |
 | Integer/pointer result | `rax` | `x0` |
-| FP result | `xmm0` | `s0` or `d0` |
+| FP result | `xmm0` for `f32`/`f64`; `ST(0)` for `f80` | `s0` or `d0` |
 | Return address | `call` pushes it; `ret` pops it | `x30`; non-leaf functions save it and preserve `x29` with an AAPCS frame record |
 
 Each class fills its own bank before using stack slots. Overflow from both
 classes shares one stack area in argument order with eight-byte slots, including
-for `f32`. The FP rules are reviewed profile behavior; the pinned ABI v2 data
+for `f32`. AMD64 `f80` arguments always take 16-byte-aligned, 16-byte stack
+slots and consume no GP or SSE register. The FP rules are reviewed profile behavior; the pinned ABI v2 data
 describes only the integer bank.
 
 SysV AMD64 sets `%al` to the number of FP registers used before every call,

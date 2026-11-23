@@ -34,6 +34,9 @@ __cephyr_syscall_result:
     CEPHYR_SYSCALL __cephyr_rt_sigprocmask, 14
     CEPHYR_SYSCALL __cephyr_ioctl, 16
     CEPHYR_SYSCALL __cephyr_getpid, 39
+    CEPHYR_SYSCALL __cephyr_clone, 56
+    CEPHYR_SYSCALL __cephyr_execve, 59
+    CEPHYR_SYSCALL __cephyr_wait4, 61
     CEPHYR_SYSCALL __cephyr_gettid, 186
     CEPHYR_SYSCALL __cephyr_clock_gettime, 228
     CEPHYR_SYSCALL __cephyr_tgkill, 234

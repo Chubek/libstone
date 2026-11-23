@@ -15,41 +15,57 @@ size_t an_outgoing_words(size_t argc)
 void an_parameters(ANOut *out, const ArchonMIRFunction *fn,
     const ANFrame *frame, const ANHome *homes)
 {
-    size_t i;
+    size_t i, cursor = 0;
 
     for (i = 0; i < fn->param_count; ++i) {
-        unsigned src = AN_T0;
-        if (i < an_abi.argc) {
-            src = an_abi.args[i];
-        } else {
-            /* Incoming stack words begin at the caller's sp. */
-            an_load(out, src, an_abi.stack_pointer,
-                frame->frame_size + stack_arg_offset(i));
+        int wide = fn->types && fn->types[i] == ARCHON_MIR_F128;
+        size_t start = an_arg_slot(&cursor, wide);
+        for (size_t slot = start; slot < cursor; ++slot) {
+            unsigned src = AN_T0;
+            if (slot < an_abi.argc)
+                src = an_abi.args[slot];
+            else
+                an_load(out, src, an_abi.stack_pointer, frame->frame_size + stack_arg_offset(slot));
+            if (slot == start)
+                an_write(out, frame, homes, (ArchonValue)i, src);
+            else
+                an_store(out, src, an_abi.stack_pointer, frame->high_offsets[i]);
         }
-        an_write(out, frame, homes, (ArchonValue)i, src);
     }
 }
 
 static void call_arguments(ANOut *out, const ArchonMIRInst *inst,
     const ANFrame *frame, const ANHome *homes)
 {
-    size_t i;
-
-    for (i = an_abi.argc; i < inst->arg_count; ++i) {
-        an_read(out, frame, homes, inst->args[i], AN_T0);
-        an_store(out, AN_T0, an_abi.stack_pointer, stack_arg_offset(i));
+    /* Stack writes first, then populate argument registers. */
+    for (int stack = 1; stack >= 0; --stack) {
+        size_t cursor = 0;
+        for (size_t i = 0; i < inst->arg_count; ++i) {
+            ArchonValue v = inst->args[i];
+            size_t start = an_arg_slot(&cursor, frame->types && frame->types[v] == ARCHON_MIR_F128);
+            for (size_t slot = start; slot < cursor; ++slot) {
+                if ((slot >= an_abi.argc) != stack)
+                    continue;
+                unsigned dst = stack ? AN_T0 : an_abi.args[slot];
+                if (slot == start)
+                    an_read(out, frame, homes, v, dst);
+                else
+                    an_load(out, dst, an_abi.stack_pointer, frame->high_offsets[v]);
+                if (stack)
+                    an_store(out, dst, an_abi.stack_pointer, stack_arg_offset(slot));
+            }
+        }
     }
-    /* Homes never overlap argument registers, so filling one cannot overwrite
-     * a source, even when a value is passed more than once. */
-    for (i = 0; i < inst->arg_count && i < an_abi.argc; ++i)
-        an_read(out, frame, homes, inst->args[i], an_abi.args[i]);
 }
 
 static void call_result(ANOut *out, const ArchonMIRInst *inst,
     const ANFrame *frame, const ANHome *homes)
 {
-    if (inst->dst != ARCHON_MIR_NONE)
+    if (inst->dst != ARCHON_MIR_NONE) {
         an_write(out, frame, homes, inst->dst, an_abi.result);
+        if (frame->types && frame->types[inst->dst] == ARCHON_MIR_F128)
+            an_store(out, an_abi.args[1], an_abi.stack_pointer, frame->high_offsets[inst->dst]);
+    }
 }
 
 void an_call(ANOut *out, const ArchonMIRInst *inst,

@@ -13,12 +13,16 @@ See [the libc inventory](stdlib/README.md) and
 
 ## Build and use
 
-Requires CMake 3.20+, a C++20 compiler, CPython 3.10+ with embedding development
-files, Perl (to generate the QML frontend), and LMDB development files.
-Lua, Kaguya, ucpp, tomlc99, lmdbxx, and
-cparser-iso11 are taken from `third_party/`; the build does not download them.
-The bundled target bank uses `clang`, `ld.lld`, and `llvm-ar` to assemble and
-link ELF output. The default target is `x86_64-linux-gnu`.
+Building the compiler requires CMake 3.20+, a C/C++20 toolchain, Python 3.10+
+(Archon and build-time generators), and Perl (QML frontend generation).
+Packaging bundled Linux libc additionally needs `ar` and a GNU target compiler
+for each of `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `riscv64-linux-gnu`.
+Set `CEPHYR_PACKAGE_CC_AMD64`, `CEPHYR_PACKAGE_CC_AArch64`, or
+`CEPHYR_PACKAGE_CC_RISCV64IM` to an explicit target compiler, or supply trusted
+`CEPHYR_PREBUILT_RUNTIME_ROOT` with `ARCH/{crt0.o,libc.a}` for all three.
+Cephyr's uncompressed SymAS banks are generated with the in-tree Lua and
+Sandstone assembler-record compiler. No LLVM is required. The default target
+is `x86_64-linux-gnu`.
 
 ```sh
 cmake -S cornerstone/Cephyr -B build-cephyr
@@ -72,7 +76,7 @@ and its trust and verification boundaries.
 ### Python bindings
 
 The `cephyr` package uses `ctypes` and requires the CPython main interpreter,
-built with the GIL, and the same CPython major/minor version used to build the
+built with the GIL. There is no embedded CPython version dependency in the
 native library. Calls can overlap and the wrapper releases the GIL while the
 native compiler runs. The compiler can still run its configured build tools
 when needed.
@@ -148,22 +152,55 @@ ucpp preprocesses C and `.S` inputs. cparser-iso11 parses the C translation
 unit, Wetstone evaluates integer constant expressions and analyzes control
 flow, and Syren reports source diagnostics in text or SARIF. The compiler
 lowers the AST to typed native Archon MachineIR and invokes a generated native
-backend. It does **not** delegate user C source to Clang or GCC; a separate
-configurable compiler builds Cephyr's packaged libc sources.
+backend. CMake generates three reviewed Gated/Archon backend modules for the
+compiler host and one CRT object and libc archive per Linux target. A native
+compile checks the selected specification and imported source digests, then loads
+that module. `-v` shows the module and effective tool argv. Artifacts are found
+relative to libcephyr after installation; `resource_root`/`stdlib_root` can
+select headers, but do not redirect executable package loading. Missing files
+or mismatched specifications are errors. Custom targets may supply an exact
+SDK backend; new built-in representations or ABIs require rebuilding Cephyr.
 
-On each invocation that needs native C output, the driver regenerates the
-backend through Archon's C++ IRGen API unless the architecture, generation
-settings, and generator inputs match an LMDB cache entry. The cache stores
-generated source artifacts only, never user sources, user object code, or
-loadable host libraries. The private library is built for the current
-invocation; `-v` reports a hit or regeneration. Use `--no-cache` to bypass
-LMDB. Preprocessing, frontend checks, and `--emit-mir` do not build a backend.
+No C/C++ compiler driver, archiver, `llvm-mc` or LLD executable is needed on
+`PATH` for the bundled static targets, even on the first compile. The package
+needs the packaged Archon specification files and a writable temporary directory for
+stages which use named intermediates. `--cache`/`--no-cache` and the old cache
+path are accepted for compatibility. They do not affect backend selection.
+Old `[tools].host_cc`, `runtime_cc`, `archiver`, `[flags].compile` and `runtime`
+settings should be removed.
+
+Native qobjld supports bundled static Linux links and AMD64 shared modules.
+For AArch64 or RV64 shared objects, explicitly select a capable raw linker
+(e.g. `[tools]` followed by `linker = "aarch64-linux-gnu-ld"`). For RV64 external objects,
+use `-march=rv64im -mabi=lp64 -mno-relax`; inputs requiring linker relaxation
+need an explicit compatible linker. `--stdlib=system` requests an explicitly
+configured system compiler-driver linker and matching sysroot/libraries.
+Neither a failed assembly nor a failed native link triggers a fallback.
+
 `--emit-mir` is a debugging view; data which cannot be represented by native
 MachineIR's word-only globals is emitted separately in `-S` output.
 
+### Blackstone MIR optimization
+
+Blackstone folds block-local integer MIR expressions and simplifies identities
+such as `x * 1` without removing operand producers. It runs by default on C
+and preprocessed C inputs, after QML and SDK
+rewrites and before FactIR. `--emit-mir` shows the result; assembly, object,
+and link stages use the same optimized MIR. Preprocessing and syntax checks
+skip the pass. The CLI and embedding APIs use the same pipeline.
+
+To disable Blackstone, add the following to `Cephyr.toml`:
+
+```toml
+[blackstone]
+enabled = false
+```
+
+This switch is independent of FactIR and QML.
+
 ### QML optimization profiles
 
-QML rewrites Cephyr's typed Archon MachineIR after lowering. Nothing runs
+QML rewrites Cephyr's typed Archon MachineIR after lowering. No QML pass runs
 by default. Enable a built-in pass directly or select a profile:
 
 ```sh
@@ -208,9 +245,7 @@ Unknown profiles, phases and parameter keys are errors.
 
 QML operates on C and preprocessed C inputs for `--emit-mir`, `-S`, `-c`,
 and linking from source. QML is not run for `-E`, `-fsyntax-only`, assembler,
-or link-only inputs; those stages do not load rule files. QML processing does
-not alter the generated Archon backend cache key because that cache stores no
-per-input artifacts. Built-in rules are precompiled; installed Cephyr uses
+or link-only inputs; those stages do not load rule files. Built-in rules are precompiled; installed Cephyr uses
 `python3` (3.10+) on `PATH` only when compiling user-supplied fragments. Optional
 Prolific profiles report `qml_configure` and `qml_rewrite`, as well as
 `qml_verify` when the pass changes MIR or a custom backend needs verification.
@@ -252,11 +287,11 @@ they emit instructions (`CQO`/`IDIV`) that it does not support.
   AMD64 and AArch64 also support native `float`/`double` arithmetic, conversions,
   comparisons, and fixed-prototype calls. Both also support a scalar subset
   of `<stdarg.h>` and direct floating-point variadic calls. AMD64 supports
-  `long double` storage, scalar arithmetic, comparisons, and conversions,
-  but not by-value calls. RV64IM supports
+  `long double` storage, scalar arithmetic, comparisons, conversions, and
+  by-value parameters and returns for prototyped functions. RV64IM supports
   software floating point and fixed-prototype
-  passing and returning of supported integer/pointer records. Nonvolatile
-  bit-fields are supported outside by-value ABI boundaries. Atomics and VLAs
+  passing and returning of supported integer/pointer records. Bit-fields,
+  including volatile accesses, are supported outside by-value ABI boundaries. Atomics and VLAs
   remain unsupported. See [C11 status](C11.md) for details.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux

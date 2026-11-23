@@ -7,6 +7,7 @@ import ctypes
 import gc
 import json
 import os
+import re
 import sys
 import tempfile
 import textwrap
@@ -88,7 +89,7 @@ class CephyrPythonAPITests(unittest.TestCase):
         cls.root = Path(temporary.name)
         config = cls.root / "Cephyr.toml"
         config.write_text(
-            'target = "x86_64-linux-gnu"\ncache_enabled = false\n', encoding="utf-8"
+            'target = "x86_64-linux-gnu"\nassembler_style = "as"\ncache_enabled = false\n', encoding="utf-8"
         )
         cls.config_args = ("--config", config)
         cls.compiler = cephyr.Compiler()
@@ -302,7 +303,7 @@ class CephyrPythonAPITests(unittest.TestCase):
                 self.assertTrue(result.ok, result.diagnostics)
 
     def test_python_runs_while_native_tool_is_active(self) -> None:
-        helper = self.root / "host_cc.py"
+        helper = self.root / "assembler.py"
         entered = self.root / "host_tool_entered"
         proceed = self.root / "host_tool_proceed"
         helper.write_text(textwrap.dedent("""\
@@ -318,20 +319,20 @@ class CephyrPythonAPITests(unittest.TestCase):
                 if time.monotonic() >= deadline:
                     raise SystemExit("host tool could not run concurrently with Python")
                 time.sleep(0.01)
-            os.execvp("cc", ["cc", *sys.argv[3:]])
+            os.execvp("as", ["as", *sys.argv[3:]])
             """), encoding="utf-8")
         config = self.root / "parallel.toml"
         command = json.dumps([sys.executable, str(helper), str(entered), str(proceed)],
                              ensure_ascii=False)
         config.write_text(
-            'target = "x86_64-linux-gnu"\ncache_enabled = false\n'
-            f"[tools]\nhost_cc = {command}\n",
+            'target = "x86_64-linux-gnu"\nassembler_style = "as"\ncache_enabled = false\n'
+            f"[tools]\nassembler = {command}\n",
             encoding="utf-8",
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
                 self.compiler.compile,
-                ("--config", config, "-S", "-o", "-", "-"),
+                ("--config", config, "-c", "-o", "-", "-"),
                 "int outside_the_gil(void) { return 19; }\n",
             )
             deadline = time.monotonic() + 30
@@ -347,7 +348,7 @@ class CephyrPythonAPITests(unittest.TestCase):
                 proceed.touch()
             result = future.result(timeout=30)
         self.assertTrue(result.ok, result.diagnostics)
-        self.assertIn(b"outside_the_gil:", result.output)
+        self.assertTrue(result.output.startswith(b"\x7fELF"))
 
 
 class CephyrPythonSDKTests(unittest.TestCase):
@@ -422,6 +423,28 @@ class CephyrPythonSDKTests(unittest.TestCase):
         self.assertTrue(self.compiler.compile(["--version"]).ok)
         self.assertIn(b"const 0 7\n", snapshots[1].text)
         self.assertIn(b"const 0 8\n", snapshots[-1].text)
+
+    def test_blackstone_runs_between_sdk_rewrite_and_backend(self) -> None:
+        def rewrite(data: cephyr.HookInput) -> bytes:
+            # Introduce a multiply-by-one opportunity only after lowering.
+            self.assertIn(b"\nmul ", data.text)
+            mir, count = re.subn(rb"(?m)^(const \d+) 7$", rb"\1 1", data.text)
+            self.assertEqual(count, 1)
+            return mir
+
+        def assembly(data: cephyr.HookInput) -> str:
+            self.assertNotIn(b"\nmul ", data.text)
+            self.assertRegex(data.text, rb"(?m)^load (\d+) \d+ 0\nret \1$")
+            return ".text\n"
+
+        triple = "x86_64-linux-gnu"
+        result = self.compiler.compile(
+            [f"--target={triple}", "-S", "-o", "-", "-"],
+            "unsigned long scale(unsigned long x) { return x * 7UL; }",
+            sdk=(cephyr.Hook(cephyr.Stage.REWRITE, "make-identity", rewrite),
+                 cephyr.Hook(cephyr.Stage.ASSEMBLY, "observe-mir", assembly, triple)),
+        )
+        self.assertTrue(result.ok, result.diagnostics)
 
     def test_sdk_rejection_and_invalid_output(self) -> None:
         def run(callback):

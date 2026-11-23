@@ -1,7 +1,6 @@
 #ifndef CEPHYR_FACT_IR_HPP
 #define CEPHYR_FACT_IR_HPP
 
-#include "src/driver_io.hpp"
 #include "src/mir_verify.h"
 
 #include <cephyr/diagnostics.hpp>
@@ -9,7 +8,6 @@
 #include <novostone/Datalog/Datalog.hpp>
 #include <SatieCDCL.hpp>
 #include <SatieTheoryUtils.hpp>
-#include <lmdb++.h>
 #include <weighstone/support/KnownBitMasks.hpp>
 
 #include <algorithm>
@@ -86,10 +84,18 @@ struct Result {
     }
 };
 
+inline satie::SolveResult solve_obligation(satie::theory::Encoder &enc, std::uint64_t conflict_budget)
+{
+    satie::CNF cnf;
+    for (auto &clause : enc.take_clauses())
+        cnf.add_clause(std::move(clause));
+    satie::CDCLSolver solver(std::move(cnf));
+    solver.set_conflict_budget(conflict_budget);
+    return solver.solve();
+}
+
 // The proof checks for a counterexample to wrap_add64(x, k) == copy64(x).
-// Both are pure, total MIR i64 operations. Carry-out is explicitly dropped.
-// The rewrite neither removes the zero's defining instruction nor replaces,
-// duplicates, reorders, or speculates any of the input computations.
+// Carry-out is explicitly dropped.
 inline satie::SolveResult prove_add_constant(std::uint64_t k, std::uint64_t conflict_budget = 256)
 {
     satie::theory::Encoder enc(1);
@@ -102,12 +108,22 @@ inline satie::SolveResult prove_add_constant(std::uint64_t k, std::uint64_t conf
     for (std::size_t bit = 0; bit < 64; ++bit)
         difference[bit] = enc.lxor2(sum[bit], x[bit]);
     enc.add_clause(std::move(difference));
-    satie::CNF cnf;
-    for (auto &clause : enc.take_clauses())
-        cnf.add_clause(std::move(clause));
-    satie::CDCLSolver solver(std::move(cnf));
-    solver.set_conflict_budget(conflict_budget);
-    return solver.solve();
+    return solve_obligation(enc, conflict_budget);
+}
+
+// eq(eq(x,0),0) yields the i64 zero-extension of (x != 0).
+inline satie::SolveResult prove_boolize(std::uint64_t known_zero)
+{
+    satie::theory::Encoder enc(1);
+    auto nonzero = enc.const_false();
+    std::vector<satie::Lit> x(64);
+    for (unsigned bit = 0; bit < 64; ++bit) {
+        x[bit] = (known_zero >> bit) & 1 ? enc.const_false() : enc.fresh_lit();
+        nonzero = enc.lor2(nonzero, x[bit]);
+    }
+    x[0] = enc.lxor2(nonzero, x[0]);
+    enc.add_clause(std::move(x)); // At least one result bit differs.
+    return solve_obligation(enc, 256);
 }
 
 inline dl::Program rules()
@@ -228,9 +244,11 @@ inline std::vector<Bits> function_known_bits(const ArchonMIRFunction &fn)
     return bits;
 }
 
+enum class Identity { add_zero, boolize };
 struct Edit {
     std::size_t begin, end;
     ArchonValue dst, source;
+    Identity identity;
 };
 
 struct Scan {
@@ -260,13 +278,15 @@ struct Scan {
             const auto &fn = module.functions[f];
             const auto fid = static_cast<std::int64_t>(f);
             insert("function", {fid, std::string(fn.name)});
+            std::vector<Bits> bits;
             if (!over_budget) {
-                const auto bits = function_known_bits(fn);
+                bits = function_known_bits(fn);
                 for (ArchonValue v = 0; v < bits.size(); ++v)
                     if (bits[v].zero || bits[v].one)
                         known_bits.push_back({f, v, bits[v]});
             }
             std::vector<std::size_t> zero_in_block(find_rewrites ? fn.value_count : 0);
+            std::vector<ArchonValue> negated(find_rewrites ? bits.size() : 0, ARCHON_MIR_NONE);
             for (std::size_t b = 0; b < fn.block_count; ++b) {
                 const auto &block = fn.blocks[b];
                 const auto sink = [&](ArchonValue v) {
@@ -299,7 +319,16 @@ struct Scan {
                                    fn.types[ins.a] == ARCHON_MIR_I64 && fn.types[ins.b] == ARCHON_MIR_I64 &&
                                    (known_zero(ins.a) || known_zero(ins.b))) {
                             edits.push_back({starts[span], ends[span], ins.dst,
-                                             known_zero(ins.b) ? ins.a : ins.b});
+                                             known_zero(ins.b) ? ins.a : ins.b, Identity::add_zero});
+                        } else if (ins.op == ARCHON_MIR_EQ && !bits.empty() &&
+                                   fn.types[ins.a] == ARCHON_MIR_I64 && fn.types[ins.b] == ARCHON_MIR_I64 &&
+                                   (known_zero(ins.a) || known_zero(ins.b))) {
+                            const auto v = known_zero(ins.b) ? ins.a : ins.b;
+                            if (negated[v] != ARCHON_MIR_NONE)
+                                edits.push_back({starts[span], ends[span], ins.dst, negated[v], Identity::boolize});
+                            // Remember !v only when v itself is a canonical boolean.
+                            if ((bits[v].zero | UINT64_C(1)) == UINT64_MAX)
+                                negated[ins.dst] = v;
                         }
                     }
                     if (over_budget)
@@ -357,123 +386,55 @@ inline bool scan(std::string_view input, Scan &scan, Diagnostics &diag, const st
     return true;
 }
 
-inline void persist(Result &result, const Target &target, std::string_view name,
-                    std::string_view mir, const std::string &signature, const std::string &hints,
-                    const std::string &bits, const std::string &coordinates,
-                    const std::filesystem::path &workspace)
-{
-    // No shared or reusable cache: separate mode-0700 environment per TU,
-    // with exact post-rewrite MIR, target identity, and rule/schema metadata.
-    // Read the committed hint relation before giving it to the backend.
-    detail::TempDirectory dbdir(workspace, "factir-XXXXXX");
-    auto env = lmdb::env::create();
-    env.set_mapsize(64u * 1024u * 1024u);
-    env.open(dbdir.path.c_str(), 0, 0600);
-    {
-        auto txn = lmdb::txn::begin(env);
-        auto db = lmdb::dbi::open(txn, nullptr);
-        const auto put = [&](const char *key, std::string_view value) {
-            lmdb::val bytes(value.data(), value.size());
-            if (!db.put(txn, lmdb::val(key), bytes, MDB_NOOVERWRITE))
-                throw std::runtime_error("duplicate FactIR database key");
-        };
-        put("schema", schema);
-        put("mir_schema", std::to_string(ARCHON_MIR_SCHEMA_VERSION));
-        put("rules", signature);
-        put("triple", target.triple);
-        put("architecture", target.architecture);
-        put("abi", target.abi);
-        put("specification", target.specification.string());
-        put("input_name", name);
-        put("post_rewrite_mir", mir);
-        put("facts", result.facts);
-        put("observable_input", hints);
-        put("known_bits_i64", bits);
-        put("backend_coordinates", coordinates);
-        txn.commit();
-    }
-    auto txn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
-    auto db = lmdb::dbi::open(txn, nullptr);
-    lmdb::val data;
-    if (!db.get(txn, lmdb::val("observable_input"), data))
-        throw std::runtime_error("missing committed FactIR hints");
-    if (data.size()) {
-        std::istringstream rows(std::string(data.data(), data.size()));
-        rows.imbue(std::locale::classic());
-        std::size_t function;
-        ArchonValue dst;
-        while (rows >> function >> dst)
-            result.preferred.emplace_back(function, dst);
-    }
-    if (!db.get(txn, lmdb::val("known_bits_i64"), data))
-        throw std::runtime_error("missing committed FactIR known bits");
-    if (data.size()) {
-        std::istringstream rows(std::string(data.data(), data.size()));
-        rows.imbue(std::locale::classic());
-        KnownBitsRow row;
-        while (rows >> row.function >> row.value >> row.bits.zero >> row.bits.one)
-            result.known_bits.push_back(row);
-    }
-    if (!db.get(txn, lmdb::val("backend_coordinates"), data))
-        throw std::runtime_error("missing committed FactIR backend coordinates");
-    if (data.size()) {
-        std::istringstream rows(std::string(data.data(), data.size()));
-        rows.imbue(std::locale::classic());
-        unsigned kind;
-        std::size_t function, block;
-        std::uint32_t key;
-        while (rows >> kind >> function >> block >> key)
-            result.coordinates.emplace_back(static_cast<ArchonBackendFactKind>(kind), function, block, key);
-        std::sort(result.coordinates.begin(), result.coordinates.end());
-    }
-    if (!db.get(txn, lmdb::val("post_rewrite_mir"), data))
-        throw std::runtime_error("missing committed FactIR input");
-    result.source_mir.assign(data.data(), data.size());
-    result.triple = target.triple;
-    result.architecture = target.architecture;
-    result.abi = target.abi;
-    result.specification = target.specification;
-    if (!db.get(txn, lmdb::val("facts"), data))
-        throw std::runtime_error("missing committed FactIR relations");
-    result.facts.assign(data.data(), data.size());
-}
-
 inline std::optional<Result> run(std::string &mir, const Target &target, const std::string &name,
-                                 const std::filesystem::path &workspace, Diagnostics &diag)
+                                 Diagnostics &diag)
 {
     Result result;
     Scan candidates{true};
     if (!scan(mir, candidates, diag, name))
         return std::nullopt;
-    result.smtlib = "(set-logic QF_BV)\n; Cephyr FactIR: no applicable add-to-copy candidate\n(exit)\n";
+    result.smtlib = "(set-logic QF_BV)\n";
     std::string transformed;
     if (!candidates.edits.empty()) {
-        // All candidates share exactly this obligation: both operand orders
-        // of modular addition lower to the same commutative bit-vector adder.
-        const auto proof = prove_add_constant(0);
-        result.smtlib = "(set-logic QF_BV)\n"
-                        "; Zero operand comes from an i64 constant zero, possibly through\n"
-                        "; verified zero-preserving copies and conversions in the same block.\n"
-                        "; Is there an i64 counterexample to add x,0 -> copy x?\n"
-                        "(declare-fun x () (_ BitVec 64))\n"
-                        "(assert (distinct (bvadd x (_ bv0 64)) x))\n"
-                        "(check-sat)\n";
-        if (proof.unsatisfiable()) {
-            result.rewrites = candidates.edits.size();
-            std::size_t previous = 0;
-            for (const auto &edit : candidates.edits) {
-                transformed.append(mir, previous, edit.begin - previous);
-                transformed += "copy " + std::to_string(edit.dst) + " " + std::to_string(edit.source);
-                previous = edit.end;
-            }
-            transformed.append(mir, previous);
-            result.smtlib += "; Satie: unsat; applied to " + std::to_string(result.rewrites) + " instruction(s)\n";
-        } else {
-            result.smtlib += proof.satisfiable() ? "; Satie: sat; not applied\n" :
-                                                  "; Satie: unknown; not applied\n";
+        result.smtlib += "(declare-fun x () (_ BitVec 64))\n";
+        const auto proved = [&](Identity id) {
+            const auto count = std::count_if(candidates.edits.begin(), candidates.edits.end(),
+                                             [&](const Edit &e) { return e.identity == id; });
+            if (!count)
+                return false;
+            result.smtlib += "(push 1)\n";
+            if (id == Identity::add_zero)
+                result.smtlib += "; add x,0 -> copy x (verified zero operand)\n"
+                                 "(assert (distinct (bvadd x (_ bv0 64)) x))\n";
+            else
+                result.smtlib += "; eq(eq(x,0),0) -> copy x (known-zero high bits)\n"
+                                 "(assert (= ((_ extract 63 1) x) (_ bv0 63)))\n"
+                                 "(assert (distinct (ite (= x (_ bv0 64)) (_ bv0 64) (_ bv1 64)) x))\n";
+            const auto proof = id == Identity::add_zero ? prove_add_constant(0) : prove_boolize(~UINT64_C(1));
+            result.smtlib += "(check-sat)\n(pop 1)\n";
+            if (proof.unsatisfiable())
+                result.smtlib += "; Satie: unsat; applied to " + std::to_string(count) + " instruction(s)\n";
+            else
+                result.smtlib += proof.satisfiable() ? "; Satie: sat; not applied\n" :
+                                                       "; Satie: unknown; not applied\n";
+            return proof.unsatisfiable();
+        };
+        const bool add = proved(Identity::add_zero), boolean = proved(Identity::boolize);
+        std::size_t previous = 0;
+        for (const auto &edit : candidates.edits) {
+            if (!(edit.identity == Identity::add_zero ? add : boolean))
+                continue;
+            transformed.append(mir, previous, edit.begin - previous);
+            transformed += "copy " + std::to_string(edit.dst) + " " + std::to_string(edit.source);
+            previous = edit.end;
+            ++result.rewrites;
         }
-        result.smtlib += "(exit)\n";
+        if (result.rewrites)
+            transformed.append(mir, previous);
+    } else {
+        result.smtlib += "; Cephyr FactIR: no applicable candidate\n";
     }
+    result.smtlib += "(exit)\n";
     Scan post_rewrite{false};
     const auto &verified_input = result.rewrites ? transformed : mir;
     if (result.rewrites) {
@@ -482,14 +443,13 @@ inline std::optional<Result> run(std::string &mir, const Target &target, const s
         if (!scan(verified_input, post_rewrite, diag, name))
             return std::nullopt;
     }
-    const auto &relations = result.rewrites ? post_rewrite : candidates;
+    auto &relations = result.rewrites ? post_rewrite : candidates;
 
     const auto program = rules();
-    std::ostringstream dump, hints, bits, coordinates;
+    // Stage all facts in this TU-local result. Nothing escapes before the
+    // verified MIR and its matching backend coordinates are ready together.
+    std::ostringstream dump;
     dump.imbue(std::locale::classic());
-    hints.imbue(std::locale::classic());
-    bits.imbue(std::locale::classic());
-    coordinates.imbue(std::locale::classic());
     dump << schema << '\n';
     try {
         if (relations.over_budget)
@@ -498,7 +458,7 @@ inline std::optional<Result> run(std::string &mir, const Target &target, const s
             auto rows = program.evaluate(relations.facts, relation, relation_limits).rows;
             if (std::string_view(relation) == "observable_input")
                 for (const auto &row : rows)
-                    hints << std::get<std::int64_t>(row[0]) << ' ' << std::get<std::int64_t>(row[1]) << '\n';
+                    result.preferred.emplace_back(std::get<std::int64_t>(row[0]), std::get<std::int64_t>(row[1]));
             dump << '[' << relation << "]\n" << dl::dump(rows);
         }
         for (const auto &[relation, rows] : relations.facts) {
@@ -506,26 +466,29 @@ inline std::optional<Result> run(std::string &mir, const Target &target, const s
                 relation == "return_value" ? ARCHON_BACKEND_FACT_RETURN_VALUE : 0;
             if (kind)
                 for (const auto &row : rows)
-                    coordinates << kind << ' ' << std::get<std::int64_t>(row[0]) << ' '
-                                << std::get<std::int64_t>(row[1]) << ' '
-                                << std::get<std::int64_t>(row[2]) << '\n';
+                    result.coordinates.emplace_back(static_cast<ArchonBackendFactKind>(kind),
+                        std::get<std::int64_t>(row[0]), std::get<std::int64_t>(row[1]),
+                        std::get<std::int64_t>(row[2]));
             dump << '[' << relation << "]\n" << dl::dump(rows);
         }
         dump << "[known_bits_i64]\n";
         for (const auto &[f, v, masks] : relations.known_bits) {
-            bits << f << ' ' << v << ' ' << masks.zero << ' ' << masks.one << '\n';
             dump << '(' << f << ", " << v << ", " << masks.zero << ", " << masks.one << ")\n";
         }
+        result.known_bits = std::move(relations.known_bits);
+        std::sort(result.coordinates.begin(), result.coordinates.end());
         result.facts = std::move(dump).str();
     } catch (const dl::BudgetExceeded &) {
         result.budget_exceeded = true;
         result.facts = std::string(schema) + "\nDatalog budget exceeded; no facts exported or consumed\n";
-        hints.str({});
-        bits.str({});
-        coordinates.str({});
+        result.preferred.clear();
+        result.coordinates.clear();
     }
-    persist(result, target, name, verified_input, program.signature(), hints.str(), bits.str(),
-            coordinates.str(), workspace);
+    result.source_mir = verified_input;
+    result.triple = target.triple;
+    result.architecture = target.architecture;
+    result.abi = target.abi;
+    result.specification = target.specification;
     if (result.rewrites)
         mir.swap(transformed);
     return result;
