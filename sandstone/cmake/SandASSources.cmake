@@ -1,0 +1,34 @@
+# The standalone SDK and package-private, uncompressed SandAS use the
+# same reader/encoder/assembler sources.
+set(sandstone_reader_sources
+  decoder/domsymas.c
+  decoder/abi.cpp
+  decoder/archive.cpp
+  decoder/binary.cpp
+  decoder/compression.cpp
+  decoder/container.cpp
+  decoder/databank.cpp
+  decoder/encoding.cpp
+  decoder/format.cpp
+  decoder/instr.cpp
+  decoder/linking.cpp
+  decoder/relocation.cpp
+  decoder/semantics.cpp
+  decoder/syntax.cpp
+  decoder/tuning.cpp
+  decoder/validation.cpp
+)
+set(sandstone_assembler_sources
+  assembler.c
+  parser.c
+  a64_gas.cpp
+  rv_gas.cpp
+  preprocess.cpp
+  directives.c
+  binarizer.c
+  elf.cpp
+  native_object.cpp
+  lua.cpp
+  asm_opt.cpp
+  sdk.cpp
+)

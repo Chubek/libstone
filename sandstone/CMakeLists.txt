@@ -42,24 +42,8 @@ if(SANDSTONE_BUILD_ARCHML AND NOT TARGET Sandstone::ArchML)
 endif()
 
 # ---- core databank library ----
-add_library(sandstone STATIC
-  decoder/domsymas.c
-  decoder/abi.cpp
-  decoder/archive.cpp
-  decoder/binary.cpp
-  decoder/compression.cpp
-  decoder/container.cpp
-  decoder/databank.cpp
-  decoder/encoding.cpp
-  decoder/format.cpp
-  decoder/instr.cpp
-  decoder/linking.cpp
-  decoder/relocation.cpp
-  decoder/semantics.cpp
-  decoder/syntax.cpp
-  decoder/tuning.cpp
-  decoder/validation.cpp
-)
+include(cmake/SandASSources.cmake)
+add_library(sandstone STATIC ${sandstone_reader_sources})
 # Historical target name kept as an alias.
 add_library(domsymas ALIAS sandstone)
 add_library(Sandstone::sandstone ALIAS sandstone)
@@ -152,8 +136,13 @@ if(SANDSTONE_BUILD_TESTS)
               --build-dir ${CMAKE_CURRENT_BINARY_DIR}
               --source-dir ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    add_test(NAME sandstone_native_objects COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_objects.py --build-dir ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(sandstone_native_objects PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME sandstone_rv_gas COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/rv_gas.py --build-dir ${CMAKE_CURRENT_BINARY_DIR})
     if(SANDSTONE_DSL_DIRECTORY)
-      set_tests_properties(sandstone_spec_pipeline PROPERTIES
+      set_tests_properties(sandstone_spec_pipeline sandstone_native_objects sandstone_rv_gas PROPERTIES
         ENVIRONMENT "SANDSTONE_DSL_DIRECTORY=${SANDSTONE_DSL_DIRECTORY}")
     endif()
   endif()

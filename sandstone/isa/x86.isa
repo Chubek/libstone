@@ -1551,6 +1551,25 @@ op movaps_mem_store { class = store; encoding = MOVAPS_MEM_STORE;
 # Integer JIT forms. Group encodings expose the 3-bit opcode extension as
 # an immediate selector, not a physical register. shift_cl selectors 4/5/7
 # mean SHL/SHR/SAR; unary64 selector 7 means signed IDIV.
+# Accumulator immediates. A write to EAX clears RAX[63:32].
+encoding MOV_EAX_IMM32 { width = variable;
+  opcode = 0xb8;
+  imm32 = imm;
+}
+op mov_eax_imm32 { class = misc; encoding = MOV_EAX_IMM32;
+  operands = imm: imm;
+  syntax = "mov eax, {imm}";
+}
+# REX.W C7 /0, ModR/M 11:000:000 selects the register-direct RAX form.
+encoding MOV_RAX_SEXT32 { width = variable;
+  rex_w = 1;
+  opcode = 0xc7c0;
+  imm32 = imm;
+}
+op mov_rax_sext32 { class = misc; encoding = MOV_RAX_SEXT32;
+  operands = imm: imm;
+  syntax = "mov rax, {imm}";
+}
 encoding MOV_IMM64 { width = variable;
   opcode = 0xb8;
   rex_w = 1;

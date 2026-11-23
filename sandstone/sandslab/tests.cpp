@@ -27,6 +27,12 @@ int main() {
         fails([&] { p.emit("add", {{"rd", "rax"}}); });
 
         auto x86 = isa::load_arch("x86", SANDSLAB_TEST_ISA_DIR);
+        Program constants(x86);
+        constants.emit("mov_eax_imm32", {{"imm", INT32_MIN}})
+                 .emit("mov_rax_sext32", {{"imm", -1}});
+        require(constants.compile().bytes == std::vector<std::uint8_t>({
+                    0xb8, 0, 0, 0, 0x80, 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff}),
+                "AMD64 accumulator immediates");
         Program branch(x86);
         branch.label("start").emit(Instruction{"jmp", {}},
             {{"offset", "end", RelativeBase::next_instruction}})

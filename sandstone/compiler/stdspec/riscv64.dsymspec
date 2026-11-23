@@ -7,13 +7,20 @@
 -- Operand names used by encoders: rd, rs1, rs2, imm, sym, id.
 -- Strata: base I | M | A | F/D | C | Zb*/Zk* | V | Zicsr/Zifencei/priv.
 local symas = require("backend").new("riscv64")
+local im = ... == "rv64im"
+local form = symas.form
+symas.form = function(record)
+    record.required = record.required or {}
+    table.insert(record.required, "i")
+    return form(record)
+end
 
 symas.target{
-    arch = "riscv64", subarch = "rv64gcv",
-    addr_size = 64, op_size = 32, addr_def = 64, align = 2,
-    byte_order = "little", obj_format = "ELF64", abi = "LP64D",
-    calling_conv = "lp64d",
-    features = { "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" },
+    arch = "riscv64", subarch = im and "rv64im" or "rv64gcv",
+    addr_size = 64, op_size = 32, addr_def = 64, align = im and 4 or 2,
+    byte_order = "little", obj_format = "ELF64", abi = im and "LP64" or "LP64D",
+    calling_conv = im and "lp64" or "lp64d",
+    features = im and { "i", "m" } or { "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" },
 }
 
 -- Base + M/A/F/D/C (as before) plus stratified extensions.
@@ -59,8 +66,8 @@ symas.register{ name = "fp",    class = "gpr", width = 64, enc = 8, flags = { "r
 for i = 0, 2 do symas.register{ name = "t" .. i, class = "gpr", width = 64, enc = 5 + i, flags = { "readable", "writable" } } end
 for i = 0, 1 do symas.register{ name = "s" .. i, class = "gpr", width = 64, enc = 8 + i, flags = { "readable", "writable" } } end
 for i = 0, 7 do symas.register{ name = "a" .. i, class = "gpr", width = 64, enc = 10 + i, flags = { "readable", "writable" } } end
-for i = 2, 11 do symas.register{ name = "s" .. i, class = "gpr", width = 64, enc = 16 + (i - 2), flags = { "readable", "writable" } } end
-for i = 3, 6 do symas.register{ name = "t" .. i, class = "gpr", width = 64, enc = 25 + (i - 3), flags = { "readable", "writable" } } end
+for i = 2, 11 do symas.register{ name = "s" .. i, class = "gpr", width = 64, enc = 18 + (i - 2), flags = { "readable", "writable" } } end
+for i = 3, 6 do symas.register{ name = "t" .. i, class = "gpr", width = 64, enc = 28 + (i - 3), flags = { "readable", "writable" } } end
 -- FP ABI aliases ft0-ft11 / fs0-fs11 / fa0-fa7.
 for i = 0, 7 do symas.register{ name = "ft" .. i, class = "fp", width = 64, enc = i, flags = { "readable", "writable" } } end
 for i = 0, 7 do symas.register{ name = "fa" .. i, class = "fp", width = 64, enc = 10 + i, flags = { "readable", "writable" } } end
@@ -96,25 +103,25 @@ symas.encoder{ name = "sltu", source = "emit32le(0x00003033 + rd*128 + rs1*32768
 -- Base I-type.
 symas.encoder{ name = "addi", source = "emit32le(0x00000013 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
 symas.encoder{ name = "li",   source = "emit32le(0x00000013 + rd*128 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "lui",  source = "emit32le(0x00000037 + rd*128 + ((imm + 524288) % 1048576));", max_bytes = 4 }
-symas.encoder{ name = "auipc", source = "emit32le(0x00000017 + rd*128 + ((imm + 524288) % 1048576));", max_bytes = 4 }
+symas.encoder{ name = "lui",  source = "emit32le(0x00000037 + rd*128 + ((imm + 1048576) % 1048576)*4096);", max_bytes = 4 }
+symas.encoder{ name = "auipc", source = "emit32le(0x00000017 + rd*128 + ((imm + 1048576) % 1048576)*4096);", max_bytes = 4 }
 -- Loads / stores (word, double, byte, half).
-symas.encoder{ name = "lw",   source = "emit32le(0x00002003 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "ld",   source = "emit32le(0x00003003 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "lb",   source = "emit32le(0x00000003 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "lbu",  source = "emit32le(0x00004003 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "lh",   source = "emit32le(0x00001003 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "sw",   source = "emit32le(0x00002023 + (imm % 32)*128 + rs1*32768 + rs2*1048576 + ((imm / 32) % 128)*33554432);", max_bytes = 4 }
-symas.encoder{ name = "sd",   source = "emit32le(0x00003023 + (imm % 32)*128 + rs1*32768 + rs2*1048576 + ((imm / 32) % 128)*33554432);", max_bytes = 4 }
-symas.encoder{ name = "sb",   source = "emit32le(0x00000023 + (imm % 32)*128 + rs1*32768 + rs2*1048576 + ((imm / 32) % 128)*33554432);", max_bytes = 4 }
-symas.encoder{ name = "sh",   source = "emit32le(0x00001023 + (imm % 32)*128 + rs1*32768 + rs2*1048576 + ((imm / 32) % 128)*33554432);", max_bytes = 4 }
+local function memory_form(m, base, store)
+    local offset = "((imm + 4096) % 4096)"
+    local fields = store and ("r0*1048576 + ("..offset.." % 32)*128 + ("..offset.." / 32)*33554432")
+                         or ("rd*128 + "..offset.."*1048576")
+    symas.encoder{ name = m, max_bytes = 4, source = "require(imm >= -2048); require(imm <= 2047); emit32le("..
+        base.." + rs1*32768 + "..fields..");" }
+end
+for i,m in ipairs({"lb","lh","lw","ld","lbu","lhu","lwu"}) do memory_form(m, 3+(i-1)*4096, false) end
+for i,m in ipairs({"sb","sh","sw","sd"}) do memory_form(m, 35+(i-1)*4096, true) end
 -- Control transfer.
 symas.encoder{ name = "jalr", source = "emit32le(0x00000067 + rd*128 + rs1*32768 + ((imm + 4096) % 4096)*1048576);", max_bytes = 4 }
-symas.encoder{ name = "jal",  source = "emit32le(0x0000006F + rd*128); emit_relocation(sym, R_RISCV_CALL);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "beq",  source = "emit32le(0x00000063 + rs1*32768 + rs2*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "bne",  source = "emit32le(0x00001063 + rs1*32768 + rs2*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "blt",  source = "emit32le(0x00004063 + rs1*32768 + rs2*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "bge",  source = "emit32le(0x00005063 + rs1*32768 + rs2*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
+symas.encoder{ name = "jal",  source = "emit32le(0x0000006F + rd*128); emit_relocation(sym, R_RISCV_JAL);", max_bytes = 4, max_relocs = 1 }
+symas.encoder{ name = "beq",  source = "emit32le(0x00000063 + r0*32768 + r1*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
+symas.encoder{ name = "bne",  source = "emit32le(0x00001063 + r0*32768 + r1*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
+symas.encoder{ name = "blt",  source = "emit32le(0x00004063 + r0*32768 + r1*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
+symas.encoder{ name = "bge",  source = "emit32le(0x00005063 + r0*32768 + r1*1048576); emit_relocation(sym, R_RISCV_BRANCH);", max_bytes = 4, max_relocs = 1 }
 symas.encoder{ name = "ret",  source = "emit32le(0x00008067);", max_bytes = 4 }
 -- M extension.
 symas.encoder{ name = "mul",  source = "emit32le(0x02000033 + rd*128 + rs1*32768 + rs2*1048576);", max_bytes = 4 }
@@ -196,27 +203,16 @@ symas.form{ mnemonic = "addi", encoder = "addi", operands = { rreg(0,64), reg(64
 symas.form{ mnemonic = "li", encoder = "li", operands = { rreg(0,64),
     { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
 symas.form{ mnemonic = "lui", encoder = "lui", operands = { rreg(0,64),
-    { kind = "imm", width = 32, signed = true, imm_min = -524288, imm_max = 524287 } } }
+    { kind = "imm", width = 32, signed = true, imm_min = -524288, imm_max = 1048575 } } }
 symas.form{ mnemonic = "auipc", encoder = "auipc", operands = { rreg(0,64),
-    { kind = "imm", width = 32, signed = true, imm_min = -524288, imm_max = 524287 } } }
-symas.form{ mnemonic = "lw", encoder = "lw", flags = { "reads_mem" }, operands = { rreg(0,64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "ld", encoder = "ld", flags = { "reads_mem" }, operands = { rreg(0,64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "lb", encoder = "lb", flags = { "reads_mem" }, operands = { rreg(0,64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "lbu", encoder = "lbu", flags = { "reads_mem" }, operands = { rreg(0,64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "lh", encoder = "lh", flags = { "reads_mem" }, operands = { rreg(0,64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "sw", encoder = "sw", flags = { "writes_mem" }, operands = { reg(64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "sd", encoder = "sd", flags = { "writes_mem" }, operands = { reg(64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "sb", encoder = "sb", flags = { "writes_mem" }, operands = { reg(64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
-symas.form{ mnemonic = "sh", encoder = "sh", flags = { "writes_mem" }, operands = { reg(64),
-    { kind = "mem", width = 12, signed = true, imm_min = -2048, imm_max = 2047 }, reg(64) } }
+    { kind = "imm", width = 32, signed = true, imm_min = -524288, imm_max = 1048575 } } }
+local signed12 = {kind="imm", width=12, signed=true, imm_min=-2048, imm_max=2047}
+for _,m in ipairs({"lb","lh","lw","ld","lbu","lhu","lwu","sb","sh","sw","sd"}) do
+    if m == "lhu" or m == "lwu" then symas.mnemonic{name=m} end
+    local store = string.sub(m,1,1) == "s"
+    symas.form{mnemonic=m, encoder=m, operands={store and reg(64) or rreg(0,64),reg(64),signed12},
+        flags={store and "writes_mem" or "reads_mem"}}
+end
 symas.form{ mnemonic = "jalr", encoder = "jalr", flags = { "branch" }, operands = { rreg(0,64), reg(64),
     { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
 symas.form{ mnemonic = "jal", encoder = "jal", flags = { "branch", "reloc" }, operands = { rreg(0,64),
@@ -281,6 +277,35 @@ symas.form{ mnemonic = "vsetvli", encoder = "vsetvli", required = { "v" },
 symas.form{ mnemonic = "c.addi", encoder = "caddi", required = { "c" }, operands = { rreg(0,64),
     { kind = "imm", width = 12, signed = true, imm_min = -32, imm_max = 31 } } }
 symas.form{ mnemonic = "c.nop", encoder = "cnop", required = { "c" } }
+
+-- Gas normalization supplies ordinary register/immediate operands. All
+-- instruction words and relocation kinds are chosen by the compiled bank.
+local dst, src, symbol = rreg(0,64), reg(64), {kind="sym",width=64}
+local function extra(m, operands, body, required, reloc, size)
+    symas.mnemonic{name=m}
+    symas.encoder{name=m, source=body, max_bytes=size or 4, max_relocs=reloc and 1 or 0}
+    symas.form{mnemonic=m, encoder=m, operands=operands, required=required or {},
+        flags=reloc and {"reloc"} or {}}
+end
+for _,op in ipairs({{"divu",0x02005033},{"remu",0x02007033}}) do
+    extra(op[1], {dst,src,src}, "emit32le("..op[2].." + rd*128 + rs1*32768 + rs2*1048576);", {"m"})
+end
+extra("slli", {dst,src,{kind="imm",width=6,imm_max=63}},
+      "require(imm >= 0); require(imm <= 63); emit32le(4115 + rd*128 + rs1*32768 + imm*1048576);")
+extra("andi",{dst,src,signed12},"require(imm >= -2048); require(imm <= 2047); emit32le(0x7013 + rd*128 + rs1*32768 + ((imm+4096)%4096)*1048576);")
+for _,op in ipairs({{"bgeu",0x7063},{"bltu",0x6063}}) do
+    extra(op[1],{src,src,symbol},"emit_relocation(sym, R_RISCV_BRANCH); emit32le("..
+          op[2].." + r0*32768 + r1*1048576);",nil,true)
+end
+extra("call", {symbol}, "emit_relocation(sym, R_RISCV_CALL_PLT); emit32le(0x97); emit32le(0x80e7);",
+      nil, true, 8)
+for _,op in ipairs({{"rv_pcrel_hi", "R_RISCV_PCREL_HI20"},{"rv_got_hi","R_RISCV_GOT_HI20"}}) do
+    extra(op[1], {dst,symbol}, "emit_relocation(sym, "..op[2].."); emit32le(23 + rd*128);", nil, true)
+end
+for _,op in ipairs({{"rv_pcrel_jalr",103},{"rv_pcrel_addi",19},{"rv_pcrel_ld",0x3003}}) do
+    extra(op[1], {dst,src,symbol}, "emit_relocation(sym, R_RISCV_PCREL_LO12_I); emit32le("..
+          op[2].." + rd*128 + rs1*32768);", nil, true)
+end
 
 symas.syntax{ name = "default", comment = "#", separator = ", " }
 symas.syntax{ name = "abi", comment = "#", separator = ", ", tmpl = "{mnemonic} {ops}" }

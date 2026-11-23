@@ -516,7 +516,7 @@ struct Interp {
             return emit((uint8_t)(((a & 3) << 6) | ((b & 7) << 3) | (c & 7)));
         }
         if (s.callee == "emit_relocation" || s.callee == "emit_reloc") {
-            if (!need(2)) return false;
+            if (s.args.size() != 2 && s.args.size() != 3) { err = "relocation needs symbol, type[, addend]"; return false; }
             std::string sym, type;
             if (!str_of(s.args[0], sym)) return false;
             // type may be ident (reloc name) or string
@@ -534,6 +534,7 @@ struct Interp {
             r.type_name = type;
             r.type = numeric ? (uint32_t)tid : 0xFFFFFFFFu;
             r.addend = 0;
+            if (s.args.size() == 3 && !num_of(s.args[2], r.addend)) return false;
             out->relocs.push_back(std::move(r));
             return true;
         }

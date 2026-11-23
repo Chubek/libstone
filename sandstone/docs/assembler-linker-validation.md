@@ -121,14 +121,25 @@ Python reports `BINDINGS_OK`.
 
 ## Remaining limits and regression risks
 
-- Sandstone writes flat binary/custom JSON, not ELF; no direct Yellowstone
-  JSON-object bridge. ArchML `.insn` accepts constants, not symbolic relocations.
+- The subsequent [native ELF64 mode](assembler.md#native-elf-objects-and-cephyr)
+  supports AMD64, AArch64 and RV64 SymAS banks. `llvm-readelf -hSWsr` verified
+  all three. Separate caller and callee objects linked with qobjld and exited
+  37 (native AMD64; QEMU user-mode AArch64 and RISC-V). AMD64 used a direct
+  `call`/`R_X86_64_PLT32` with addend -4. The cross-target qobjld fixtures
+  loaded an external function pointer (`R_AARCH64_ABS64` / `R_RISCV_64`) and
+  branched indirectly. Direct `bl`/`jal` also ran with `ld.lld`; the tested
+  qobjld rejected `R_AARCH64_CALL26` (283) and `R_RISCV_JAL` (17). Its
+  diagnostic misnamed type 17 `R_RISCV_CALL`. JSON has no Yellowstone bridge.
+  ArchML `.insn` accepts constants, not symbolic relocations.
+  Reproduce the three executable checks with
+  `python3 sandstone/tests/elf_link.py --build-dir BUILD --qobjld PATH/TO/qobjld
+  --qemu-aarch64 PATH/TO/qemu-aarch64 --qemu-riscv64 PATH/TO/qemu-riscv64`.
 - Script expression evaluation is source-ordered, not GNU ld's lazy evaluator.
   Full dynamic linking, GOT/PLT/TLS, program-header scripts, LMA, symbol versions
   and hidden script-symbol visibility remain unsupported. See the script manual
   for rejected commands and exact limits. SDK expansion is an extension point,
   not a replacement for missing native relocation algorithms.
-- Existing `.type`/`.size` assembler metadata no-ops remain. GAS/NASM and GNU ld
+- Flat/JSON `.type`/`.size` assembler metadata no-ops remain. GAS/NASM and GNU ld
   compatibility is partial. Expansion diagnostics carry file/line context;
   flattened assembler parse/layout diagnostics do not yet retain an expansion
   source map.

@@ -75,6 +75,12 @@ class Assembler {
                                           src_name.c_str()) != 0)
             throw std::runtime_error(last_error());
     }
+    void assemble_object(const std::string &source, const std::string &source_name,
+                         const std::string &output, const std::string &format) {
+        if (sandstone_asm_assemble_object(ctx_, source.c_str(), source_name.c_str(),
+                                          output.c_str(), format.c_str()))
+            throw std::runtime_error(last_error());
+    }
     void assemble_file(const std::string &path) {
         if (sandstone_asm_assemble_file(ctx_, path.c_str()) != 0)
             throw std::runtime_error(last_error());

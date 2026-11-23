@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 
@@ -56,11 +57,118 @@ def run(cmd, **kwargs):
     return proc
 
 
+def check_elf(assembler, bank, path, branch, machine, branch_type, addend):
+    """Decode the file independently, including links between ELF tables."""
+    source = f""".text
+.global entry
+.type entry, %function
+entry:
+{branch}
+.size entry, .-entry
+.section .slots,"aw",%progbits
+.byte 1
+localptr:
+.quad external+8, localptr-4
+.section .reserve,"aw",%nobits
+.balign 64
+.space 65536
+"""
+    assemble(assembler, bank, source, path, fmt="elf")
+    data = Path(path).read_bytes()
+    assert data[:7] == b"\x7fELF\x02\x01\x01" and len(data) < 2048
+    assert struct.unpack_from("<HH", data, 16) == (1, machine)
+    assert struct.unpack_from("<I", data, 48)[0] == 0
+    shoff, = struct.unpack_from("<Q", data, 40)
+    entsize, count, shstridx = struct.unpack_from("<HHH", data, 58)
+    headers = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i*entsize)
+               for i in range(count)]
+    def string(table, offset):
+        return data[table[4]+offset:].split(b"\0", 1)[0].decode()
+    sections = {string(headers[shstridx], h[0]): h for h in headers}
+    assert sections[".reserve"][1:3] == (8, 3)
+    assert sections[".reserve"][5] == 65536 and sections[".reserve"][8] == 64
+    assert sections[".text"][1:3] == (1, 6)
+    symtab = sections[".symtab"]
+    names = headers[symtab[6]]
+    symbols = []
+    for i in range(0, symtab[5], symtab[9]):
+        name, info, _, sec, value, size = struct.unpack_from("<IBBHQQ", data, symtab[4]+i)
+        symbols.append((string(names, name), info, sec, value, size))
+    assert symbols[0] == ("", 0, 0, 0, 0)
+    assert symbols[1] == ("localptr", 0, headers.index(sections[".slots"]), 1, 0)
+    assert symbols[symtab[7]:] == [
+        ("entry", 18, headers.index(sections[".text"]), 0, sections[".text"][5]),
+        ("external", 16, 0, 0, 0)]
+    def relocs(name):
+        h = sections[".rela"+name]
+        assert h[1] == 4 and headers[h[6]] == symtab and headers[h[7]] == sections[name]
+        rows = []
+        for i in range(0, h[5], h[9]):
+            offset, info, a = struct.unpack_from("<QQq", data, h[4]+i)
+            rows.append((offset, symbols[info >> 32][0], info & 0xffffffff, a))
+        return rows
+    assert relocs(".text") == [(int(machine == 62), "external", branch_type, addend)]
+    absolute = {62: 1, 183: 257, 243: 2}[machine]
+    assert relocs(".slots") == [(1, "external", absolute, 8), (9, "localptr", absolute, -4)]
+
+
 def find_binary(build_dir, name):
     for root, _dirs, files in os.walk(build_dir):
         if name in files:
             return os.path.join(root, name)
     raise AssertionError("binary %s not found under %s" % (name, build_dir))
+
+
+def check_amd64_att(assembler, bank, tmp):
+    """Golden bytes checked against independent GNU as, not re-encoded by the test."""
+    root = Path(tmp)
+    source = """movq %r15,-128(%r12,%r9,8)
+movzwl 128(%r13),%r10d
+movabsq $0xffffffffffffffff,%r11
+movb %sil,(%rbp)
+leaq 12(,%r12,4),%r15
+movq %xmm8,%r9
+cvttsd2siq %xmm11,%r14
+fsubrp %st,%st(1)
+fdivrp %st,%st(1)
+fucomip %st(1),%st
+fnstcw 8(%rsp)
+jmp *%r11
+movq $7,target(%rip)
+call alias@PLT
+movq target@GOTPCREL(%rip),%r8
+.set alias, target
+"""
+    obj = root / "forms.o"
+    assemble(assembler, bank, source, str(obj), syntax="att", fmt="elf")
+    data = obj.read_bytes()
+    shoff, = struct.unpack_from("<Q", data, 40)
+    # Sections in this fixture are null, .text, .rela.text, .symtab, ...
+    def content(index):
+        offset, size = struct.unpack_from("<QQ", data, shoff+64*index+24)
+        return data[offset:offset+size]
+    assert content(1) == bytes.fromhex("""
+        4f897ccc80 450fb79580000000 49bbffffffffffffffff 40887500
+        4e8d3ca50c000000 664d0f7ec1 f24d0f2cf3 dee9 def9 dfe9 d97c2408 41ffe3
+        48c7050000000007000000 e800000000 4c8b0500000000""")
+    relas = list(struct.iter_unpack("<QQq",content(2)))
+    assert [(p,info & 0xffffffff,a) for p,info,a in relas] == [
+        (0x3d,2,-8),(0x46,4,-4),(0x4d,9,-4)]
+    assert len(set(info >> 32 for _,info,_ in relas)) == 1
+    assert b"target\0" in content(4) and b"alias\0" not in content(4)
+    for invalid in [
+        "movq %xmm1,%eax", "movq %eax,%rax", "movq $0x100000000,(%rax)",
+        "movq $0x10000000000000000,%rax", "movq %rax,2147483648(%rax)",
+        "movq (%rax,%rcx,3),%rdx", "movq (%rax,%rsp,4),%rdx", "movq (%rip,%rax),%rdx",
+        "movq (%eax),%rax", "movb %ah,%r8b", "shrq %dl,%rax", "call %r11", "movq *%rax,%rdx",
+        "movq %rax,,%rdx", "movq (%rsp,%rax", "fstpt %rax", "fsubp %st(2),%st(1)",
+    ]:
+        src = root / "invalid-att.s"
+        src.write_text(invalid+"\n")
+        bad = root / "bad-att.o"
+        p = subprocess.run([assembler,"-b",bank,"-s","att","-f","elf","-o",bad,src],
+                           capture_output=True)
+        assert p.returncode != 0 and not bad.exists(), invalid
 
 
 def build_bank(source_dir, compiler_bin, spec, out_path):
@@ -251,8 +359,23 @@ def main():
     with open(rv_jal_obj, encoding="utf-8") as f:
         jal_obj = json.load(f)
     assert len(jal_obj["relocs"]) == 1, jal_obj["relocs"]
-    assert jal_obj["relocs"][0]["type"] == "R_RISCV_CALL"
+    assert jal_obj["relocs"][0]["type"] == "R_RISCV_JAL"
     assert jal_obj["relocs"][0]["symbol"] == "target"
+
+    for arch, call, machine, reloc, addend in [
+        ("amd64", "call external", 62, 4, -4),
+        ("aarch64", "bl external", 183, 283, 0),
+        ("rv64im", "jal x1, external", 243, 17, 0),
+    ]:
+        bank = os.path.join(tmp, arch+".symas")
+        build_bank(args.source_dir, compiler_bin,
+                   os.path.join(args.source_dir, "compiler", "stdspec", arch+".dsymspec"), bank)
+        check_elf(asm_bin, bank, os.path.join(tmp, arch+".o"), call, machine, reloc, addend)
+        if arch == "aarch64":
+            from aarch64_cephyr import check_aarch64_cephyr
+            check_aarch64_cephyr(asm_bin, bank, tmp)
+        if arch == "amd64":
+            check_amd64_att(asm_bin, bank, tmp)
 
     print("PIPELINE_OK")
 

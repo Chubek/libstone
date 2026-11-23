@@ -17,20 +17,10 @@
 #include <cstdint>
 #include <string>
 
-#include "sandstone.hpp"     // domsymas::Builder, domsymas::Databank
+#include "records.hpp"
 #include "Symspec.hpp"
 
 namespace domsymas::cc {
-
-// Current DSL/schema version this compiler understands.
-inline constexpr uint32_t kSchemaVersion = 1;
-
-// Result of a compile step.
-struct Result {
-    bool ok = false;
-    std::string error;                 // human-readable diagnostic
-    std::string spec_json;             // the JSON document (for --emit-spec)
-};
 
 // ---- Pure document -> builder mapping (no DomMune required) ----------------
 //

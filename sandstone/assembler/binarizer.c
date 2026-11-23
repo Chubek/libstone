@@ -65,7 +65,9 @@ static int kind_matches(const sand_operand_t *op, uint32_t desc) {
 static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
                           uint32_t form, DomSymAs_OpVal **vals_out,
                           uint32_t *n_out) {
-    size_t cap = line->n_operands * 6 + 4;
+    if (line->a64_form_plus_one)
+        return sand_a64_bindings(line, vals_out, n_out);
+    size_t cap = line->n_operands * 18 + 4;
     DomSymAs_OpVal *vals = calloc(cap, sizeof *vals);
     if (!vals)
         return 0;
@@ -75,6 +77,20 @@ static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
         int is_sym = 0;
         int64_t ival = op->ival;
         const char *sval = op->sval;
+        if (op->att && i < 2) {
+            static const char *const names[2][10] = {
+                {"width0","modrm0","sib0","b0","x0","ds0","disp0","fix0","ind0","ref0"},
+                {"width1","modrm1","sib1","b1","x1","ds1","disp1","fix1","ind1","ref1"}
+            };
+            int64_t fields[] = {op->width,op->modrm,op->sib,op->rex_b,op->rex_x,op->disp_size,
+                                op->disp,op->fixup,op->indirect,0};
+            for (unsigned j=0; j<10; ++j) {
+                vals[n].name = names[i][j];
+                vals[n].ival = fields[j];
+                vals[n].is_symbol = j==9;
+                vals[n++].sval = op->sval ? op->sval : "";
+            }
+        }
         uint32_t ndesc = domsymas_operand_count(ctx->bank, form);
         uint32_t desc = 6;
         if (i < ndesc) {
@@ -143,6 +159,11 @@ static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
  * form ids that accept the operand count, features and kinds. */
 static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
                            uint32_t *forms, uint32_t cap, uint32_t *n_out) {
+    if (line->a64_form_plus_one && cap) {
+        forms[0] = line->a64_form_plus_one - 1;
+        *n_out = 1;
+        return 1;
+    }
     uint32_t found[64];
     uint32_t n_found = 0;
     DomSymAs_Error e =
@@ -167,6 +188,12 @@ static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
     uint32_t n = 0;
     for (uint32_t i = 0; i < n_found && n < cap; i++) {
         uint32_t form = found[i];
+        const DomSymAs_Form *record = domsymas_find_form(ctx->bank, form);
+        if (record && record->syntax_count) {
+            uint32_t j = 0;
+            while (j < record->syntax_count && record->syntaxes[j] != ctx->syntax_id) j++;
+            if (j == record->syntax_count) continue;
+        }
         uint32_t ndesc = domsymas_operand_count(ctx->bank, form);
         if (ndesc < line->n_operands)
             continue;
@@ -174,7 +201,10 @@ static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
         for (size_t k = 0; k < line->n_operands; k++) {
             const DomSymAs_Operand *d =
                 domsymas_operand_at(ctx->bank, form, (uint32_t)k);
-            if (!d || !kind_matches(&line->operands[k], d->kind)) {
+            const sand_operand_t *op = &line->operands[k];
+            if (!d || !kind_matches(op, d->kind) ||
+                (op->att && (op->kind == SAND_OP_REG && d->width != (unsigned)op->width)) ||
+                (op->att && op->kind == SAND_OP_SYM && d->kind != 6 && d->kind != 5)) {
                 ok = 0;
                 break;
             }
@@ -245,6 +275,8 @@ int sand_encode_literal(const sandstone_asm_t *ctx, const char *source,
         return 0;
     sandstone_asm_t probe = {
         .bank = ctx->bank,
+        .syntax_name = ctx->syntax_name,
+        .syntax_id = ctx->syntax_id,
         .comment = ctx->comment,
         .reg_prefix = ctx->reg_prefix,
         .imm_prefix = ctx->imm_prefix,
@@ -406,7 +438,18 @@ static int resolve_reloc(sandstone_asm_t *ctx, const sand_line_t *line,
         return -1;
     }
     sand_symbol_t *s = sand_find_symbol(ctx, ro->symbol ? ro->symbol : "");
-    if (!s || !s->defined)
+    if (!strcmp(rec->name, "R_X86_64_GOTPCREL")) return 0; /* needs a linker-created GOT entry */
+    if (line->a64_form_plus_one && insn_len == 4 && s && s->defined &&
+        (!ctx->relocatable || (!s->global && s->sec_idx == sec_idx))) {
+        sand_section_t *section = &ctx->sections[sec_idx];
+        int patched = sand_a64_patch_local(section->bytes + section->len - 4,
+            (int64_t)s->address - (int64_t)insn_addr + ro->addend, rec->name);
+        if (patched < 0)
+            sand_set_error(ctx, "%s:%u: AArch64 branch displacement out of range or unaligned",
+                           line->src_name, line->lineno);
+        if (patched) return patched;
+    }
+    if (ctx->relocatable || !s || !s->defined)
         return 0; /* external: kept */
     uint32_t field_off = 0, field_len = 0;
     if (reloc_field(line, insn_len, rec, ro, &field_off, &field_len,
@@ -423,7 +466,8 @@ static int resolve_reloc(sandstone_asm_t *ctx, const sand_line_t *line,
     if (rec->pcrel) {
         int suffix = field_off > 0 &&
                      field_off + field_len == insn_len;
-        uint64_t P = suffix ? insn_addr + insn_len : insn_addr;
+        int x86_pc32 = !strcmp(rec->name, "R_X86_64_PC32") || !strcmp(rec->name, "R_X86_64_PLT32");
+        uint64_t P = x86_pc32 ? insn_addr + field_off + 4 : suffix ? insn_addr + insn_len : insn_addr;
         v = (int64_t)(S + (uint64_t)A) - (int64_t)P;
     } else {
         v = (int64_t)(S + (uint64_t)A);
@@ -559,8 +603,40 @@ static int layout_round(sandstone_asm_t *ctx, int round, int last,
                     cur = (uint32_t)k;
                     break;
                 }
-            ctx->sections[cur].is_bss = is_bss;
+            if (ctx->relocatable) {
+                const DomSymAs_SectionInfo *info = domsymas_find_section(ctx->bank, sec_name);
+                if (info && (info->flags & DOMSYMAS_SF_ZEROFILL)) is_bss = 1;
+            }
+            if (!ctx->sections[cur].elf_flags_set)
+                ctx->sections[cur].is_bss = is_bss;
             ctx->sections[cur].align = bank_section_align(ctx, sec_name);
+            if (ctx->relocatable && !strcmp(ln->mnemonic, ".section") && ln->n_operands > 1) {
+                const char *p = ln->operands[1].sval;
+                int flags = 0;
+                if (!p) p = "";
+                for (; *p; ++p) {
+                    if (*p == '"') continue;
+                    if (*p == 'a') flags |= 2;
+                    else if (*p == 'w') flags |= 1;
+                    else if (*p == 'x') flags |= 4;
+                    else break;
+                }
+                const char *type = ln->n_operands > 2 ? ln->operands[2].sval : NULL;
+                if (*p || ln->n_operands > 3 || (type && strcmp(type, "@progbits") &&
+                    strcmp(type, "%progbits") && strcmp(type, "@nobits") && strcmp(type, "%nobits"))) {
+                    sand_set_error(ctx, "%s:%u: unsupported ELF section attributes", ln->src_name, ln->lineno);
+                    free(off); return 0;
+                }
+                if (ctx->sections[cur].elf_flags_set &&
+                    (flags != ctx->sections[cur].elf_flags ||
+                     (type && ctx->sections[cur].is_bss != !strcmp(type+1,"nobits")))) {
+                    sand_set_error(ctx, "%s:%u: conflicting ELF section attributes", ln->src_name, ln->lineno);
+                    free(off); return 0;
+                }
+                ctx->sections[cur].elf_flags = flags;
+                ctx->sections[cur].elf_flags_set = 1;
+                if (type) ctx->sections[cur].is_bss = !strcmp(type + 1, "nobits");
+            }
             continue;
         }
         ln->section_idx = cur;
@@ -718,6 +794,11 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
         if (ln->kind == SAND_LINE_DIRECTIVE && is_equ(ln->mnemonic)) {
             int ok = 0;
             if (ln->n_operands >= 2) sand_eval_expr(ctx, ln->operands[1].sval, &ok);
+            /* A relocatable .set alias is bound after layout. It may name
+             * an external, as in Cephyr's TU-private variadic call aliases. */
+            if (!ok && ctx->relocatable && !strcmp(ln->mnemonic, ".set") &&
+                ln->n_operands == 2 && sand_is_name(ln->operands[0].sval) &&
+                sand_is_name(ln->operands[1].sval)) continue;
             if (!ok) {
                 sand_set_error(ctx, "%s:%u: undefined or invalid constant expression", ln->src_name, ln->lineno);
                 free(off); return 0;
@@ -751,6 +832,12 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
                 free(off);
                 return 0;
             }
+            if (ctx->relocatable && strcmp(s->section, "*abs*")) {
+                sand_set_error(ctx, "%s:%u: no relocation for symbol '%s' in numeric operand",
+                               ln->src_name, ln->lineno, op->sval);
+                free(off);
+                return 0;
+            }
         }
     }
 
@@ -760,7 +847,7 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
         base = align_up(base, ctx->sections[k].align
                                   ? ctx->sections[k].align
                                   : 1);
-        ctx->sections[k].base = base;
+        ctx->sections[k].base = ctx->relocatable ? 0 : base;
         base += off[k];
     }
     /* Absolute addresses for labels and lines. */
@@ -899,7 +986,7 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
      * zeros so section readers never over-read the storage. */
     for (size_t k = 0; k < ctx->n_sections; k++) {
         sand_section_t *sec = &ctx->sections[k];
-        if (!sec->is_bss)
+        if (!sec->is_bss || ctx->relocatable)
             continue;
         if (sec->len > sec->cap) {
             uint8_t *nb = realloc(sec->bytes, sec->len);

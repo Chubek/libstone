@@ -86,7 +86,9 @@ void malformed_and_roundtrip() {
 void integration(const Path& root, const Path& dsl_directory, const Path& temporary,
                  const std::string& lua) {
     Repository repository(root);
-    check(take(repository.architectures()).size() == 27, "source architecture discovery failed");
+    const auto sources = take(repository.architectures());
+    check(sources.size() == 28 && std::find(sources.begin(), sources.end(), "rv64im") != sources.end(),
+          "source architecture discovery failed (including RV64IM profile)");
     auto architectures = take(repository.architectures(LoadMode::backend));
     check(architectures.size() == 27, "backend architecture discovery failed");
     check(!repository.load("../bad"), "invalid architecture key accepted");

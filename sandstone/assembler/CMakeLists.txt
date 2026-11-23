@@ -1,14 +1,6 @@
 # Sandstone assembler framework: library + `sandstone-as` CLI.
-add_library(sandstone_assembler STATIC
-  assembler.c
-  parser.c
-  preprocess.cpp
-  directives.c
-  binarizer.c
-  lua.cpp
-  asm_opt.cpp
-  sdk.cpp
-)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SandASSources.cmake")
+add_library(sandstone_assembler STATIC ${sandstone_assembler_sources})
 add_library(Sandstone::assembler ALIAS sandstone_assembler)
 set_target_properties(sandstone_assembler PROPERTIES EXPORT_NAME assembler)
 target_include_directories(sandstone_assembler

@@ -13,7 +13,9 @@
 
 #include <cstring>
 
+#ifndef SANDSTONE_PLAIN_BANKS_ONLY
 #include <zlib.h>
+#endif
 
 #if defined(SANDSTONE_HAS_ZSTD)
 #include <zstd.h>
@@ -36,6 +38,7 @@ Error compress_payload(const std::vector<uint8_t> &in, Compression c,
     }
     if (in.size() > kMaxOutput)
         return Error{DOMSYMAS_ERR_OVERFLOW, "payload exceeds 64 MiB", 0};
+#ifndef SANDSTONE_PLAIN_BANKS_ONLY
     if (c == Compression::Zlib) {
         uLong bound = compressBound((uLong)in.size());
         if (bound > kMaxOutput)
@@ -49,6 +52,7 @@ Error compress_payload(const std::vector<uint8_t> &in, Compression c,
         out.resize((size_t)dest);
         return Error{};
     }
+#endif
     if (c == Compression::Zstd) {
 #if defined(SANDSTONE_HAS_ZSTD)
         size_t bound = ZSTD_compressBound(in.size());
@@ -84,6 +88,7 @@ Error decompress_payload(const uint8_t *data, size_t len, Compression c,
     }
     if (expected > kMaxOutput)
         return Error{DOMSYMAS_ERR_OVERFLOW, "payload exceeds 64 MiB", 0};
+#ifndef SANDSTONE_PLAIN_BANKS_ONLY
     if (c == Compression::Zlib) {
         out.resize(expected ? expected : 1);
         uLong dest = (uLong)expected;
@@ -100,6 +105,7 @@ Error decompress_payload(const uint8_t *data, size_t len, Compression c,
         out.resize(expected);
         return Error{};
     }
+#endif
     if (c == Compression::Zstd) {
 #if defined(SANDSTONE_HAS_ZSTD)
         out.resize(expected ? expected : 1);

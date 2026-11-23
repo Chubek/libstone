@@ -86,7 +86,7 @@ static int64_t expr_primary(expr_cursor_t *c) {
         char *name = sand_strndup(start, (size_t)(c->p - start));
         sand_symbol_t *s = name ? sand_find_symbol(c->ctx, name) : NULL;
         free(name);
-        if (!s || !s->defined) {
+        if (!s || !s->defined || (c->ctx->relocatable && strcmp(s->section, "*abs*"))) {
             c->ok = 0;
             return 0;
         }
@@ -214,27 +214,8 @@ int sand_directive_section(const sand_line_t *line, const char **name_out,
     }
     if (name_is(m, ".section") && line->n_operands >= 1 &&
         line->operands[0].sval) {
-        /* Strip optional flags (",\"aw\"") and quotes. */
-        static char buf[256];
-        const char *raw = line->operands[0].sval;
-        size_t i = 0;
-        if (raw[0] == '"') {
-            raw++;
-            while (raw[i] && raw[i] != '"' && i < sizeof buf - 1) {
-                buf[i] = raw[i];
-                i++;
-            }
-        } else {
-            while (raw[i] && raw[i] != ',' && i < sizeof buf - 1) {
-                buf[i] = raw[i];
-                i++;
-            }
-            while (i > 0 && isspace((unsigned char)buf[i - 1]))
-                i--;
-        }
-        buf[i] = '\0';
-        *name_out = buf;
-        *is_bss_out = strcmp(buf, ".bss") == 0;
+        *name_out = line->operands[0].sval;
+        *is_bss_out = strcmp(*name_out, ".bss") == 0;
         return 1;
     }
     return 0;
@@ -245,7 +226,7 @@ int sand_directive_is_symbol(const sand_line_t *line) {
         return 0;
     const char *m = line->mnemonic;
     return name_is(m, ".globl") || name_is(m, ".global") ||
-           name_is(m, ".extern") || name_is(m, ".local") ||
+           name_is(m, ".extern") || name_is(m, ".local") || name_is(m, ".hidden") ||
            name_is(m, ".equ") || name_is(m, ".set") || name_is(m, ".type") ||
            name_is(m, ".size");
 }
@@ -259,7 +240,7 @@ int sand_directive_symbol(sandstone_asm_t *ctx, const sand_line_t *line,
     if (name_is(m, ".type") || name_is(m, ".size"))
         return 1; /* accepted, no local effect */
     if (name_is(m, ".globl") || name_is(m, ".global") ||
-        name_is(m, ".extern") || name_is(m, ".local")) {
+        name_is(m, ".extern") || name_is(m, ".local") || name_is(m, ".hidden")) {
         for (size_t i = 0; i < line->n_operands; i++) {
             const char *name =
                 line->operands[i].sval ? line->operands[i].sval : "";
@@ -290,9 +271,15 @@ int sand_directive_symbol(sandstone_asm_t *ctx, const sand_line_t *line,
                 ctx->symbols[ctx->n_symbols++] = ns;
                 s = &ctx->symbols[ctx->n_symbols - 1];
             }
-            if (name_is(m, ".globl") || name_is(m, ".global"))
+            if (name_is(m, ".hidden")) s->hidden = 1;
+            if (name_is(m, ".globl") || name_is(m, ".global")) {
                 s->global = 1;
-            if (name_is(m, ".local")) s->global = 0;
+                s->explicit_local = 0;
+            }
+            if (name_is(m, ".local")) {
+                s->explicit_local = 1;
+                s->global = 0;
+            }
         }
         return 1;
     }
@@ -564,7 +551,7 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
     sand_section_t *sec = &ctx->sections[sec_idx];
     if (sand_is_name(expr)) {
         sand_symbol_t *s = sand_find_symbol(ctx, expr);
-        if (s && s->defined) {
+        if (s && s->defined && (!ctx->relocatable || !strcmp(s->section, "*abs*"))) {
             return put_checked(ctx, sec, (int64_t)s->address, width);
         }
         uint32_t at = (uint32_t)sec->len;
@@ -592,13 +579,15 @@ static int emit_expr(sandstone_asm_t *ctx, const sand_line_t *line,
         char *name = sand_strndup(expr, (size_t)(sep - expr));
         char *trimmed = name ? sand_trim(name) : NULL;
         int64_t add = 0;
-        int ok2 = trimmed && sand_is_name(trimmed) &&
-                  sand_parse_integer(sep + 1, &add);
+        int ok2 = 0;
+        if (trimmed && sand_is_name(trimmed))
+            add = sand_eval_expr(ctx, sep + 1, &ok2);
+        if (sep == minus && add == INT64_MIN) ok2 = 0;
         if (sep == minus && ok2)
             add = -add;
         if (ok2) {
             sand_symbol_t *s = sand_find_symbol(ctx, trimmed);
-            if (s && s->defined) {
+            if (s && s->defined && (!ctx->relocatable || !strcmp(s->section, "*abs*"))) {
                 int result = put_checked(ctx, sec, (int64_t)((uint64_t)s->address + (uint64_t)add), width);
                 free(name);
                 return result;
@@ -682,6 +671,13 @@ int sand_emit_directive(sandstone_asm_t *ctx, const sand_line_t *line,
                            line->src_name, line->lineno, m);
             return 0;
         }
+        if (ctx->relocatable && sec->is_bss) {
+            if (fill) {
+                sand_set_error(ctx, "%s:%u: nonzero initializer in NOBITS section", line->src_name, line->lineno);
+                return 0;
+            }
+            return 1;
+        }
         for (int64_t i = 0; i < n; i++)
             if (!put_u(sec, (uint64_t)fill, 1, 0)) return 0;
         return 1;
@@ -753,11 +749,13 @@ int sand_directive_pad(sandstone_asm_t *ctx, const sand_line_t *line,
         want = (uint64_t)arg - address;
     } else {
         uint64_t align = align_value(m, arg);
-        if (align == 0) {
+        if (align == 0 || (ctx->relocatable && ((align & (align-1)) || align > UINT32_MAX))) {
             sand_set_error(ctx, "%s:%u: invalid alignment", line->src_name,
                            line->lineno);
             return -1;
         }
+        if (emit && ctx->relocatable && align > ctx->sections[sec_idx].align)
+            ctx->sections[sec_idx].align = (uint32_t)align;
         uint64_t mis = address % align;
         want = mis ? align - mis : 0;
     }
@@ -766,8 +764,20 @@ int sand_directive_pad(sandstone_asm_t *ctx, const sand_line_t *line,
                        line->lineno);
         return -1;
     }
-    if (emit && want) {
+    if (emit && ctx->relocatable && ctx->sections[sec_idx].is_bss) {
+        if (fill && want) {
+            sand_set_error(ctx, "%s:%u: nonzero padding in NOBITS section", line->src_name, line->lineno);
+            return -1;
+        }
+    } else if (emit && want) {
         sand_section_t *sec = &ctx->sections[sec_idx];
+        const DomSymAs_Target *target = domsymas_target_at(ctx->bank, 0);
+        if (target && !strcmp(target->arch, "aarch64") && !strcmp(sec->name, ".text") &&
+            !name_is(m, ".org") && line->n_operands == 1 && !(address % 4) && !(want % 4)) {
+            for (uint64_t i = 0; i < want; i += 4)
+                if (!put_u(sec, UINT32_C(0xd503201f), 4, 0)) return -1;
+            return (int)want;
+        }
         uint8_t fb = (uint8_t)(fill & 0xFF);
         for (uint64_t i = 0; i < want; i++)
             if (!put_u(sec, fb, 1, 0)) return -1;

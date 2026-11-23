@@ -1,0 +1,3 @@
+-- Integer-only feature defaults and LP64 soft-float calling convention.
+-- Including binary128 calls: these pass integer register/stack pairs, not Q instructions.
+assert(loadfile("riscv64.dsymspec"))("rv64im")

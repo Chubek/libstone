@@ -11,6 +11,23 @@ for register allocation, instruction selection, and instruction scheduling.
 read the `backend` extension from the emitted JSON; the existing SymAS
 builder does not persist that extension.
 
+The AArch64 bank covers the scalar ELF GAS forms emitted by Archon's
+`AArch64GAS.c` for Cephyr. These include X/W/S/D/Q register transfers,
+scaled unsigned memory offsets, checked integer arithmetic, FP arithmetic
+and casts, conditional branches, large stack frames, and direct and GOT
+symbol addressing. `a64:*` operand constraints identify register roles
+(including SP versus ZR), shift syntax, conditions and memory forms; the
+bank itself selects the encoding and relocation. `tests/aarch64_cephyr.py`
+checks GNU reference bytes, relocation records, and a captured mixed
+binary128 translation unit. Tests do not invoke LLVM.
+
+This is not a general A64 GAS parser. For example, logical-immediate EOR
+accepts the two sign masks emitted by the backend; pre/post-indexed,
+register-indexed and literal-pool loads are outside the reviewed subset.
+Unknown external addresses and GOT references need a relocatable object
+and linker. Other illustrative instructions in the bank are not covered
+by the Cephyr conformance test.
+
 ```text
   .dsymspec (Lua DSL)  ->  JSON document  ->  domsymas::Builder  ->  .symas
        (Lua)                 (this file)        (spec_document.cpp)
@@ -116,7 +133,7 @@ register **name** (or absent). `width` ∈ `{8,16,32,64,80,128,256,512}`.
 `source` is the Algol-like encoding language parsed by
 `domlibs/domsymas` (`domdsl`). Statements: `emit8`, `emit16le/be`,
 `emit32le/be`, `emit64le/be`, `emit_imm(width,v)`, `emit_disp(width,v)`,
-`emit_modrm(dst,src)`, `emit_sib(a,b,c)`, `emit_relocation(sym,TYPE)`,
+`emit_modrm(dst,src)`, `emit_sib(a,b,c)`, `emit_relocation(sym,TYPE[,addend])`,
 `emit_reloc`, `require(cond);`, `if (...) {...} else {...}`, `fail("msg")`.
 Operands are referenced by name (`rd`, `rs1`, `imm`, ...).
 

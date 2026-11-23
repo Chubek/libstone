@@ -356,6 +356,13 @@ int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
             return -1;
         expanded = optimized;
     }
+    const DomSymAs_Target *target = domsymas_target_at(ctx->bank, 0);
+    if (target && target->arch && !strcmp(target->arch, "riscv64")) {
+        char *normalized = sand_rv_gas(ctx, expanded, name);
+        free(expanded);
+        if (!normalized) return -1;
+        expanded = normalized;
+    }
     int ok = sand_parse_source(ctx, expanded, name);
     free(expanded);
     if (!ok || !sand_assemble_lines(ctx)) {
@@ -368,6 +375,31 @@ int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
     }
     snprintf(ctx->error, sizeof ctx->error, "ok");
     return 0;
+}
+
+int sandstone_asm_assemble_elf(sandstone_asm_t *ctx, const char *src,
+                               const char *src_name, const char *output) {
+    return sandstone_asm_assemble_object(ctx, src, src_name, output, "elf");
+}
+
+int sandstone_asm_assemble_object(sandstone_asm_t *ctx, const char *src,
+                                  const char *src_name, const char *output, const char *format) {
+    if (!ctx || !output) return -1;
+    if (!format || (strcmp(format,"elf") && strcmp(format,"coff") && strcmp(format,"macho"))) {
+        sand_set_error(ctx, "unknown native object format");
+        return -1;
+    }
+    if (!ctx->bank || domsymas_target_count(ctx->bank) != 1) {
+        sand_set_error(ctx, "native object output requires a single-target SymAS bank");
+        return -1;
+    }
+    ctx->relocatable = 1;
+    int rc = sandstone_asm_assemble_string(ctx, src, src_name);
+    if (!rc) rc = !strcmp(format,"elf") ? sand_emit_elf64(ctx, output)
+                                        : sand_emit_native_object(ctx, output, format);
+    free_results(ctx); /* Section-relative layout does not expose a flat image. */
+    ctx->relocatable = 0;
+    return rc;
 }
 
 int sandstone_asm_assemble_file(sandstone_asm_t *ctx, const char *path) {

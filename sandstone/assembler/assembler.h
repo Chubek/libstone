@@ -84,6 +84,13 @@ int sandstone_asm_disable_feature(sandstone_asm_t *ctx, const char *name);
 int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
                                   const char *src_name);
 int sandstone_asm_assemble_file(sandstone_asm_t *ctx, const char *path);
+/* Assemble and write a little-endian ELF64 relocatable object. Selects
+ * relocatable layout before processing source (unlike flat image layout). */
+int sandstone_asm_assemble_elf(sandstone_asm_t *ctx, const char *src,
+                               const char *src_name, const char *output);
+/* Native relocatable object; format is "elf", "coff" or "macho". */
+int sandstone_asm_assemble_object(sandstone_asm_t *ctx, const char *src,
+                                  const char *src_name, const char *output, const char *format);
 
 /* Output model: sections in order of first use. */
 uint32_t sandstone_asm_section_count(const sandstone_asm_t *ctx);

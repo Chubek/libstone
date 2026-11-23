@@ -26,6 +26,10 @@ typedef struct {
     sand_op_kind_t kind;
     int64_t ival;
     char *sval; /* owned, for SYM/MEM */
+    /* Normalized AMD64 AT&T addressing. The bank selects the opcode and
+     * checks widths; these fields describe only the concrete operand. */
+    int att, width, indirect, modrm, sib, rex_b, rex_x, disp_size, fixup;
+    int64_t disp;
 } sand_operand_t;
 
 typedef enum {
@@ -49,7 +53,14 @@ typedef struct {
     uint32_t size;
     uint32_t form_id;
     int has_form;
+    /* A bank form selected by typed AArch64 GAS operand constraints. */
+    uint32_t a64_form_plus_one;
+    int64_t a64_disp;
 } sand_line_t;
+
+int sand_a64_operands(sandstone_asm_t *, sand_line_t *, char **, size_t);
+int sand_a64_bindings(const sand_line_t *, DomSymAs_OpVal **, uint32_t *);
+int sand_a64_patch_local(uint8_t *, int64_t, const char *);
 
 typedef struct {
     char *name; /* owned */
@@ -57,6 +68,7 @@ typedef struct {
     size_t len, cap;
     uint64_t base;
     int is_bss;
+    int elf_flags, elf_flags_set;
     uint32_t align;
 } sand_section_t;
 
@@ -66,6 +78,8 @@ typedef struct {
     uint32_t sec_idx;
     uint64_t address;
     int global;
+    int hidden; /* ELF STV_HIDDEN */
+    int explicit_local;
     int defined;
     int round; /* pass-1 round that (re)defined this symbol */
 } sand_symbol_t;
@@ -94,6 +108,7 @@ struct sandstone_asm {
     uint32_t *enabled;
     size_t n_enabled;
     int byte_order; /* 0 LE, 1 BE (from first target) */
+    int relocatable;
 
     sand_line_t *lines;
     size_t n_lines, cap_lines;
@@ -122,9 +137,12 @@ struct sandstone_asm {
 };
 
 /* error helper */
+int sand_emit_elf64(sandstone_asm_t *, const char *path);
+int sand_emit_native_object(sandstone_asm_t *, const char *path, const char *format);
 void sand_set_error(sandstone_asm_t *ctx, const char *fmt, ...);
 
 /* parser.c */
+char *sand_rv_gas(sandstone_asm_t *ctx, const char *src, const char *name);
 int sand_parse_source(sandstone_asm_t *ctx, const char *src,
                       const char *src_name);
 char *sand_preprocess_source(sandstone_asm_t *ctx, const char *src,

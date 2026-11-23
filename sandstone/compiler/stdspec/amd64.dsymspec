@@ -194,8 +194,8 @@ for _, m in ipairs({ "nop", "ret", "mov", "movabs", "movzx", "movsx", "xchg",
 end
 symas.form{ mnemonic = "nop", encoder = "nop" }
 symas.form{ mnemonic = "ret", encoder = "ret", flags = { "return", "terminator" } }
-symas.form{ mnemonic = "mov", encoder = "mov", operands = { w64(), r64() } }
-symas.form{ mnemonic = "movabs", encoder = "movimm", operands = { w64(),
+symas.form{ mnemonic = "mov", encoder = "mov", syntaxes = {"intel"}, operands = { w64(), r64() } }
+symas.form{ mnemonic = "movabs", encoder = "movimm", syntaxes = {"intel"}, operands = { w64(),
     { kind = "imm", width = 64, signed = true, imm_min = -9223372036854775807, imm_max = 9223372036854775807 } } }
 symas.form{ mnemonic = "movzx", encoder = "movzx", operands = { w64(), { kind = "reg", class = "gpr", width = 32 } } }
 symas.form{ mnemonic = "movsx", encoder = "movsx", operands = { w64(), { kind = "reg", class = "gpr", width = 32 } } }
@@ -227,8 +227,8 @@ symas.form{ mnemonic = "push", encoder = "push", operands = { r64() } }
 symas.form{ mnemonic = "pop",  encoder = "pop",  operands = { w64() } }
 symas.form{ mnemonic = "pushf", encoder = "pushf" }
 symas.form{ mnemonic = "popf", encoder = "popf" }
-symas.form{ mnemonic = "call", encoder = "call", flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "jmp", encoder = "jmp", flags = { "branch", "terminator", "reloc" }, operands = { { kind = "sym", width = 64 } } }
+symas.form{ mnemonic = "call", encoder = "call", syntaxes = {"intel"}, flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 64 } } }
+symas.form{ mnemonic = "jmp", encoder = "jmp", syntaxes = {"intel"}, flags = { "branch", "terminator", "reloc" }, operands = { { kind = "sym", width = 64 } } }
 symas.form{ mnemonic = "jcc", encoder = "jcc", flags = { "cond_branch", "reloc" },
     operands = { { kind = "cond", width = 8 }, { kind = "sym", width = 64 } } }
 symas.form{ mnemonic = "leave", encoder = "leave" }
@@ -236,7 +236,7 @@ symas.form{ mnemonic = "syscall", encoder = "syscall", flags = { "privileged", "
 symas.form{ mnemonic = "int", encoder = "int", flags = { "may_trap" }, operands = {
     { kind = "imm", width = 8, signed = false, imm_min = 0, imm_max = 255 } } }
 symas.form{ mnemonic = "cpuid", encoder = "cpuid" }
-symas.form{ mnemonic = "movaps", encoder = "movaps", required = { "sse" }, operands = { wxv(), xv() } }
+symas.form{ mnemonic = "movaps", encoder = "movaps", syntaxes = {"intel"}, required = { "sse" }, operands = { wxv(), xv() } }
 symas.form{ mnemonic = "addps", encoder = "addps", required = { "sse" }, operands = { wxv(), xv() } }
 symas.form{ mnemonic = "vaddps", encoder = "vaddps", required = { "avx" },
     operands = { wxv(), xv(), xv() } }
@@ -255,9 +255,170 @@ symas.form{ mnemonic = "pause", encoder = "pause" }
 symas.syntax{ name = "intel", comment = ";", separator = ", " }
 symas.syntax{ name = "att", order = 1, reg_prefix = "%", imm_prefix = "$", comment = "#", separator = ", " }
 
+-- SysV AMD64 scalar GAS provider. Records are in encoding (destination
+-- first) order. The only runtime inputs beyond ordinary operand values
+-- are the address components normalized by the AT&T parser.
+do
+local seen = {mov=true, movabs=true, movaps=true, call=true, jmp=true}
+local kinds = {r="reg", m="mem", i="imm", s="sym"}
+local function form(name, ops, program, feature, indirect)
+    if not seen[name] then symas.mnemonic{name=name}; seen[name]=true end
+    local enc = "att_" .. name .. "_" .. table.concat(ops,"_")
+    local descriptors, checks = {}, ""
+    for i,op in ipairs(ops) do
+        local kind, width = op:sub(1,1), tonumber(op:sub(2))
+        descriptors[i]={kind=kinds[kind],width=width}
+        if kind=="r" then descriptors[i].class = width==128 and "vec" or width==80 and "fp" or "gpr" end
+        checks=checks..("require(ind%d == %d);"):format(i-1,indirect and 1 or 0)
+    end
+    symas.encoder{name=enc, source=checks..program, max_bytes=15, max_relocs=1}
+    symas.form{mnemonic=name,encoder=enc,syntaxes={"att"},operands=descriptors,
+               required=feature and {feature} or {}}
+end
+local function bytes(hex)
+    return (hex:gsub("%x%x",function(byte) return "emit8(0x"..byte..");" end))
+end
+-- Generate both r/m variants from one opcode recipe. rg is an operand
+-- index or (/digit + 2) for a ModR/M opcode extension.
+local function rm(name, ops, rmidx, rg, prefix, opcode, w, immbytes, extra, feature, indirect)
+    local reg = rg<2 and ("r"..rg) or tostring(rg-2)
+    local r = rg<2 and ("b"..rg) or "0"
+    local rex = ("%d + 4*%s + 2*x%d + b%d"):format(w and 72 or 64,r,rmidx,rmidx)
+    local force = ""
+    for i,op in ipairs(ops) do
+        if op=="r8" then force=force..(" || r%d >= 4"):format(i-1) end
+    end
+    local code=(extra or "")..bytes(prefix)..("if ((%s) != 64%s) {emit8(%s);}"):format(rex,force,rex)
+        ..bytes(opcode)..("emit8(modrm%d + (%s %% 8)*8);"):format(rmidx,reg)
+        ..("if (sib%d >= 0) {emit8(sib%d);}"):format(rmidx,rmidx)
+    if ops[rmidx+1]:sub(1,1)=="m" then
+        -- Record P at the start of disp32. Any immediate after it also
+        -- contributes to the PC bias relative to the end of the instruction.
+        local i=rmidx
+        code=code..("if (fix%d != 0) {if (fix%d == 2) {emit_relocation(ref%d,R_X86_64_GOTPCREL,disp%d-%d);}"..
+            "else {emit_relocation(ref%d,R_X86_64_PC32,disp%d-%d);} emit32le(0);}"..
+            "else {if (ds%d == 1) {emit8(disp%d);} if (ds%d == 4) {emit32le(disp%d);}}"):
+            format(i,i,i,i,immbytes or 0,i,i,immbytes or 0,i,i,i,i)
+    end
+    if immbytes then code=code..("emit_imm(%d,imm);"):format(immbytes) end
+    form(name,ops,code,feature,indirect)
+end
+local function immcheck(n,signed)
+    return ("require(imm >= %d && imm <= %d);"):format(-(1<<(n-1)),(1<<(signed and n-1 or n))-1)
+end
+local function ophex(n) return ("%02x"):format(n) end
+-- Integer data transfer, including explicit sign/zero extensions.
+for _,width in ipairs{8,16,32,64} do
+    local suffix=({[8]="b",[16]="w",[32]="l",[64]="q"})[width]
+    local mov="mov"..suffix
+    local reg="r"..width
+    local p=width==16 and "66" or ""
+    for _,k in ipairs{"r","m"} do
+        local dest=k..width
+        rm(mov,{dest,reg},0,1,p,width==8 and "88" or "89",width==64)
+        if k=="m" then rm(mov,{reg,dest},1,0,p,width==8 and "8a" or "8b",width==64) end
+        local n=math.min(width,32)
+        rm(mov,{dest,"i"..n},0,2,p,width==8 and "c6" or "c7",width==64,n//8,immcheck(n,width==64))
+    end
+end
+-- Unsuffixed register-destination GAS mov derives width from that register.
+for _,w in ipairs{8,16,32,64} do
+    local r,p="r"..w,w==16 and "66" or ""
+    rm("mov",{r,r},0,1,p,w==8 and "88" or "89",w==64)
+    local n=math.min(w,32)
+    rm("mov",{r,"i"..n},0,2,p,w==8 and "c6" or "c7",w==64,n//8,immcheck(n,w==64))
+end
+for _,name in ipairs{"movabs","movabsq"} do
+    form(name,{"r64","i64"},"emit8(72+b0);emit8(184+r0%8);emit64le(imm);")
+end
+rm("leaq",{"r64","m64"},1,0,"","8d",true)
+for _,spec in ipairs{
+    {"movzbq",8,64,"0fb6"},{"movzbl",8,32,"0fb6"},{"movsbq",8,64,"0fbe"},
+    {"movzwq",16,64,"0fb7"},{"movzwl",16,32,"0fb7"},{"movswq",16,64,"0fbf"},
+    {"movslq",32,64,"63"},
+} do
+    for _,k in ipairs{"r","m"} do rm(spec[1],{"r"..spec[3],k..spec[2]},1,0,"",spec[4],spec[3]==64) end
+end
+for _,spec in ipairs{
+    {"addq",64,0x01,0},{"subq",64,0x29,5},{"andq",64,0x21,4},{"andl",32,0x21,4},
+    {"andb",8,0x20,4},{"orq",64,0x09,1},{"orw",16,0x09,1},{"xorq",64,0x31,6},
+    {"xorl",32,0x31,6},{"cmpq",64,0x39,7},
+} do
+    local name,w,opcode,ext=table.unpack(spec)
+    local r,p="r"..w,w==16 and "66" or ""
+    rm(name,{r,r},0,1,p,ophex(opcode),w==64)
+    local n=math.min(w,32)
+    rm(name,{r,"i"..n},0,ext+2,p,w==8 and "80" or "81",w==64,n//8,immcheck(n,w==64))
+end
+rm("imulq",{"r64","r64"},1,0,"","0faf",true)
+for _,spec in ipairs{{"testq",64,"85"},{"testb",8,"84"}} do
+    local r="r"..spec[2]; rm(spec[1],{r,r},0,1,"",spec[3],spec[2]==64)
+end
+for _,spec in ipairs{{"shlq",4},{"shrq",5},{"sarq",7}} do
+    rm(spec[1],{"r64","i8"},0,2+spec[2],"","c1",true,1,immcheck(8,false))
+    rm(spec[1],{"r64","r8"},0,2+spec[2],"","d3",true,nil,"require(r1 == 1);")
+end
+for _,spec in ipairs{{"btsq",5},{"btcq",7}} do
+    rm(spec[1],{"r64","i8"},0,spec[2]+2,"","0fba",true,1,immcheck(8,false))
+end
+for _,spec in ipairs{{"divq",6},{"idivq",7}} do rm(spec[1],{"r64"},0,spec[2]+2,"","f7",true) end
+form("cqto",{},bytes("4899"))
+form("int3",{},bytes("cc"))
+for _,spec in ipairs{{"sete",4},{"setl",12},{"setb",2},{"setbe",6},{"setnp",11}} do
+    rm(spec[1],{"r8"},0,2,"","0f"..ophex(0x90+spec[2]),false)
+end
+for _,spec in ipairs{{"jmp","e9"},{"call","e8"},{"jz","0f84"},{"jnz","0f85"},{"jne","0f85"},
+                     {"jns","0f89"},{"jb","0f82"},{"jno","0f81"}} do
+    local branch = spec[1]=="jmp" or spec[1]=="call"
+    local rel = branch and "R_X86_64_PLT32" or "R_X86_64_PC32"
+    form(spec[1],{"s64"},(branch and "" or "require(fix0 == 0);")..bytes(spec[2])..
+        "emit_relocation(ref0,"..rel..",disp0);emit32le(0);")
+    if branch then
+        for _,op in ipairs{"r64","m64"} do
+            rm(spec[1],{op},0,spec[1]=="jmp" and 6 or 4,"","ff",false,nil,nil,nil,true)
+        end
+    end
+end
+-- Scalar SSE/SSE2, in particular the SSE/GPR MOVQ overload.
+for _,s in ipairs{{"movd",32},{"movq",64}} do
+    rm(s[1],{"r128","r"..s[2]},1,0,"66","0f6e",s[2]==64,nil,nil,"sse2")
+    rm(s[1],{"r"..s[2],"r128"},0,1,"66","0f7e",s[2]==64,nil,nil,"sse2")
+end
+rm("movaps",{"m128","r128"},0,1,"","0f29",false,nil,nil,"sse")
+rm("movaps",{"r128","r128"},1,0,"","0f28",false,nil,nil,"sse")
+for _,s in ipairs{{"ss","f3","","sse",32},{"sd","f2","66","sse2",64}} do
+    local suffix,p,compare,feature,w=table.unpack(s)
+    rm("mov"..suffix,{"r128","m"..w},1,0,p,"0f10",false,nil,nil,feature)
+    for _,op in ipairs{{"add","58"},{"sub","5c"},{"mul","59"},{"div","5e"}} do
+        rm(op[1]..suffix,{"r128","r128"},1,0,p,"0f"..op[2],false,nil,nil,feature)
+    end
+    for _,op in ipairs{{"ucomi","2e"},{"comi","2f"}} do
+        rm(op[1]..suffix,{"r128","r128"},1,0,compare,"0f"..op[2],false,nil,nil,feature)
+    end
+    rm("cvtsi2"..suffix.."q",{"r128","r64"},1,0,p,"0f2a",true,nil,nil,feature)
+    rm("cvtt"..suffix.."2siq",{"r64","r128"},1,0,p,"0f2c",true,nil,nil,feature)
+    rm("cvt"..suffix.."2"..(w==32 and "sd" or "ss"),{"r128","r128"},1,0,p,"0f5a",false,nil,nil,"sse2")
+end
+-- x87 operand precision is encoded by the opcode, not by REX.W.
+for _,s in ipairs{
+    {"fldt","db",5,80},{"fstpt","db",7,80},{"flds","d9",0,32},{"fldl","dd",0,64},
+    {"fstps","d9",3,32},{"fstpl","dd",3,64},{"fildq","df",5,64},{"faddl","dc",0,64},
+    {"fnstcw","d9",7,16},{"fldcw","d9",5,16},{"fistpq","df",7,64},
+} do rm(s[1],{"m"..s[4]},0,s[3]+2,"",s[2],false) end
+for _,s in ipairs{{"faddp",0xc0},{"fmulp",0xc8},{"fsubrp",0xe8},{"fsubp",0xe0},{"fdivrp",0xf8}} do
+    form(s[1],{"r80","r80"},"require(r1 == 0);emit8(0xde);emit8("..s[2].."+r0);")
+end
+for _,s in ipairs{{"fucomip","df",0xe8},{"fcomip","df",0xf0},{"fucomi","db",0xe8}} do
+    form(s[1],{"r80","r80"},"require(r0 == 0);"..bytes(s[2]).."emit8("..s[3].."+r1);")
+end
+form("fxch",{"r80"},"emit8(0xd9);emit8(200+r0);")
+form("fstp",{"r80"},"emit8(0xdd);emit8(216+r0);")
+end
+
 symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
 symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
 symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".data.rel.ro", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
 symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 8, content = "data" }
 symas.section{ name = ".tdata", flags = { "write", "alloc", "tls", "data" }, align = 8, content = "data" }
 symas.section{ name = ".tbss", flags = { "write", "alloc", "zerofill", "tls", "data" }, align = 8, content = "data" }

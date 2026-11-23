@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -117,6 +118,8 @@ def main(argv=None):
                         help="payload compression (default: zlib)")
     parser.add_argument("--validate", action="store_true",
                         help="validate the output bank")
+    parser.add_argument("--object-profile", choices=("windows", "darwin"),
+                        help="select the object ABI for the standard amd64 or aarch64 encoder")
     parser.add_argument("--emit-spec", nargs="?", const="-", default=None,
                         metavar="FILE",
                         help="write the merged JSON document to FILE "
@@ -135,6 +138,22 @@ def main(argv=None):
 
     lua = find_lua(args.lua)
     documents = [run_spec(lua, spec, spec_dir, args.dsl_dir) for spec in args.inputs]
+    if args.object_profile:
+        if len(documents) != 1:
+            parser.error("--object-profile requires a single architecture")
+        doc = json.loads(documents[0])
+        targets = doc.get("targets", [])
+        expected = {"amd64": "SysV", "aarch64": "AAPCS64"}
+        t = targets[0] if len(targets) == 1 else {}
+        if (t.get("arch") not in expected or t.get("abi") != expected[t["arch"]]
+                or t.get("obj_format") != "ELF64" or t.get("addr_size") != 64
+                or t.get("byte_order") != "little"):
+            parser.error("unsupported source target/ABI for --object-profile")
+        windows = args.object_profile == "windows"
+        t.update(obj_format="COFF" if windows else "Mach-O",
+                 abi="Win64" if windows else "Darwin",
+                 calling_conv=args.object_profile + "-" + t["arch"])
+        documents = [json.dumps(doc, separators=(",", ":"))]
 
     if args.emit_spec is not None:
         joined = "\n".join(documents) + "\n"

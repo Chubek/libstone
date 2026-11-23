@@ -54,7 +54,7 @@ endif()
 install(TARGETS sandstone_spec_core sandstone_symspec EXPORT SandstoneTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES include/domsymascc/domsymascc.hpp
+install(FILES include/domsymascc/domsymascc.hpp include/domsymascc/records.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/domsymascc
 )
 install(FILES Symspec.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

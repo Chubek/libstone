@@ -26,10 +26,10 @@ char *sand_trim(char *s) {
 int sand_is_name(const char *s) {
     if (!s || !*s)
         return 0;
-    if (!(isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '.'))
+    if (!(isalpha((unsigned char)s[0]) || (unsigned char)s[0] >= 128 || s[0] == '_' || s[0] == '.'))
         return 0;
     for (s++; *s; s++)
-        if (!(isalnum((unsigned char)*s) || *s == '_' || *s == '.' ||
+        if (!(isalnum((unsigned char)*s) || (unsigned char)*s >= 128 || *s == '_' || *s == '.' ||
               *s == '$'))
             return 0;
     return 1;
@@ -55,7 +55,8 @@ int sand_parse_integer(const char *text, int64_t *out) {
     }
     if (!*text)
         return 0;
-    int64_t v = 0;
+    uint64_t v = 0;
+    uint64_t limit = neg ? (UINT64_C(1) << 63) : base == 10 ? INT64_MAX : UINT64_MAX;
     for (; *text; text++) {
         int d = -1;
         if (*text >= '0' && *text <= '9')
@@ -70,11 +71,11 @@ int sand_parse_integer(const char *text, int64_t *out) {
             return 0;
         if (d < 0 || d >= base)
             return 0;
-        if (v > (INT64_MAX - d) / base)
+        if (v > (limit - (unsigned)d) / (unsigned)base)
             return 0;
         v = v * base + d;
     }
-    *out = neg ? -v : v;
+    *out = (int64_t)(neg ? 0-v : v);
     return 1;
 }
 
@@ -178,6 +179,8 @@ static void classify_operand(sandstone_asm_t *ctx, const char *text,
     op->sval = sand_strdup(text);
 }
 
+#include "amd64_att.h"
+
 /* Split operand text on the syntax separator, aware of brackets/quotes. */
 static char **split_operands(sandstone_asm_t *ctx, char *text, size_t *n_out) {
     size_t cap = 4, n = 0;
@@ -225,6 +228,8 @@ static char **split_operands(sandstone_asm_t *ctx, char *text, size_t *n_out) {
                     out = realloc(out, cap * sizeof *out);
                 }
                 out[n++] = t;
+            } else if (!ws_mode) {
+                free(out); *n_out = SIZE_MAX; return NULL;
             }
             if (save == '\0')
                 break;
@@ -239,6 +244,7 @@ static char **split_operands(sandstone_asm_t *ctx, char *text, size_t *n_out) {
         if (c == '\0')
             break;
     }
+    if (quote || depth) { free(out); *n_out = SIZE_MAX; return NULL; }
     *n_out = n;
     return out;
 }
@@ -335,6 +341,10 @@ int sand_parse_source(sandstone_asm_t *ctx, const char *src,
             char **ops = NULL;
             if (*rest)
                 ops = split_operands(ctx, rest, &n_ops);
+            if (n_ops == SIZE_MAX) {
+                sand_set_error(ctx, "%s:%u: malformed operand list in '%s'", src_name, lineno, ln.raw);
+                free(ln.raw); free(ln.label); free(ln.mnemonic); free(line); failed = 1; break;
+            }
             /* AT&T operand order is reversed relative to encoding order. */
             if (ln.kind == SAND_LINE_INSN && ctx->operand_order == 1 &&
                 n_ops > 1) {
@@ -344,7 +354,18 @@ int sand_parse_source(sandstone_asm_t *ctx, const char *src,
                     ops[n_ops - 1 - i] = tmp;
                 }
             }
-            if (n_ops) {
+            int a64 = ln.kind == SAND_LINE_INSN
+                ? sand_a64_operands(ctx, &ln, ops, n_ops) : 0;
+            if (a64 < 0) {
+                sand_set_error(ctx, "%s:%u: invalid AArch64 operands for '%s'",
+                               src_name, lineno, ln.mnemonic);
+                free(ops); free(ln.mnemonic); free(ln.label); free(ln.raw); free(line);
+                failed = 1;
+                break;
+            }
+            if (a64) {
+                free(ops);
+            } else if (n_ops) {
                 ln.operands = calloc(n_ops, sizeof *ln.operands);
                 if (!ln.operands) {
                     failed = 1;
@@ -360,9 +381,27 @@ int sand_parse_source(sandstone_asm_t *ctx, const char *src,
                     if (ln.kind == SAND_LINE_DIRECTIVE) {
                         /* Directives keep raw operand strings. */
                         ln.operands[i].kind = SAND_OP_SYM;
-                        ln.operands[i].sval = sand_strdup(ops[i]);
+                        size_t len = strlen(ops[i]);
+                        if (i == 0 && !strcmp(ln.mnemonic, ".section") &&
+                            len >= 2 && ops[i][0] == '"' && ops[i][len-1] == '"')
+                            ln.operands[i].sval = sand_strndup(ops[i]+1, len-2);
+                        else
+                            ln.operands[i].sval = sand_strdup(ops[i]);
                     } else {
-                        classify_operand(ctx, ops[i], &ln.operands[i]);
+                        const DomSymAs_Target *target = ctx->bank ? domsymas_target_at(ctx->bank, 0) : NULL;
+                        if (target && target->arch && !strcmp(target->arch, "amd64") &&
+                            ctx->syntax_name && !strcmp(ctx->syntax_name, "att")) {
+                            if (!amd64_att_operand(ctx, ops[i], &ln.operands[i])) {
+                                sand_set_error(ctx, "%s:%u: invalid AMD64 AT&T operand in '%s'",
+                                               src_name, lineno, ln.raw);
+                                failed = 1;
+                            }
+                        } else if (target && !strcmp(target->arch, "riscv64") &&
+                                   !strcmp(ln.mnemonic,"call") && n_ops == 1 && sand_is_name(ops[i])) {
+                            // A call operand is a symbol even if named after a CSR (e.g. time).
+                            ln.operands[i].kind = SAND_OP_SYM;
+                            ln.operands[i].sval = sand_strdup(ops[i]);
+                        } else classify_operand(ctx, ops[i], &ln.operands[i]);
                     }
                 }
                 free(ops);

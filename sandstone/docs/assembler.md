@@ -8,7 +8,120 @@ and byte emission all go through the bank.
 ```sh
 sandstone-as --bank x86.symas --syntax intel -o out.bin prog.s
 sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
+sandstone-as --bank rv64im.symas -f elf -o prog.o prog.s
 ```
+
+## Native Windows and Darwin objects
+
+`-f coff` writes a relocatable Windows COFF `.obj` (default `out.obj`).
+`-f macho` writes a 64-bit Darwin `MH_OBJECT` (default `out.o`, macOS 11
+build-version command). Both writers run inside SandAS with no LLVM or
+platform toolchain dependency. Use `obj` for the existing JSON format.
+
+Select a bank with the matching target **before** assembly. With
+`sandstone-spec-compiler` on PATH, for example:
+
+```sh
+python3 sandstone/scripts/spec-compiler.py --object-profile windows --validate \
+  -o amd64-win.symas sandstone/compiler/stdspec/amd64.dsymspec
+sandstone-as --bank amd64-win.symas -s att -f coff -o routine.obj routine.s
+python3 sandstone/scripts/spec-compiler.py --object-profile darwin --validate \
+  -o arm64-mac.symas sandstone/compiler/stdspec/aarch64.dsymspec
+sandstone-as --bank arm64-mac.symas -f macho -o routine.o routine.s
+```
+
+Both profiles support little-endian, 64-bit `amd64` and `aarch64`. They
+reuse the standard encoder and select target metadata `COFF`/`Win64` or
+`Mach-O`/`Darwin`, with calling convention `<profile>-<arch>`. The
+assembler does not translate calling conventions, decorate symbol names,
+or accept arbitrary MASM/Apple assembler syntax. Supply code for the
+destination ABI and spell names as the linker expects (e.g. `_main` on macOS).
+
+| Input / fixup | COFF | Mach-O |
+| --- | --- | --- |
+| `.text`, `.rodata`, `.data`, `.bss` | `.text`, `.rdata`, `.data`, `.bss` | `__TEXT,__text`, `__TEXT,__const`, `__DATA,__data`, `__DATA,__bss` |
+| Symbolic data with signed addend | `.long`, `.quad` | `.quad` |
+| AMD64 call/jump, RIP-relative address | REL32 | BRANCH, SIGNED |
+| AArch64 B/BL, ADRP, ADD low 12 | BRANCH26, PAGEBASE_REL21, PAGEOFFSET_12A | BRANCH26, PAGE21, PAGEOFF12 |
+
+BSS takes virtual space only. Section alignment is a power of two (COFF
+up to 8192 bytes, Mach-O up to 16 MiB). `.global`/`.local` bindings,
+section-defined and undefined symbols are preserved. Both formats use
+in-place data addends; AArch64 instruction fixups require zero addends.
+Custom sections, TLS/GOT fixups, nonnumeric `.set` aliases, `.hidden`,
+and unwind/COMDAT generation are outside this writer's scope.
+
+The C SDK provides `sandstone_asm_assemble_object(ctx, source, source_name,
+output_path, format)` (`elf`, `coff`, `macho`); C++ provides
+`Assembler::assemble_object(source, source_name, output_path, format)`.
+These one-shot calls select section-relative layout, use the existing
+context configuration and return the file as their result.
+
+`tests/native_objects.py --build-dir BUILD` inspects all four object
+profiles with `llvm-readobj` and `llvm-nm`. Add `--lld` to cross-link all
+four and verify the linked AArch64 branch, page address and pointer
+addends. `--qobjld /absolute/path/to/qobjld` exercises Yellowstone's native
+AMD64 static PE and Mach-O linkers and checks the freestanding result on
+Linux x86-64. AArch64 static PE and Mach-O linkage is not currently
+supported by native qobjld.
+
+## Native ELF objects and Cephyr
+
+`-f elf` (or `--format elf`) selects little-endian ELF64 `ET_REL` before
+layout. The CLI defaults to `out.o` in this mode. The C SDK entry point is
+`sandstone_asm_assemble_elf(ctx, source, source_name, output_path)`;
+it uses the context's syntax, features and source hooks and returns 0 on
+success. The file is the result; this call clears intermediate layout data.
+The encoder and ELF writer run inside SandAS. `-f bin` (default) still
+writes a flat image and `-f obj` still writes `sandstone-obj-1` JSON.
+
+Build the single-target `.symas` bank once, e.g. from the repository root
+with `sandstone-spec-compiler` on PATH:
+
+```sh
+python3 sandstone/scripts/spec-compiler.py --validate -o rv64im.symas \
+  sandstone/compiler/stdspec/rv64im.dsymspec
+sandstone-as --bank rv64im.symas --syntax default -f elf -o routine.o routine.s
+llvm-readelf -hSWsr routine.o
+```
+
+| Cephyr target | Standard spec | `--syntax` | ABI |
+| --- | --- | --- | --- |
+| `x86_64-linux-gnu` | `amd64.dsymspec` | `att` (`intel` for Intel-order sources) | SysV AMD64 |
+| `aarch64-linux-gnu` | `aarch64.dsymspec` | `default` | AAPCS64 |
+| `riscv64-linux-gnu` | `rv64im.dsymspec` | `default` | LP64, no RVC |
+
+`riscv64.dsymspec` defaults to LP64D with RVC enabled; changing the filename
+or selecting a different syntax does not change the ABI. Rebuild old RISC-V
+banks: a four-byte `jal` must use `R_RISCV_JAL`, not the two-instruction
+`R_RISCV_CALL`.
+
+Use SandAS as a raw assembler for a bank-compatible `.s` input from Cephyr:
+
+```toml
+target = "x86_64-linux-gnu"
+assembler_style = "as"
+[tools]
+assembler = ["/path/to/sandstone-as", "--bank", "/path/to/amd64.symas", "--syntax", "att", "-f", "elf"]
+```
+
+```sh
+cephyr --config sandas.toml -c -x assembler routine.s -o routine.o
+```
+
+The writer preserves section-relative symbols, `SHT_NOBITS` sizes,
+power-of-two alignment and explicit-addend `SHT_RELA` entries (including
+references to *defined* labels). Section attributes default to bank metadata;
+`.section NAME,"aw",@nobits` and the `a`, `w`, `x` flag subset are supported.
+Use `.balign` for bytes or `.p2align` for a power-of-two exponent.
+Symbols default to local when defined, global when undefined. `.global`,
+`.local`, numeric `.equ`, `.type NAME,@function`/`@object` and
+`.size NAME,.-NAME` or a numeric size are supported. Unknown relocation
+kinds and unsupported relocatable expressions are errors.
+
+For AMD64, `cephyr --config sandas.toml -c routine.c -o routine.o` also
+handles the bundled scalar GAS provider's instruction forms. See the
+[AMD64 source inventory, validation and limits](amd64-cephyr.md).
 
 ## Pipeline
 
@@ -74,7 +187,7 @@ Sections (`.text` `.data` `.rodata` `.bss`, `.section NAME`), symbols
 data (`.byte` `.short`/`.hword`/`.2byte` `.word`/`.long`/`.4byte`
 `.quad`/`.8byte`, `.uleb128` `.sleb128`, `.ascii` `.asciz`
 `.string`, `.zero`/`.space`/`.skip`, `.fill`, `.align`/`.balign`
-`.p2align`, `.org`), and GAS-compatible no-ops (`.type`, `.size`).
+`.p2align`, `.org`), and symbol metadata (`.type`, `.size` in ELF mode).
 `.align N` follows GAS (`2^N` for small `N`; `.balign` takes bytes).
 Integer widths are 1, 2, 4 and 8 bytes respectively; `.word` is always
 4 bytes. `.asciz` terminates **each** string. Hex/octal escapes are checked.
@@ -216,7 +329,5 @@ context destruction. Do not recursively assemble on the same context.
 See the executable [C SDK example](../examples/assembler-sdk.c) and
 [installed build instructions](../INSTALL.md).
 
-Output is flat binary or Sandstone JSON objects, not ELF. Yellowstone currently
-consumes ELF inputs; there is no direct JSON-object bridge. This is a defined
-assembler subset, not complete GAS/NASM compatibility; `.type`/`.size` remain
-accepted metadata no-ops.
+Yellowstone consumes the native ELF objects described above. There is no
+direct JSON-object bridge. `.type` and `.size` remain no-ops in flat/JSON mode.

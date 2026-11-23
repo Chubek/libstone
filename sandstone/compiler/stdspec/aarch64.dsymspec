@@ -112,37 +112,9 @@ end
 -- Encodings: shifts as multiplication (`<< 5` == *32, `<< 16` == *65536,
 -- `<< 10` == *1024). Fixed 32-bit, little-endian. Bases from the ARM ARM.
 symas.encoder{ name = "nop",  source = "emit32le(0xD503201F);", max_bytes = 4 }
-symas.encoder{ name = "add",  source = "emit32le(0x8B000000 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "sub",  source = "emit32le(0xCB000000 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "and",  source = "emit32le(0x8A000000 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "orr",  source = "emit32le(0xAA000000 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "eor",  source = "emit32le(0xCA000000 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "mov",  source = "emit32le(0xAA0003E0 + rd + 31*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "movz", source = "emit32le(0xD2800000 + rd + ((imm + 65536) % 65536)*32);", max_bytes = 4 }
-symas.encoder{ name = "movk", source = "emit32le(0xF2800000 + rd + ((imm + 65536) % 65536)*32);", max_bytes = 4 }
-symas.encoder{ name = "addi", source = "emit32le(0x91000000 + rd + rn*32 + ((imm + 4096) % 4096)*1024);", max_bytes = 4 }
-symas.encoder{ name = "lsl",  source = "emit32le(0xD3400000 + rd + rn*32 + ((imm + 64) % 64)*1024);", max_bytes = 4 }
-symas.encoder{ name = "lsr",  source = "emit32le(0xD3400000 + rd + rn*32 + ((imm + 64) % 64)*1024 + 1024*64);", max_bytes = 4 }
-symas.encoder{ name = "asr",  source = "emit32le(0xD3400000 + rd + rn*32 + ((imm + 64) % 64)*1024 + 1024*128);", max_bytes = 4 }
-symas.encoder{ name = "mul",  source = "emit32le(0x9B007C00 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "sdiv", source = "emit32le(0x9AC00C00 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "cmp",  source = "emit32le(0xEB00001F + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "ldr",  source = "emit32le(0xF9400000 + rd + rn*32);", max_bytes = 4 }
-symas.encoder{ name = "str",  source = "emit32le(0xF9000000 + rd + rn*32);", max_bytes = 4 }
 symas.encoder{ name = "ldp",  source = "emit32le(0xA9400000 + rd + rn*32 + rm*1048576);", max_bytes = 4 }
 symas.encoder{ name = "stp",  source = "emit32le(0xA9000000 + rd + rn*32 + rm*1048576);", max_bytes = 4 }
-symas.encoder{ name = "ldrb", source = "emit32le(0x39400000 + rd + rn*32);", max_bytes = 4 }
-symas.encoder{ name = "strb", source = "emit32le(0x39000000 + rd + rn*32);", max_bytes = 4 }
-symas.encoder{ name = "adrp", source = "emit32le(0x90000000 + rd); emit_relocation(sym, R_AARCH64_ADR_PREL_PG_HI21);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "adr",  source = "emit32le(0x10000000 + rd); emit_relocation(sym, R_AARCH64_PREL32);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "ret",  source = "emit32le(0xD65F03C0);", max_bytes = 4 }
-symas.encoder{ name = "br",   source = "emit32le(0xD61F0000 + rn*32);", max_bytes = 4 }
-symas.encoder{ name = "blr",  source = "emit32le(0xD63F0000 + rn*32);", max_bytes = 4 }
-symas.encoder{ name = "b",    source = "emit32le(0x14000000); emit_relocation(sym, R_AARCH64_JUMP26);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "bl",   source = "emit32le(0x94000000); emit_relocation(sym, R_AARCH64_CALL26);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "cbz",  source = "emit32le(0xB4000000 + rd); emit_relocation(sym, R_AARCH64_PREL32);", max_bytes = 4, max_relocs = 1 }
 symas.encoder{ name = "bcond", source = "emit32le(0x54000000); emit_relocation(sym, R_AARCH64_PREL32);", max_bytes = 4, max_relocs = 1 }
-symas.encoder{ name = "svc",  source = "emit32le(0xD4000001 + ((imm + 65536) % 65536)*32);", max_bytes = 4 }
 symas.encoder{ name = "dmb",  source = "emit32le(0xD50330BF);", max_bytes = 4 }
 symas.encoder{ name = "dsb",  source = "emit32le(0xD50330BF + 32);", max_bytes = 4 }
 symas.encoder{ name = "isb",  source = "emit32le(0xD50330DF);", max_bytes = 4 }
@@ -152,10 +124,6 @@ symas.encoder{ name = "msr",  source = "emit32le(0xD5100000 + rn);", max_bytes =
 symas.encoder{ name = "ldxr", source = "emit32le(0xC8E07C00 + rd + rn*32);", max_bytes = 4 }
 symas.encoder{ name = "stxr", source = "emit32le(0xC8E07C00 + rd + rn*32 + rm*65536);", max_bytes = 4 }
 symas.encoder{ name = "cas",  source = "emit32le(0xC8A07C00 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "fadd", source = "emit32le(0x1E602800 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "fmul", source = "emit32le(0x1E600800 + rd + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "fcmp", source = "emit32le(0x1E602000 + rn*32 + rm*65536);", max_bytes = 4 }
-symas.encoder{ name = "fmov", source = "emit32le(0x1E604000 + rd + rn*32);", max_bytes = 4 }
 symas.encoder{ name = "vadd", source = "emit32le(0x0E208400 + rd + rn*32 + rm*65536);", max_bytes = 4 }
 symas.encoder{ name = "ld1",  source = "emit32le(0x0C400000 + rd + rn*32);", max_bytes = 4 }
 symas.encoder{ name = "st1",  source = "emit32le(0x0C000000 + rd + rn*32);", max_bytes = 4 }
@@ -184,45 +152,10 @@ for _, m in ipairs({ "nop", "add", "sub", "and", "orr", "eor", "mov", "movz",
     symas.mnemonic{ name = m }
 end
 symas.form{ mnemonic = "nop", encoder = "nop" }
-symas.form{ mnemonic = "add", encoder = "add", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "sub", encoder = "sub", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "and", encoder = "and", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "orr", encoder = "orr", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "eor", encoder = "eor", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "mov", encoder = "mov", operands = { wx(), x() } }
-symas.form{ mnemonic = "movz", encoder = "movz", operands = { wx(),
-    { kind = "imm", width = 16, signed = false, imm_min = 0, imm_max = 65535 } } }
-symas.form{ mnemonic = "movk", encoder = "movk", operands = { { kind = "reg", class = "gpr", width = 64, access = "readwrite" },
-    { kind = "imm", width = 16, signed = false, imm_min = 0, imm_max = 65535 } } }
-symas.form{ mnemonic = "addi", encoder = "addi", operands = { wx(), x(),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 4095 } } }
-symas.form{ mnemonic = "lsl", encoder = "lsl", operands = { wx(), x(),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 63 } } }
-symas.form{ mnemonic = "lsr", encoder = "lsr", operands = { wx(), x(),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 63 } } }
-symas.form{ mnemonic = "asr", encoder = "asr", operands = { wx(), x(),
-    { kind = "imm", width = 12, signed = false, imm_min = 0, imm_max = 63 } } }
-symas.form{ mnemonic = "mul", encoder = "mul", operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "sdiv", encoder = "sdiv", flags = { "may_trap" }, operands = { wx(), x(), x() } }
-symas.form{ mnemonic = "cmp", encoder = "cmp", operands = { x(), x() } }
-symas.form{ mnemonic = "ldr", encoder = "ldr", flags = { "reads_mem" }, operands = { wx(), { kind = "mem", width = 64 } } }
-symas.form{ mnemonic = "str", encoder = "str", flags = { "writes_mem" }, operands = { x(), { kind = "mem", width = 64 } } }
 symas.form{ mnemonic = "ldp", encoder = "ldp", flags = { "reads_mem" }, operands = { wx(), wx(), { kind = "mem", width = 64 } } }
 symas.form{ mnemonic = "stp", encoder = "stp", flags = { "writes_mem" }, operands = { x(), x(), { kind = "mem", width = 64 } } }
-symas.form{ mnemonic = "ldrb", encoder = "ldrb", flags = { "reads_mem" }, operands = { wx(), { kind = "mem", width = 8 } } }
-symas.form{ mnemonic = "strb", encoder = "strb", flags = { "writes_mem" }, operands = { x(), { kind = "mem", width = 8 } } }
-symas.form{ mnemonic = "adrp", encoder = "adrp", flags = { "reloc" }, operands = { wx(), { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "adr", encoder = "adr", flags = { "reloc" }, operands = { wx(), { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "ret", encoder = "ret", flags = { "return", "terminator" } }
-symas.form{ mnemonic = "br", encoder = "br", flags = { "branch", "terminator" }, operands = { x() } }
-symas.form{ mnemonic = "blr", encoder = "blr", flags = { "branch" }, operands = { x() } }
-symas.form{ mnemonic = "b", encoder = "b", flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "bl", encoder = "bl", flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "cbz", encoder = "cbz", flags = { "cond_branch", "reloc" }, operands = { x(), { kind = "sym", width = 64 } } }
 symas.form{ mnemonic = "b.cond", encoder = "bcond", flags = { "cond_branch", "reloc" },
     operands = { { kind = "cond", width = 8 }, { kind = "sym", width = 64 } } }
-symas.form{ mnemonic = "svc", encoder = "svc", flags = { "may_trap" }, operands = {
-    { kind = "imm", width = 16, signed = false, imm_min = 0, imm_max = 65535 } } }
 symas.form{ mnemonic = "dmb", encoder = "dmb" }
 symas.form{ mnemonic = "dsb", encoder = "dsb" }
 symas.form{ mnemonic = "isb", encoder = "isb" }
@@ -238,11 +171,6 @@ symas.form{ mnemonic = "stxr", encoder = "stxr", required = { "lse" }, flags = {
     operands = { wx(), x(), { kind = "mem", width = 64 } } }
 symas.form{ mnemonic = "cas", encoder = "cas", required = { "lse" }, flags = { "reads_mem", "writes_mem" },
     operands = { wx(), x(), { kind = "mem", width = 64 } } }
-symas.form{ mnemonic = "fadd", encoder = "fadd", required = { "fp" }, operands = { dd(), dd(), dd() } }
-symas.form{ mnemonic = "fmul", encoder = "fmul", required = { "fp" }, operands = { dd(), dd(), dd() } }
-symas.form{ mnemonic = "fcmp", encoder = "fcmp", required = { "fp" }, operands = { dd(), dd() } }
-symas.form{ mnemonic = "fmov", encoder = "fmov", required = { "fp" }, operands = {
-    { kind = "reg", class = "fp", width = 64, access = "write" }, dd() } }
 symas.form{ mnemonic = "vadd", encoder = "vadd", required = { "neon" }, operands = { wv(), v(), v() } }
 symas.form{ mnemonic = "ld1", encoder = "ld1", required = { "neon" }, flags = { "reads_mem" },
     operands = { wv(), { kind = "mem", width = 128 } } }
@@ -257,6 +185,133 @@ symas.form{ mnemonic = "pacia", encoder = "pacia", required = { "paca" }, operan
 symas.form{ mnemonic = "bti", encoder = "bti", required = { "bti" } }
 symas.form{ mnemonic = "irg", encoder = "irg", required = { "mte" }, operands = { wx(), x() } }
 symas.form{ mnemonic = "sb", encoder = "sb", required = { "sb" } }
+
+-- Cephyr/Archon GAS subset. A64 operands specify a syntax constraint as
+-- well as their public register class/width. The syntax reader binds r0..r3
+-- in source order, disp in bytes, and sym without quotes/reloc modifiers.
+for _,m in ipairs({"adds","subs","udiv","msub","smulh","lslv","lsrv","asrv","cmn",
+    "csinv","cset","brk","cbnz","b.ne","b.eq","b.vc","ubfx","sbfx","ldrh","strh",
+    "ldrsb","ldrsh","ldrsw","fsub","fdiv","fcmpe","fcvt","fcvtzs","fcvtzu","scvtf","ucvtf"}) do
+    symas.mnemonic{name=m}
+end
+local function operand(c)
+    local kind,width,class="imm",64,nil
+    if c=="x" or c=="xsp" or c=="w" then kind,width,class="reg",c=="w" and 32 or 64,"gpr"
+    elseif c=="s" or c=="d" then kind,width,class="reg",c=="s" and 32 or 64,"fp"
+    elseif c=="q" then kind,width,class="reg",128,"vec"
+    elseif c:sub(1,3)=="mem" then kind,width="mem",(tonumber(c:sub(4)) or 8)*8
+    elseif c=="got" or c=="lo12" or c=="sym" then kind="sym"
+    elseif c=="cond" then kind="cond" end
+    return {kind=kind,width=width,class=class,constraint="a64:"..c}
+end
+local function form(m, args, base, fields, checks, reloc, flags, fp)
+    local ops={}
+    for c in args:gmatch("%S+") do ops[#ops+1]=operand(c) end
+    local read_only = {cmp=true, cmn=true, fcmp=true, fcmpe=true, ret=true, br=true, blr=true,
+                       cbz=true, cbnz=true, str=true, strb=true, strh=true}
+    if ops[1] and ops[1].kind=="reg" and not read_only[m] then
+        ops[1].access=m=="movk" and "readwrite" or "write"
+    end
+    local name="a64_"..m:gsub("%.","_").."_"..args:gsub(" ","_")
+    local expr=string.format("0x%08x",base)..(fields and " + "..fields or "")
+    local src=(checks and "require("..checks.."); " or "").."emit32le("..expr..");"
+    if reloc then src=src.." emit_relocation(sym, R_AARCH64_"..reloc..");" end
+    symas.encoder{name=name,source=src,max_bytes=4,max_relocs=reloc and 1 or 0}
+    symas.form{mnemonic=m,encoder=name,operands=ops,flags=flags,required=fp and {"fp"} or nil}
+end
+local rr="r0 + r1*32"
+local rrr=rr.." + r2*65536"
+local ui12="r2 >= 0 && r2 <= 4095"
+local ui16="r1 >= 0 && r1 <= 65535"
+for _,v in ipairs({{"add",0x8b000000},{"sub",0xcb000000},{"adds",0xab000000},{"subs",0xeb000000},
+    {"orr",0xaa000000},{"and",0x8a000000},{"eor",0xca000000},{"mul",0x9b007c00},
+    {"smulh",0x9b407c00},{"sdiv",0x9ac00c00},{"udiv",0x9ac00800},
+    {"lslv",0x9ac02000},{"lsrv",0x9ac02400},{"asrv",0x9ac02800}}) do
+    form(v[1],"x x x",v[2],rrr)
+end
+form("msub","x x x x",0x9b008000,rrr.." + r3*1024")
+for _,v in ipairs({{"add",0x91000000},{"addi",0x91000000},{"sub",0xd1000000}}) do
+    form(v[1],"xsp xsp imm",v[2],rr.." + r2*1024",ui12)
+    form(v[1],"xsp xsp imm lsl",v[2]+0x400000,rr.." + r2*1024",ui12.." && r3 == 12")
+end
+form("add","xsp xsp x uxtx",0x8b206000,rrr)
+form("mov","x x",0xaa0003e0,"r0 + r1*65536")
+-- MOV to an X register with a one-halfword immediate aliases MOVZ/MOVN.
+form("mov","x imm",0x92800000,"r0 + ((r1 < 0)*(-1-r1) + (r1 >= 0)*r1)*32 + (r1 >= 0)*0x40000000",
+     "r1 >= -65536 && r1 <= 65535")
+-- The variadic prologue uses small negative W immediates (MOVN) or zero (MOVZ).
+form("mov","w imm",0x12800000,"r0 + ((r1 < 0)*(-1-r1) + (r1 >= 0)*r1)*32 + (r1 >= 0)*0x40000000",
+     "r1 >= -65536 && r1 <= 65535")
+for _,v in ipairs({{"movz",0xd2800000},{"movk",0xf2800000}}) do
+    form(v[1],"x imm",v[2],"r0 + r1*32",ui16)
+    form(v[1],"x imm lsl",v[2],"r0 + r1*32 + r2/16*2097152",ui16.." && r2 >= 0 && r2 <= 48 && r2%16 == 0")
+end
+local sh="r2 >= 0 && r2 < 64"
+form("lsl","x x imm",0xd3400000,rr.." + ((64-r2)%64)*65536 + (63-r2)*1024",sh)
+form("lsr","x x imm",0xd340fc00,rr.." + r2*65536",sh)
+form("asr","x x imm",0x9340fc00,rr.." + r2*65536",sh)
+for _,v in ipairs({{"ubfx",0xd3400000},{"sbfx",0x93400000}}) do
+    form(v[1],"x x imm imm",v[2],rr.." + r2*65536 + (r2+r3-1)*1024",sh.." && r3 >= 1 && r3 <= 64-r2")
+end
+-- Logical immediate N=1, imms=0 (a single set bit), immr=1 or 33.
+form("eor","x x imm",0xd2410000,rr.." + (r2 == 0x80000000)*0x200000", "r2 == 0x80000000 || r2 == 0x8000000000000000")
+form("cmp","x x",0xeb00001f,"r0*32 + r1*65536")
+form("cmp","x x asr",0xeb80001f,"r0*32 + r1*65536 + r2*1024",sh)
+form("cmp","xsp imm",0xf100001f,"r0*32 + r1*1024","r1 >= 0 && r1 <= 4095")
+form("cmn","xsp imm",0xb100001f,"r0*32 + r1*1024","r1 >= 0 && r1 <= 4095")
+form("csinv","x x x cond",0xda800000,rrr.." + r3*4096")
+form("cset","x cond",0x9a9f07e0,"r0 + (r1 + 1 - (r1%2)*2)*4096")
+for _,v in ipairs({{"ldr","x",8,0xf9400000},{"str","x",8,0xf9000000},
+    {"ldr","w",4,0xb9400000},{"str","w",4,0xb9000000},{"ldr","s",4,0xbd400000},
+    {"str","s",4,0xbd000000},{"ldr","d",8,0xfd400000},{"str","d",8,0xfd000000},
+    {"ldr","q",16,0x3dc00000},{"str","q",16,0x3d800000},{"ldrb","w",1,0x39400000},
+    {"strb","w",1,0x39000000},{"ldrh","w",2,0x79400000},{"strh","w",2,0x79000000},
+    {"ldrsb","x",1,0x39800000},{"ldrsh","x",2,0x79800000},{"ldrsw","x",4,0xb9800000}}) do
+    form(v[1],v[2].." mem"..v[3],v[4],rr.." + disp/"..v[3].."*1024",nil,nil,
+         {v[1]:sub(1,2)=="ld" and "reads_mem" or "writes_mem"},v[2]:match("^[sdq]$")~=nil)
+end
+form("adr","x sym",0x10000000,"r0",nil,"ADR_PREL_LO21",{"reloc"})
+form("adrp","x sym",0x90000000,"r0",nil,"ADR_PREL_PG_HI21",{"reloc"})
+form("adrp","x got",0x90000000,"r0",nil,"ADR_GOT_PAGE",{"reloc"})
+form("add","xsp xsp lo12",0x91000000,rr,nil,"ADD_ABS_LO12_NC",{"reloc"})
+form("ldr","x memgot",0xf9400000,rr,nil,"LD64_GOT_LO12_NC",{"reads_mem","reloc"})
+form("ret","",0xd65f03c0,nil,nil,nil,{"return","terminator"})
+form("ret","x",0xd65f0000,"r0*32",nil,nil,{"return","terminator"})
+form("br","x",0xd61f0000,"r0*32",nil,nil,{"branch","terminator"})
+form("blr","x",0xd63f0000,"r0*32",nil,nil,{"branch"})
+form("bl","sym",0x94000000,nil,nil,"CALL26",{"branch","reloc"})
+form("b","sym",0x14000000,nil,nil,"JUMP26",{"branch","terminator","reloc"})
+for _,v in ipairs({{"b.eq",0x54000000},{"b.ne",0x54000001},{"b.vc",0x54000007}}) do
+    form(v[1],"sym",v[2],nil,nil,"CONDBR19",{"cond_branch","reloc"})
+end
+for _,v in ipairs({{"cbz",0xb4000000},{"cbnz",0xb5000000}}) do
+    form(v[1],"x sym",v[2],"r0",nil,"CONDBR19",{"cond_branch","reloc"})
+end
+for _,v in ipairs({{"svc",0xd4000001},{"brk",0xd4200000}}) do
+    form(v[1],"imm",v[2],"r0*32","r0 >= 0 && r0 <= 65535",nil,{"may_trap"})
+end
+for _,f in ipairs({"s","d"}) do
+    local t=f=="d" and 0x00400000 or 0
+    local g=f=="d" and "x" or "w"
+    for _,v in ipairs({{"fadd",0x1e202800},{"fsub",0x1e203800},{"fmul",0x1e200800},{"fdiv",0x1e201800}}) do
+        form(v[1],f.." "..f.." "..f,v[2]+t,rrr,nil,nil,nil,true)
+    end
+    for _,v in ipairs({{"fcmp",0x1e202000},{"fcmpe",0x1e202010}}) do
+        form(v[1],f.." "..f,v[2]+t,"r0*32 + r1*65536",nil,nil,nil,true)
+    end
+    form("fmov",f.." "..f,0x1e204000+t,rr,nil,nil,nil,true)
+    form("fmov",g.." "..f,f=="d" and 0x9e660000 or 0x1e260000,rr,nil,nil,nil,true)
+    form("fmov",f.." "..g,f=="d" and 0x9e670000 or 0x1e270000,rr,nil,nil,nil,true)
+    form("fcvt",f.." "..(f=="d" and "s" or "d"),f=="d" and 0x1e22c000 or 0x1e624000,rr,nil,nil,nil,true)
+    for _,v in ipairs({{"scvtf",0x9e220000},{"ucvtf",0x9e230000}}) do
+        form(v[1],f.." x",v[2]+t,rr,nil,nil,nil,true)
+    end
+    for _,v in ipairs({{"fcvtzs",0x9e380000},{"fcvtzu",0x9e390000}}) do
+        form(v[1],"x "..f,v[2]+t,rr,nil,nil,nil,true)
+    end
+end
+symas.reloc{name="R_AARCH64_ADR_GOT_PAGE",width=32,pcrel=true,signed=true,expr="Page(GOT(S)) - Page(P)"}
+symas.reloc{name="R_AARCH64_LD64_GOT_LO12_NC",width=32,expr="GOT(S)"}
 
 symas.syntax{ name = "default", comment = "//", separator = ", " }
 symas.syntax{ name = "llvm", comment = "//", separator = ", ", tmpl = "{mnemonic} {ops}" }
@@ -291,6 +346,8 @@ symas.reloc{ name = "R_AARCH64_PREL16", width = 32, signed = true, pcrel = true,
 symas.reloc{ name = "R_AARCH64_JUMP26", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
 symas.reloc{ name = "R_AARCH64_CALL26", width = 32, signed = true, pcrel = true, expr = "PLT(S) + A - P" }
 symas.reloc{ name = "R_AARCH64_ADR_PREL_PG_HI21", width = 32, signed = true, pcrel = true, expr = "Page(S + A) - Page(P)" }
+symas.reloc{ name = "R_AARCH64_ADR_PREL_LO21", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_CONDBR19", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
 symas.reloc{ name = "R_AARCH64_ADR_PREL_PG_HI21_NC", width = 32, pcrel = true, expr = "Page(S + A) - Page(P)" }
 symas.reloc{ name = "R_AARCH64_ADD_ABS_LO12_NC", width = 32, expr = "S + A" }
 symas.reloc{ name = "R_AARCH64_LDST64_ABS_LO12_NC", width = 32, expr = "S + A" }

@@ -10,7 +10,10 @@
 // Symspec / Boost.JSON and the `domsymas` library. The private json::Value
 // model adapts assembler fields to the existing Builder mapping; parsing and
 // lossless document serialization are handled by Symspec.
+#include "domsymascc/records.hpp"
+#ifndef SANDSTONE_RECORDS_ONLY
 #include "domsymascc/domsymascc.hpp"
+#endif
 #include "json.hpp"
 
 #include <cstdlib>
@@ -26,6 +29,7 @@ namespace {
 
 using json::Value;
 
+#ifndef SANDSTONE_RECORDS_ONLY
 // Only assembler fields enter the legacy Builder mapping. Keep the original
 // Boost.JSON document for serialization so backend nulls, DAGs and integers
 // (including unsigned 64-bit values) survive unchanged.
@@ -54,6 +58,8 @@ Value assembler_value(const symspec::Json &input) {
     }
     return result;
 }
+
+#endif
 
 // ---- small typed accessors over json::Value --------------------------------
 
@@ -399,6 +405,12 @@ static const Value &field(const Value &v, const char *key) {
 
 } // namespace
 
+static Result compile_records(const Value &doc, domsymas::Builder &builder);
+Result compile_assembler_records(const std::string &text, domsymas::Builder &builder) {
+    return compile_records(json::parse(text), builder);
+}
+
+#ifndef SANDSTONE_RECORDS_ONLY
 Result compile_document(const std::string &document_json, domsymas::Builder &builder) {
     auto spec = symspec::Spec::from_json(document_json);
     if (!spec) return {false, "spec JSON: " + spec.error().message, {}};
@@ -432,6 +444,14 @@ Result compile_spec(const symspec::Spec &spec, domsymas::Builder &builder) {
         res.error = std::string("spec JSON parse failed: ") + e.what();
         return res;
     }
+    res = compile_records(doc, builder);
+    if (res.ok) res.spec_json = *spec.serialize();
+    return res;
+}
+#endif
+
+static Result compile_records(const Value &doc, domsymas::Builder &builder) {
+    Result res;
     if (doc.type != json::Type::Object) {
         res.error = "spec document must be a JSON object";
         return res;
@@ -1124,10 +1144,10 @@ Result compile_spec(const symspec::Spec &spec, domsymas::Builder &builder) {
     }
 
     res.ok = true;
-    res.spec_json = *spec.serialize();
     return res;
 }
 
+#ifndef SANDSTONE_RECORDS_ONLY
 Result compile_document_to_bank(const std::string &document_json,
                                 domsymas::Databank &out) {
     domsymas::Builder builder;
@@ -1141,4 +1161,5 @@ Result compile_document_to_bank(const std::string &document_json,
     return res;
 }
 
+#endif
 } // namespace domsymas::cc

@@ -1,6 +1,6 @@
 /* sandstone-as: SymAS-driven assembler command line.
  *
- * Usage: sandstone-as --bank ARCH.symas [-s SYNTAX] [-f bin|obj]
+ * Usage: sandstone-as --bank ARCH.symas [-s SYNTAX] [-f bin|obj|elf|coff|macho]
  *          [-F FEATURE]... [--lua HOOK.lua] [--asm-opt FILE.lua] [-o OUT] FILE...
  */
 #include <getopt.h>
@@ -21,13 +21,13 @@ static void usage(const char *argv0) {
             "  -b, --bank BANK     .symas databank (required)\n"
             "  --archml PROFILE   ArchML .insn encoder (may replace --bank)\n"
             "  -s, --syntax NAME   syntax record (default: first in bank)\n"
-            "  -f, --format FMT    bin (flat image, default) or obj (JSON "
-            "object)\n"
+            "  -f, --format FMT    bin (flat image, default), obj (JSON), elf (ET_REL),\n"
+            "                      coff (Windows .obj), macho (Darwin MH_OBJECT)\n"
             "  -F, --feature NAME  enable feature (repeatable); prefix with\n"
             "                      '-' to disable (e.g. -F -avx)\n"
             "  --lua HOOK.lua      source preprocessing hook\n"
             "  --asm-opt FILE.lua  run asm_optimize after source expansion\n"
-            "  -o, --output OUT    output path (default: out.bin / out.obj)\n"
+            "  -o, --output OUT    output path (default: out.bin / out.obj / out.o)\n"
             "  --list-syntaxes     list syntax records in the bank and exit\n"
             "  -h, --help          print this text\n",
             argv0);
@@ -86,7 +86,8 @@ int main(int argc, char **argv) {
         usage(argv[0]);
         return 2;
     }
-    if (strcmp(format, "bin") != 0 && strcmp(format, "obj") != 0) {
+    if (strcmp(format, "bin") && strcmp(format, "obj") && strcmp(format, "elf") &&
+        strcmp(format, "coff") && strcmp(format, "macho")) {
         fprintf(stderr, "sandstone-as: unknown format '%s'\n", format);
         return 2;
     }
@@ -206,6 +207,14 @@ int main(int argc, char **argv) {
     }
     /* Keep the first input's path as the include base even when multiple
        source files are concatenated into one assembly unit. */
+    if (!strcmp(format, "elf") || !strcmp(format, "coff") || !strcmp(format, "macho")) {
+        if (!output) output = !strcmp(format, "coff") ? "out.obj" : "out.o";
+        int rc = sandstone_asm_assemble_object(ctx, src, argv[optind], output, format);
+        if (rc) fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
+        free(src);
+        sandstone_asm_free(ctx);
+        return rc != 0;
+    }
     if (sandstone_asm_assemble_string(ctx, src, argv[optind]) != 0) {
         fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
         free(src);
