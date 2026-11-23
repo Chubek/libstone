@@ -1013,9 +1013,14 @@ static int tokenize_pragma(struct lexer_state *ls, char *buf, long line,
 	while (!(r = next_token(&tokenize_lexer))) {
 		struct token t, *ct = tokenize_lexer.ctok;
 
-		if (ttWHI(ct->type)) continue;
 		t = *ct;
-		if (S_TOKEN(t.type)) t.name = sdup(t.name);
+		if (ttWHI(t.type)) {
+			if (!(ls->flags & PROCESS_TEXT_PRAGMAS)
+				|| !tf->nt || ttWHI(tf->t[tf->nt - 1].type))
+				continue;
+			t.type = OPT_NONE; /* No owned spelling, even in SEMPER_FIDELIS mode. */
+			t.name = 0;
+		} else if (S_TOKEN(t.type)) t.name = sdup(t.name);
 		aol(tf->t, tf->nt, t, TOKEN_LIST_MEMG);
 	}
 	buf[length] = 0;
@@ -1306,7 +1311,7 @@ collect_args:
 		if (ls->flags & PROCESS_TEXT_PRAGMAS) {
 			struct token_fifo tf;
 			int failed = tokenize_pragma(ls, buf, l, &tf);
-			if (!failed) failed = check_pragma(&tf, l);
+			if (!failed) failed = check_pragma(ls, ls->flags, &tf, l);
 			free_pragma_tokens(&tf);
 			freemem(buf);
 			return failed;

@@ -69,7 +69,9 @@ it does not need the `cephyr` executable. Set `PYTHONPATH` to
 
 See the [embedding guide](EMBEDDING.md) for C and C++ examples and lifecycle
 requirements. The [extension SDK](SDK.md) provides opt-in, trusted callbacks
-through `<cephyr/CephyrSDK.h>` without exposing parser internals as public ABI.
+through `<cephyr/CephyrSDK.h>`, including handlers for `#pragma cephyr NAME`.
+The [Lua extension guide](extension/README.md) describes how to use
+`--lua-extension` and the sandboxed `lcephyr` SDK.
 See [the Moonstone integration](MOONSTONE.md) for optional compiler tooling
 and its trust and verification boundaries.
 
@@ -122,6 +124,10 @@ linker, and archiver commands. Lua tables run with memory and instruction
 limits and no standard file or process libraries. Configuration, target
 definitions, Archon resources, tools, and the local cache are trusted build
 inputs.
+
+[Configure extensions](extension/CONFIGURATION.md) to load sandboxed Lua
+scripts or trusted native SDK plugins from explicit paths. Native plugins
+also require `--allow-native-plugins`; the configuration cannot grant it.
 
 ### Host target selection
 

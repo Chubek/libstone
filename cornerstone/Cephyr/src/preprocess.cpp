@@ -1,5 +1,7 @@
 #include <cephyr/preprocess.hpp>
 
+#include "sdk_internal.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -8,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <string_view>
@@ -22,6 +25,7 @@ extern "C" {
 // expand macros. These are the internal entry points in ucpp/ucppi.h.
 void ucpp_init_cppm(void);
 int ucpp_next_token(struct lexer_state *);
+char *ucpp_token_name(struct token *);
 }
 
 namespace {
@@ -498,6 +502,170 @@ struct ActiveDiagnosticScope {
     UcppDiagnosticContext *previous;
 };
 
+struct DirectiveEvent {
+    Location location;
+    std::size_t offset;
+    unsigned resume_line;
+    std::string name;
+    std::string arguments;
+    const char *error = nullptr;
+};
+
+struct PragmaContext {
+    const std::vector<std::string> &gcc_pragma_names;
+    std::vector<DirectiveEvent> events{};
+    std::size_t bytes = 0;
+    std::exception_ptr exception{};
+};
+
+bool pragma_whitespace(const token &t) {
+    return t.type == NONE || t.type == OPT_NONE || t.type == COMMENT || t.type == NEWLINE;
+}
+
+int record_text_pragma(void *opaque, token_fifo *tokens, long line, const char *file,
+                       int can_emit, std::size_t offset, long resume_line) noexcept {
+    auto &context = *static_cast<PragmaContext *>(opaque);
+    if (context.exception)
+        return 1;
+    if (!context.events.empty() && context.events.back().error)
+        return 0;
+    std::size_t i = 0;
+    while (i < tokens->nt && pragma_whitespace(tokens->t[i]))
+        ++i;
+    if (i == tokens->nt || tokens->t[i].type != NAME)
+        return 0;
+    const std::string_view space_name(tokens->t[i].name);
+    if (space_name != "cephyr" && space_name != "GCC")
+        return 0;
+    do {
+        ++i;
+    } while (i < tokens->nt && pragma_whitespace(tokens->t[i]));
+    const auto name = i < tokens->nt && tokens->t[i].type == NAME
+        ? std::string_view(tokens->t[i].name) : std::string_view{};
+    // Unclaimed GCC pragmas retain their normal behavior and do not spend
+    // SDK budgets. In the reserved Cephyr namespace, missing names are errors.
+    const auto &gcc_names = context.gcc_pragma_names;
+    if (space_name == "GCC" &&
+        (name.empty() || std::ranges::find(gcc_names, name) == gcc_names.end()))
+        return 0;
+    try {
+        const std::string_view filename = file ? file : "";
+        auto &event = context.events.emplace_back(DirectiveEvent{
+            {std::string(filename.substr(0, CEPHYR_SDK_MAX_FILE_BYTES)), line_number(line), 0},
+            offset, line_number(resume_line), {}, {}, nullptr
+        });
+        const auto fail = [&](const char *message) {
+            event.error = message;
+            return 0; // Diagnose in order, after ucpp has released its lock.
+        };
+        if (context.events.size() > CEPHYR_SDK_MAX_DIRECTIVE_INVOCATIONS)
+            return fail("directive invocation limit exceeded");
+        if (filename.size() > CEPHYR_SDK_MAX_FILE_BYTES)
+            return fail("Cephyr directive filename exceeds the size limit");
+        if (!can_emit)
+            return fail("Cephyr _Pragma is not supported inside a preprocessing directive");
+
+        if (name.empty())
+            return fail("expected a directive name after '#pragma cephyr'");
+        if (name.size() > CEPHYR_SDK_MAX_NAME_BYTES)
+            return fail("Cephyr directive name exceeds the size limit");
+        event.name = name;
+
+        // Keep punctuation and literal spellings, with one space for any
+        // nonempty run of trivia between the argument tokens.
+        auto &arguments = event.arguments;
+        bool space = false;
+        for (++i; i < tokens->nt; ++i) {
+            auto &token = tokens->t[i];
+            if (pragma_whitespace(token)) {
+                space = !arguments.empty();
+                continue;
+            }
+            const std::string_view spelling(ucpp_token_name(&token));
+            if (spelling.size() + space > CEPHYR_SDK_MAX_DIRECTIVE_ARGUMENT_BYTES - arguments.size())
+                return fail("Cephyr directive arguments exceed the size limit");
+            if (space)
+                arguments.push_back(' ');
+            arguments.append(spelling);
+            space = false;
+        }
+
+        const auto bytes = filename.size() + name.size() + arguments.size();
+        if (bytes > CEPHYR_SDK_MAX_SOURCE_BYTES - context.bytes)
+            return fail("total Cephyr directive input exceeds the size limit");
+        context.bytes += bytes;
+        return 0;
+    } catch (...) {
+        // Do not unwind through ucpp's C stack; let it finish cleaning up.
+        context.exception = std::current_exception();
+        return 1;
+    }
+}
+
+bool apply_directives(const PragmaContext &context, const cephyr::PreprocessOptions &options,
+                      Diagnostics &diagnostics, std::string &source,
+                      std::vector<GeneratedLineMarker> &markers) {
+    std::string output;
+    std::vector<GeneratedLineMarker> output_markers;
+    std::size_t offset = 0, marker_index = 0;
+    auto append_original = [&](std::size_t end) {
+        // Events never occur inside a marker. Original markers beginning at
+        // this offset belong to the next chunk, after the insertion.
+        while (marker_index < markers.size() && markers[marker_index].begin < end) {
+            auto marker = markers[marker_index++];
+            marker.begin = output.size() + (marker.begin - offset);
+            marker.end = output.size() + (marker.end - offset);
+            output_markers.push_back(std::move(marker));
+        }
+        output.append(source, offset, end - offset);
+        offset = end;
+    };
+    auto append_marker = [&](const Location &where) {
+        const auto begin = output.size();
+        output += "# " + std::to_string(where.line) + " " +
+                  quote_directive_filename(where.file) + "\n";
+        output_markers.push_back({begin, output.size(), where});
+    };
+
+    for (const auto &event : context.events) {
+        if (event.error) {
+            diagnostics.error("cephyr.sdk.directive", event.error, event.location);
+            return false;
+        }
+        if (!options.directive) {
+            diagnostics.error("cephyr.sdk.directive",
+                              "unknown Cephyr directive '" + event.name + "'", event.location);
+            return false;
+        }
+        std::optional<std::string> replacement;
+        const auto errors_before = diagnostics.error_count();
+        if (!options.directive(event.name, event.arguments, event.location, replacement)) {
+            if (diagnostics.error_count() == errors_before)
+                diagnostics.error("cephyr.sdk.directive", "directive callback failed without a diagnostic",
+                                  event.location);
+            return false;
+        }
+        if (!replacement || replacement->empty())
+            continue;
+        // Bracket the emitted fragment with markers. The fresh line on each
+        // side also prevents token merging for inline _Pragma expansions.
+        append_original(event.offset);
+        if (!output.empty() && output.back() != '\n')
+            output.push_back('\n');
+        append_marker(event.location);
+        output.append(*replacement);
+        if (output.back() != '\n')
+            output.push_back('\n');
+        append_marker({event.location.file, event.resume_line, 0});
+    }
+    if (!output.empty()) {
+        append_original(source.size());
+        source.swap(output);
+        markers.swap(output_markers);
+    }
+    return true;
+}
+
 struct MemoryOutput {
     char *bytes = nullptr;
     std::size_t size = 0;
@@ -672,6 +840,44 @@ extern "C" void ucpp_ouch(char *format, ...) {
 
 namespace cephyr {
 
+bool valid_directive_output(std::string_view text) {
+    if (text.empty())
+        return true;
+    // PHASE3_INPUT disables translation phases 1/2 (including UTF-8
+    // validation, which is performed here). Reject carriage returns so the
+    // literal scanner, parser and emitted line map agree on line boundaries.
+    c11_utf8_state utf8{};
+    for (const unsigned char c : text) {
+        if ((c < ' ' && c != '\n' && c != '\t' && c != '\v' && c != '\f') || c == 127 ||
+            c11_utf8_feed(&utf8, c) < 0)
+            return false;
+    }
+    if (utf8.remaining)
+        return false;
+
+    // Use a separate raw lexer, not CPP. Suppress its low-level diagnostics;
+    // a rejected sink submission produces a callback diagnostic.
+    std::lock_guard lock(ucpp_mutex());
+    UcppDiagnosticContext silent;
+    ActiveDiagnosticScope scope(silent);
+    struct lexer_state lexer {};
+    init_lexer_state(&lexer);
+    lexer.flags = LEXER | PHASE3_INPUT | CPLUSPLUS_COMMENTS | UTF8_SOURCE;
+    lexer.input_string = reinterpret_cast<unsigned char *>(const_cast<char *>(text.data()));
+    lexer.ebuf = text.size();
+    int status;
+    while ((status = ucpp_next_token(&lexer)) == 0 && !lexer.character_error) {
+        const auto &token = *lexer.ctok;
+        if (token.type == COMMENT || token.type == BUNCH || token.type == SHARP ||
+            token.type == DSHARP || token.type == DIG_SHARP || token.type == DIG_DSHARP ||
+            (token.type == NAME && std::strcmp(token.name, "_Pragma") == 0))
+            break;
+    }
+    const bool valid = status == 2 && !lexer.character_error;
+    free_lexer_state(&lexer);
+    return valid;
+}
+
 Location Preprocessed::locate(unsigned line, unsigned column) const {
     if (line == 0)
         return {file, 0, column};
@@ -697,9 +903,11 @@ std::optional<Preprocessed> preprocess(const std::string &source,
                                        const std::string &file,
                                        const PreprocessOptions &options,
                                        Diagnostics &diagnostics) {
-    std::lock_guard lock(ucpp_mutex());
+    const auto errors_before = diagnostics.error_count();
+    std::unique_lock lock(ucpp_mutex());
     UcppDiagnosticContext diagnostic_context{&diagnostics, file, 0};
     ActiveDiagnosticScope diagnostic_scope(diagnostic_context);
+    PragmaContext pragma_context{options.gcc_pragma_names};
 
     MemoryOutput capture;
     auto *output = capture.stream;
@@ -739,6 +947,8 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     if (options.assembler)
         lexer.flags |= ASSEMBLY_INPUT;
     else {
+        lexer.text_pragma = record_text_pragma;
+        lexer.text_pragma_context = &pragma_context;
         lexer.flags |= UTF8_SOURCE | C11_CONSTRAINTS;
         if (options.plain_char_signed)
             lexer.flags |= PP_CHAR_SIGNED;
@@ -797,6 +1007,9 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     const bool write_failed = std::ferror(output);
     lexer_scope.finish();
     const int close_status = capture.close();
+    lock.unlock();
+    if (pragma_context.exception)
+        std::rethrow_exception(pragma_context.exception);
     if (write_failed || close_status != 0 || !capture.bytes) {
         emit_host_error(diagnostics, "cephyr.preprocessor.io",
                         "unable to read preprocessor output", file);
@@ -806,13 +1019,19 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     if (failed && diagnostic_context.errors == 0)
         emit_host_error(diagnostics, "cephyr.preprocessor.error",
                         "preprocessing failed without a diagnostic", file);
-    if (failed || diagnostic_context.errors != 0)
+    if (failed || diagnostic_context.errors != 0 ||
+        (!pragma_context.events.empty() && diagnostics.error_count() != errors_before))
         return std::nullopt;
 
-    auto result = strip_generated_markers(std::string(capture.bytes, capture.size), file, markers);
-    if (!options.assembler && result.text.find_first_of("\"'") != std::string::npos &&
-        !check_literals(result, diagnostics))
+    std::string preprocessed(capture.bytes, capture.size);
+    if (!apply_directives(pragma_context, options, diagnostics, preprocessed, markers))
         return std::nullopt;
+    auto result = strip_generated_markers(std::move(preprocessed), file, markers);
+    if (!options.assembler && result.text.find_first_of("\"'") != std::string::npos) {
+        std::lock_guard literal_lock(ucpp_mutex());
+        if (!check_literals(result, diagnostics))
+            return std::nullopt;
+    }
     if (!options.line_markers)
         result.output = result.text;
     return result;

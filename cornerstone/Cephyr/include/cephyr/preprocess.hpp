@@ -3,8 +3,10 @@
 #include <cephyr/diagnostics.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,6 +28,11 @@ struct PreprocessOptions {
     // Target properties for C character constants in #if and #elif.
     bool plain_char_signed = false;
     bool wchar_signed = true;
+    // Only registered names for the current target are recognized under GCC.
+    std::vector<std::string> gcc_pragma_names;
+    // Dispatch for active SDK pragmas in raw C, after ucpp releases its lock.
+    std::function<bool(std::string_view name, std::string_view arguments,
+                       const Location &, std::optional<std::string> &replacement)> directive;
 };
 
 struct Preprocessed {

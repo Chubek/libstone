@@ -80,7 +80,10 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
   stages invoke the packaged SandAS and qobjld, or configured replacements,
   directly. Bundled links use prebuilt CRT/libc without a target compiler.
   Treat settings, roots, SDK hooks, and tools as trusted build inputs;
-  embedding is not a sandbox.
+  embedding is not a sandbox. [Lua extensions](extension/README.md) are
+  separately sandboxed and may be supplied as script bytes and an explicit
+  environment via `cephyr_request.lua` or `cephyr::CompileOptions::lua`.
+  Context-based and Python callers can use the driver options.
 - Calls can overlap on different threads. Cephyr serializes access to the
   vendored preprocessor. Each translation unit owns its FactIR result.
   Use distinct file outputs (or in-memory output) for concurrent requests.
@@ -97,6 +100,22 @@ auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
 - The native library does not initialize or link a Python interpreter.
   `cephyr_python_version()` returns zero. The compiler checks the selected
   architecture's source manifest and loads its packaged backend directly.
+
+To load a Lua extension from memory, attach a `cephyr_lua_options` to the
+request before calling `cephyr_compile`:
+
+```c
+const char script[] = "assert(require('lcephyr').env.get('BUILD_MODE') == 'checked')";
+const cephyr_lua_script scripts[] = {{script, sizeof(script) - 1, "build.lua"}};
+const cephyr_lua_env_entry environment[] = {{"BUILD_MODE", "checked"}};
+const cephyr_lua_options lua = {sizeof(lua), scripts, 1, environment, 1};
+request.lua = &lua;
+```
+
+The strings and descriptors are borrowed until the call returns. The script
+name is a diagnostic label; the compiler does not open it. Every script in
+the request can read all explicitly supplied values, and none of the process
+environment is inherited.
 
 ## Reusing a context and loading trusted code (C API)
 

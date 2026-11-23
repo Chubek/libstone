@@ -20,6 +20,12 @@ struct QmlProfile {
     std::map<std::string, unsigned, std::less<>> phase_fuel;
 };
 
+struct ExtensionConfig {
+    std::vector<std::filesystem::path> lua;
+    std::vector<std::filesystem::path> native;
+    std::map<std::string, std::string, std::less<>> lua_env;
+};
+
 struct Config {
     std::optional<std::string> target; // unset uses the driver default (or the explicit script)
 
@@ -45,6 +51,7 @@ struct Config {
     std::vector<std::string> link_flags;
 
     PreprocessOptions preprocess;
+    ExtensionConfig extensions;
     std::optional<std::string> qml_profile;
     std::map<std::string, QmlProfile, std::less<>> qml_profiles;
 

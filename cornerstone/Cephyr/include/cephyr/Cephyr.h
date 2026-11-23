@@ -12,8 +12,34 @@ typedef struct cephyr_sdk cephyr_sdk;
 typedef struct cephyr_context cephyr_context;
 typedef struct cephyr_module cephyr_module;
 
+#define CEPHYR_LUA_MAX_SCRIPTS 8u
+#define CEPHYR_LUA_MAX_SCRIPT_BYTES (1024u * 1024u)
+#define CEPHYR_LUA_MAX_NAME_BYTES 4096u
+#define CEPHYR_LUA_MAX_ENV_ENTRIES 64u
+#define CEPHYR_LUA_MAX_ENV_NAME_BYTES 128u
+#define CEPHYR_LUA_MAX_ENV_VALUE_BYTES 4096u
+
+typedef struct cephyr_lua_script {
+    const char *source; /* Lua source bytes, not bytecode. NULL only for size zero. */
+    size_t size;
+    const char *name; /* Optional diagnostic label (not a path to load). */
+} cephyr_lua_script;
+
+typedef struct cephyr_lua_env_entry {
+    const char *name; /* Unique ASCII [A-Za-z_][A-Za-z0-9_]* key. */
+    const char *value; /* NUL-terminated; may be empty. */
+} cephyr_lua_env_entry;
+
+typedef struct cephyr_lua_options {
+    size_t struct_size; /* Set to sizeof(cephyr_lua_options). */
+    const cephyr_lua_script *scripts;
+    size_t script_count;
+    const cephyr_lua_env_entry *environment; /* Visible to every script in this request. */
+    size_t environment_count;
+} cephyr_lua_options;
+
 typedef struct cephyr_request {
-    size_t struct_size;         /* Set to sizeof(cephyr_request); trailing fields are ignored. */
+    size_t struct_size;         /* Set to sizeof(cephyr_request); unknown trailing fields are ignored. */
     size_t argc;
     const char *const *argv;     /* argc arguments; no program name or sentinel. */
     const char *stdin_data;     /* Bytes used for an input operand of "-". */
@@ -21,6 +47,7 @@ typedef struct cephyr_request {
     const char *resource_root;  /* Directory containing stdlib/ and triples/, or NULL. */
     const char *archon_root;    /* Directory containing archon/ and stdspec/, or NULL. */
     const cephyr_sdk *sdk;      /* Optional borrowed SDK; see CephyrSDK.h. */
+    const cephyr_lua_options *lua; /* Optional borrowed scripts and explicit environment. */
 } cephyr_request;
 
 typedef enum cephyr_status {
@@ -50,6 +77,9 @@ unsigned cephyr_python_version(void);
  * capture is not supported. Calls can overlap on different threads, but
  * same-thread recursion is rejected.
  * Opt into QML through the same argv options and TOML profiles as the CLI.
+ * Pass Lua extensions through `lua`, or use the driver's files and configuration.
+ * Do not combine `lua` with driver Lua options or configured Lua scripts.
+ * See extension/README.md for the sandbox's capabilities and limits.
  * See EMBEDDING.md for host CPython lifecycle and native backend requirements.
  */
 int cephyr_compile(const cephyr_request *request, cephyr_result **result);

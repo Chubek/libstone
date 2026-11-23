@@ -36,6 +36,14 @@ bool valid_name(cephyr_sdk_text text) {
     });
 }
 
+bool valid_directive_name(cephyr_sdk_text text) {
+    if (!text.size || !span_ok(text, CEPHYR_SDK_MAX_NAME_BYTES))
+        return false;
+    const auto name = view(text);
+    return !(name.front() >= '0' && name.front() <= '9') &&
+           std::ranges::all_of(name, [](char c) { return ascii_alnum(c) || c == '_'; });
+}
+
 bool valid_triple(cephyr_sdk_text text) {
     if (!span_ok(text, CEPHYR_SDK_MAX_TRIPLE_BYTES))
         return false;
@@ -74,6 +82,8 @@ std::string_view stage_name(uint32_t stage) {
         return "rewrite";
     case CEPHYR_SDK_ASSEMBLY:
         return "assembly";
+    case CEPHYR_SDK_DIRECTIVE:
+        return "directive";
     }
     return "unknown";
 }
@@ -83,6 +93,9 @@ struct Invocation {
     std::string_view input_name;
     std::size_t &diagnostic_count;
     uint32_t stage;
+    uint32_t line;
+    uint32_t column;
+    std::size_t remaining_directive_output;
     std::optional<std::string> replacement;
     const char *failure = nullptr;
 
@@ -126,21 +139,27 @@ int set_text(void *context, cephyr_sdk_text text) noexcept {
     if (call.stage == CEPHYR_SDK_ANALYZE)
         return call.fail("analysis hooks cannot replace text");
     if (call.replacement)
-        return call.fail("text may be submitted only once per hook");
-    const auto maximum = call.stage == CEPHYR_SDK_DESUGAR ? CEPHYR_SDK_MAX_SOURCE_BYTES :
-                         call.stage == CEPHYR_SDK_REWRITE ? CEPHYR_SDK_MAX_MIR_BYTES :
-                                                           CEPHYR_SDK_MAX_ASSEMBLY_BYTES;
+        return call.fail("text may be submitted only once per callback");
+    const bool directive = call.stage == CEPHYR_SDK_DIRECTIVE;
+    const auto maximum = directive                       ? CEPHYR_SDK_MAX_DIRECTIVE_OUTPUT_BYTES :
+                         call.stage == CEPHYR_SDK_DESUGAR  ? CEPHYR_SDK_MAX_SOURCE_BYTES :
+                         call.stage == CEPHYR_SDK_REWRITE  ? CEPHYR_SDK_MAX_MIR_BYTES :
+                                                              CEPHYR_SDK_MAX_ASSEMBLY_BYTES;
     if (text.size > maximum)
         return call.fail("text exceeds the stage output limit");
-    if (!span_ok(text, maximum) || (!text.size && call.stage != CEPHYR_SDK_DESUGAR))
+    if (directive && text.size > call.remaining_directive_output)
+        return call.fail("total directive output limit exceeded");
+    if (!span_ok(text, maximum) || (!text.size && !directive && call.stage != CEPHYR_SDK_DESUGAR))
         return call.fail("invalid text output");
     if (call.stage == CEPHYR_SDK_ASSEMBLY && text.data[text.size - 1] != '\n')
         return call.fail("assembly text must end in a newline");
     try {
+        if (directive && !valid_directive_output(view(text)))
+            return call.fail("directive output must be already-preprocessed C text");
         call.replacement.emplace(view(text));
         return 1;
     } catch (...) {
-        return call.fail("unable to copy hook output");
+        return call.fail("unable to copy callback output");
     }
 }
 
@@ -160,6 +179,10 @@ int report(void *context, uint32_t severity, cephyr_sdk_text code,
         !span_ok(file, CEPHYR_SDK_MAX_FILE_BYTES) || (column && !line))
         return call.fail("invalid diagnostic");
     try {
+        if (call.stage == CEPHYR_SDK_DIRECTIVE && !file.size && !line && !column) {
+            line = call.line;
+            column = call.column;
+        }
         Location where{std::string(file.size ? view(file) : call.input_name), line, column};
         switch (severity) {
         case CEPHYR_SDK_NOTE:
@@ -175,7 +198,7 @@ int report(void *context, uint32_t severity, cephyr_sdk_text code,
         ++call.diagnostic_count;
         return 1;
     } catch (...) {
-        return call.fail("unable to copy hook diagnostic");
+        return call.fail("unable to copy callback diagnostic");
     }
 }
 
@@ -184,14 +207,27 @@ int report(void *context, uint32_t severity, cephyr_sdk_text code,
 bool SdkPipeline::validate(Diagnostics &diagnostics) {
     valid_ = false;
     hooks_.clear();
+    directives_.clear();
     diagnostic_count_ = 0;
+    directive_invocations_ = 0;
+    directive_output_bytes_ = 0;
     if (!sdk_) {
         valid_ = true;
         return true;
     }
 
-    if (sdk_->struct_size < sizeof(cephyr_sdk) || sdk_->abi_version != CEPHYR_SDK_ABI_VERSION) {
+    constexpr auto v1_size = offsetof(cephyr_sdk, directives);
+    constexpr auto directive_fields_size = offsetof(cephyr_sdk, directive_count) +
+                                           sizeof(cephyr_sdk::directive_count);
+    if (sdk_->struct_size < v1_size || sdk_->abi_version != CEPHYR_SDK_ABI_VERSION) {
         diagnostics.error("cephyr.sdk.registration", "incompatible SDK descriptor size or ABI version");
+        return false;
+    }
+    // The pointer and count form a pair. Older clients need not allocate
+    // storage past the original prefix at all.
+    const auto directive_count = sdk_->struct_size >= directive_fields_size ? sdk_->directive_count : 0;
+    if (directive_count > CEPHYR_SDK_MAX_DIRECTIVES || (directive_count && !sdk_->directives)) {
+        diagnostics.error("cephyr.sdk.registration", "invalid SDK directive count or missing directive array");
         return false;
     }
     if (sdk_->hook_count > CEPHYR_SDK_MAX_HOOKS || (sdk_->hook_count && !sdk_->hooks)) {
@@ -229,7 +265,30 @@ bool SdkPipeline::validate(Diagnostics &diagnostics) {
         hooks.push_back({hook.stage, std::string(name), std::string(triple),
                          hook.callback, hook.user});
     }
+
+    std::vector<Hook> directives;
+    directives.reserve(directive_count);
+    for (std::size_t i = 0; i < directive_count; ++i) {
+        const auto &entry = sdk_->directives[i];
+        const auto invalid = [&](std::string_view reason) {
+            diagnostics.error("cephyr.sdk.registration",
+                              "SDK directive " + std::to_string(i) + ": " + std::string(reason));
+            return false;
+        };
+        if (!entry.callback || !valid_directive_name(entry.name))
+            return invalid("missing callback or invalid directive name");
+        if (!valid_triple(entry.target_triple))
+            return invalid("invalid target triple");
+        const auto name = view(entry.name);
+        const auto triple = view(entry.target_triple);
+        for (const auto &prior : directives)
+            if (name == prior.name && triple == prior.target_triple)
+                return invalid("directive name and target pair must be unique");
+        directives.push_back({CEPHYR_SDK_DIRECTIVE, std::string(name), std::string(triple),
+                              entry.callback, entry.user});
+    }
     hooks_.swap(hooks);
+    directives_.swap(directives);
     valid_ = true;
     return true;
 }
@@ -250,24 +309,28 @@ const SdkPipeline::Hook *SdkPipeline::find_backend(const Target &target) const {
 }
 
 bool SdkPipeline::invoke(const Hook &hook, std::string_view text, const Target &target,
-                         std::string_view input_name, uint32_t flags, Diagnostics &diagnostics,
+                         std::string_view input_name, uint32_t flags, uint32_t line,
+                         uint32_t column, Diagnostics &diagnostics,
                          std::optional<std::string> &replacement) {
+    const bool directive = hook.stage == CEPHYR_SDK_DIRECTIVE;
     const cephyr_sdk_input input{
         sizeof(cephyr_sdk_input), CEPHYR_SDK_ABI_VERSION, hook.stage,
         span(text), span(input_name), span(target.triple), span(target.architecture),
-        span(target.abi), hook.stage == CEPHYR_SDK_DESUGAR ? 0u : CEPHYR_SDK_MIR_SCHEMA_VERSION,
-        flags
+        span(target.abi), directive || hook.stage == CEPHYR_SDK_DESUGAR ? 0u : CEPHYR_SDK_MIR_SCHEMA_VERSION,
+        flags, directive ? span(hook.name) : cephyr_sdk_text{}, line, column
     };
-    Invocation call{diagnostics, input_name, diagnostic_count_, hook.stage, std::nullopt};
+    Invocation call{diagnostics, input_name, diagnostic_count_, hook.stage, line, column,
+                    CEPHYR_SDK_MAX_SOURCE_BYTES - directive_output_bytes_, std::nullopt};
     const cephyr_sdk_output output{
         sizeof(cephyr_sdk_output), CEPHYR_SDK_ABI_VERSION, &call, set_text, report
     };
     const auto errors_before = diagnostics.error_count();
     const auto error = [&](std::string_view reason) {
         diagnostics.error("cephyr.sdk.callback",
-                          std::string(stage_name(hook.stage)) + " hook '" + hook.name + "': " +
+                          std::string(stage_name(hook.stage)) + (directive ? " '" : " hook '") +
+                              hook.name + "': " +
                               std::string(reason),
-                          Location{std::string(input_name)});
+                          Location{std::string(input_name), line, column});
         return false;
     };
 
@@ -307,7 +370,7 @@ bool SdkPipeline::transform(uint32_t stage, std::string &text, const Target &tar
             continue;
         std::optional<std::string> next;
         if (!invoke(hook, current ? std::string_view(*current) : std::string_view(text),
-                    target, input_name, 0, diagnostics, next))
+                    target, input_name, 0, 0, 0, diagnostics, next))
             return false;
         if (next)
             current = std::move(next);
@@ -325,6 +388,49 @@ bool SdkPipeline::desugar(std::string &source, const Target &target,
     return transform(CEPHYR_SDK_DESUGAR, source, target, input_name, diagnostics, nullptr);
 }
 
+std::vector<std::string> SdkPipeline::directive_names(const Target &target) const {
+    std::vector<std::string> names;
+    for (const auto &entry : directives_)
+        if (matches(entry.target_triple, target) && std::ranges::find(names, entry.name) == names.end())
+            names.push_back(entry.name);
+    return names;
+}
+
+bool SdkPipeline::directive(std::string_view name, std::string_view arguments,
+                            const Target &target, const Location &where, Diagnostics &diagnostics,
+                            std::optional<std::string> &replacement) {
+    if (!ready(diagnostics))
+        return false;
+    const Hook *handler = nullptr;
+    for (const auto &entry : directives_) {
+        if (entry.name != name)
+            continue;
+        if (entry.target_triple == target.triple) {
+            handler = &entry;
+            break;
+        }
+        if (entry.target_triple.empty())
+            handler = &entry;
+    }
+    if (!handler) {
+        diagnostics.error("cephyr.sdk.directive",
+                          "unknown Cephyr directive '" + std::string(name) +
+                              "' for target '" + target.triple + "'", where);
+        return false;
+    }
+    if (directive_invocations_ >= CEPHYR_SDK_MAX_DIRECTIVE_INVOCATIONS) {
+        diagnostics.error("cephyr.sdk.directive", "directive invocation limit exceeded", where);
+        return false;
+    }
+    ++directive_invocations_;
+    if (!invoke(*handler, arguments, target, where.file, 0, where.line, where.column,
+                diagnostics, replacement))
+        return false;
+    if (replacement)
+        directive_output_bytes_ += replacement->size();
+    return true;
+}
+
 bool SdkPipeline::analyze(std::string_view mir, const Target &target,
                           std::string_view input_name, Diagnostics &diagnostics) {
     if (!ready(diagnostics))
@@ -333,7 +439,7 @@ bool SdkPipeline::analyze(std::string_view mir, const Target &target,
         if (hook.stage != CEPHYR_SDK_ANALYZE || !matches(hook.target_triple, target))
             continue;
         std::optional<std::string> ignored;
-        if (!invoke(hook, mir, target, input_name, 0, diagnostics, ignored))
+        if (!invoke(hook, mir, target, input_name, 0, 0, 0, diagnostics, ignored))
             return false;
     }
     return true;
@@ -362,7 +468,7 @@ std::optional<std::string> SdkPipeline::emit_assembly(std::string_view mir, cons
     std::optional<std::string> assembly;
     if (!invoke(*backend, mir, target, input_name,
                 position_independent ? static_cast<uint32_t>(CEPHYR_SDK_POSITION_INDEPENDENT) : 0u,
-                diagnostics, assembly))
+                0, 0, diagnostics, assembly))
         return std::nullopt;
     return assembly;
 }

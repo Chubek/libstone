@@ -45,7 +45,7 @@ cephyr_request context_request(const cephyr_context &context, const char *source
 {
     return {sizeof(cephyr_request), context.argv.size(), context.argv.data(), source, size,
             context.resource_root ? context.resource_root->c_str() : nullptr,
-            context.archon_root ? context.archon_root->c_str() : nullptr, sdk};
+            context.archon_root ? context.archon_root->c_str() : nullptr, sdk, nullptr};
 }
 }
 

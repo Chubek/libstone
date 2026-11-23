@@ -75,6 +75,7 @@ static void check_call(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
     CHECK(equals(in->target_abi, "SysVAMD64"));
     CHECK(in->mir_schema_version == (stage == CEPHYR_SDK_DESUGAR ? 0u :
                                      CEPHYR_SDK_MIR_SCHEMA_VERSION));
+    CHECK(!in->directive_name.size && !in->line && !in->column);
     if (stage != CEPHYR_SDK_ASSEMBLY)
         CHECK(in->flags == 0);
 }
@@ -334,7 +335,7 @@ static void test_pipeline(void)
         {CEPHYR_SDK_ASSEMBLY, SPAN("amd64-backend"), SPAN(AMD64), assemble, &ctx},
     };
     cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, hooks,
-                      sizeof(hooks) / sizeof(hooks[0])};
+                      sizeof(hooks) / sizeof(hooks[0]), NULL, 0};
 
     cephyr_result *result = compile(&sdk, SOURCE, AMD64, "-S", "-", "-fPIC", CEPHYR_OK);
     CHECK(ctx.step == 5);
@@ -396,7 +397,7 @@ static void test_invalid_registration(void)
         {CEPHYR_SDK_ASSEMBLY, SPAN("backend"), SPAN(AMD64), forbidden, NULL},
         {CEPHYR_SDK_ASSEMBLY, SPAN("duplicate-backend"), SPAN(AMD64), forbidden, NULL},
     };
-    cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, hooks, 2};
+    cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, hooks, 2, NULL, 0};
     failed(compile(&sdk, C_SOURCE, AMD64, "-fsyntax-only", NULL, NULL, CEPHYR_INVALID_ARGUMENT),
            "more than one assembly hook");
     hooks[1].target_triple = NONE;
@@ -422,7 +423,7 @@ static void test_invalid_callbacks(void)
 {
     struct context ctx = {0, 0, 1};
     cephyr_sdk_hook hook = {CEPHYR_SDK_DESUGAR, SPAN("invalid-source"), {0}, desugar, &ctx};
-    cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, &hook, 1};
+    cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, &hook, 1, NULL, 0};
     cephyr_result *result = compile(&sdk, SOURCE, AMD64, "-S", "-", NULL, CEPHYR_COMPILE_ERROR);
     CHECK(strstr(cephyr_result_diagnostics(result, NULL), "cephyr."));
     cephyr_result_destroy(result);
@@ -531,7 +532,7 @@ static void test_custom_object(void)
         {CEPHYR_SDK_ASSEMBLY, SPAN("not-custom"), SPAN(AMD64), forbidden, NULL},
         {CEPHYR_SDK_ASSEMBLY, SPAN("custom-object"), SPAN(CUSTOM), custom_backend, &calls},
     };
-    const cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, hooks, 2};
+    const cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, hooks, 2, NULL, 0};
     char path[] = "cephyr-sdk-object.XXXXXX";
     int fd = mkstemp(path);
     CHECK(fd >= 0);
@@ -561,6 +562,285 @@ static void test_custom_object(void)
     CHECK(unlink(path) == 0);
 }
 
+static void check_directive(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
+                            const char *name)
+{
+    CHECK(in->struct_size >= sizeof(*in));
+    CHECK(out->struct_size >= sizeof(*out));
+    CHECK(in->abi_version == CEPHYR_SDK_ABI_VERSION);
+    CHECK(out->abi_version == CEPHYR_SDK_ABI_VERSION);
+    CHECK(in->stage == CEPHYR_SDK_DIRECTIVE);
+    CHECK(equals(in->target_triple, AMD64));
+    CHECK(equals(in->target_architecture, "AMD64"));
+    CHECK(equals(in->target_abi, "SysVAMD64"));
+    CHECK(equals(in->directive_name, name));
+    CHECK(in->mir_schema_version == 0 && in->flags == 0);
+    CHECK(in->column == 0 && in->line != 0);
+}
+
+static uint32_t emit_directive(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
+                               void *user)
+{
+    int *calls = user;
+    check_directive(in, out, "emit");
+    switch ((*calls)++) {
+    case 0: {
+        CHECK(equals(in->input_name, "sdk-directive-root.c"));
+        CHECK(in->line == 40);
+        CHECK(equals(in->text, "VALUE (2, \"// not trivia\")"));
+        char text[] = "int GENERATED = 4;\nint also_generated = 5;";
+        CHECK(out->set_text(out->context, (cephyr_sdk_text){text, sizeof(text) - 1}));
+        clobber(text, sizeof(text));
+        break;
+    }
+    case 1:
+        CHECK(equals(in->input_name, "sdk-directive-header.h"));
+        CHECK(in->line == 18);
+        CHECK(equals(in->text, "header"));
+        CHECK(out->set_text(out->context, TEXT("int header_generated = 6;")));
+        break;
+    case 2:
+        CHECK(equals(in->input_name, "sdk-directive-root.c"));
+        CHECK(in->line == 71);
+        CHECK(equals(in->text, "prefix(7, 8) \"quoted value\""));
+        CHECK(out->set_text(out->context, TEXT("20 +")));
+        CHECK(out->report(out->context, CEPHYR_SDK_WARNING, TEXT("test.directive"),
+                          TEXT("defaulted to the pragma"), NONE, 0, 0));
+        break;
+    case 3:
+        CHECK(equals(in->input_name, "sdk-directive-root.c"));
+        CHECK(in->line == 72);
+        CHECK(equals(in->text, ""));
+        CHECK(out->set_text(out->context, NONE));
+        break;
+    default:
+        CHECK(!"unexpected directive invocation");
+    }
+    return CEPHYR_SDK_OK;
+}
+
+static uint32_t directive_output(const cephyr_sdk_input *in, const cephyr_sdk_output *out,
+                                void *user)
+{
+    check_directive(in, out, "output");
+    const cephyr_sdk_text *text = user;
+    if (equals(in->text, "reject"))
+        return CEPHYR_SDK_REJECT;
+    if (equals(in->text, "error")) {
+        CHECK(out->report(out->context, CEPHYR_SDK_ERROR, TEXT("test.directive_error"),
+                          TEXT("explicit directive error"), NONE, 0, 0));
+    } else if (equals(in->text, "invalid")) {
+        CHECK(!out->set_text(out->context, *text));
+    } else if (equals(in->text, "twice")) {
+        CHECK(out->set_text(out->context, NONE));
+        CHECK(!out->set_text(out->context, NONE));
+    } else {
+        CHECK(out->set_text(out->context, *text));
+    }
+    return CEPHYR_SDK_OK;
+}
+
+static void test_directives(void)
+{
+    int calls = 0;
+    const cephyr_sdk_directive directives[] = {
+        {SPAN("emit"), {0}, forbidden, NULL},
+        {SPAN("emit"), SPAN(AMD64), emit_directive, &calls},
+        {SPAN("emit"), SPAN(AARCH64), forbidden, NULL},
+        {SPAN("other_target"), SPAN(AARCH64), forbidden, NULL},
+    };
+    const cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, NULL, 0, directives, 4};
+    char include[4096];
+    const int length = snprintf(include, sizeof(include), "-I%s/tests/fixtures/sdk", resource_root);
+    CHECK(length > 0 && (size_t)length < sizeof(include));
+    const char source[] =
+        "#define VALUE 999\n"
+        "#define GENERATED wrong_name\n"
+        "#define SDK_PRAGMA(x) _Pragma(#x)\n"
+        "#pragma unrelated cephyr unknown\n"
+        "#pragma cephyr_like unknown\n"
+        "#pragma Cephyr unknown\n"
+        "#pragma GCC diagnostic push\n"
+        "_Pragma(\"GCC diagnostic pop\")\n"
+        "#pragma GCC other_target\n"
+        "#pragma GCC\n"
+        "#pragma gcc emit\n"
+        "/* #pragma cephyr unknown */\n"
+        "const char *lookalike = \"#pragma cephyr unknown _Pragma(\\\"cephyr unknown\\\")\";\n"
+        "#if 0\n#pragma cephyr unknown\n_Pragma(\"cephyr unknown\")\n#pragma GCC emit\n#endif\n"
+        "#line 40 \"sdk-directive-root.c\"\n"
+        "%:pragma /* gap */ GCC emit VALUE /* gap */ (2, \\\n"
+        "  \"// not trivia\")\n"
+        "#include \"directive.h\"\n"
+        "#include \"directive.h\"\n"
+        "#line 71 \"sdk-directive-root.c\"\n"
+        "int inline_result = 10 + SDK_PRAGMA(GCC emit prefix(7, 8) \"quoted value\") 3;\n"
+        "_Pragma(\"cephyr emit\")\n";
+    cephyr_result *result = compile(&sdk, source, AMD64, "-E", "-", include, CEPHYR_OK);
+    CHECK(calls == 4);
+    const char *text = cephyr_result_output(result, NULL);
+    const char *first = strstr(text, "int GENERATED = 4;");
+    const char *header = strstr(text, "int header_generated = 6;");
+    const char *last = strstr(text, "int inline_result = 10 +");
+    CHECK(first && header && last && first < header && header < last);
+    CHECK(strstr(text, "int also_generated = 5;"));
+    CHECK(strstr(text, "\"#pragma cephyr unknown _Pragma"));
+    CHECK(!strstr(text, "wrong_name"));
+    CHECK(strstr(last, "20 +"));
+    CHECK(strstr(text, "# 18 \"sdk-directive-header.h\""));
+    CHECK(strstr(cephyr_result_diagnostics(result, NULL), "sdk-directive-root.c:71: warning"));
+    cephyr_result_destroy(result);
+
+    const char *plain_args[] = {"--target", AMD64, "-E", "-P", "-o", "-", "-x", "c", "-", include};
+    calls = 0;
+    result = run(&sdk, source, sizeof(plain_args) / sizeof(plain_args[0]), plain_args, CEPHYR_OK);
+    text = cephyr_result_output(result, NULL);
+    CHECK(calls == 4 && !strstr(text, "\"sdk-directive-header.h\""));
+    CHECK(strstr(text, "int header_generated = 6;"));
+    cephyr_result_destroy(result);
+
+    calls = 0;
+    result = compile(&sdk, source, AMD64, "-fsyntax-only", NULL, include, CEPHYR_OK);
+    CHECK(calls == 4);
+    cephyr_result_destroy(result);
+
+    /* Warning promotion stops the stream before the following pragma. */
+    const char *args[] = {"--target", AMD64, "-E", "-o", "-", "-x", "c", "-", include, "-Werror"};
+    calls = 0;
+    failed(run(&sdk, source, sizeof(args) / sizeof(args[0]), args, CEPHYR_COMPILE_ERROR),
+           "sdk-directive-root.c:71: error");
+    CHECK(calls == 3);
+
+    failed(compile(NULL, "#pragma cephyr unknown\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "unknown Cephyr directive 'unknown'");
+    result = compile(NULL, "#pragma GCC emit\n_Pragma(\"GCC emit\")\nint after;\n",
+                     AMD64, "-E", "-", NULL, CEPHYR_OK);
+    CHECK(strstr(cephyr_result_output(result, NULL), "int after;"));
+    CHECK(!*cephyr_result_diagnostics(result, NULL));
+    cephyr_result_destroy(result);
+    failed(compile(&sdk, "#pragma cephyr\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "expected a directive name");
+    failed(compile(&sdk, "#pragma cephyr 123\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "expected a directive name");
+    failed(compile(&sdk, "#pragma cephyr other_target\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "unknown Cephyr directive 'other_target'");
+    failed(compile(&sdk, "#if _Pragma(\"cephyr emit\") 1\n#endif\n", AMD64, "-E", "-", NULL,
+                   CEPHYR_COMPILE_ERROR), "not supported inside a preprocessing directive");
+    result = compile(NULL, "#define SHARP %:\nSHARP pragma cephyr no_match\n",
+                     AMD64, "-E", "-", NULL, CEPHYR_OK);
+    CHECK(strstr(cephyr_result_output(result, NULL), "pragma cephyr no_match"));
+    cephyr_result_destroy(result);
+
+    const char *cpp_args[] = {"--target", AMD64, "-E", "-o", "-", "-x", "cpp-output", "-"};
+    result = run(&sdk, "#pragma cephyr emit\n", sizeof(cpp_args) / sizeof(cpp_args[0]),
+                 cpp_args, CEPHYR_OK);
+    CHECK(strstr(cephyr_result_output(result, NULL), "#pragma cephyr emit"));
+    cephyr_result_destroy(result);
+    const char *asm_args[] = {"--target", AMD64, "-E", "-o", "-", "-x", "assembler-with-cpp", "-"};
+    result = run(&sdk, "#pragma cephyr emit\n", sizeof(asm_args) / sizeof(asm_args[0]),
+                 asm_args, CEPHYR_OK);
+    cephyr_result_destroy(result);
+    CHECK(calls == 3);
+}
+
+static void test_directive_errors(void)
+{
+    cephyr_sdk_text text = TEXT("int generated;\nint second;");
+    cephyr_sdk_directive directive = {SPAN("output"), {0}, directive_output, &text};
+    cephyr_sdk sdk = {sizeof(sdk), CEPHYR_SDK_ABI_VERSION, NULL, 0, &directive, 1};
+    const char source[] = "#line 36 \"directive-locations.c\"\n"
+                          "#pragma cephyr output\n"
+                          "int x(void) { return not_declared; }\n";
+    failed(compile(&sdk, source, AMD64, "-fsyntax-only", NULL, NULL, CEPHYR_COMPILE_ERROR),
+           "directive-locations.c:37:");
+    failed(compile(&sdk,
+                   "#line 79 \"inline-locations.c\"\nint x(void) { _Pragma(\"cephyr output\") "
+                   "return not_declared; }\n", AMD64, "-fsyntax-only", NULL, NULL, CEPHYR_COMPILE_ERROR),
+           "inline-locations.c:79:");
+    text = TEXT("int first;\nint broken = ;");
+    failed(compile(&sdk, source, AMD64, "-fsyntax-only", NULL, NULL, CEPHYR_COMPILE_ERROR),
+           "directive-locations.c:37:");
+    failed(compile(&sdk, "#pragma cephyr output reject\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "<stdin>:1: error[cephyr.sdk.callback]");
+    failed(compile(&sdk, "#pragma cephyr output error\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "test.directive_error");
+    failed(compile(&sdk, "#pragma cephyr output twice\n", AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "text may be submitted only once");
+    const cephyr_sdk_text invalid[] = {
+        TEXT("#include \"must-not-open.h\"\n"),
+        TEXT("%: 8 \"forged.c\"\n"),
+        TEXT("_Pragma(\"cephyr output\")"),
+        TEXT("/* eats original source"),
+        TEXT("int x; /* no phase-3 trivia */"),
+        TEXT("\"unterminated"),
+        TEXT("int x;\\\n"),
+        TEXT("i\0nt x;"),
+        {NULL, CEPHYR_SDK_MAX_DIRECTIVE_OUTPUT_BYTES + 1},
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        text = invalid[i];
+        failed(compile(&sdk, "#pragma cephyr output invalid\n", AMD64, "-E", "-", NULL,
+                       CEPHYR_COMPILE_ERROR), "<stdin>:1: error[cephyr.sdk.callback]");
+    }
+    const char prefix[] = "#pragma cephyr output ";
+    const size_t argument_size = CEPHYR_SDK_MAX_DIRECTIVE_ARGUMENT_BYTES + 1u;
+    char *oversized = malloc(sizeof(prefix) + argument_size + 1);
+    CHECK(oversized);
+    memcpy(oversized, prefix, sizeof(prefix) - 1);
+    memset(oversized + sizeof(prefix) - 1, 'a', argument_size);
+    memcpy(oversized + sizeof(prefix) - 1 + argument_size, "\n", 2);
+    failed(compile(&sdk, oversized, AMD64, "-E", "-", NULL, CEPHYR_COMPILE_ERROR),
+           "directive arguments exceed the size limit");
+    free(oversized);
+
+    /* A descriptor allocated by a v1 client may end at hook_count. */
+    struct original_sdk {
+        size_t struct_size;
+        uint32_t abi_version;
+        const cephyr_sdk_hook *hooks;
+        size_t hook_count;
+    } original = {sizeof(original), CEPHYR_SDK_ABI_VERSION, NULL, 0};
+    CHECK(sizeof(original) == offsetof(cephyr_sdk, directives));
+    cephyr_result *result = compile((const cephyr_sdk *)(const void *)&original, C_SOURCE,
+                                    AMD64, "-E", "-", NULL, CEPHYR_OK);
+    cephyr_result_destroy(result);
+    sdk.struct_size = offsetof(cephyr_sdk, directive_count);
+    result = compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_OK);
+    cephyr_result_destroy(result);
+    sdk.struct_size = sizeof(sdk);
+
+    cephyr_sdk_directive entries[] = {directive, directive};
+    sdk.directives = entries;
+    sdk.directive_count = 2;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "directive name and target pair must be unique");
+    sdk.directive_count = 1;
+    entries[0].name = TEXT("bad-name");
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "invalid directive name");
+    entries[0] = directive;
+    entries[0].target_triple = TEXT("not_a_triple");
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "invalid target triple");
+    entries[0] = directive;
+    entries[0].callback = NULL;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "missing callback");
+    sdk.directives = NULL;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "missing directive array");
+    sdk.directives = entries;
+    sdk.directive_count = CEPHYR_SDK_MAX_DIRECTIVES + 1u;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "invalid SDK directive count");
+    const cephyr_sdk_hook hook = {CEPHYR_SDK_DIRECTIVE, SPAN("not-a-hook"), {0}, forbidden, NULL};
+    sdk.directive_count = 0;
+    sdk.hooks = &hook;
+    sdk.hook_count = 1;
+    failed(compile(&sdk, C_SOURCE, AMD64, "-E", "-", NULL, CEPHYR_INVALID_ARGUMENT),
+           "unknown stage");
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);
@@ -570,6 +850,8 @@ int main(int argc, char **argv)
     test_invalid_registration();
     test_invalid_callbacks();
     test_custom_object();
+    test_directives();
+    test_directive_errors();
     /* Request-local hooks must not affect later requests. */
     cephyr_result *result = compile(NULL, "unsigned long fresh(void) { return 6UL * 8UL; }\n",
                                     AMD64, "--emit-mir", "-", NULL, CEPHYR_OK);

@@ -367,6 +367,8 @@ void init_buf_lexer_state(struct lexer_state *ls, int wb)
 	ls->output_offset = 0;
 	ls->line_marker = 0;
 	ls->line_marker_context = 0;
+	ls->text_pragma = 0;
+	ls->text_pragma_context = 0;
 	ls->output_fifo = 0;
 
 	ls->ctok = getmem(sizeof(struct token));
@@ -1693,10 +1695,12 @@ static void handle_error(struct lexer_state *ls)
 }
 
 /* 6.10.6: STDC pragmas are not macro-expanded. Other pragmas are ignored
-   in Cephyr's text mode. Cephyr never contracts floating-point expressions
+   unless the text-mode consumer handles them. Cephyr never contracts
+   floating-point expressions
    or applies the limited-range complex shortcuts, and cannot honor
    dynamic access to the floating-point environment. */
-int check_pragma(struct token_fifo *tf, long line)
+int check_pragma(struct lexer_state *ls, unsigned long flags,
+	struct token_fifo *tf, long line)
 {
 	struct token *words[3];
 	size_t i, n = 0;
@@ -1705,8 +1709,13 @@ int check_pragma(struct token_fifo *tf, long line)
 		struct token *t = tf->t + i;
 		if (ttWHI(t->type)) continue;
 		if (n == 3) goto invalid;
-		if (n == 0 && (t->type != NAME || strcmp(t->name, "STDC")))
+		if (n == 0 && (t->type != NAME || strcmp(t->name, "STDC"))) {
+			if (ls->text_pragma)
+				return ls->text_pragma(ls->text_pragma_context, tf, line,
+					current_filename, !(flags & LEXER), ls->output_offset,
+					ls->oline);
 			return 0;
+		}
 		if (t->type != NAME) goto invalid;
 		words[n ++] = t;
 	}
@@ -1868,6 +1877,7 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 #define condfval(x)	((ls->condf[(x) / 32] & (1UL << ((x) % 32))) != 0)
 
 	long l = ls->line;
+	long pragma_line = ls->ctok->line;
 	unsigned long save_flags = ls->flags;
 	int ret = 0;
 
@@ -2034,7 +2044,7 @@ static int handle_cpp(struct lexer_state *ls, int sharp_type)
 					if (save_flags & PROCESS_TEXT_PRAGMAS) {
 						struct token_fifo tf;
 						ret = collect_directive(ls, &tf);
-						if (!ret) ret = check_pragma(&tf, l);
+						if (!ret) ret = check_pragma(ls, save_flags, &tf, pragma_line);
 						if (tf.nt) freemem(tf.t);
 						goto handle_exit;
 					}

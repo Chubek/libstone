@@ -16,6 +16,7 @@ struct CompileOptions {
     const char *resource_root = nullptr;
     const char *archon_root = nullptr;
     const cephyr_sdk *sdk = nullptr;
+    const cephyr_lua_options *lua = nullptr;
 };
 
 class CompileResult {
@@ -73,7 +74,7 @@ inline CompileResult compile(const std::vector<std::string> &args, std::string_v
     }
     return compile(cephyr_request{sizeof(cephyr_request), argv.size(), argv.data(),
                                   stdin_data.data(), stdin_data.size(), options.resource_root,
-                                  options.archon_root, options.sdk});
+                                  options.archon_root, options.sdk, options.lua});
 }
 
 inline CompileResult compile(std::initializer_list<std::string> args, std::string_view stdin_data = {},

@@ -5,13 +5,15 @@ with explicit, **trusted in-process callbacks**. Link against `Cephyr::Cephyr` o
 `libcephyr`. Create a `cephyr_sdk` with `struct_size = sizeof(cephyr_sdk)` and
 `abi_version = CEPHYR_SDK_ABI_VERSION`, then set `cephyr_request.sdk` or pass
 the SDK to `cephyr_context_compile` for that call.
-A null SDK leaves the normal pipeline unchanged. Cephyr does not search for,
-load, or sandbox user plugins. Only register code that you would trust to run
-with your application's privileges.
+A null SDK registers no native extensions. The native SDK does not discover
+or sandbox callback code. Only register code that you would trust to run with
+your application's privileges. To load a trusted native plugin from an explicit
+file path, see [configuring extensions and plugins](extension/CONFIGURATION.md).
 
 | Stage | Input | Result |
 | --- | --- | --- |
 | `CEPHYR_SDK_DESUGAR` | Raw C translation unit, before CPP | Optional replacement C text. This stage also runs for raw C with `-E`. It does not see the contents of includes and is skipped for `.i` and assembler inputs. |
+| `CEPHYR_SDK_DIRECTIVE` | Arguments of an active `#pragma cephyr NAME ...`, `#pragma GCC NAME ...`, or equivalent `_Pragma` in raw C | Optional insertion of already-preprocessed C. Runs once per occurrence, including with `-E`; register in `directives`, not `hooks`. |
 | `CEPHYR_SDK_ANALYZE` | Immutable MIR v1 text just after Cephyr has parsed, checked, and lowered the C translation unit | Additional diagnostics or rejection. Runs for C and `.i`, including `-fsyntax-only`. |
 | `CEPHYR_SDK_REWRITE` | MIR v1 text after analysis and any opt-in QML passes | Optional replacement MIR. Runs for `--emit-mir` and native output, not for `-fsyntax-only`. |
 | `CEPHYR_SDK_ASSEMBLY` | Final MIR v1 text for an exact target triple | Required assembly output, replacing the built-in backend for `-S`, `-c`, and linking from C/`.i`. |
@@ -26,10 +28,82 @@ The default [Blackstone pass](README.md#blackstone-mir-optimization) runs
 after SDK rewrites; assembly hooks receive its output.
 The analysis stage only sees the pre-rewrite MIR, so an analysis callback should
 not assume that later rewrites preserve properties it checks unless the
-application guarantees that. Names must be unique within an SDK. An empty target
+application guarantees that. Hook names must be unique within an SDK. An empty target
 selector applies to all targets except for assembly, which requires a concrete
 triple; two backend hooks cannot claim the same triple. A nonmatching backend is
 skipped and Cephyr uses its built-in backend.
+
+## Custom directives
+
+Add `cephyr_sdk_directive` descriptors to `cephyr_sdk.directives` and set
+`directive_count`. Each descriptor contains a `name`, `target_triple`,
+`callback`, and `user` pointer. Names must be case-sensitive ASCII C
+identifiers. The `(name, target_triple)` pair must be unique. An empty target
+selector is a fallback for that name; a matching exact triple takes precedence
+regardless of registration order. The original ABI v1 prefix is still accepted
+and registers no directives; both appended fields must be present to use them.
+
+```c
+#define TEXT(s) { (s), sizeof(s) - 1 }
+
+static uint32_t emit_answer(const cephyr_sdk_input *in,
+                            const cephyr_sdk_output *out, void *user)
+{
+    (void)user;
+    if (in->text.size != 0)
+        return CEPHYR_SDK_REJECT; /* This directive takes no arguments. */
+    const cephyr_sdk_text declaration = TEXT("int answer(void) { return 42; }");
+    return out->set_text(out->context, declaration) ? CEPHYR_SDK_OK : CEPHYR_SDK_REJECT;
+}
+
+static const cephyr_sdk_directive directives[] = {
+    { TEXT("emit_answer"), {0}, emit_answer, NULL },
+};
+static const cephyr_sdk sdk = {
+    .struct_size = sizeof(cephyr_sdk),
+    .abi_version = CEPHYR_SDK_ABI_VERSION,
+    .directives = directives,
+    .directive_count = 1,
+};
+```
+
+Use `#pragma cephyr emit_answer` or `#pragma GCC emit_answer` in the C
+translation unit. Both spellings also work with `_Pragma`, for example
+`_Pragma("GCC emit_answer")`. The two namespace tokens are case-sensitive and
+select the same registration. Under `cephyr`, a missing name or a name with
+no matching registration is an error. Under `GCC`, an unclaimed pragma keeps
+its ordinary behavior; this alias does not implement GCC's built-in pragmas.
+
+The C preprocessor recognizes these in active branches and included files,
+not in comments, string contents, or inactive branches. A macro can produce
+`_Pragma`; `_Pragma` inside a preprocessing directive such as `#if` is not
+supported for Cephyr extensions. Cephyr does not dispatch directives from
+`.i` or assembler inputs.
+
+After ucpp finishes successfully, Cephyr calls each matching directive in
+occurrence order on the compiling thread, without holding the ucpp lock. The
+callback receives `CEPHYR_SDK_DIRECTIVE`, `directive_name`, the presumed
+`input_name` and `line` (honoring `#line` and include context), and `column`
+(currently zero, meaning unknown). For `_Pragma` the location is the expansion
+site. These appended fields are empty or zero for ordinary hooks. `text`
+contains only the argument tokens: Cephyr trims leading and trailing trivia
+and normalizes intervening whitespace or comments to one space, preserving
+token spellings. `#pragma` arguments are not macro-expanded. `_Pragma` operands
+are destringized normally before the tokens are collected. With `report`,
+passing an empty file and zero coordinates uses the pragma's presumed location.
+
+`set_text` inserts a fragment at the pragma's output position. Omit the call
+or submit an empty span to emit nothing. This is **already-preprocessed C**:
+macro names are not expanded and the fragment cannot define macros, open
+headers, change conditional compilation, or dispatch another pragma. Submit
+complete tokens in valid UTF-8, with LF line endings, no comments, preprocessing
+`#`/`##` tokens, `_Pragma`, or stray backslashes. C syntax and semantics are
+checked by the normal frontend except with `-E`, which stops after preprocessing.
+Cephyr separates the fragment from surrounding tokens with line breaks and
+generates line markers (omitted with `-P`). The first emitted line maps to the
+pragma's logical line, subsequent emitted lines count from there, and following
+original tokens retain their original logical file and line. Inline
+`_Pragma` insertions can change columns and split a physical output line.
 
 ## Declarative QML profiles
 
@@ -98,7 +172,7 @@ replace the assembler or linker.
 
 ## Memory, errors, and limits
 
-Keep the SDK descriptor, hook array, and registration strings alive and
+Keep the SDK descriptor, hook and directive arrays, and registration strings alive and
 unchanged for the call to `cephyr_compile` or `cephyr_context_compile`.
 A [persistent context](EMBEDDING.md#reusing-a-context-and-loading-trusted-code-c-api)
 does not store its per-call SDK. Keep callback state alive for the same
@@ -123,9 +197,13 @@ An invalid registration fails the compile call with `CEPHYR_INVALID_ARGUMENT`;
 callback failures are `CEPHYR_COMPILE_ERROR`. Inspect the compilation result
 with `cephyr_result_diagnostics` for details, then destroy the result.
 
-The v1 limits in the header include 64 hooks and 256 callback diagnostics per
-compile call, and at most 16 MiB of replacement C, 4 MiB of replacement MIR, or
-16 MiB of assembly per hook. Submitted text must not contain NUL bytes. These
+The v1 limits in the header include 64 hooks, 64 directive registrations, up to
+4,096 directive invocations and 256 callback diagnostics per compile call, and
+at most 16 MiB of replacement C, 4 MiB of replacement MIR, or 16 MiB of assembly
+per hook. Each directive has up to 64 KiB of arguments and up to 64 KiB of output.
+Cephyr limits captured directive input (including names and filenames) to
+16 MiB per translation unit and directive output to 16 MiB per compile call.
+Submitted text must not contain NUL bytes. These
 limits protect the host's copies; they cannot enforce execution time or
 isolate memory accesses in trusted callbacks.
 
@@ -137,8 +215,9 @@ optimization, and backend callbacks.
 
 The Python [embedding API](EMBEDDING.md#python) accepts `sdk=` on both
 `Compiler.compile()` and `cephyr.compile()`. Pass an iterable of `Hook`
-descriptors. They use the same v1 stages, ordering, exact target matching,
-and [limits](#memory-errors-and-limits) as C.
+descriptors. They use the same v1 hook stages, ordering, exact target matching,
+and [limits](#memory-errors-and-limits) as C. The Python hook wrapper does not
+expose the native `cephyr_sdk_directive` registration array.
 
 ```python
 from cephyr import Diagnostic, Hook, HookResult, Severity, Stage, compile

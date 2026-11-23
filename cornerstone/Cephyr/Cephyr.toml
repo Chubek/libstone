@@ -54,6 +54,15 @@ keep_comments = false
 line_markers = true
 hosted = true
 
+# Extensions load in array order; paths are relative to this configuration.
+# Lua is sandboxed and sees only the string values in lua_env. Native code
+# runs in the compiler process and requires explicit --allow-native-plugins.
+# See extension/CONFIGURATION.md for precedence, limits and the plugin ABI.
+# [extensions]
+# lua = ["extensions/build.lua"]
+# lua_env = { BUILD_MODE = "checked" }
+# native = ["plugins/libproject.so"]
+
 # SandSLAB shortens native AMD64 constants after lowering (default: off).
 # [sandslab]
 # enabled = true

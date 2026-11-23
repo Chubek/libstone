@@ -8,6 +8,8 @@
 #include "qml_rewrite.hpp"
 #include "sdk_internal.hpp"
 #include "../FactIR.hpp"
+#include "../extension/lua_extensions.hpp"
+#include "../extension/native_plugins.hpp"
 
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
 #include "moonstone_analysis.hpp"
@@ -25,10 +27,12 @@
 #include <cephyr/target.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +44,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -73,6 +78,8 @@ struct Options {
     std::string target, stdlib;
     std::string qml_profile;
     QmlProfile qml;
+    std::vector<std::string> lua_files;
+    std::vector<std::string> lua_environment;
     Command assembler_options;
     PreprocessOptions preprocess;
     std::optional<bool> use_cache, static_link, line_markers, keep_comments, trigraphs, pic, hosted;
@@ -80,6 +87,7 @@ struct Options {
     std::optional<bool> sandslab_enabled;
     bool no_headers = false, no_start = false, no_libraries = false, shared = false;
     bool verbose = false, sarif = false, werror = false, help = false, version = false;
+    bool allow_native_plugins = false;
     bool moonstone_analysis = false;
 };
 
@@ -128,6 +136,9 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   --qml-file PATH           Load a QML rule fragment (repeatable)
   --qml-fuel N              Set the QML rewrite fuel limit
   --qml-param PHASE.KEY=N   Set a phase parameter (repeatable; KEY may be fuel)
+  --lua-extension FILE      Load a sandboxed Lua extension (repeatable)
+  --lua-env NAME=VALUE       Grant Lua extensions an explicit value (repeatable)
+  --allow-native-plugins    Load trusted native plugins listed in Cephyr.toml
   --no-cache                Compatibility option (packaged backends need no cache)
   --diagnostics-format=FMT  text or sarif
   --moonstone-analyze       Inspect supported typed MIR (optional build)
@@ -302,6 +313,22 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
                 diag.error("cephyr.option", "unsupported C standard '" + value + "'; use -std=c11");
         } else if (option("--config")) {
             opts.config_file = argument("--config");
+        } else if (token == "--allow-native-plugins") {
+            opts.allow_native_plugins = true;
+        } else if (option("--lua-extension")) {
+            if (auto file = argument("--lua-extension"); !file.empty()) {
+                if (opts.lua_files.size() == CEPHYR_LUA_MAX_SCRIPTS)
+                    diag.error("cephyr.lua.options", "too many Lua extensions");
+                else
+                    opts.lua_files.push_back(std::move(file));
+            }
+        } else if (option("--lua-env")) {
+            if (auto entry = argument("--lua-env"); !entry.empty()) {
+                if (opts.lua_environment.size() == CEPHYR_LUA_MAX_ENV_ENTRIES)
+                    diag.error("cephyr.lua.options", "too many Lua environment entries");
+                else
+                    opts.lua_environment.push_back(std::move(entry));
+            }
         } else if (option("--profile")) {
             opts.qml_profile = argument("--profile");
         } else if (option("--qml-pass")) {
@@ -1227,7 +1254,12 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
     return check("a target linker", config.linker.empty() ? target.linker : config.linker);
 }
 
-bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostics &diag,
+const cephyr_lua_options *lua_options(const cephyr_request &request);
+bool load_lua_extensions(LuaExtensions &extensions, const cephyr_request &request,
+                         const Options &opts, const ExtensionConfig &config,
+                         const cephyr_sdk *native_sdk, Diagnostics &diag);
+
+bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Diagnostics &diag,
              MoonstoneProfile *profile)
 {
     detail::MoonstoneAnalysis *analysis = nullptr;
@@ -1242,6 +1274,30 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     if (!loaded)
         return false;
     auto &config = *loaded;
+    const auto &request = invocation.request;
+    const cephyr_sdk *native_sdk = request.sdk;
+    std::optional<NativePlugins> plugins;
+    std::optional<LuaExtensions> extensions;
+    std::optional<SdkPipeline> merged;
+    if (!config.extensions.native.empty()) {
+        if (!opts.allow_native_plugins) {
+            diag.error("cephyr.plugin.permission",
+                       "configured native plugins require explicit --allow-native-plugins");
+            return false;
+        }
+        if (!plugins.emplace().load(config.extensions.native, native_sdk, diag))
+            return false;
+        native_sdk = plugins->sdk();
+    }
+    if (lua_options(request) || !config.extensions.lua.empty() ||
+        !opts.lua_files.empty() || !opts.lua_environment.empty()) {
+        if (!load_lua_extensions(extensions.emplace(), request, opts, config.extensions, native_sdk, diag))
+            return false;
+        native_sdk = extensions->sdk();
+    }
+    if ((plugins || extensions) && !merged.emplace(native_sdk).validate(diag))
+        return false;
+    auto &sdk = merged ? *merged : request_sdk;
     std::optional<qml::Pipeline> qml_pipeline;
     if (opts.stage != Stage::preprocess && opts.stage != Stage::syntax &&
         (!opts.qml_profile.empty() || config.qml_profile || !opts.qml.passes.empty() ||
@@ -1342,8 +1398,13 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
         return workspace->path;
     };
     std::optional<Backend> backend;
-    const auto preprocessor = preprocessor_options(opts, config, *target, provider,
-                                                  custom_model, native_scalar_fp, native_rv64_lp64, false);
+    auto preprocessor = preprocessor_options(opts, config, *target, provider,
+                                            custom_model, native_scalar_fp, native_rv64_lp64, false);
+    preprocessor.gcc_pragma_names = sdk.directive_names(*target);
+    preprocessor.directive = [&](std::string_view name, std::string_view arguments,
+                                 const Location &where, std::optional<std::string> &replacement) {
+        return sdk.directive(name, arguments, *target, where, diag, replacement);
+    };
     const auto assembler_preprocessor = preprocessor_options(opts, config, *target, provider,
                                                             custom_model, native_scalar_fp, native_rv64_lp64, true);
     Command link_inputs;
@@ -1600,6 +1661,157 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &sdk, Diagnostic
     return true;
 }
 
+// cephyr_request originally ended at sdk. Only read the appended pointer
+// when present; this also accepts older C++ and ctypes clients as-is.
+constexpr auto request_v1_size = offsetof(cephyr_request, lua);
+
+const cephyr_lua_options *lua_options(const cephyr_request &request)
+{
+    return request.struct_size >= sizeof(cephyr_request) ? request.lua : nullptr;
+}
+
+bool valid_lua_label(std::string_view name)
+{
+    return !name.empty() && name.size() <= CEPHYR_LUA_MAX_NAME_BYTES &&
+        std::ranges::none_of(name, [](unsigned char c) { return c < 0x20 || c == 0x7f; });
+}
+
+std::optional<std::string> read_lua_extension(const std::string &path, Diagnostics &diag)
+{
+    if (!valid_lua_label(path) || path == "-") {
+        diag.error("cephyr.lua.options", path == "-" ? "Lua extensions cannot be read from standard input"
+                                                     : "invalid Lua extension file path");
+        return std::nullopt;
+    }
+
+    struct InputFile {
+        int fd;
+        ~InputFile() { if (fd >= 0) close(fd); }
+    } file{open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK)};
+    const auto io_error = [&] {
+        const auto error = std::error_code(errno, std::generic_category());
+        diag.error("cephyr.lua.file", "cannot read Lua extension: " + error.message(), Location{path});
+    };
+    struct stat info{};
+    if (file.fd < 0 || fstat(file.fd, &info) < 0) {
+        io_error();
+        return std::nullopt;
+    }
+    if (!S_ISREG(info.st_mode)) {
+        diag.error("cephyr.lua.file", "Lua extension must be a regular file", Location{path});
+        return std::nullopt;
+    }
+    if (info.st_size > CEPHYR_LUA_MAX_SCRIPT_BYTES) {
+        diag.error("cephyr.lua.file", "Lua extension exceeds the source size limit", Location{path});
+        return std::nullopt;
+    }
+
+    std::string source;
+    std::array<char, 4096> buffer;
+    while (true) {
+        const auto count = read(file.fd, buffer.data(), buffer.size());
+        if (count == 0)
+            return source;
+        if (count < 0) {
+            if (errno == EINTR)
+                continue;
+            io_error();
+            return std::nullopt;
+        }
+        if (static_cast<std::size_t>(count) > CEPHYR_LUA_MAX_SCRIPT_BYTES - source.size()) {
+            diag.error("cephyr.lua.file", "Lua extension exceeds the source size limit", Location{path});
+            return std::nullopt;
+        }
+        source.append(buffer.data(), static_cast<std::size_t>(count));
+    }
+}
+
+bool load_lua_extensions(LuaExtensions &extensions, const cephyr_request &request,
+                         const Options &opts, const ExtensionConfig &config,
+                         const cephyr_sdk *native_sdk, Diagnostics &diag)
+{
+    const auto *lua = lua_options(request);
+    const bool files_or_env = !opts.lua_files.empty() || !opts.lua_environment.empty();
+    const auto invalid = [&](std::string_view reason) {
+        diag.error("cephyr.lua.options", reason);
+        return false;
+    };
+    if (lua && files_or_env)
+        return invalid("request Lua options cannot be combined with driver Lua options");
+    if (lua && !config.lua.empty())
+        return invalid("request Lua options cannot be combined with configured Lua extensions");
+    if (!lua && opts.lua_files.empty() && !opts.lua_environment.empty())
+        return invalid("--lua-env requires --lua-extension");
+    if (lua && !lua->script_count && lua->environment_count)
+        return invalid("Lua environment entries require at least one script");
+    if (config.lua.size() + opts.lua_files.size() > CEPHYR_LUA_MAX_SCRIPTS)
+        return invalid("too many Lua extensions across configuration and command line");
+
+    std::vector<std::pair<std::string, std::string>> cli_environment;
+    std::vector<cephyr_lua_env_entry> cli_entries;
+    for (const auto &entry : opts.lua_environment) {
+        const auto pos = entry.find('=');
+        if (pos == entry.npos)
+            return invalid("--lua-env requires NAME=VALUE");
+        cli_environment.emplace_back(entry.substr(0, pos), entry.substr(pos + 1));
+    }
+    for (const auto &[key, value] : cli_environment)
+        cli_entries.push_back({key.c_str(), value.c_str()});
+    const auto environment = lua
+        ? std::span<const cephyr_lua_env_entry>(lua->environment, lua->environment_count)
+        : std::span<const cephyr_lua_env_entry>(cli_entries);
+    {
+        const auto letter = [](char ch) {
+            return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+        };
+        std::set<std::string_view> keys;
+        for (const auto &entry : environment) {
+            if (!entry.name || !entry.value)
+                return invalid("Lua environment entry is missing a name or value");
+            const std::string_view key(entry.name, strnlen(entry.name, CEPHYR_LUA_MAX_ENV_NAME_BYTES + 1));
+            if (key.empty() || key.size() > CEPHYR_LUA_MAX_ENV_NAME_BYTES || !letter(key.front()) ||
+                !std::ranges::all_of(key, [&](char ch) { return letter(ch) || (ch >= '0' && ch <= '9'); }))
+                return invalid("invalid Lua environment entry name");
+            if (strnlen(entry.value, CEPHYR_LUA_MAX_ENV_VALUE_BYTES + 1) > CEPHYR_LUA_MAX_ENV_VALUE_BYTES)
+                return invalid("Lua environment value exceeds the size limit");
+            if (!keys.insert(key).second)
+                return invalid("duplicate Lua environment entry");
+        }
+    }
+
+    if (!extensions.set_native(native_sdk, diag))
+        return false;
+    if (lua) {
+        for (const auto &script : std::span(lua->scripts, lua->script_count)) {
+            const std::string_view name = script.name
+                ? std::string_view(script.name, strnlen(script.name, CEPHYR_LUA_MAX_NAME_BYTES + 1))
+                : std::string_view("<lua-extension>");
+            if (!valid_lua_label(name))
+                return invalid("invalid Lua extension name");
+            if (!extensions.add({script.source ? script.source : "", script.size}, name, environment, diag))
+                return false;
+        }
+    } else {
+        // Explicit CLI values were granted to CLI scripts, not to scripts
+        // discovered via the driver's (possibly implicit) configuration.
+        std::vector<cephyr_lua_env_entry> config_environment;
+        for (const auto &[key, value] : config.lua_env)
+            config_environment.push_back({key.c_str(), value.c_str()});
+        for (const auto &file : config.lua) {
+            const auto &path = file.native();
+            const auto source = read_lua_extension(path, diag);
+            if (!source || !extensions.add(*source, path, config_environment, diag))
+                return false;
+        }
+        for (const auto &path : opts.lua_files) {
+            const auto source = read_lua_extension(path, diag);
+            if (!source || !extensions.add(*source, path, environment, diag))
+                return false;
+        }
+    }
+    return true;
+}
+
 int drive(Invocation &invocation)
 {
     Options opts;
@@ -1609,8 +1821,8 @@ int drive(Invocation &invocation)
         const auto &request = invocation.request;
         SdkPipeline sdk(request.sdk);
         if (invocation.units.empty() && request.argc && moonstone_tools::is_tool(request.argv[0])) {
-            if (request.sdk) {
-                diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks");
+            if (request.sdk || lua_options(request)) {
+                diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks or Lua extensions");
                 status = CEPHYR_INVALID_ARGUMENT;
             } else {
                 auto output = moonstone_tools::run_tool(request.argv[0],
@@ -1674,7 +1886,7 @@ int cephyr_cli_main(int argc, const char *const *argv, std::istream &input,
 {
     const cephyr_request request{sizeof(cephyr_request), argc > 0 ? static_cast<std::size_t>(argc - 1) : 0,
                                  argc > 0 ? argv + 1 : nullptr,
-                                 nullptr, 0, nullptr, nullptr, nullptr};
+                                 nullptr, 0, nullptr, nullptr, nullptr, nullptr};
     cephyr_result result;
     Invocation invocation{request, result, &input, &output};
     CompilationScope scope;
@@ -1701,7 +1913,8 @@ int cephyr::detail::compile_units(const cephyr_request *request,
     if (!result)
         return CEPHYR_INVALID_ARGUMENT;
     *result = nullptr;
-    if (!request || request->struct_size < sizeof(cephyr_request) ||
+    if (!request || (request->struct_size != cephyr::request_v1_size &&
+                     request->struct_size < sizeof(cephyr_request)) ||
         (request->argc && !request->argv) || (request->stdin_size && !request->stdin_data) ||
         (request->resource_root && !*request->resource_root) ||
         (request->archon_root && !*request->archon_root) || cephyr::compiling)
@@ -1709,6 +1922,16 @@ int cephyr::detail::compile_units(const cephyr_request *request,
     for (std::size_t i = 0; i < request->argc; ++i)
         if (!request->argv[i])
             return CEPHYR_INVALID_ARGUMENT;
+    if (const auto *lua = cephyr::lua_options(*request)) {
+        if (lua->struct_size < sizeof(cephyr_lua_options) ||
+            lua->script_count > CEPHYR_LUA_MAX_SCRIPTS || (lua->script_count && !lua->scripts) ||
+            lua->environment_count > CEPHYR_LUA_MAX_ENV_ENTRIES ||
+            (lua->environment_count && !lua->environment))
+            return CEPHYR_INVALID_ARGUMENT;
+        for (const auto &script : std::span(lua->scripts, lua->script_count))
+            if (script.size > CEPHYR_LUA_MAX_SCRIPT_BYTES || (script.size && !script.source))
+                return CEPHYR_INVALID_ARGUMENT;
+    }
 
     try {
         cephyr::CompilationScope scope;

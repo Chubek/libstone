@@ -181,6 +181,13 @@ struct lexer_state {
 	size_t output_offset;
 	void (*line_marker)(void *, size_t, size_t, long, const char *);
 	void *line_marker_context;
+	/* Optional dispatch for non-STDC pragmas in PROCESS_TEXT_PRAGMAS.
+	   Tokens and filenames are borrowed. The final arguments identify the
+	   byte offset and logical line in the emitted stream; can_emit is false
+	   during expansion of CPP directives. */
+	int (*text_pragma)(void *, struct token_fifo *, long, const char *,
+		int, size_t, long);
+	void *text_pragma_context;
 
 	/* token control */
 	struct token *ctok;

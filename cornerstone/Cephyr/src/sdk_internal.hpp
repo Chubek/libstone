@@ -11,7 +11,11 @@
 namespace cephyr {
 
 class Diagnostics;
+struct Location;
 struct Target;
+
+// Checks already-preprocessed text using the raw lexer.
+bool valid_directive_output(std::string_view text);
 
 // A request-local pipeline. Call validate() before running any stage, even
 // when the selected output mode wouldn't invoke callbacks.
@@ -22,6 +26,10 @@ class SdkPipeline {
     bool validate(Diagnostics &diagnostics);
     bool desugar(std::string &source, const Target &target,
                  std::string_view input_name, Diagnostics &diagnostics);
+    [[nodiscard]] std::vector<std::string> directive_names(const Target &target) const;
+    bool directive(std::string_view name, std::string_view arguments,
+                   const Target &target, const Location &where, Diagnostics &diagnostics,
+                   std::optional<std::string> &replacement);
     bool analyze(std::string_view mir, const Target &target,
                  std::string_view input_name, Diagnostics &diagnostics);
     bool rewrite(std::string &mir, const Target &target,
@@ -49,14 +57,17 @@ class SdkPipeline {
                    std::string_view input_name, Diagnostics &diagnostics,
                    bool *changed);
     bool invoke(const Hook &hook, std::string_view text, const Target &target,
-                std::string_view input_name, uint32_t flags,
+                 std::string_view input_name, uint32_t flags, uint32_t line, uint32_t column,
                 Diagnostics &diagnostics,
                 std::optional<std::string> &replacement);
 
     const cephyr_sdk *sdk_;
     bool valid_ = false;
     std::vector<Hook> hooks_;
+    std::vector<Hook> directives_;
     std::size_t diagnostic_count_ = 0;
+    std::size_t directive_invocations_ = 0;
+    std::size_t directive_output_bytes_ = 0;
 };
 
 } // namespace cephyr

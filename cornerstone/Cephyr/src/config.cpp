@@ -1,5 +1,6 @@
 #include <cephyr/config.hpp>
 
+#include <cephyr/CephyrPlugin.h>
 #include <cephyr/diagnostics.hpp>
 
 #include <toml.h>
@@ -612,6 +613,82 @@ bool read_qml(Config &config, const toml_table_t *table,
     return valid;
 }
 
+bool read_extensions(ExtensionConfig &extensions, const toml_table_t *table,
+                     const std::filesystem::path &base, const SourceMap &source,
+                     Diagnostics &diagnostics) {
+    constexpr std::string_view section = "extensions";
+    bool valid = known_keys(table, {"lua", "native", "lua_env"}, section, source, diagnostics);
+    const auto paths = [&](std::string_view key, std::size_t limit,
+                           std::vector<std::filesystem::path> &destination) {
+        auto values = string_array(table, key, section, source, diagnostics, valid);
+        if (!values)
+            return;
+        const auto qualified = "extensions." + std::string(key);
+        if (values->size() > limit) {
+            error(diagnostics, source, "cephyr.config.value",
+                  "too many paths in '" + qualified + "' (maximum " + std::to_string(limit) + ")",
+                  section, key);
+            valid = false;
+            return;
+        }
+        destination.clear();
+        for (const auto &value : *values) {
+            if (!validate_text(value, qualified, section, key, source, diagnostics)) {
+                valid = false;
+                continue;
+            }
+            if (value == "-") {
+                error(diagnostics, source, "cephyr.config.value",
+                      "'" + qualified + "' requires file paths, not standard input", section, key);
+                valid = false;
+                continue;
+            }
+            destination.push_back(resolve_path(base, value));
+        }
+    };
+    paths("lua", CEPHYR_LUA_MAX_SCRIPTS, extensions.lua);
+    paths("native", CEPHYR_PLUGIN_MAX_FILES, extensions.native);
+    if (!has(table, "lua_env"))
+        return valid;
+
+    const auto *env = toml_table_in(table, "lua_env");
+    if (!env) {
+        error(diagnostics, source, "cephyr.config.type",
+              "configuration key 'extensions.lua_env' must be a table of strings", section, "lua_env");
+        return false;
+    }
+    std::map<std::string, std::string, std::less<>> checked;
+    constexpr std::string_view initial = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+    constexpr std::string_view identifier = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789";
+    for (int i = 0; const char *key = toml_key_in(env, i); ++i) {
+        if (i == CEPHYR_LUA_MAX_ENV_ENTRIES) {
+            error(diagnostics, source, "cephyr.config.value",
+                  "too many entries in 'extensions.lua_env'", section, "lua_env");
+            return false;
+        }
+        const std::string_view name(key);
+        if (name.empty() || name.size() > CEPHYR_LUA_MAX_ENV_NAME_BYTES ||
+            initial.find(name.front()) == initial.npos ||
+            name.find_first_not_of(identifier) != name.npos) {
+            error(diagnostics, source, "cephyr.config.value",
+                  "invalid Lua environment entry name", section, "lua_env");
+            valid = false;
+            continue;
+        }
+        if (auto value = string_value(env, name, "extensions.lua_env", source, diagnostics, valid)) {
+            if (value->size() > CEPHYR_LUA_MAX_ENV_VALUE_BYTES) {
+                error(diagnostics, source, "cephyr.config.value",
+                      "Lua environment value exceeds the size limit", "extensions.lua_env", name);
+                valid = false;
+                continue;
+            }
+            checked.emplace(name, std::move(*value));
+        }
+    }
+    extensions.lua_env = std::move(checked);
+    return valid;
+}
+
 std::optional<unsigned> qml_fuel(const toml_table_t *table, std::string_view section,
                                  const SourceMap &source, Diagnostics &diagnostics, bool &valid) {
     if (!has(table, "fuel"))
@@ -761,6 +838,12 @@ bool validate_config(const Config &config, const SourceMap &source,
     };
     validate_flags(config.assemble_flags, "assemble");
     validate_flags(config.link_flags, "link");
+    if (!config.extensions.lua_env.empty() && config.extensions.lua.empty()) {
+        error(diagnostics, source, "cephyr.config.value",
+              "'extensions.lua_env' requires at least one path in 'extensions.lua'",
+              "extensions", "lua_env");
+        valid = false;
+    }
     return valid;
 }
 
@@ -844,7 +927,7 @@ bool load_config(Config &config, const std::filesystem::path &path,
         root.get(),
         {"target", "representation", "assembler_style", "stdlib",
          "cache_enabled", "static_link", "paths", "tools", "flags",
-         "preprocess", "qml", "profiles", "factir", "blackstone", "sandslab"},
+         "preprocess", "extensions", "qml", "profiles", "factir", "blackstone", "sandslab"},
         {}, source, diagnostics);
     Config candidate = config;
 
@@ -888,6 +971,9 @@ bool load_config(Config &config, const std::filesystem::path &path,
             table_value(root.get(), "preprocess", source, diagnostics, valid))
         valid =
             read_preprocess(candidate, table, base, source, diagnostics) && valid;
+
+    if (auto *table = table_value(root.get(), "extensions", source, diagnostics, valid))
+        valid = read_extensions(candidate.extensions, table, base, source, diagnostics) && valid;
 
     if (auto *table = table_value(root.get(), "qml", source, diagnostics, valid))
         valid = read_qml(candidate, table, source, diagnostics) && valid;

@@ -14,6 +14,10 @@ extern "C" {
 #define CEPHYR_SDK_MIR_SCHEMA_VERSION 1u
 
 #define CEPHYR_SDK_MAX_HOOKS 64u
+#define CEPHYR_SDK_MAX_DIRECTIVES 64u
+#define CEPHYR_SDK_MAX_DIRECTIVE_ARGUMENT_BYTES (64u * 1024u)
+#define CEPHYR_SDK_MAX_DIRECTIVE_OUTPUT_BYTES (64u * 1024u)
+#define CEPHYR_SDK_MAX_DIRECTIVE_INVOCATIONS 4096u
 #define CEPHYR_SDK_MAX_DIAGNOSTICS 256u
 #define CEPHYR_SDK_MAX_SOURCE_BYTES (16u * 1024u * 1024u)
 #define CEPHYR_SDK_MAX_MIR_BYTES (4u * 1024u * 1024u)
@@ -34,7 +38,8 @@ enum {
     CEPHYR_SDK_DESUGAR = 1,
     CEPHYR_SDK_ANALYZE = 2,
     CEPHYR_SDK_REWRITE = 3,
-    CEPHYR_SDK_ASSEMBLY = 4
+    CEPHYR_SDK_ASSEMBLY = 4,
+    CEPHYR_SDK_DIRECTIVE = 5 /* Directive callback only; not a hook stage. */
 };
 
 enum {
@@ -53,10 +58,13 @@ enum {
 };
 
 /* Borrowed and immutable, valid only during the callback. `text` is raw C at
- * DESUGAR and Archon MachineIR text at the other stages. The compiler supplies
+ * DESUGAR, the unexpanded pragma arguments at DIRECTIVE, and Archon MachineIR
+ * text at the other stages. The compiler supplies
  * canonical MIR; once replaced, later hooks see the submitted text as-is.
  * The MIR schema and flags are zero when inapplicable. An ASSEMBLY hook may
- * receive CEPHYR_SDK_POSITION_INDEPENDENT in flags. */
+ * receive CEPHYR_SDK_POSITION_INDEPENDENT in flags. A DIRECTIVE receives the
+ * directive name and presumed source location (column may be unknown/zero).
+ * The appended fields are empty/zero for hooks. */
 typedef struct cephyr_sdk_input {
     size_t struct_size;
     uint32_t abi_version;
@@ -68,6 +76,9 @@ typedef struct cephyr_sdk_input {
     cephyr_sdk_text target_abi;
     uint32_t mir_schema_version;
     uint32_t flags;
+    cephyr_sdk_text directive_name;
+    uint32_t line;
+    uint32_t column;
 } cephyr_sdk_input;
 
 /* These sinks may be called synchronously on the callback's thread only,
@@ -77,17 +88,20 @@ typedef struct cephyr_sdk_input {
  * and context expire when the callback returns and cannot be used from a
  * different thread.
  *
- * set_text may be used once by a DESUGAR, REWRITE, or ASSEMBLY callback,
+ * set_text may be used once by a DESUGAR, REWRITE, ASSEMBLY, or DIRECTIVE callback,
  * never by ANALYZE. No submission leaves a transformation unchanged.
  * ASSEMBLY must submit nonempty module assembly ending in a newline; see
  * SDK.md for the linkage/data contract. REWRITE must submit nonempty MIR
- * if replacing.
+ * if replacing. DIRECTIVE text is inserted as already-preprocessed C; it
+ * must not contain comments, preprocessing directives or line splices.
  *
  * report uses an ASCII code ([A-Za-z0-9_.-]+) and a nonempty message.
  * Supply an empty file span for the input name. Coordinates are 1-based;
  * zero means unknown, and a column requires a line. Coordinates are
- * client-provided and are not remapped. An error diagnostic rejects the
- * compilation even if the callback returns CEPHYR_SDK_OK. */
+ * client-provided and are not remapped. At DIRECTIVE, supplying an empty
+ * file and zero coordinates defaults to the pragma's presumed location.
+ * An error diagnostic rejects compilation even if the callback returns
+ * CEPHYR_SDK_OK. */
 typedef struct cephyr_sdk_output {
     size_t struct_size;
     uint32_t abi_version;
@@ -116,19 +130,34 @@ typedef struct cephyr_sdk_hook {
     void *user;
 } cephyr_sdk_hook;
 
+/* Registers `#pragma cephyr NAME ...`, `#pragma GCC NAME ...`, and their
+ * `_Pragma` equivalents. Unclaimed GCC pragmas are ignored by the SDK.
+ * Names are case-sensitive ASCII C identifiers. Each (name, target triple)
+ * pair must be unique; an exact target match wins over an empty selector. */
+typedef struct cephyr_sdk_directive {
+    cephyr_sdk_text name;
+    cephyr_sdk_text target_triple;
+    cephyr_sdk_callback callback;
+    void *user;
+} cephyr_sdk_directive;
+
 /* Explicit registration via `cephyr_request.sdk`. A null request field
- * disables all hooks. The descriptor, hook array, their strings, and user
- * state must remain valid for the duration of the compile call. Do not modify
+ * registers no hooks or directives. The descriptor, its arrays and strings,
+ * and user state must remain valid for the compile call. Do not modify
  * registration data during that call. Invocation
- * is synchronous and in array order within each stage. Do not reenter
+ * is synchronous in array order within each hook stage, and in preprocessing
+ * order for directives. Do not reenter
  * cephyr_compile on the callback's thread. Different concurrent compile
  * calls may invoke the same hooks concurrently; synchronize mutable client
- * state accordingly. Cephyr does not load SDK code from disk. */
+ * state accordingly. For explicitly configured native plugins, see
+ * CephyrPlugin.h. */
 struct cephyr_sdk {
     size_t struct_size;
     uint32_t abi_version;
     const cephyr_sdk_hook *hooks;
     size_t hook_count;
+    const cephyr_sdk_directive *directives;
+    size_t directive_count;
 };
 
 #ifdef __cplusplus

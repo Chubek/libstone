@@ -152,6 +152,7 @@ add_library(cephyr_compiler SHARED
   src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
   src/embedding.cpp src/moonstone_tools.cpp src/qml_rewrite.cpp src/blackstone_opt.cpp
+  extension/lua_extensions.cpp extension/native_plugins.cpp
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
   "${cephyr_native}/Legalizer.c"
   "${cephyr_repo}/novostone/Datalog/Datalog.cpp" "${cephyr_satie}/src/SatieMemory.cpp")
@@ -276,6 +277,7 @@ install(EXPORT CephyrTargets NAMESPACE Cephyr:: DESTINATION "${cephyr_package_di
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CephyrConfig.cmake"
   "${CMAKE_CURRENT_BINARY_DIR}/CephyrConfigVersion.cmake" DESTINATION "${cephyr_package_dir}")
 install(FILES include/cephyr/Cephyr.h include/cephyr/Cephyr.hpp include/cephyr/CephyrSDK.h
+  include/cephyr/CephyrPlugin.h
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cephyr")
 if(CEPHYR_INSTALL_PYTHON)
   install(DIRECTORY python/cephyr DESTINATION "${CMAKE_INSTALL_LIBDIR}/cephyr/python"
@@ -291,6 +293,7 @@ install(FILES benchmark/tools/time_sandslab.py DESTINATION "${cephyr_data_dir}/b
 install(DIRECTORY benchmark/fixtures DESTINATION "${cephyr_data_dir}/benchmark")
 install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md MOONSTONE.md MOONSTONE_ANALYSIS.md
   DESTINATION "${cephyr_data_dir}")
+install(FILES extension/README.md extension/CONFIGURATION.md DESTINATION "${cephyr_data_dir}/extension")
 install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md docs/FactIR.md docs/SandSLAB.md
   DESTINATION "${cephyr_data_dir}/docs")
 install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
@@ -337,6 +340,17 @@ if(CEPHYR_BUILD_TESTS)
   set_target_properties(cephyr-sdk-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
   target_link_libraries(cephyr-sdk-test PRIVATE Cephyr::Cephyr)
   add_test(NAME cephyr.sdk COMMAND cephyr-sdk-test "${CMAKE_CURRENT_SOURCE_DIR}" "${cephyr_archon}")
+  add_executable(cephyr-lua-api-test tests/lua_extensions.c)
+  set_target_properties(cephyr-lua-api-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+  target_link_libraries(cephyr-lua-api-test PRIVATE Cephyr::Cephyr)
+  add_test(NAME cephyr.lua-api COMMAND cephyr-lua-api-test)
+  add_test(NAME cephyr.lua-driver COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lua_extensions.py" "$<TARGET_FILE:cephyr>")
+  set_tests_properties(cephyr.lua-api cephyr.lua-driver PROPERTIES TIMEOUT 30)
+  add_test(NAME cephyr.config-extensions COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_config_extensions.py" "$<TARGET_FILE:cephyr>"
+    "${CMAKE_C_COMPILER}")
+  set_tests_properties(cephyr.config-extensions PROPERTIES TIMEOUT 60)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     foreach(test IN ITEMS cephyr-diagnostics-test cephyr-preprocess-test cephyr-cache-test cephyr-host-target-test)
       target_compile_options(${test} PRIVATE -UNDEBUG)
