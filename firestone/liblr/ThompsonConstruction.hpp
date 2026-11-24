@@ -177,4 +177,10 @@ inline NFA compile_regex(std::string_view pattern, Acceptance acceptance = {}) {
     return nfa;
 }
 
+// Add a byte-regex alternative to a hand-built NFA. Syntax errors leave the
+// destination untouched, including its state IDs and previous alternatives.
+inline void add_regex_alternative(NFA& nfa, std::string_view pattern, Acceptance acceptance = {}) {
+    nfa.add_alternative(compile_regex(pattern, acceptance));
+}
+
 } // namespace firestone::lr

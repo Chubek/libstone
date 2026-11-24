@@ -68,6 +68,7 @@ struct LoopPlan {
     }
 
     bool usable() const { return (count != 0 || inverted) && count <= ranges.size(); }
+    bool all_bytes() const { return count == 0 && inverted; }
 
 #if defined(FIRESTONE_LR_VECTOR_BYTES)
     bool all_match(const char* input) const {
@@ -128,6 +129,12 @@ public:
             std::size_t offset = 0, next_vector = 0;
             while (offset < input.size()) {
                 const auto& loop = loops_[state];
+                if (loop.all_bytes()) {
+                    // No later input can leave this state. Either it accepts
+                    // the entire suffix, or the previous match remains best.
+                    if (states[state].acceptance) best = DFAMatch{input.size(), *states[state].acceptance};
+                    return best;
+                }
                 if (offset >= next_vector && loop.usable() && input.size() - offset >= 16) {
                     if (loop.all_match(input.data() + offset)) {
                         offset += 16;

@@ -18,6 +18,10 @@ inline std::string emitAssembly(const DFA& dfa, std::string_view name = "firesto
     const auto& states = dfa.states();
     if (states.size() > 65535)
         throw std::length_error("lexer assembly codegen: more than 65535 states");
+    const auto alphabet = dfa.byte_classes();
+    const auto saved_columns = byte_count - alphabet.representatives.size();
+    const auto compressed = saved_columns != 0 && states.size() > byte_count / (2 * saved_columns);
+    const auto width = compressed ? alphabet.representatives.size() : byte_count;
     std::ostringstream out;
     out.imbue(std::locale::classic());
     // r10/r11: table bases, r12: token start, r13: probe cursor, r14: DFA state,
@@ -68,8 +72,11 @@ inline std::string emitAssembly(const DFA& dfa, std::string_view name = "firesto
     cmpq %rsi,%r13
     je 4f
     movzbl (%rdi,%r13),%eax
-    shlq $8,%r14
-    addq %rax,%r14
+)";
+    if (compressed)
+        out << "    movzbl -256(%r10,%rax),%eax\n    imulq $" << width << ",%r14,%r14\n";
+    else out << "    shlq $8,%r14\n";
+    out << R"(    addq %rax,%r14
     movzwl (%r10,%r14,2),%r14d
     testl %r14d,%r14d
     jz 4f
@@ -135,13 +142,22 @@ inline std::string emitAssembly(const DFA& dfa, std::string_view name = "firesto
     ret
     .cfi_endproc
 )";
-    out << ".size " << name << ",.-" << name << "\n.section .rodata\n.p2align 1\n9:\n";
-    for (const auto& state : states)
+    out << ".size " << name << ",.-" << name << "\n.section .rodata\n.p2align 1\n";
+    if (compressed) {
+        // Exactly 256 bytes immediately before the transition table at 9.
         for (std::size_t byte = 0; byte < byte_count; ++byte) {
-            auto target = state.transitions[byte];
-            out << (byte % 16 == 0 ? "    .word " : ",") << (target == no_state ? 0 : target + 1);
+            out << (byte % 16 == 0 ? "    .byte " : ",") << static_cast<unsigned int>(alphabet.index[byte]);
             if (byte % 16 == 15) out << '\n';
         }
+    }
+    out << "9:\n";
+    for (const auto& state : states) {
+        for (std::size_t cls = 0; cls < width; ++cls) {
+            auto target = state.transitions[compressed ? alphabet.representatives[cls] : cls];
+            out << (cls % 16 == 0 ? "    .word " : ",") << (target == no_state ? 0 : target + 1);
+            if (cls % 16 == 15 || cls + 1 == width) out << '\n';
+        }
+    }
     out << ".p2align 3\n10:\n";
     for (const auto& state : states) {
         if (state.acceptance) {
@@ -149,7 +165,11 @@ inline std::string emitAssembly(const DFA& dfa, std::string_view name = "firesto
             out << "    .quad " << state.acceptance->token << ',' << (state.acceptance->skip ? 2 : 1) << '\n';
         } else out << "    .quad 0,0\n";
     }
-    out << ".section .note.GNU-stack,\"\",@progbits\n";
+    // GNU as can warn if concatenated scanners specify this section type twice.
+    out << ".ifndef .Lfirestone_lr_stack_note\n"
+           ".set .Lfirestone_lr_stack_note,1\n"
+           ".section .note.GNU-stack,\"\",@progbits\n"
+           ".endif\n";
     return out.str();
 }
 

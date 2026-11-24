@@ -2,8 +2,10 @@
 #include <bitset>
 #include <climits>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -73,6 +75,30 @@ public:
         (void)states_.at(to);
         auto& state = states_.at(from);
         if (bytes.any()) state.edges.push_back({bytes, to});
+    }
+
+    // Copy a disjoint alternative and connect it by epsilon from this start.
+    // Existing state IDs and both automata's acceptance records are preserved.
+    // Self-composition is allowed.
+    void add_alternative(const NFA& alternative) {
+        const auto base = states_.size();
+        if (start_ >= base || alternative.start_ >= alternative.states_.size())
+            throw std::invalid_argument("NFA: no start state");
+        if (alternative.states_.size() > states_.max_size() - base)
+            throw std::length_error("NFA: too many states");
+        auto added = alternative.states_;
+        for (auto& state : added) {
+            for (auto& target : state.epsilon) target += base;
+            for (auto& edge : state.edges) edge.target += base;
+        }
+        states_[start_].epsilon.push_back(base + alternative.start_);
+        try {
+            states_.insert(states_.end(), std::make_move_iterator(added.begin()),
+                           std::make_move_iterator(added.end()));
+        } catch (...) {
+            states_[start_].epsilon.pop_back();
+            throw;
+        }
     }
 };
 

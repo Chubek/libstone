@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -15,7 +16,7 @@ namespace firestone::lr {
 
 using LRState = std::size_t;
 
-enum class LRMode { canonicalLR1, lalr1 };
+enum class LRMode { canonicalLR1, lalr1, slr1 };
 enum class LRActionKind { shift, reduce, accept };
 
 struct LRAction {
@@ -33,21 +34,26 @@ struct LRConflict {
 
 class LRTable {
 public:
+    using ActionRow = std::map<Symbol, std::vector<LRAction>>;
+    using GotoRow = std::map<Symbol, LRState>;
+
     const Grammar& grammar() const { return grammar_; }
     LRMode mode() const { return mode_; }
     std::size_t stateCount() const { return actions_.size(); }
     const std::vector<LRConflict>& conflicts() const { return conflicts_; }
+    const ActionRow& actionRow(LRState state) const { return actions_.at(state); }
+    const GotoRow& gotoRow(LRState state) const { return gotos_.at(state); }
 
     // State zero is the initial state. An empty action cell means syntax error.
     const std::vector<LRAction>& actions(LRState state, Symbol lookahead) const {
         static const std::vector<LRAction> empty;
-        const auto& row = actions_.at(state);
+        const auto& row = actionRow(state);
         const auto it = row.find(lookahead);
         return it == row.end() ? empty : it->second;
     }
 
     std::optional<LRState> goTo(LRState state, Symbol nonterminal) const {
-        const auto& row = gotos_.at(state);
+        const auto& row = gotoRow(state);
         const auto it = row.find(nonterminal);
         return it == row.end() ? std::nullopt : std::optional<LRState>(it->second);
     }
@@ -55,8 +61,8 @@ public:
 private:
     Grammar grammar_;
     LRMode mode_;
-    std::vector<std::map<Symbol, std::vector<LRAction>>> actions_;
-    std::vector<std::map<Symbol, LRState>> gotos_;
+    std::vector<ActionRow> actions_;
+    std::vector<GotoRow> gotos_;
     std::vector<LRConflict> conflicts_;
 
     LRTable(Grammar grammar, LRMode mode) : grammar_(std::move(grammar)), mode_(mode) {}
@@ -83,33 +89,16 @@ struct LRItemState {
 
 class LRItemBuilder {
 public:
-    explicit LRItemBuilder(const Grammar& grammar)
-        : grammar_(grammar), byLhs_(grammar.symbols().size()), first_(byLhs_.size()), nullable_(byLhs_.size()) {
+    LRItemBuilder(const Grammar& grammar, bool slr)
+        : grammar_(grammar), slr_(slr), byLhs_(grammar.symbols().size()),
+          useful_(slr ? usefulProductions(grammar) : std::vector<bool>{}),
+          first_(grammar, slr ? &useful_ : nullptr) {
         for (std::size_t i = 0; i < grammar_.productions().size(); ++i) {
-            byLhs_[grammar_.productions()[i].lhs].push_back(i);
+            if (!slr_ || useful_[i]) byLhs_[grammar_.productions()[i].lhs].push_back(i);
         }
-        for (Symbol s = 0; s < first_.size(); ++s) {
-            if (grammar_.symbols()[s].terminal) first_[s].insert(s);
-        }
-        bool changed;
-        do {
-            changed = false;
-            for (const auto& rule : grammar_.productions()) {
-                bool allNullable = true;
-                for (const auto s : rule.rhs) {
-                    changed |= unite(first_[rule.lhs], first_[s]);
-                    if (!nullable_[s]) {
-                        allNullable = false;
-                        break;
-                    }
-                }
-                if (allNullable && !nullable_[rule.lhs]) {
-                    nullable_[rule.lhs] = true;
-                    changed = true;
-                }
-            }
-        } while (changed);
     }
+
+    std::vector<std::set<Symbol>> follow() const { return first_.follow(grammar_, slr_ ? &useful_ : nullptr); }
 
     std::size_t augmented() const { return grammar_.productions().size(); }
 
@@ -117,7 +106,8 @@ public:
         return item.dot == (item.production == augmented() ? 1 : grammar_.productions()[item.production].rhs.size());
     }
 
-    std::vector<LRItemState> canonical() const {
+    std::vector<LRItemState> build() const {
+        if (slr_ && byLhs_[grammar_.start()].empty()) return {LRItemState{}};
         const auto initial = closure({{augmented(), 0, grammar_.eof()}});
         std::vector<LRItemState> states{{initial, {}}};
         std::map<LRItemSet, LRState> ids{{initial, 0}};
@@ -171,15 +161,50 @@ public:
 
 private:
     const Grammar& grammar_;
+    bool slr_;
     std::vector<std::vector<std::size_t>> byLhs_;
-    std::vector<std::set<Symbol>> first_;
-    std::vector<bool> nullable_;
+    std::vector<bool> useful_;
+    GrammarFirst first_;
 
-    static bool unite(std::set<Symbol>& into, const std::set<Symbol>& from) {
-        if (&into == &from) return false;
-        const auto before = into.size();
-        into.insert(from.begin(), from.end());
-        return into.size() != before;
+    static std::vector<bool> usefulProductions(const Grammar& grammar) {
+        // Dead contexts can introduce non-progressing reductions into LR(0)
+        // states. Remove them before SLR analysis without renumbering rules.
+        const auto& rules = grammar.productions();
+        std::vector<bool> productive(grammar.symbols().size());
+        for (Symbol s = 0; s < productive.size(); ++s) productive[s] = grammar.symbols()[s].terminal;
+        std::vector<bool> productiveRules(rules.size());
+        std::vector<std::vector<std::size_t>> byLhs(productive.size());
+        bool changed;
+        do {
+            changed = false;
+            for (std::size_t p = 0; p < rules.size(); ++p) {
+                if (productiveRules[p]) continue;
+                const auto& rule = rules[p];
+                if (std::all_of(rule.rhs.begin(), rule.rhs.end(), [&](Symbol s) { return productive[s]; })) {
+                    productiveRules[p] = true;
+                    byLhs[rule.lhs].push_back(p);
+                    changed |= !productive[rule.lhs];
+                    productive[rule.lhs] = true;
+                }
+            }
+        } while (changed);
+
+        std::vector<bool> reachable(byLhs.size());
+        std::vector<bool> useful(rules.size());
+        std::vector<Symbol> work{grammar.start()};
+        reachable[grammar.start()] = true;
+        for (std::size_t i = 0; i < work.size(); ++i) {
+            for (const auto production : byLhs[work[i]]) {
+                useful[production] = true;
+                for (const auto s : rules[production].rhs) {
+                    if (!reachable[s] && !byLhs[s].empty()) {
+                        reachable[s] = true;
+                        work.push_back(s);
+                    }
+                }
+            }
+        }
+        return useful;
     }
 
     Symbol afterDot(const LRItem& item) const {
@@ -187,16 +212,12 @@ private:
     }
 
     std::set<Symbol> lookaheads(const LRItem& item) const {
-        std::set<Symbol> result;
-        if (item.production != augmented()) {
-            const auto& rhs = grammar_.productions()[item.production].rhs;
-            for (auto i = item.dot + 1; i < rhs.size(); ++i) {
-                unite(result, first_[rhs[i]]);
-                if (!nullable_[rhs[i]]) return result;
-            }
-        }
-        result.insert(item.lookahead);
-        return result;
+        // In LR(0) closure a fixed placeholder replaces actual lookaheads.
+        if (slr_ || item.production == augmented()) return {item.lookahead};
+        const auto& rhs = grammar_.productions()[item.production].rhs;
+        auto result = first_.sequence(rhs, item.dot + 1);
+        if (result.nullable) result.terminals.insert(item.lookahead);
+        return std::move(result.terminals);
     }
 
     LRItemSet closure(const LRItemSet& kernel) const {
@@ -223,11 +244,17 @@ private:
 
 // Conflicting actions are preserved; no precedence or implicit conflict
 // resolution is applied. LALR merges equal LR(0) kernels of canonical states.
+// SLR uses LR(0) states and FOLLOW of the LHS, considering only productive
+// productions reachable from the start through other productive productions.
 inline LRTable generateLRTable(const Grammar& grammar, LRMode mode = LRMode::canonicalLR1) {
+    if (mode != LRMode::canonicalLR1 && mode != LRMode::lalr1 && mode != LRMode::slr1)
+        throw std::invalid_argument("unknown LR table mode");
     grammar.validate();
-    const detail::LRItemBuilder builder(grammar);
-    auto states = builder.canonical();
+    const bool slr = mode == LRMode::slr1;
+    const detail::LRItemBuilder builder(grammar, slr);
+    auto states = builder.build();
     if (mode == LRMode::lalr1) states = builder.merge(states);
+    const auto follow = slr ? builder.follow() : std::vector<std::set<Symbol>>{};
     LRTable table(grammar, mode);
     table.actions_.resize(states.size());
     table.gotos_.resize(states.size());
@@ -243,8 +270,14 @@ inline LRTable generateLRTable(const Grammar& grammar, LRMode mode = LRMode::can
         }
         for (const auto& item : states[i].items) {
             if (!builder.complete(item)) continue;
-            if (item.production == builder.augmented()) addAction(grammar.eof(), {LRActionKind::accept, 0});
-            else addAction(item.lookahead, {LRActionKind::reduce, item.production});
+            if (item.production == builder.augmented()) {
+                addAction(grammar.eof(), {LRActionKind::accept, 0});
+            } else if (slr) {
+                for (const auto token : follow[grammar.productions()[item.production].lhs])
+                    addAction(token, {LRActionKind::reduce, item.production});
+            } else {
+                addAction(item.lookahead, {LRActionKind::reduce, item.production});
+            }
         }
         for (const auto& entry : row) {
             if (entry.second.size() > 1) table.conflicts_.push_back({i, entry.first, entry.second});

@@ -1,5 +1,6 @@
 #pragma once
 #include "DFA.hpp"
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <string_view>
@@ -46,6 +47,16 @@ constexpr UTF8State utf8_step(UTF8State state, unsigned char byte) noexcept {
         case S::invalid: return S::invalid;
     }
     return S::invalid;
+}
+
+// Scalar automata split the stream boundary into distinct start and accept
+// states and have no transitions out of the accept state.
+inline constexpr StateId utf8_scalar_end = static_cast<StateId>(UTF8State::invalid);
+
+constexpr StateId utf8_scalar_transition(StateId from, unsigned char byte) noexcept {
+    const auto next = utf8_step(static_cast<UTF8State>(from), byte);
+    if (next == UTF8State::invalid) return no_state;
+    return next == UTF8State::boundary ? utf8_scalar_end : static_cast<StateId>(next);
 }
 
 } // namespace detail
@@ -129,21 +140,35 @@ constexpr bool validate_utf8(std::string_view input) noexcept {
 }
 
 // Byte DFA for exactly one scalar, usable with Lexer, minimization or
-// code generation. Split the stream's boundary into a start and a terminal
-// accept state so successive scalars are separate matches.
+// code generation.
 inline DFA utf8_scalar_dfa(Acceptance acceptance = {}) {
-    using S = detail::UTF8State;
-    const auto end = static_cast<StateId>(S::invalid); // Reject has no DFA state.
+    constexpr auto end = detail::utf8_scalar_end;
     std::vector<DFAState> states(end + 1);
     states[end].acceptance = acceptance;
     for (StateId from = 0; from < end; ++from) {
-        for (std::size_t byte = 0; byte < byte_count; ++byte) {
-            const auto next = detail::utf8_step(static_cast<S>(from), static_cast<unsigned char>(byte));
-            if (next == S::invalid) continue;
-            states[from].transitions[byte] = next == S::boundary ? end : static_cast<StateId>(next);
-        }
+        for (std::size_t byte = 0; byte < byte_count; ++byte)
+            states[from].transitions[byte] = detail::utf8_scalar_transition(from, static_cast<unsigned char>(byte));
     }
-    return DFA(std::move(states), static_cast<StateId>(S::boundary));
+    return DFA(std::move(states));
+}
+
+// NFA for exactly one scalar: can be composed with byte regex rules before
+// determinization to provide a Unicode-aware lexer fallback.
+inline NFA utf8_scalar_nfa(Acceptance acceptance = {}) {
+    constexpr auto end = detail::utf8_scalar_end;
+    NFA result;
+    for (StateId id = 1; id <= end; ++id) result.add_state();
+    for (StateId from = 0; from < end; ++from) {
+        std::array<ByteSet, end + 1> by_target{};
+        for (std::size_t byte = 0; byte < byte_count; ++byte) {
+            const auto target = detail::utf8_scalar_transition(from, static_cast<unsigned char>(byte));
+            if (target != no_state) by_target[target].set(byte);
+        }
+        for (StateId target = 0; target <= end; ++target)
+            result.add_transition(from, by_target[target], target);
+    }
+    result.set_acceptance(end, acceptance);
+    return result;
 }
 
 } // namespace firestone::lr

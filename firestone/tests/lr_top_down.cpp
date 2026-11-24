@@ -1,5 +1,6 @@
 #include "liblr/ATN.hpp"
 #include "liblr/GLL.hpp"
+#include "liblr/GLR.hpp"
 #include "liblr/LLFunctionDriven.hpp"
 #include "liblr/LLTableDriven.hpp"
 #include "liblr/PEG.hpp"
@@ -276,6 +277,20 @@ bool cfgAccepts(const Grammar& grammar, const std::vector<Symbol>& tokens) {
     return spans[grammar.start()][tokens.size()];
 }
 
+void checkGeneralizedLR(const GLRParser& parser, const std::vector<Symbol>& tokens, bool accepted) {
+    CHECK(parser.accepts(tokens) == accepted);
+    const auto forest = parser.parse(tokens);
+    CHECK(static_cast<bool>(forest) == accepted);
+    if (!forest) return;
+    const auto& root = forest->nodes.at(forest->root);
+    CHECK(root.symbol == parser.table().grammar().start());
+    CHECK(root.begin == 0 && root.end == tokens.size());
+    CHECK(!root.alternatives.empty());
+    const auto tree = forest->tree();
+    CHECK(tree);
+    checkTree(parser.table().grammar(), tokens, *tree);
+}
+
 void testGeneralizedAgainstOracle() {
     std::mt19937 rng(0x4180u);
     for (int trial = 0; trial < 60; ++trial) {
@@ -297,6 +312,9 @@ void testGeneralizedAgainstOracle() {
         }
         const GLL gll(grammar);
         const ATN atn(grammar);
+        const GLRParser canonical(grammar);
+        const GLRParser lalr(grammar, LRMode::lalr1);
+        const GLRParser slr(grammar, LRMode::slr1);
         for (unsigned length = 0; length <= 4; ++length) {
             for (unsigned mask = 0; mask < (1u << length); ++mask) {
                 std::vector<Symbol> tokens(length);
@@ -304,6 +322,9 @@ void testGeneralizedAgainstOracle() {
                 const bool accepted = cfgAccepts(grammar, tokens);
                 checkGeneralized(gll, tokens, accepted);
                 checkGeneralized(atn, tokens, accepted);
+                checkGeneralizedLR(canonical, tokens, accepted);
+                checkGeneralizedLR(lalr, tokens, accepted);
+                checkGeneralizedLR(slr, tokens, accepted);
             }
         }
     }

@@ -30,10 +30,11 @@ public:
     RecursiveDescent(const Grammar&, const std::vector<Symbol>&&) = delete;
 
     std::size_t position() const noexcept { return position_; }
-    bool atEnd() const noexcept { return position_ == tokens_.size(); }
+    std::size_t remaining() const noexcept { return tokens_.size() - position_; }
+    bool atEnd() const noexcept { return remaining() == 0; }
 
     std::optional<Symbol> peek(std::size_t offset = 0) const noexcept {
-        if (offset >= tokens_.size() - position_) return std::nullopt;
+        if (offset >= remaining()) return std::nullopt;
         return tokens_[position_ + offset];
     }
 
@@ -48,6 +49,15 @@ public:
         return true;
     }
 
+    // Match the entire sequence or leave the cursor unchanged.
+    bool consumeSequence(const std::vector<Symbol>& symbols) noexcept {
+        if (symbols.size() > remaining()) return false;
+        for (std::size_t i = 0; i < symbols.size(); ++i)
+            if (tokens_[position_ + i] != symbols[i]) return false;
+        position_ += symbols.size();
+        return true;
+    }
+
     void restore(std::size_t checkpoint) {
         if (checkpoint > tokens_.size())
             throw std::out_of_range("recursive descent checkpoint outside input");
@@ -57,19 +67,13 @@ public:
     // A failed or throwing attempt restores the cursor, not outside side effects.
     template<class Function>
     bool attempt(Function&& parse) {
-        const auto checkpoint = position_;
-        try {
-            if (std::invoke(std::forward<Function>(parse), *this)) {
-                if (position_ < checkpoint)
-                    throw std::logic_error("recursive descent attempt moved backward");
-                return true;
-            }
-        } catch (...) {
-            position_ = checkpoint;
-            throw;
-        }
-        position_ = checkpoint;
-        return false;
+        return transaction(std::forward<Function>(parse), true);
+    }
+
+    // Probe a parser without committing any cursor movement.
+    template<class Function>
+    bool lookahead(Function&& parse) {
+        return transaction(std::forward<Function>(parse), false);
     }
 
     // Use a distinct id for each user rule. Calls such as A -> B -> A at the
@@ -85,6 +89,23 @@ public:
     }
 
 private:
+    struct Checkpoint {
+        std::size_t& position;
+        std::size_t saved;
+        bool commit = false;
+        ~Checkpoint() { if (!commit) position = saved; }
+    };
+
+    template<class Function>
+    bool transaction(Function&& parse, bool consume) {
+        Checkpoint guard{position_, position_};
+        if (!std::invoke(std::forward<Function>(parse), *this)) return false;
+        if (position_ < guard.saved)
+            throw std::logic_error("recursive descent attempt moved backward");
+        guard.commit = consume;
+        return true;
+    }
+
     using Calls = std::set<std::pair<Symbol, std::size_t>>;
     struct ActiveRule {
         Calls& calls;

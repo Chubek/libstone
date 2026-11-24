@@ -51,11 +51,13 @@ void stream() {
 
 void errors() {
     const auto dfa = utf8_scalar_dfa();
+    const auto from_nfa = determinize(utf8_scalar_nfa());
     auto expect_bad = [&](std::string_view text, std::size_t offset) {
         CHECK(utf8_error_offset(text) == offset);
         CHECK(!validate_utf8(text));
         CHECK(!decode_utf8_prefix(text));
         CHECK(!dfa.match_prefix(text));
+        CHECK(!from_nfa.match_prefix(text));
     };
     for (const auto text : {"\x80", "\xbf", "\xc0\x80", "\xc1\xbf", "\xf5\x80\x80\x80",
                             "\xf8\x88\x80\x80\x80", "\xff"})
@@ -82,6 +84,7 @@ void every_scalar() {
     // Encode from the numeric scalar value, independently of the DFA's
     // byte classification. Check all widths, including U+0000.
     const auto dfa = utf8_scalar_dfa({7, 2, false});
+    const auto from_nfa = minimize(determinize(utf8_scalar_nfa({7, 2, false})));
     for (std::uint_least32_t cp = 0; cp <= 0x10ffff; ++cp) {
         if (cp >= 0xd800 && cp <= 0xdfff) continue;
         std::array<char, 4> bytes{};
@@ -98,7 +101,25 @@ void every_scalar() {
         const auto decoded = decode_utf8_prefix(text);
         CHECK(decoded && decoded->length == length && decoded->code_point == cp);
         CHECK(dfa.match_prefix(text) == DFAMatch{length, {7, 2, false}});
+        CHECK(from_nfa.match_prefix(text) == DFAMatch{length, {7, 2, false}});
     }
+}
+
+void lexer_with_scalar_fallback() {
+    NFA rules;
+    add_regex_alternative(rules, "[a-z]+", {1, 0, false});
+    add_regex_alternative(rules, R"(\xc3\xa9)", {2, 1, false});
+    add_regex_alternative(rules, " +", {3, 2, true});
+    rules.add_alternative(utf8_scalar_nfa({4, 3, false}));
+    const Lexer mixed(minimize(determinize(rules)));
+    const std::string_view text(" hi\xc3\xa9\xf0\x9f\x98\x80\xff\0", 11);
+    std::size_t offset = 0;
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::Token, 1, 1, 2});
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::Token, 2, 3, 2});
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::Token, 4, 5, 4});
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::Error, 0, 9, 1});
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::Token, 4, 10, 1});
+    CHECK(mixed.next(text, offset) == LexToken{LexStatus::End, 0, 11, 0});
 }
 
 void lexer() {
@@ -124,6 +145,7 @@ int main() {
         errors();
         every_scalar();
         lexer();
+        lexer_with_scalar_fallback();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

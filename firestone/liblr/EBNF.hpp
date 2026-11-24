@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -118,6 +119,88 @@ inline void validateInput(const Grammar& grammar, const std::vector<Symbol>& inp
 
 namespace detail {
 
+// Shared FIRST/nullable analysis for predictive and LR table construction.
+// Epsilon is represented separately, never as an entry in a terminal set.
+// The grammar must already be validated.
+class GrammarFirst {
+public:
+    explicit GrammarFirst(const Grammar& grammar, const std::vector<bool>* includedProductions = nullptr)
+        : nullable_(grammar.symbols().size()), first_(grammar.symbols().size()) {
+        for (Symbol s = 0; s < first_.size(); ++s)
+            if (grammar.symbols()[s].terminal) first_[s].insert(s);
+        bool changed;
+        do {
+            changed = false;
+            for (std::size_t p = 0; p < grammar.productions().size(); ++p) {
+                if (includedProductions && !(*includedProductions)[p]) continue;
+                const auto& rule = grammar.productions()[p];
+                if (extend(first_[rule.lhs], rule.rhs, 0, changed) && !nullable_[rule.lhs]) {
+                    nullable_[rule.lhs] = true;
+                    changed = true;
+                }
+            }
+        } while (changed);
+    }
+
+    bool nullable(Symbol s) const { return nullable_.at(s); }
+    const std::set<Symbol>& first(Symbol s) const { return first_.at(s); }
+
+    struct SequenceFirst {
+        std::set<Symbol> terminals;
+        bool nullable;
+    };
+
+    SequenceFirst sequence(const std::vector<Symbol>& rhs, std::size_t begin = 0) const {
+        SequenceFirst result;
+        bool changed = false;
+        result.nullable = extend(result.terminals, rhs, begin, changed);
+        return result;
+    }
+
+    std::vector<std::set<Symbol>> follow(
+        const Grammar& grammar, const std::vector<bool>* includedProductions = nullptr) const {
+        std::vector<std::set<Symbol>> result(first_.size());
+        result[grammar.start()].insert(grammar.eof());
+        bool changed;
+        do {
+            changed = false;
+            for (std::size_t p = 0; p < grammar.productions().size(); ++p) {
+                if (includedProductions && !(*includedProductions)[p]) continue;
+                const auto& rule = grammar.productions()[p];
+                auto suffix = result[rule.lhs];
+                for (auto it = rule.rhs.rbegin(); it != rule.rhs.rend(); ++it) {
+                    const auto s = *it;
+                    if (!grammar.symbols()[s].terminal) changed |= merge(result[s], suffix);
+                    if (nullable_[s]) merge(suffix, first_[s]);
+                    else suffix = first_[s];
+                }
+            }
+        } while (changed);
+        return result;
+    }
+
+private:
+    static bool merge(std::set<Symbol>& into, const std::set<Symbol>& from) {
+        if (&into == &from) return false;
+        const auto before = into.size();
+        into.insert(from.begin(), from.end());
+        return into.size() != before;
+    }
+
+    bool extend(std::set<Symbol>& terminals, const std::vector<Symbol>& rhs,
+                std::size_t begin, bool& changed) const {
+        for (auto i = begin; i < rhs.size(); ++i) {
+            const auto s = rhs[i];
+            changed |= merge(terminals, first_[s]);
+            if (!nullable_[s]) return false;
+        }
+        return true;
+    }
+
+    std::vector<bool> nullable_;
+    std::vector<std::set<Symbol>> first_;
+};
+
 class EBNFReader {
 public:
     explicit EBNFReader(std::string_view source) : source_(source) {}
@@ -157,7 +240,10 @@ private:
         while (offset_ < source_.size()) {
             const auto c = source_[offset_];
             if (c == '#') {
-                while (offset_ < source_.size() && source_[offset_] != '\n') ++offset_;
+                while (offset_ < source_.size() && source_[offset_] != '\n' && source_[offset_] != '\r') {
+                    if (source_[offset_] == '\0') fail("unexpected NUL");
+                    ++offset_;
+                }
             } else if (c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f' || c == '\v') {
                 ++offset_;
             } else {
@@ -189,6 +275,18 @@ private:
         return std::string(source_.substr(begin, offset_ - begin));
     }
 
+    unsigned char hexDigit() {
+        if (offset_ == source_.size()) fail("expected two hex digits");
+        const auto c = source_[offset_];
+        unsigned char value;
+        if (digit(c)) value = static_cast<unsigned char>(c - '0');
+        else if (c >= 'a' && c <= 'f') value = static_cast<unsigned char>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') value = static_cast<unsigned char>(c - 'A' + 10);
+        else fail("expected two hex digits");
+        ++offset_;
+        return value;
+    }
+
     Symbol literal() {
         const auto quote = source_[offset_++];
         std::string text;
@@ -206,7 +304,11 @@ private:
                 if (c == 'n') c = '\n';
                 else if (c == 'r') c = '\r';
                 else if (c == 't') c = '\t';
-                else if (c != '\'' && c != '"' && c != '\\') fail("unknown escape");
+                else if (c == '0') c = '\0';
+                else if (c == 'x') {
+                    const auto high = hexDigit();
+                    c = static_cast<char>(16 * high + hexDigit());
+                } else if (c != '\'' && c != '"' && c != '\\') fail("unknown escape");
             } else if (c == '\0' || c == '\n' || c == '\r') {
                 fail("unexpected NUL or line break in terminal literal");
             }
@@ -279,6 +381,7 @@ private:
 // atoms, | separates alternatives, and an empty alternative means epsilon.
 // Atoms are bare nonterminal names, single/double-quoted token names, or
 // groups (), [], {} (group, optional, repetition); postfix ?, *, + also work.
+// Literals accept \n, \r, \t, \0, \xHH, and escaped quotes and backslashes.
 // # starts a line comment. %start name; overrides the default first rule.
 // Desugaring introduces ordinary nonterminals, visible in parser results.
 inline Grammar readEBNF(std::string_view source) {

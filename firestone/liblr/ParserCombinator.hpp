@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -82,6 +83,20 @@ public:
             });
     }
 
+    // Select the next parser from the first parser's value.
+    template<class Function>
+    auto flatMap(Function select) const
+        -> ParserCombinator<typename std::decay_t<std::invoke_result_t<const Function&, T>>::Value> {
+        using U = typename std::decay_t<std::invoke_result_t<const Function&, T>>::Value;
+        return ParserCombinator<U>([parser = *this, select = std::move(select)]
+            (const std::vector<Symbol>& tokens, std::size_t begin)
+            -> std::optional<CombinatorMatch<U>> {
+                auto first = parser.match(tokens, begin);
+                if (!first) return std::nullopt;
+                return std::invoke(select, std::move(first->value)).match(tokens, first->end);
+            });
+    }
+
     ParserCombinator orElse(ParserCombinator alternative) const {
         return ParserCombinator([first = *this, second = std::move(alternative)]
             (const std::vector<Symbol>& tokens, std::size_t begin) -> Result {
@@ -101,11 +116,20 @@ public:
     }
 
     ParserCombinator<std::vector<T>> many(std::size_t minimum = 0) const {
-        return ParserCombinator<std::vector<T>>([parser = *this, minimum]
+        return repeat(minimum, std::numeric_limits<std::size_t>::max());
+    }
+
+    // Greedy, bounded repetition; never probes the body past the maximum.
+    ParserCombinator<std::vector<T>> repeat(std::size_t minimum, std::size_t maximum) const {
+        if (minimum > maximum)
+            throw std::invalid_argument("parser combinator repetition minimum exceeds maximum");
+        return ParserCombinator<std::vector<T>>([parser = *this, minimum, maximum]
             (const std::vector<Symbol>& tokens, std::size_t pos)
             -> std::optional<CombinatorMatch<std::vector<T>>> {
                 std::vector<T> values;
-                while (auto result = parser.match(tokens, pos)) {
+                while (values.size() < maximum) {
+                    auto result = parser.match(tokens, pos);
+                    if (!result) break;
                     if (result->end == pos)
                         throw std::invalid_argument("parser combinator repetition did not consume input");
                     pos = result->end;

@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -36,8 +37,10 @@ public:
     TopDownWorklist(const Network& network, const std::vector<Symbol>& tokens, bool witness)
         : network_(network), tokens_(tokens), witness_(witness) {}
 
-    bool run(Symbol start) {
-        const auto root = enter(start, 0);
+    struct Match { std::size_t end, proof; };
+
+    std::optional<Match> run(Symbol start, std::size_t begin = 0, bool prefix = false) {
+        const auto root = enter(start, begin);
         while (!agenda_.empty()) {
             const auto descriptor = agenda_.front();
             agenda_.pop_front();
@@ -66,17 +69,19 @@ public:
                 }
             });
             const auto accepted = calls_[root].returns.find(tokens_.size());
-            if (accepted != calls_[root].returns.end()) {
-                result_ = accepted->second;
-                return true;
-            }
+            if (accepted != calls_[root].returns.end())
+                return Match{accepted->first, accepted->second};
         }
-        return false;
+        if (prefix && !calls_[root].returns.empty()) {
+            const auto best = calls_[root].returns.rbegin();
+            return Match{best->first, best->second};
+        }
+        return std::nullopt;
     }
 
-    ParseNode tree() const {
+    ParseNode tree(std::size_t proof) const {
         ParseNode root{};
-        std::vector<std::pair<std::size_t, ParseNode*>> work{{result_, &root}};
+        std::vector<std::pair<std::size_t, ParseNode*>> work{{proof, &root}};
         while (!work.empty()) {
             const auto [id, node] = work.back();
             work.pop_back();
@@ -165,7 +170,6 @@ private:
     const Network& network_;
     const std::vector<Symbol>& tokens_;
     bool witness_;
-    std::size_t result_ = 0;
     std::map<std::pair<Symbol, std::size_t>, std::size_t> callIds_;
     std::vector<Call> calls_;
     std::set<std::tuple<std::size_t, std::size_t, std::size_t>> seen_;
@@ -178,7 +182,7 @@ template<class Network>
 bool topDownAccepts(const Network& network, const Grammar& grammar, const std::vector<Symbol>& tokens) {
     validateInput(grammar, tokens);
     TopDownWorklist<Network> work(network, tokens, false);
-    return work.run(grammar.start());
+    return work.run(grammar.start()).has_value();
 }
 
 template<class Network>
@@ -186,8 +190,9 @@ std::optional<ParseNode> topDownParse(const Network& network, const Grammar& gra
                                      const std::vector<Symbol>& tokens) {
     validateInput(grammar, tokens);
     TopDownWorklist<Network> work(network, tokens, true);
-    if (!work.run(grammar.start())) return std::nullopt;
-    return work.tree();
+    const auto match = work.run(grammar.start());
+    if (!match) return std::nullopt;
+    return work.tree(match->proof);
 }
 
 } // namespace detail
@@ -221,7 +226,35 @@ public:
         return detail::topDownParse(network_, grammar_, tokens);
     }
 
+    // Longest complete start-rule match at begin, including an empty match.
+    // The result (and tree spans) is relative to the original token vector.
+    std::optional<std::size_t> matchPrefix(const std::vector<Symbol>& tokens) const {
+        return matchPrefixAt(tokens, 0);
+    }
+
+    std::optional<std::size_t> matchPrefixAt(const std::vector<Symbol>& tokens, std::size_t begin) const {
+        validatePrefix(tokens, begin);
+        detail::TopDownWorklist<Network> work(network_, tokens, false);
+        const auto match = work.run(grammar_.start(), begin, true);
+        if (!match) return std::nullopt;
+        return match->end;
+    }
+
+    std::optional<ParseNode> parsePrefix(const std::vector<Symbol>& tokens,
+                                         std::size_t begin = 0) const {
+        validatePrefix(tokens, begin);
+        detail::TopDownWorklist<Network> work(network_, tokens, true);
+        const auto match = work.run(grammar_.start(), begin, true);
+        if (!match) return std::nullopt;
+        return work.tree(match->proof);
+    }
+
 private:
+    void validatePrefix(const std::vector<Symbol>& tokens, std::size_t begin) const {
+        if (begin > tokens.size()) throw std::out_of_range("GLL position outside input");
+        validateInput(grammar_, tokens);
+    }
+
     struct Network {
         std::vector<std::vector<std::size_t>> entries;
         std::vector<detail::TopDownArc> slots;

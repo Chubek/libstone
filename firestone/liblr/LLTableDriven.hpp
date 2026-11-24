@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace firestone::lr {
@@ -24,66 +25,20 @@ struct LLConflict {
 
 class LLTable {
 public:
-    explicit LLTable(Grammar grammar) : grammar_(std::move(grammar)) {
-        grammar_.validate();
+    explicit LLTable(Grammar grammar)
+        : grammar_(std::move(grammar)), first_(analyze(grammar_)), follow_(first_.follow(grammar_)),
+          rows_(grammar_.symbols().size()) {
         const auto count = grammar_.symbols().size();
-        nullable_.resize(count);
-        first_.resize(count);
-        follow_.resize(count);
-        rows_.resize(count);
-        for (Symbol symbol = 0; symbol < count; ++symbol)
-            if (grammar_.symbols()[symbol].terminal) first_[symbol].insert(symbol);
-
-        bool changed;
-        do {
-            changed = false;
-            for (const auto& production : grammar_.productions()) {
-                auto& lhs = first_[production.lhs];
-                bool nullable = true;
-                for (const auto symbol : production.rhs) {
-                    changed = merge(lhs, first_[symbol]) || changed;
-                    if (!nullable_[symbol]) {
-                        nullable = false;
-                        break;
-                    }
-                }
-                if (nullable && !nullable_[production.lhs]) {
-                    nullable_[production.lhs] = true;
-                    changed = true;
-                }
-            }
-        } while (changed);
-
-        follow_[grammar_.start()].insert(grammar_.eof());
-        do {
-            changed = false;
-            for (const auto& production : grammar_.productions()) {
-                auto suffix = follow_[production.lhs];
-                for (auto it = production.rhs.rbegin(); it != production.rhs.rend(); ++it) {
-                    const auto symbol = *it;
-                    if (!grammar_.symbols()[symbol].terminal)
-                        changed = merge(follow_[symbol], suffix) || changed;
-                    if (nullable_[symbol]) merge(suffix, first_[symbol]);
-                    else suffix = first_[symbol];
-                }
-            }
-        } while (changed);
-
         findLeftRecursion();
         std::vector<std::map<Symbol, std::vector<std::size_t>>> candidates(count);
         for (std::size_t i = 0; i < grammar_.productions().size(); ++i) {
             const auto& production = grammar_.productions()[i];
-            std::set<Symbol> predict;
-            bool nullable = true;
-            for (const auto symbol : production.rhs) {
-                merge(predict, first_[symbol]);
-                if (!nullable_[symbol]) {
-                    nullable = false;
-                    break;
-                }
+            auto predict = first_.sequence(production.rhs);
+            if (predict.nullable) {
+                const auto& follow = follow_[production.lhs];
+                predict.terminals.insert(follow.begin(), follow.end());
             }
-            if (nullable) merge(predict, follow_[production.lhs]);
-            for (const auto token : predict) candidates[production.lhs][token].push_back(i);
+            for (const auto token : predict.terminals) candidates[production.lhs][token].push_back(i);
         }
         for (Symbol lhs = 0; lhs < count; ++lhs) {
             for (auto& cell : candidates[lhs]) {
@@ -94,13 +49,13 @@ public:
     }
 
     const Grammar& grammar() const noexcept { return grammar_; }
-    bool nullable(Symbol symbol) const { return nullable_.at(symbol); }
-    const std::set<Symbol>& first(Symbol symbol) const { return first_.at(symbol); }
+    bool nullable(Symbol symbol) const { return first_.nullable(symbol); }
+    const std::set<Symbol>& first(Symbol symbol) const { return first_.first(symbol); }
     const std::set<Symbol>& follow(Symbol symbol) const { return follow_.at(symbol); }
     const std::vector<LLConflict>& conflicts() const noexcept { return conflicts_; }
     // One closed left-corner cycle (including paths through nullable prefixes), or empty.
     const std::vector<Symbol>& leftRecursion() const noexcept { return leftRecursion_; }
-    bool isLL1() const noexcept { return conflicts_.empty() && leftRecursion_.empty(); }
+    bool isLL1() const noexcept { return !rows_.empty() && conflicts_.empty() && leftRecursion_.empty(); }
 
     // A conflicting or absent cell has no unique production.
     const std::map<Symbol, std::size_t>& row(Symbol lhs) const { return rows_.at(lhs); }
@@ -112,6 +67,7 @@ public:
     }
 
     void requireLL1() const {
+        if (rows_.empty()) throw std::invalid_argument("missing LL(1) table rows");
         if (!leftRecursion_.empty()) {
             std::string error = "LL(1) does not support left recursion: ";
             for (std::size_t i = 0; i < leftRecursion_.size(); ++i) {
@@ -132,11 +88,9 @@ public:
     }
 
 private:
-    static bool merge(std::set<Symbol>& into, const std::set<Symbol>& from) {
-        if (&into == &from) return false;
-        const auto before = into.size();
-        into.insert(from.begin(), from.end());
-        return before != into.size();
+    static detail::GrammarFirst analyze(const Grammar& grammar) {
+        grammar.validate();
+        return detail::GrammarFirst(grammar);
     }
 
     void findLeftRecursion() {
@@ -145,7 +99,7 @@ private:
             for (const auto symbol : production.rhs) {
                 if (grammar_.symbols()[symbol].terminal) break;
                 edges[production.lhs].push_back(symbol);
-                if (!nullable_[symbol]) break;
+                if (!first_.nullable(symbol)) break;
             }
         }
 
@@ -181,12 +135,17 @@ private:
     }
 
     Grammar grammar_;
-    std::vector<bool> nullable_;
-    std::vector<std::set<Symbol>> first_;
+    detail::GrammarFirst first_;
     std::vector<std::set<Symbol>> follow_;
     std::vector<std::map<Symbol, std::size_t>> rows_;
     std::vector<LLConflict> conflicts_;
     std::vector<Symbol> leftRecursion_;
+};
+
+struct LLSyntaxError {
+    std::size_t position; // Token index; tokens.size() at end of input.
+    Symbol found;         // Grammar::eof() when input is exhausted.
+    std::vector<Symbol> expected;
 };
 
 class LLTableDriven {
@@ -197,9 +156,27 @@ public:
     const LLTable& table() const noexcept { return table_; }
 
     std::optional<ParseNode> parse(const std::vector<Symbol>& tokens) const {
+        return parseImpl(tokens, nullptr);
+    }
+
+    // Reports lookaheads for the failing table row, or the literal terminal
+    // (including EOF) required by the stack. Invalid input symbols still throw.
+    std::variant<ParseNode, LLSyntaxError> parseWithDiagnostics(const std::vector<Symbol>& tokens) const {
+        LLSyntaxError error{};
+        if (auto root = parseImpl(tokens, &error)) return std::move(*root);
+        return error;
+    }
+
+private:
+    std::optional<ParseNode> parseImpl(const std::vector<Symbol>& tokens, LLSyntaxError* error) const {
         const auto& grammar = table_.grammar();
         validateInput(grammar, tokens);
         RecursiveDescent cursor(tokens);
+        const auto lookahead = [&] { return cursor.peek().value_or(grammar.eof()); };
+        const auto fail = [&](Symbol expected) {
+            if (error) *error = {cursor.position(), lookahead(), {expected}};
+            return std::nullopt;
+        };
         ParseNode root{grammar.start(), 0, 0, {}};
         struct Frame { ParseNode* node; bool closing; };
         std::vector<Frame> work{{&root, false}};
@@ -214,12 +191,21 @@ public:
             }
             node.begin = cursor.position();
             if (grammar.symbols()[node.symbol].terminal) {
-                if (!cursor.consume(node.symbol)) return std::nullopt;
+                if (!cursor.consume(node.symbol)) return fail(node.symbol);
                 node.end = cursor.position();
                 continue;
             }
-            const auto choice = table_.lookup(node.symbol, cursor.peek().value_or(grammar.eof()));
-            if (!choice) return std::nullopt;
+            const auto token = lookahead();
+            const auto choice = table_.lookup(node.symbol, token);
+            if (!choice) {
+                if (error) {
+                    const auto& row = table_.row(node.symbol);
+                    *error = {cursor.position(), token, {}};
+                    error->expected.reserve(row.size());
+                    for (const auto& entry : row) error->expected.push_back(entry.first);
+                }
+                return std::nullopt;
+            }
             const auto& rhs = grammar.productions()[*choice].rhs;
             node.children.resize(rhs.size());
             work.push_back({&node, true});
@@ -228,11 +214,10 @@ public:
                 work.push_back({&node.children[i - 1], false});
             }
         }
-        if (!cursor.atEnd()) return std::nullopt;
+        if (!cursor.atEnd()) return fail(grammar.eof());
         return root;
     }
 
-private:
     LLTable table_;
 };
 

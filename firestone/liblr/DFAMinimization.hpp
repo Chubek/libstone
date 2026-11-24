@@ -15,8 +15,10 @@ namespace firestone::lr {
 // states and states equivalent to the implicit rejecting sink are discarded.
 inline DFA minimize(const DFA& dfa) {
     const auto& states = dfa.states();
-    if (states.empty()) throw std::invalid_argument("DFA: no start state");
-    struct Incoming { StateId state; unsigned char byte; };
+    if (dfa.start() >= states.size()) throw std::invalid_argument("DFA: no start state");
+    const auto alphabet = dfa.byte_classes();
+    const auto width = alphabet.representatives.size();
+    struct Incoming { StateId state; unsigned char byte_class; };
     std::vector<std::vector<Incoming>> incoming(states.size());
     std::vector<bool> reached(states.size());
     std::vector<StateId> reachable{dfa.start()};
@@ -29,10 +31,10 @@ inline DFA minimize(const DFA& dfa) {
             live.push_back(state);
             productive[state] = true;
         }
-        for (std::size_t byte = 0; byte < byte_count; ++byte) {
-            auto target = states[state].transitions[byte];
+        for (std::size_t cls = 0; cls < width; ++cls) {
+            auto target = states[state].transitions[alphabet.representatives[cls]];
             if (target == no_state) continue;
-            incoming[target].push_back({state, static_cast<unsigned char>(byte)});
+            incoming[target].push_back({state, static_cast<unsigned char>(cls)});
             if (!reached[target]) {
                 reached[target] = true;
                 reachable.push_back(target);
@@ -81,8 +83,9 @@ inline DFA minimize(const DFA& dfa) {
         blocks[splitter].pending = false;
         // Snapshot all preimages before splitting any blocks (including splitter).
         for (auto target : blocks[splitter].members)
-            for (auto edge : incoming[target]) predecessors[edge.byte].push_back(edge.state);
-        for (auto& before : predecessors) {
+            for (auto edge : incoming[target]) predecessors[edge.byte_class].push_back(edge.state);
+        for (std::size_t cls = 0; cls < width; ++cls) {
+            auto& before = predecessors[cls];
             for (auto state : before) {
                 auto id = block_of[state];
                 if (selected[id].empty()) touched.push_back(id);
@@ -124,16 +127,22 @@ inline DFA minimize(const DFA& dfa) {
         const auto& from = states[blocks[order[i]].members.front()];
         result.emplace_back();
         result.back().acceptance = from.acceptance;
-        for (std::size_t byte = 0; byte < byte_count; ++byte) {
-            auto target = from.transitions[byte];
-            if (target == no_state || !productive[target]) continue;
+        std::array<StateId, byte_count> targets;
+        for (std::size_t cls = 0; cls < width; ++cls) {
+            auto target = from.transitions[alphabet.representatives[cls]];
+            if (target == no_state || !productive[target]) {
+                targets[cls] = no_state;
+                continue;
+            }
             auto block = block_of[target];
             if (number[block] == no_state) {
                 number[block] = order.size();
                 order.push_back(block);
             }
-            result.back().transitions[byte] = number[block];
+            targets[cls] = number[block];
         }
+        for (std::size_t byte = 0; byte < byte_count; ++byte)
+            result.back().transitions[byte] = targets[alphabet.index[byte]];
     }
     return DFA(std::move(result));
 }

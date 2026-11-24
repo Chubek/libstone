@@ -22,22 +22,25 @@ public:
     explicit ATN(Grammar grammar) : grammar_(std::move(grammar)) {
         grammar_.validate();
         network_.entries.resize(grammar_.symbols().size());
-        std::vector<StateId> exits(grammar_.symbols().size());
+        exits_.resize(grammar_.symbols().size());
+        productionEntries_.reserve(grammar_.productions().size());
         for (Symbol rule = 0; rule < grammar_.symbols().size(); ++rule) {
             if (grammar_.symbols()[rule].terminal) continue;
             network_.entries[rule] = appendState();
-            exits[rule] = appendState();
-            network_.states[exits[rule]].push_back({ArcKind::return_, 0, 0});
+            exits_[rule] = appendState();
+            network_.states[*exits_[rule]].push_back({ArcKind::return_, 0, 0});
         }
         for (const auto& production : grammar_.productions()) {
             const auto entryState = *network_.entries[production.lhs];
-            const auto branch = production.rhs.empty() ? exits[production.lhs] : appendState();
+            const auto exitState = *exits_[production.lhs];
+            const auto branch = production.rhs.empty() ? exitState : appendState();
+            productionEntries_.push_back(branch);
             network_.states[entryState].push_back({ArcKind::epsilon, branch, 0});
             auto state = branch;
             for (std::size_t i = 0; i < production.rhs.size(); ++i) {
                 const auto symbol = production.rhs[i];
                 const auto next = i + 1 == production.rhs.size()
-                    ? exits[production.lhs] : appendState();
+                    ? exitState : appendState();
                 const auto kind = grammar_.symbols()[symbol].terminal ? ArcKind::match : ArcKind::call;
                 network_.states[state].push_back({kind, next, symbol});
                 state = next;
@@ -47,7 +50,12 @@ public:
 
     const Grammar& grammar() const noexcept { return grammar_; }
     const std::vector<std::vector<Arc>>& states() const noexcept { return network_.states; }
+    // Terminals have no entry or exit. Out-of-range IDs throw.
     std::optional<StateId> entry(Symbol symbol) const { return network_.entries.at(symbol); }
+    std::optional<StateId> exit(Symbol symbol) const { return exits_.at(symbol); }
+    // Indexed by Grammar::productions() ID. An empty alternative starts at
+    // its rule's shared exit; multiple empty alternatives share this state.
+    StateId productionEntry(std::size_t production) const { return productionEntries_.at(production); }
 
     bool accepts(const std::vector<Symbol>& tokens) const {
         return detail::topDownAccepts(network_, grammar_, tokens);
@@ -79,6 +87,8 @@ private:
 
     Grammar grammar_;
     Network network_;
+    std::vector<std::optional<StateId>> exits_;
+    std::vector<StateId> productionEntries_;
 };
 
 } // namespace firestone::lr

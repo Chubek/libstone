@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,19 +28,92 @@ struct PackedNode {
 };
 
 struct ParseForest {
-    ForestNodeId root;
+    ForestNodeId root = 0;
     std::vector<PackedNode> nodes;
     // Contains only nodes reachable from root. Recursive derivations for
     // the same span can form cycles; use visited IDs for graph traversal.
+
+    // Extract one finite derivation, even if earlier alternatives are cyclic.
+    // Returns no tree for an unproductive root; invalid IDs throw out_of_range.
+    std::optional<ParseNode> tree() const {
+        if (root >= nodes.size()) throw std::out_of_range("parse forest root outside nodes");
+        struct Candidate {
+            ForestNodeId parent;
+            const PackedAlternative* alternative;
+            std::size_t pending;
+        };
+        std::vector<Candidate> candidates;
+        std::vector<std::vector<std::size_t>> users(nodes.size());
+        std::vector<const PackedAlternative*> selected(nodes.size());
+        std::vector<bool> finite(nodes.size());
+        std::vector<ForestNodeId> ready;
+        const auto mark = [&](ForestNodeId id, const PackedAlternative* alternative) {
+            if (finite[id]) return;
+            finite[id] = true;
+            selected[id] = alternative;
+            ready.push_back(id);
+        };
+        for (ForestNodeId id = 0; id < nodes.size(); ++id) {
+            const auto& node = nodes[id];
+            if (node.terminal) {
+                mark(id, nullptr);
+                continue;
+            }
+            for (const auto& alternative : node.alternatives) {
+                if (alternative.children.empty()) {
+                    mark(id, &alternative);
+                    continue;
+                }
+                for (const auto child : alternative.children) users.at(child).push_back(candidates.size());
+                candidates.push_back({id, &alternative, alternative.children.size()});
+            }
+        }
+        // An alternative is ready only after every child already has a proof.
+        // Duplicate child IDs contribute separate edges and are counted twice.
+        for (std::size_t i = 0; !finite[root] && i < ready.size(); ++i) {
+            for (const auto user : users[ready[i]]) {
+                auto& candidate = candidates[user];
+                if (--candidate.pending == 0) mark(candidate.parent, candidate.alternative);
+            }
+        }
+        if (!finite[root]) return std::nullopt;
+
+        ParseNode result{};
+        std::vector<std::pair<ForestNodeId, ParseNode*>> work{{root, &result}};
+        while (!work.empty()) {
+            const auto [id, node] = work.back();
+            work.pop_back();
+            const auto& packed = nodes[id];
+            node->symbol = packed.symbol;
+            node->begin = packed.begin;
+            node->end = packed.end;
+            if (const auto* alternative = selected[id]) {
+                node->children.resize(alternative->children.size());
+                for (std::size_t i = 0; i < node->children.size(); ++i)
+                    work.emplace_back(alternative->children[i], &node->children[i]);
+            }
+        }
+        return result;
+    }
 };
 
 namespace detail {
 
 class GLRRun {
 public:
-    GLRRun(const LRTable& table, const std::vector<Symbol>& input) : table_(table), input_(input) {}
+    GLRRun(const LRTable& table, const std::vector<Symbol>& input, bool pack)
+        : table_(table), input_(input), pack_(pack) {}
 
     std::optional<ParseForest> parse() {
+        const auto root = run();
+        if (!root) return std::nullopt;
+        return finish(*root);
+    }
+
+    bool accepts() { return run().has_value(); }
+
+private:
+    std::optional<ForestNodeId> run() {
         Frontier frontier;
         stackNode(frontier, 0, 0);
         for (std::size_t position = 0; !frontier.empty(); ++position) {
@@ -49,15 +123,15 @@ public:
             Frontier next;
             for (const auto& top : frontier) {
                 for (const auto& action : table_.actions(top.first, lookahead)) {
-                    if (action.kind == LRActionKind::accept) {
+                    if (atEnd && action.kind == LRActionKind::accept) {
                         // The augmented production has just one edge, from
                         // the accepting top back to the initial stack node.
                         for (const auto& edge : stack_[top.second].edges) {
                             if (edge.predecessor == 0 && forest_[edge.label].symbol == table_.grammar().start()) {
-                                return finish(edge.label);
+                                return edge.label;
                             }
                         }
-                    } else if (action.kind == LRActionKind::shift) {
+                    } else if (!atEnd && action.kind == LRActionKind::shift) {
                         const auto leaf = forestNode(lookahead, position, position + 1);
                         const auto dest = stackNode(next, action.target, position + 1);
                         stack_[dest].edges.insert({top.second, leaf});
@@ -69,7 +143,6 @@ public:
         return std::nullopt;
     }
 
-private:
     using StackId = std::size_t;
     using Frontier = std::map<LRState, StackId>;
 
@@ -107,6 +180,7 @@ private:
 
     const LRTable& table_;
     const std::vector<Symbol>& input_;
+    bool pack_;
     std::vector<StackNode> stack_;
     std::vector<ForestEntry> forest_;
     std::map<std::tuple<Symbol, std::size_t, std::size_t>, ForestNodeId> forestIds_;
@@ -135,8 +209,11 @@ private:
             return Frame{node, stack_[node].edges.begin(), stack_[node].edges.end()};
         };
         std::vector<Reduction> result;
-        std::vector<ForestNodeId> children(rhs.size());
+        std::vector<ForestNodeId> children(pack_ ? rhs.size() : 0);
         std::vector<Frame> frames{frame(top)};
+        // For recognition, prefixes reaching the same node at the same
+        // depth have identical remaining RHS checks.
+        std::set<std::pair<std::size_t, StackId>> seen;
         while (!frames.empty()) {
             auto& f = frames.back();
             const auto depth = frames.size() - 1;
@@ -149,7 +226,8 @@ private:
                 const auto edge = *f.current++;
                 const auto i = rhs.size() - depth - 1;
                 if (forest_[edge.label].symbol != rhs[i]) continue;
-                children[i] = edge.label;
+                if (pack_) children[i] = edge.label;
+                else if (!seen.emplace(depth + 1, edge.predecessor).second) continue;
                 frames.push_back(frame(edge.predecessor));
             }
         }
@@ -173,7 +251,8 @@ private:
                         const auto dest = table_.goTo(base.state, rule.lhs);
                         if (!dest) continue;
                         const auto label = forestNode(rule.lhs, base.position, position);
-                        forest_[label].alternatives.insert({action.target, std::move(path.children)});
+                        if (pack_)
+                            forest_[label].alternatives.insert({action.target, std::move(path.children)});
                         const auto newTop = stackNode(frontier, *dest, position);
                         changed |= stack_[newTop].edges.insert({path.predecessor, label}).second;
                     }
@@ -224,10 +303,15 @@ public:
 
     const LRTable& table() const { return table_; }
 
+    bool accepts(const std::vector<Symbol>& input) const {
+        validateInput(table_.grammar(), input);
+        return detail::GLRRun(table_, input, false).accepts();
+    }
+
     // Returns no forest on syntax error. Public input omits the EOF token.
     std::optional<ParseForest> parse(const std::vector<Symbol>& input) const {
         validateInput(table_.grammar(), input);
-        return detail::GLRRun(table_, input).parse();
+        return detail::GLRRun(table_, input, true).parse();
     }
 
 private:

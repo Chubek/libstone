@@ -80,6 +80,24 @@ void regex_and_nfa() {
     CHECK(!dfa.match_prefix("b"));
     throws<std::out_of_range>([&] { nfa.add_epsilon(start, no_state); });
     throws<std::out_of_range>([&] { nfa.add_transition(no_state, ByteSet{}, start); });
+
+    NFA combined;
+    const auto outer_start = combined.add_state();
+    combined.set_start(outer_start);
+    combined.add_alternative(nfa); // Both NFAs have nonzero starts.
+    add_regex_alternative(combined, "a.", {7, 8, true});
+    const auto count = combined.states().size();
+    const auto alternatives = combined.states()[outer_start].epsilon;
+    throws<RegexError>([&] { add_regex_alternative(combined, "(c"); });
+    CHECK(combined.states().size() == count && combined.states()[outer_start].epsilon == alternatives);
+    combined.add_alternative(combined);
+    CHECK(combined.start() == outer_start && combined.states().size() == 2 * count);
+    CHECK(nfa.states().size() == 7 && nfa.start() == start);
+    const auto both = determinize(combined);
+    CHECK(both.match_prefix("a") == DFAMatch{1, {2, 3, false}});
+    CHECK(both.match_prefix("ab") == DFAMatch{2, {7, 8, true}});
+    CHECK(both.match_prefix("a\xff") == DFAMatch{2, {7, 8, true}});
+    CHECK(!both.match_prefix("b"));
 }
 
 // Exhaust the product automaton, not just a sample of input strings. The extra
@@ -103,6 +121,57 @@ bool equivalent(const DFA& a, StateId aa, const DFA& b, StateId bb) {
         }
     }
     return true;
+}
+
+void subset_budget() {
+    const auto loop = compile_regex("a+");
+    const auto normal = determinize(loop);
+    const auto count = normal.states().size();
+    CHECK(count > 1);
+    const auto at_limit = determinize_bounded(loop, count);
+    CHECK(at_limit.states().size() == count);
+    CHECK(equivalent(normal, normal.start(), at_limit, at_limit.start()));
+    throws<std::length_error>([&] { determinize_bounded(loop, count - 1); });
+    throws<std::length_error>([] { determinize_bounded(NFA{}, 0); });
+    CHECK(determinize_bounded(NFA{}, 1).states().size() == 1);
+}
+
+// Each byte has a unique combination of transitions across these rows.
+DFA full_byte_alphabet(bool merge_last_pair = false) {
+    std::vector<DFAState> states(8);
+    for (StateId id = 0; id < states.size(); ++id) {
+        for (std::size_t byte = 0; byte < byte_count; ++byte) {
+            const auto bits = merge_last_pair && byte == 254 ? 255 : byte;
+            if (bits & (1u << id)) states[id].transitions[byte] = (id + 1) % states.size();
+        }
+    }
+    states[7].acceptance = Acceptance{54, 0, false};
+    return DFA(std::move(states), 3);
+}
+
+void byte_classes() {
+    const auto literal = determinize(compile_regex(R"([\x00\xff]x|[\x00\xff]z)"));
+    const auto alphabet = literal.byte_classes();
+    CHECK(alphabet.index[0] == alphabet.index[255]);
+    CHECK(alphabet.index['x'] != alphabet.index['y']);
+    CHECK(alphabet.representatives.front() == 0);
+    // Compare all pairs against the definition, including state distinctions
+    // invisible in the start row and the default DFA's one-class alphabet.
+    for (const auto& dfa : {literal, DFA{}, full_byte_alphabet()}) {
+        const auto classes = dfa.byte_classes();
+        for (std::size_t a = 0; a < byte_count; ++a) {
+            const auto rep = classes.representatives[classes.index[a]];
+            CHECK(rep <= a && classes.index[rep] == classes.index[a]);
+            for (std::size_t b = a; b < byte_count; ++b) {
+                bool equal = true;
+                for (const auto& state : dfa.states()) equal &= state.transitions[a] == state.transitions[b];
+                CHECK((classes.index[a] == classes.index[b]) == equal);
+            }
+        }
+        const auto result = minimize(dfa);
+        CHECK(equivalent(dfa, dfa.start(), result, result.start()));
+    }
+    CHECK(full_byte_alphabet().byte_classes().representatives.size() == byte_count);
 }
 
 void minimization() {
@@ -221,6 +290,15 @@ void simd() {
     CHECK(SIMDMatcher(all_bytes).match_prefix(raw) == DFAMatch{byte_count, {}});
     const SIMDMatcher nonaccepting(minimize(determinize(compile_regex("x|x[^!]*!"))));
     CHECK(nonaccepting.match_prefix(std::string(48, 'x')) == DFAMatch{1, {}});
+    std::vector<DFAState> states(3);
+    states[0].transitions['x'] = 1;
+    states[0].transitions['y'] = 2;
+    states[1].acceptance = Acceptance{3, 1, false};
+    states[1].transitions['!'] = 2;
+    states[2].transitions.fill(2); // A non-accepting all-byte trap.
+    const SIMDMatcher trap(DFA(std::move(states)));
+    CHECK(trap.match_prefix("x!" + raw) == DFAMatch{1, {3, 1, false}});
+    CHECK(!trap.match_prefix("y" + raw));
     throws<std::invalid_argument>([&] { SIMDLexer bad(matcher.dfa()); });
 }
 
@@ -234,6 +312,14 @@ void codegen() {
     auto assembly = emitAssembly(lexer.dfa(), "the_scanner");
     CHECK(c.find("int the_scanner(") != std::string::npos);
     CHECK(assembly.find(".globl the_scanner\n") != std::string::npos);
+    CHECK(c.find("byte_class[input[i]]") != std::string::npos);
+    CHECK(assembly.find(".byte ") != std::string::npos);
+    CHECK(emitC99(full_byte_alphabet()).find("transitions[][256]") != std::string::npos);
+    CHECK(emitAssembly(full_byte_alphabet()).find(".byte ") == std::string::npos);
+    const auto marginal = full_byte_alphabet(true);
+    CHECK(marginal.byte_classes().representatives.size() == byte_count - 1);
+    CHECK(emitC99(marginal).find("transitions[][256]") != std::string::npos);
+    CHECK(emitAssembly(marginal).find(".byte ") == std::string::npos);
     CHECK(c.find("never_emit_this_as_source") == std::string::npos);
     CHECK(assembly.find("never_emit_this_as_source") == std::string::npos);
     auto saved = std::locale::global(std::locale(std::locale::classic(), new GroupDigits));
@@ -256,6 +342,8 @@ void codegen() {
 int main() {
     try {
         regex_and_nfa();
+        subset_budget();
+        byte_classes();
         minimization();
         lexing();
         simd();

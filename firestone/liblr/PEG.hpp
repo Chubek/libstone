@@ -99,11 +99,25 @@ public:
     const Grammar& grammar() const noexcept { return grammar_; }
 
     std::optional<std::size_t> matchPrefix(const std::vector<Symbol>& tokens) const {
-        validateInput(grammar_, tokens);
+        return matchPrefixAt(tokens, 0);
+    }
+
+    // Ordered PEG match at begin; the end and tree spans are absolute offsets.
+    std::optional<std::size_t> matchPrefixAt(const std::vector<Symbol>& tokens, std::size_t begin) const {
+        validatePrefix(tokens, begin);
         Evaluation evaluation(*this, tokens, false);
-        const auto match = evaluation.matchRule(grammar_.start(), 0);
+        const auto match = evaluation.matchRule(grammar_.start(), begin);
         if (!match) return std::nullopt;
         return match->end;
+    }
+
+    std::optional<ParseNode> parsePrefix(const std::vector<Symbol>& tokens,
+                                         std::size_t begin = 0) const {
+        validatePrefix(tokens, begin);
+        Evaluation evaluation(*this, tokens, true);
+        const auto match = evaluation.matchRule(grammar_.start(), begin);
+        if (!match) return std::nullopt;
+        return evaluation.tree(match->node);
     }
 
     bool accepts(const std::vector<Symbol>& tokens) const {
@@ -121,6 +135,11 @@ public:
 private:
     using Kind = PEGExpression::Kind;
 
+    void validatePrefix(const std::vector<Symbol>& tokens, std::size_t begin) const {
+        if (begin > tokens.size()) throw std::out_of_range("PEG position outside input");
+        validateInput(grammar_, tokens);
+    }
+
     class Evaluation {
     public:
         struct Match { std::size_t end, node; };
@@ -129,20 +148,117 @@ private:
             : peg_(peg), tokens_(tokens), witness_(witness), memo_(peg.grammar_.symbols().size()) {}
 
         std::optional<Match> matchRule(Symbol rule, std::size_t begin) {
-            const auto entry = memo_[rule].try_emplace(begin);
-            auto& memo = entry.first->second;
-            if (!entry.second) {
-                if (memo.active)
-                    throw std::invalid_argument("PEG left recursion in rule " +
-                        peg_.grammar_.symbols()[rule].name + " at token " + std::to_string(begin));
-                return memo.match;
-            }
-            auto end = begin;
+            auto pos = begin;
+            bool matched = false;
+            std::vector<Frame> work;
             std::vector<std::size_t> children;
-            if (evaluate(peg_.rules_.at(rule), end, children))
-                memo.match = Match{end, addProof(rule, begin, end, std::move(children))};
-            memo.active = false;
-            return memo.match;
+            const auto pushExpression = [&](const PEGExpression& expr) {
+                work.push_back({expr.node_.get(), nullptr, 0, pos, children.size()});
+            };
+            const auto pushRule = [&](Symbol symbol) {
+                const auto entry = memo_[symbol].try_emplace(pos);
+                auto& memo = entry.first->second;
+                if (entry.second) {
+                    work.push_back({nullptr, &memo, symbol, pos, children.size()});
+                    pushExpression(peg_.rules_.at(symbol));
+                } else {
+                    if (memo.active)
+                        throw std::invalid_argument("PEG left recursion in rule " +
+                            peg_.grammar_.symbols()[symbol].name + " at token " + std::to_string(pos));
+                    matched = memo.match.has_value();
+                    if (matched) {
+                        pos = memo.match->end;
+                        if (witness_) children.push_back(memo.match->node);
+                    }
+                }
+            };
+            pushRule(rule);
+            while (!work.empty()) {
+                auto& frame = work.back();
+                const auto restore = [&] {
+                    pos = frame.begin;
+                    children.resize(frame.children);
+                };
+                const auto complete = [&](bool success) {
+                    if (!success) restore();
+                    matched = success;
+                    work.pop_back();
+                };
+                if (frame.memo) {
+                    // A successful rule replaces the proofs of its body with
+                    // one memoized proof. A failed body has already rolled back.
+                    if (matched) {
+                        if (witness_) {
+                            const auto proof = addProof(frame.rule, frame.begin, pos,
+                                std::vector<std::size_t>(children.begin() + frame.children, children.end()));
+                            children.resize(frame.children);
+                            children.push_back(proof);
+                            frame.memo->match = Match{pos, proof};
+                        } else {
+                            frame.memo->match = Match{pos, 0};
+                        }
+                    }
+                    frame.memo->active = false;
+                    work.pop_back();
+                    continue;
+                }
+
+                const auto& expr = *frame.expr;
+                switch (expr.kind) {
+                case Kind::end:
+                    complete(pos == tokens_.size());
+                    break;
+                case Kind::token:
+                    if (pos == tokens_.size() || tokens_[pos] != expr.symbol) {
+                        complete(false);
+                    } else {
+                        if (witness_) children.push_back(addProof(expr.symbol, pos, pos + 1, {}));
+                        ++pos;
+                        complete(true);
+                    }
+                    break;
+                case Kind::rule:
+                    if (frame.next++ == 0) pushRule(expr.symbol);
+                    else complete(matched);
+                    break;
+                case Kind::sequence:
+                    if (frame.next != 0 && !matched) complete(false);
+                    else if (frame.next == expr.children.size()) complete(true);
+                    else pushExpression(expr.children[frame.next++]);
+                    break;
+                case Kind::choice:
+                    if (frame.next != 0 && matched) complete(true);
+                    else if (frame.next == expr.children.size()) complete(false);
+                    else pushExpression(expr.children[frame.next++]);
+                    break;
+                case Kind::optional:
+                    if (frame.next++ == 0) pushExpression(expr.children.front());
+                    else complete(true);
+                    break;
+                case Kind::repeat:
+                case Kind::oneOrMore:
+                    if (frame.next != 0 && !matched) {
+                        complete(frame.next > 1 || expr.kind == Kind::repeat);
+                    } else {
+                        if (frame.next != 0 && frame.last == pos)
+                            throw std::invalid_argument("PEG repetition matched without consuming input");
+                        frame.last = pos;
+                        ++frame.next;
+                        pushExpression(expr.children.front());
+                    }
+                    break;
+                case Kind::andPredicate:
+                case Kind::notPredicate:
+                    if (frame.next++ == 0) {
+                        pushExpression(expr.children.front());
+                    } else {
+                        restore();
+                        complete(expr.kind == Kind::andPredicate ? matched : !matched);
+                    }
+                    break;
+                }
+            }
+            return memo_[rule].at(begin).match;
         }
 
         ParseNode tree(std::size_t id) const {
@@ -165,72 +281,20 @@ private:
     private:
         struct Memo { bool active = true; std::optional<Match> match; };
         struct Proof { Symbol symbol; std::size_t begin, end; std::vector<std::size_t> children; };
+        // A frame stores the rollback point for an expression or the output
+        // boundary for a rule. Rule frames use stable pointers into memo_.
+        struct Frame {
+            const PEGExpression::Node* expr;
+            Memo* memo;
+            Symbol rule;
+            std::size_t begin, children;
+            std::size_t next = 0, last = 0;
+        };
 
         std::size_t addProof(Symbol symbol, std::size_t begin, std::size_t end,
                              std::vector<std::size_t> children) {
-            if (!witness_) return 0;
             proofs_.push_back({symbol, begin, end, std::move(children)});
             return proofs_.size() - 1;
-        }
-
-        bool evaluate(const PEGExpression& expr, std::size_t& pos, std::vector<std::size_t>& children) {
-            const auto begin = pos;
-            const auto count = children.size();
-            if (evaluateImpl(*expr.node_, pos, children)) return true;
-            pos = begin;
-            children.resize(count);
-            return false;
-        }
-
-        bool evaluateImpl(const PEGExpression::Node& expr, std::size_t& pos,
-                          std::vector<std::size_t>& children) {
-            switch (expr.kind) {
-            case Kind::end:
-                return pos == tokens_.size();
-            case Kind::token:
-                if (pos == tokens_.size() || tokens_[pos] != expr.symbol) return false;
-                if (witness_) children.push_back(addProof(expr.symbol, pos, pos + 1, {}));
-                ++pos;
-                return true;
-            case Kind::rule:
-                if (const auto match = matchRule(expr.symbol, pos)) {
-                    pos = match->end;
-                    if (witness_) children.push_back(match->node);
-                    return true;
-                }
-                return false;
-            case Kind::sequence:
-                for (const auto& part : expr.children)
-                    if (!evaluate(part, pos, children)) return false;
-                return true;
-            case Kind::choice:
-                for (const auto& part : expr.children)
-                    if (evaluate(part, pos, children)) return true;
-                return false;
-            case Kind::optional:
-                evaluate(expr.children.front(), pos, children);
-                return true;
-            case Kind::repeat:
-            case Kind::oneOrMore: {
-                bool matched = false;
-                for (;;) {
-                    const auto before = pos;
-                    if (!evaluate(expr.children.front(), pos, children)) break;
-                    if (pos == before)
-                        throw std::invalid_argument("PEG repetition matched without consuming input");
-                    matched = true;
-                }
-                return matched || expr.kind == Kind::repeat;
-            }
-            case Kind::andPredicate:
-            case Kind::notPredicate: {
-                auto probe = pos;
-                std::vector<std::size_t> discarded;
-                const bool matched = evaluate(expr.children.front(), probe, discarded);
-                return expr.kind == Kind::andPredicate ? matched : !matched;
-            }
-            }
-            throw std::logic_error("unknown PEG expression");
         }
 
         const PEG& peg_;
