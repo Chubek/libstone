@@ -38,8 +38,9 @@ sub read_spec_lines {
 }
 
 sub parse_spec {
- my($file)=@_;my %deps;my @lines=read_module_spec_lines($file,\%deps);
+ my($file)=@_;my(%deps,%receivers);my @lines=read_module_spec_lines($file,\%deps,\%receivers);
  my $s={dependencies=>[map {{path=>$_,sha256=>$deps{$_}}} sort keys %deps],file=>$file,language=>'',tokens=>[],skips=>[],rules=>[],functions=>[],states=>[],tables=>[],exceptions=>[],irs=>[],options=>{},init=>'',rewrites=>[],backends=>[],analyses=>[],pipelines=>[],precedence=>[],internal=>{}};
+ $s->{module_receivers}=\%receivers if %receivers;
  my $block='';my $cur;my $facet='';my $body='';
  for(my $n=0;$n<@lines;$n++){
   my($raw,$origin,$ln)=@{$lines[$n]};$file=$origin;my $l=strip_ws($raw);
@@ -103,7 +104,7 @@ sub parse_spec {
    $block=$1;$cur={kind=>$1,name=>$2,members=>[],file=>$file,line=>$ln};next;
   }
   if($l =~ /^\.type\s+%(\w+)\s*(?:=\s*(.*))?$/){push @{$s->{types}}, {name=>$1,type=>$2||'Any',line=>$ln,file=>$file};next}
-  if($l =~ /^\.state\s+\@(\w+)\s*:\s*(.*?)\s*=\s*(.*)$/){push @{$s->{states}},{name=>$1,type=>$2,initial=>strip_ws($3)};next}
+  if($l =~ /^\.state\s+\@(\w+)\s*:\s*(.*?)\s*=\s*(.*)$/){push @{$s->{states}},{name=>$1,type=>$2,initial=>strip_ws($3),file=>$file,line=>$ln};next}
   if($l =~ /^\.symtbl\s+\#(\w+)(?:\s*:\s*(.*))?$/){push @{$s->{tables}},{name=>$1,type=>$2||'Any'};next}
   if($l =~ /^\.exception\s+\!(\w+)(?:\((.*?)\))?\s+"(.*)"$/){push @{$s->{exceptions}},{name=>$1,params=>$2||'',message=>decode_string($3)};next}
   if($l =~ /^\.rule\s+(\w+)$/){$block='rule';$cur={name=>$1,facets=>{},line=>$ln};next}
@@ -332,10 +333,12 @@ sub compile_grammar {
  $s->{productions}=\@prods;$s->{actions}=\@action;$s->{gotos}=\@goto;
  $s->{terminals}=[sort keys %tokens];$s->{nonterminals}=\%nonterms;
 }
+our $action_ir_ops;
 sub compile_actions {
  my($s)=@_;my %funidx=map {$s->{functions}[$_]{name}=>$_} 0..$#{$s->{functions}};
  my %ops; for my $ir (@{$s->{irs}}){$ops{$ir->{name}.'.'.$_->{name}}={%$_,id=>scalar keys %ops} for @{$ir->{ops}}}
- $s->{op_by_name}=\%ops;
+  $s->{op_by_name}=\%ops;
+  local $action_ir_ops=\%ops;
  for my $f(@{$s->{functions}}){
   $f->{parameters}=[map {my($name,$type)=split /\s*:\s*/,$_,2;
    $name=~/^[A-Za-z_]\w*$/ && defined($type) or fail('function parameter requires a name and type',$s->{file},$f->{line});
@@ -359,15 +362,15 @@ sub atoks {
   if($s =~ /\G\/\/[^\n]*/gc){next}
   if($s =~ /\G(["'])( (?:\\.|[^\\])*? )\1/gcx){my $st=decode_string($2);push @out,{k=>'str',v=>$st};next}
   if($s =~ /\G(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)/gc){push @out,{k=>'num',v=>$1};next}
-   if($s =~ /\G(%[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?|[\@\#\$\!\&][A-Za-z_]\w*|t'[A-Za-z_]\w*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/gc){push @out,{k=>'name',v=>$1};next}
-  if($s =~ /\G(->|==|!=|>=|<=|&&|\|\||=>|[-+*\/=<>!;,(){}\[\]:.])/gc){push @out,{k=>'op',v=>$1};next}
+   if($s =~ /\G(%[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?|[\@\#\$\!\&][A-Za-z_]\w*|t'[A-Za-z_]\w*|[A-Za-z_]\w*)/gc){push @out,{k=>'name',v=>$1};next}
+   if($s =~ /\G(->|==|!=|>=|<=|&&|\|\||=>|[-+*\/=<>!;,(){}\[\]:.])/gc){push @out,{k=>'op',v=>$1,pos=>pos($s)-length($1)};next}
   my $bad=substr($s,pos($s)//0,25);die "invalid action syntax near '$bad'\n";
  }
  push @out,{k=>'end',v=>'<end>'};return \@out;
 }
 sub apeek {return $_[0]{t}[$_[0]{i}]{v}}
 sub anext {return $_[0]{t}[$_[0]{i}++]{v}}
-sub aaccept {my($x,$v)=@_;if(apeek($x) eq $v){anext($x);return 1}return 0}
+sub aaccept {my($x,$v)=@_;if($x->{t}[$x->{i}]{k} ne 'str' && apeek($x) eq $v){anext($x);return 1}return 0}
 sub expect {my($x,$v)=@_;aaccept($x,$v) or die "expected '$v', got '".apeek($x)."' in semantic action\n"}
 # Read a type without confusing commas inside Fn/Vec/Task with parameter separators.
 sub action_type {
@@ -395,11 +398,54 @@ sub action_closure_prefix {
  return 0;
 }
 our %prec; BEGIN { %prec=('||'=>1,'&&'=>2,'in'=>3,'=='=>3,'!='=>3,'>'=>3,'<'=>3,'>='=>3,'<='=>3,'+'=>4,'-'=>4,'*'=>5,'/'=>5); }
-sub expr {my($x,$min)=@_;$min//=0;my $t=$x->{t}[$x->{i}++];my $v=$t->{v};my $node;
+sub action_identifier {
+ my($x)=@_;my $t=$x->{t}[$x->{i}];
+ $t->{k} eq 'name' && $t->{v}=~/^[A-Za-z_]\w*$/ or die "expected identifier, got '$t->{v}'\n";
+ return anext($x);
+}
+sub action_call_args {
+ my($x)=@_;my @args;expect($x,'(');
+ unless(aaccept($x,')')){do{push @args,expr($x,0)}while(aaccept($x,','));expect($x,')')}
+ return \@args;
+}
+# Adjacent double brackets denote a table only when they enclose the
+# entire literal, preserving nested vectors such as [[1], [2]].
+sub action_table_prefix {
+ my($x,$open)=@_;my $i=$x->{i};my $t=$x->{t};
+ return 0 unless $t->[$i]{k} eq 'op' && $t->[$i]{v} eq '[' && $t->[$i]{pos}==$open->{pos}+1;
+ my $depth=0;
+ for(;$i<@$t;$i++){
+  next unless $t->[$i]{k} eq 'op';
+  $depth++ if $t->[$i]{v} eq '[';
+  if($t->[$i]{v} eq ']' && !--$depth){
+   my $close=$t->[$i+1];
+   return $close->{k} eq 'op' && $close->{v} eq ']' && $close->{pos}==$t->[$i]{pos}+1;
+  }
+ }
+ return 0;
+}
+sub expr {my($x,$min,$stop_colon)=@_;$min//=0;my $t=$x->{t}[$x->{i}++];my $v=$t->{v};my $node;
  if($t->{k} eq 'num'){$node={k=>'num',v=>0+$v,literal=>"$v",type=>($v =~ /[.eE]/?'Float64':'Int')}}
  elsif($t->{k} eq 'str'){$node={k=>'str',v=>$v}}
- elsif($v eq '['){my @items;unless(aaccept($x,']')){do{push @items,expr($x,0)}while(aaccept($x,','));expect($x,']')}$node={k=>'list',args=>\@items}}
- elsif($v eq '('){$node=expr($x,0);expect($x,')')}
+  elsif($v eq '[' && action_table_prefix($x,$t)){
+   anext($x);my @entries;
+   unless(aaccept($x,']')){
+    while(1){
+     my $first=expr($x,0,1);
+     push @entries,aaccept($x,':')?{key=>$first,value=>expr($x,0)}:{value=>$first};
+     last if aaccept($x,']');
+     expect($x,',');last if aaccept($x,']');
+    }
+   }
+   expect($x,']');$node={k=>'table',entries=>\@entries};
+  }
+  elsif($v eq '['){my @items;unless(aaccept($x,']')){do{push @items,expr($x,0)}while(aaccept($x,','));expect($x,']')}$node={k=>'list',args=>\@items}}
+  elsif($v eq '('){$node=expr($x,0);expect($x,')')}
+  elsif($v eq '*'){
+   my $name=action_identifier($x);
+   $name=~/^(?:This|Args|Argv|Type|Constructor)$/ or die "unknown metavariable '*$name'\n";
+   $node={k=>'metavar',v=>$name};
+  }
  elsif(action_closure_prefix($x,$v)){
   my $async=$v eq 'async';expect($x,'fn') if $async;expect($x,'(');my @params;my %names;
   unless(aaccept($x,')')){do{my $name=anext($x);$name=~/^[A-Za-z_]\w*$/ or die "invalid closure parameter '$name'\n";
@@ -409,14 +455,28 @@ sub expr {my($x,$min)=@_;$min//=0;my $t=$x->{t}[$x->{i}++];my $v=$t->{v};my $nod
   expect($x,'->');my $ret=action_type($x,'{');expect($x,'{');my $body=stmt_list($x,'}');expect($x,'}');
   $node={k=>'closure',params=>\@params,returns=>$ret,body=>$body,async=>$async?1:0};
  }
- elsif($v eq 'await'){$node={k=>'await',a=>expr($x,6)}}
- elsif($v eq '-' || $v eq '!'){$node={k=>'un',v=>$v,a=>expr($x,6)};if($v eq '-' && $node->{a}{k} eq 'num'){$node={%{$node->{a}},v=>-$node->{a}{v},literal=>'-'.$node->{a}{literal}}}}
- elsif($t->{k} eq 'name'){$node={k=>'name',v=>$v}}
+  elsif($v eq 'await'){$node={k=>'await',a=>expr($x,6,$stop_colon)}}
+  elsif($v eq '-' || $v eq '!'){$node={k=>'un',v=>$v,a=>expr($x,6,$stop_colon)};if($v eq '-' && $node->{a}{k} eq 'num'){$node={%{$node->{a}},v=>-$node->{a}{v},literal=>'-'.$node->{a}{literal}}}}
+  elsif($t->{k} eq 'name'){
+   if($v=~s/^LLSMod_colon_([0-9a-f]{24})_//){
+    my $receiver=$1;
+    $node={k=>'call',a=>{k=>'name',v=>$v},receiver=>$receiver,colon=>1,args=>action_call_args($x)};
+   }else{
+    my $member=$x->{t}[$x->{i}+1];
+    if($action_ir_ops && $member && $member->{k} eq 'name'
+       && $action_ir_ops->{"$v.$member->{v}"} && aaccept($x,'.')){
+     $v.='.'.anext($x);
+    }
+    $node={k=>'name',v=>$v};
+   }
+  }
  else{die "unexpected '$v' in expression\n"}
- while(1){my $p=apeek($x);
-  if($p eq '('){anext($x);my @args;unless(aaccept($x,')')){do{push @args,expr($x,0)}while(aaccept($x,','));expect($x,')')}$node={k=>'call',a=>$node,args=>\@args};next}
-  if($p eq '['){anext($x);my $idx=expr($x,0);expect($x,']');$node={k=>'index',a=>$node,b=>$idx};next}
-  if(exists($prec{$p}) && $prec{$p}>=$min){anext($x);my $r=expr($x,$prec{$p}+1);$node={k=>'bin',v=>$p,a=>$node,b=>$r};next}
+  while(1){last if $x->{t}[$x->{i}]{k} eq 'str';my $p=apeek($x);
+   if($p eq '('){$node={k=>'call',a=>$node,args=>action_call_args($x)};next}
+   if($p eq '['){anext($x);my $idx=expr($x,0);expect($x,']');$node={k=>'index',a=>$node,b=>$idx};next}
+   if($p eq '.'){anext($x);$node={k=>'member',a=>$node,v=>action_identifier($x)};next}
+   if($p eq ':' && !$stop_colon){anext($x);my $m=action_identifier($x);$node={k=>'method',a=>$node,v=>$m,args=>action_call_args($x)};next}
+   if(exists($prec{$p}) && $prec{$p}>=$min){anext($x);my $r=expr($x,$prec{$p}+1,$stop_colon);$node={k=>'bin',v=>$p,a=>$node,b=>$r};next}
   last;
  }return $node;
 }
@@ -429,7 +489,7 @@ sub stmt_list {my($x,$until)=@_;my @list;while(apeek($x) ne '<end>' && (!defined
     while(aaccept($x,',')){push @args,expr($x,0)}expect($x,')');expect($x,';');push @list,{k=>'require',cond=>$cond,name=>$name,args=>\@args};next}
   if(aaccept($x,'let')){my $name=anext($x);my $type='';if(aaccept($x,':')){while(apeek($x) ne '=' && apeek($x) ne '<end>'){$type.=anext($x)}}expect($x,'=');my $rhs=expr($x,0);expect($x,';');push @list,{k=>'let',name=>$name,type=>$type,expr=>$rhs};next}
   if(aaccept($x,'grab')){my $key=expr($x,0);expect($x,'from');my $table=anext($x);expect($x,'into');my $typ=anext($x);expect($x,'(');my $var=anext($x);expect($x,')');expect($x,';');push @list,{k=>'grab',key=>$key,table=>$table,type=>$typ,var=>$var};next}
-  if(aaccept($x,'call')){my $e=expr($x,0);expect($x,';');push @list,{k=>'exec',expr=>($e->{k} eq 'call'?$e:{k=>'call',a=>$e,args=>[]})};next}
+   if(aaccept($x,'call')){my $e=expr($x,0);expect($x,';');push @list,{k=>'exec',expr=>($e->{k}=~/^(?:call|method)$/?$e:{k=>'call',a=>$e,args=>[]})};next}
   if(aaccept($x,'discard')){my $e=expr($x,0);expect($x,';');push @list,{k=>'exec',expr=>$e};next}
   if(aaccept($x,'return')){my $e=apeek($x) eq ';'?{k=>'name',v=>'nil'}:expr($x,0);expect($x,';');push @list,{k=>'return',expr=>$e};next}
   if(aaccept($x,'while')){my $cond=expr($x,0);expect($x,'{');my $body=stmt_list($x,'}');expect($x,'}');push @list,{k=>'while',cond=>$cond,body=>$body};next}
@@ -441,7 +501,7 @@ sub stmt_list {my($x,$until)=@_;my @list;while(apeek($x) ne '<end>' && (!defined
  }
  return \@list;
 }
-sub parse_action {my($code,$file,$line)=@_;my $t=atoks($code);my $x={t=>$t,i=>0};my $list=eval{stmt_list($x,undef)};if($@){fail("invalid semantic action: $@",$file,$line)}return $list;}
+sub parse_action {my($code,$file,$line)=@_;my $list=eval{stmt_list({t=>atoks($code),i=>0},undef)};if($@){fail("invalid semantic action: $@",$file,$line)}return $list;}
 sub validate {my($s)=@_;
  my %names;for my $t(@{$s->{tokens}}){$names{$t->{name}}++ and fail("duplicate token $t->{name}",$s->{file},$t->{line});
   # Reject empty tokens at spec time. portable regex checks are strict.
@@ -586,7 +646,7 @@ sub comma_parts {
  }
  push @out,strip_ws(substr($s,$last));return @out;
 }
-sub expr_snippet {my($s)=@_;my $x={t=>atoks($s),i=>0};my $e=expr($x,0);apeek($x) eq '<end>' or die "trailing tokens in expression '$s'\n";return $e}
+sub expr_snippet {my($s,$allow_semicolon)=@_;my $x={t=>atoks($s),i=>0};my $e=expr($x,0);aaccept($x,';') if $allow_semicolon;$x->{t}[$x->{i}]{k} eq 'end' or die "trailing tokens in expression '$s'\n";return $e}
 sub function_type_parts {
  my($t)=@_;return unless $t=~/^Fn\(/;my $depth=1;
  for(my $i=3;$i<length($t);$i++){my $c=substr($t,$i,1);$depth++ if $c eq '(';$depth-- if $c eq ')';
@@ -605,6 +665,7 @@ sub parse_opcode_call {
 }
 sub compile_passes {
  my($s)=@_;
+ local $action_ir_ops=$s->{op_by_name};
  $s->{rewrite_fuel}=10000;$s->{rewrite_repeat}=1;
  @{$s->{pipelines}}>1 and fail('only one pipeline can be selected in this release',$s->{file},1);
  for my $p(@{$s->{pipelines}}){my $stages='';
@@ -619,7 +680,10 @@ sub compile_passes {
   $s->{rewrite_enabled}=defined $1?1:0;$s->{rewrite_repeat}=defined($1)&&$1 eq 'optimize*'?1:0;
  }
  $s->{rewrite_enabled}=1 unless defined $s->{rewrite_enabled};
- for my $state (@{$s->{states}}){$state->{initial_expr}=expr_snippet($state->{initial});}
+  for my $state (@{$s->{states}}){
+   $state->{initial_expr}=eval {expr_snippet($state->{initial},1)};
+   $@ and fail("invalid state initializer for \@$state->{name}: $@",$state->{file},$state->{line});
+  }
  my @rewrites;
  for my $r(@{$s->{rewrites}}){
   $r->{name} =~ /^(\w+)\s*:\s*(\w+)$/ or fail("invalid rewrite declaration '$r->{name}'",$s->{file},1);
@@ -677,15 +741,18 @@ sub compile_passes {
 
 # Static name binding, exception-arity, capture binding and lexical checks.
 sub validate_actions {
- my($s,$mode)=@_;
+  my($s,$mode)=@_;
  # Capability validation also runs for --check, not only during emission.
  if($opt{T} ne 'python3'){
   my $scan;$scan=sub{my($n)=@_;return unless ref $n;
    if(ref $n eq 'ARRAY'){$scan->($_) for @$n;return}return unless ref $n eq 'HASH';
    my $k=$n->{k}||'';
-   if($k eq 'closure'||$k eq 'await'||$n->{async}){
-    fail('closures, async functions and tasks require the python3 tool target',$s->{file},1);
-   }
+    if($k eq 'closure'||$k eq 'await'||$n->{async}){
+     fail('closures, async functions and tasks require the python3 tool target',$s->{file},1);
+    }
+    if($k=~/^(?:table|method|metavar)$/){
+     fail('first-class tables and method context require the python3 tool target',$s->{file},1);
+    }
    $scan->($_) for grep {ref} values %$n;
   };$scan->($s);
  }
@@ -697,7 +764,10 @@ sub validate_actions {
  my %builtins=map {$_=>1} qw(len pop top push emit print final_stack_height reverse min max abs is_finite spawn join sleep);
  my %arity=(len=>[1,1],pop=>[1,1],top=>[1,1],push=>[2,2],emit=>[2,2],print=>[1,1],final_stack_height=>[1,1],reverse=>[1,1], min=>[1,2],max=>[1,2],abs=>[1,1],is_finite=>[1,1],spawn=>[1,1],join=>[1,1],sleep=>[1,1]);
  my $diag=sub {my($msg,$line)=@_;fail($msg,$s->{file},$line||1)};
- my ($checkexpr,$checkblock);
+  my ($checkexpr,$checkblock);
+  our ($action_in_callable,$action_dynamic_entry);
+  local $action_in_callable=0;
+  local $action_dynamic_entry=0;
  $checkexpr=sub {my($e,$env,$captures,$line)=@_;return unless $e;
   my $kind=$e->{k};
   if($kind eq 'name'){
@@ -711,18 +781,34 @@ sub validate_actions {
    elsif($name =~ /^\$(\w+)$/){$diag->("unbound capture '$name'",$line) unless exists $captures->{$1}}
    elsif($name =~ /^&(\w+)$/){$diag->("undeclared function '$name'",$line) unless $func{$1}}
    elsif($name =~ /^t'(\w+)$/){$diag->("undeclared temporary '$name'",$line) unless $env->{$name}}
-   elsif($name =~ /\./){$diag->("unknown IR operation '$name'",$line) unless $ops{$name}}
-   elsif(!($env->{$name}||$builtins{$name}||$func{$name}||$name =~ /^(?:true|false|nil|None)$/)){
-    $diag->("undeclared variable '$name'",$line);
+    elsif($name =~ /\./){$diag->("unknown IR operation '$name'",$line) unless $ops{$name}}
+    elsif(!($env->{$name}||$builtins{$name}||$func{$name}||$name =~ /^(?:true|false|nil|None)$/)){
+     if($action_dynamic_entry && $name =~ /^[A-Za-z_]\w*$/){$e->{dynamic_free}=1}
+     else{$diag->("undeclared variable '$name'",$line)}
+    }
    }
-  }
+   elsif($kind eq 'metavar'){
+    $action_in_callable or $diag->("metavariable '*$e->{v}' requires a callable body",$line);
+   }
   elsif($kind eq 'bin'||$kind eq 'index'){$checkexpr->($e->{a},$env,$captures,$line);$checkexpr->($e->{b},$env,$captures,$line)}
-  elsif($kind eq 'un'||$kind eq 'await'){$checkexpr->($e->{a},$env,$captures,$line)}
-  elsif($kind eq 'closure'){
-   my %inner=%$env;$inner{$_->{name}}=1 for @{$e->{params}};
-   $checkblock->($e->{body},\%inner,$captures,{},$line);
+   elsif($kind eq 'un'||$kind eq 'await'||$kind eq 'member'){$checkexpr->($e->{a},$env,$captures,$line)}
+   elsif($kind eq 'closure'){
+    my %inner=%$env;$inner{$_->{name}}=1 for @{$e->{params}};
+    local $action_in_callable=1;
+    local $action_dynamic_entry=$e->{method_entry} || 0;
+    $checkblock->($e->{body},\%inner,$captures,{},$line);
   }
-  elsif($kind eq 'list'){for my $a(@{$e->{args}}){$checkexpr->($a,$env,$captures,$line)}}
+   elsif($kind eq 'list'){for my $a(@{$e->{args}}){$checkexpr->($a,$env,$captures,$line)}}
+   elsif($kind eq 'table'){
+    for my $entry(@{$e->{entries}}){
+     $checkexpr->($entry->{key},$env,$captures,$line);
+     $entry->{value}{method_entry}=1 if $entry->{value}{k} eq 'closure' && !$entry->{value}{async};
+     $checkexpr->($entry->{value},$env,$captures,$line);
+    }
+   }
+   elsif($kind eq 'method'){
+    $checkexpr->($e->{a},$env,$captures,$line);$checkexpr->($_,$env,$captures,$line) for @{$e->{args}};
+   }
   elsif($kind eq 'call'){
    $checkexpr->($e->{a},$env,$captures,$line);
    $checkexpr->($_,$env,$captures,$line) for @{$e->{args}};
@@ -756,8 +842,11 @@ sub validate_actions {
    elsif($k eq 'return'||$k eq 'exec'){$checkexpr->($st->{expr},$env,$caps,$line)}
    elsif($k eq 'assign'){
     my $lhs=$st->{lhs};
-    $lhs->{k} eq 'name' || $lhs->{k} eq 'index' or $diag->('invalid assignment target',$line);
-    if($lhs->{k} eq 'name'){$env->{$lhs->{v}}=1 unless $lhs->{v}=~/^\@/}
+     $lhs->{k}=~/^(?:name|index|member)$/ or $diag->('invalid assignment target',$line);
+     if($lhs->{k} eq 'name'){
+      if($action_dynamic_entry && !$env->{$lhs->{v}} && $lhs->{v}=~/^[A-Za-z_]\w*$/){$lhs->{dynamic_free}=1}
+      else{$env->{$lhs->{v}}=1 unless $lhs->{v}=~/^\@/}
+     }
     else {$checkexpr->($lhs->{a},$env,$caps,$line);$checkexpr->($lhs->{b},$env,$caps,$line)}
     $checkexpr->($st->{rhs},$env,$caps,$line);
    }
@@ -786,7 +875,11 @@ sub validate_actions {
   $dependencies->($state->{initial_expr});$initialized{$state->{name}}=1;
  }
  $checkblock->($s->{init_code},{},{},{},1);
- for my $f(@{$s->{functions}}){my %params=map {(split /:/,strip_ws($_))[0]=>1} comma_parts($f->{args});$checkblock->($f->{code},\%params,{},{},$f->{line})}
+  for my $f(@{$s->{functions}}){
+   local $action_in_callable=1;
+   my %params=map {(split /:/,strip_ws($_))[0]=>1} comma_parts($f->{args});
+   $checkblock->($f->{code},\%params,{},{},$f->{line});
+  }
  for my $r(@{$s->{rules}}){my (%available,%always);my $first=1;
   for my $p(@{$s->{productions}}){next unless $p->{lhs} eq $r->{name};
    my %here=map {$_=>1} grep {$_ ne ''} @{$p->{labels}};
@@ -844,7 +937,8 @@ sub validate_rewrites {
   }
   for my $op(@{$r->{match}}){$bindings{$_}=1 for grep {/^[A-Za-z_]\w*$/} @{$op->{args}}}
   my $pure;$pure=sub{my($e)=@_;return unless $e;
-   if($e->{k} eq 'name'){$bindings{$e->{v}} || $e->{v}=~/^(true|false)$/ or fail("unbound or effectful rewrite expression '$e->{v}'",$s->{file},1)}
+    if($e->{k}=~/^(?:table|method|metavar)$/){fail("unsupported '$e->{k}' in rewrite expression",$s->{file},1)}
+    if($e->{k} eq 'name'){$bindings{$e->{v}} || $e->{v}=~/^(true|false)$/ or fail("unbound or effectful rewrite expression '$e->{v}'",$s->{file},1)}
    elsif($e->{k} eq 'call'){my $name=$e->{a}{v}||'';$arity{$name} or fail("rewrite calls non-pure function '$name'",$s->{file},1);
     @{$e->{args}}==$arity{$name} or fail("wrong argument count for $name in rewrite",$s->{file},1);$pure->($_) for @{$e->{args}};
    }else{$pure->($e->{$_}) for grep {ref $e->{$_} eq 'HASH'} keys %$e;$pure->($_) for @{$e->{args}||[]}}
@@ -859,14 +953,15 @@ sub validate_rewrites {
 # Types are checked on the same action IR consumed by every runtime.
 sub builtin_sigil_type {
  my($name)=@_;
- return $name =~ /^(?:Int|Int64|Float64|String|Bool|Any|Void|Unit|Callable|Vec|Task)$/;
+  return $name =~ /^(?:Int|Int64|Float64|String|Bool|Any|Void|Unit|Callable|Vec|Task|Table)$/;
 }
 
 # These signatures are shared by the static checker and both runtimes. A tag is
 # the linked constructor name, so equal layouts in different modules stay distinct.
 sub prepare_data_types {
  my($s)=@_;
- my %ops=('%Unit'=>{action=>'unit',params=>[],returns=>'Void'});
+  my %ops=('%Unit'=>{action=>'unit',params=>[],returns=>'Void'});
+  my %members_by_owner;
  for my $d(@{$s->{types}||[]}){
   builtin_sigil_type($d->{name}) and fail("reserved builtin type '%$d->{name}'",$d->{file},$d->{line});
   next unless $d->{kind};
@@ -880,13 +975,15 @@ sub prepare_data_types {
   $add->($owner,'make',$owner,0,[map {$_->{type}} @members],$owner) if $d->{kind} eq 'prodtype';
   for my $i(0..$#members){
    my ($field,$t)=@{$members[$i]}{qw(name type)};
-   if($d->{kind} eq 'prodtype'){
-    $add->("$owner.$field",'get',$owner,$i,[$owner],$t);
-   }else{
+    if($d->{kind} eq 'prodtype'){
+     $add->("$owner.$field",'get',$owner,$i,[$owner],$t);
+     $members_by_owner{$owner}{$field}="$owner.$field";
+    }else{
     my $tag="$owner.$field";
     $add->($tag,'make',$tag,0,[$t],$owner);
     $add->("$owner.is_$field",'is',$tag,0,[$owner],'Bool');
-    $add->("$owner.get_$field",'get',$tag,0,[$owner],$t);
+     $add->("$owner.get_$field",'get',$tag,0,[$owner],$t);
+     $members_by_owner{$owner}{$field}="$owner.get_$field";
    }
   }
  }
@@ -903,7 +1000,7 @@ sub prepare_data_types {
   $target='%Unit' if $target =~ /^(?:%?Void|Unit)$/;
   $ops{$new.$_}=$by_owner{$target}{$_} for keys %{$by_owner{$target}||{}};
  }
- $s->{type_ops}=\%ops;
+  $s->{type_ops}=\%ops;$s->{type_members}=\%members_by_owner;
 }
 
 # Split only arrows belonging to this Callable, never arrows inside its
@@ -942,13 +1039,13 @@ sub validate_types {
    $ret='Fn('.$norm->($_,{%{$seen||{}}}).')->'.$ret for reverse @parts;
    return $ret;
   }
-  return $1.'<'.$norm->($2,$seen).'>' if $t=~/^(Vec|Task)<(.+)>$/;
+   if($t=~/^(Vec|Task)<(.+)>$/){my($container,$element)=($1,$2);return $container.'<'.$norm->($element,$seen).'>'}
   my @fn=function_type_parts($t);
   return 'Fn('.join(',',map {$norm->($_,{%{$seen||{}}})} comma_parts($fn[0])).')->'.$norm->($fn[1],{%{$seen||{}}}) if @fn;
   return $t;
  };
- my $known;$known=sub{my($t)=@_;$t=$norm->($t);
-  return 1 if $t =~ /^(Int|Float64|Bool|String|Void|Any)$/;
+  my $known;$known=sub{my($t)=@_;$t=$norm->($t);
+   return 1 if $t =~ /^(Int|Float64|Bool|String|Void|Any|%Table)$/;
   return 1 if $data{$t};
   return $known->($1) if $t =~ /^(?:Vec|Task)<(.+)>$/;
   return 1 if $t =~ /^(\w+)\.Op$/ && grep {$_->{name} eq $1} @{$s->{irs}};
@@ -956,8 +1053,9 @@ sub validate_types {
   if(@fn){return 0 unless $known->($fn[1]);for my $arg(comma_parts($fn[0])){return 0 unless $known->($arg)}return 1}
   return 0;
  };
- my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$type_file,$type_line);
-  $opt{T} eq 'python3' || $norm->($t)!~/\bTask</ or fail('tasks require the python3 tool target',$type_file,$type_line);
+  my $type=sub{my($t)=@_;$known->($t) or fail("unsupported or unknown type '$t'",$type_file,$type_line);
+   $opt{T} eq 'python3' || $norm->($t)!~/\bTask</ or fail('tasks require the python3 tool target',$type_file,$type_line);
+   $opt{T} eq 'python3' || $norm->($t)!~/%Table\b/ or fail('first-class tables require the python3 tool target',$type_file,$type_line);
   return $norm->($t)};
  for my $d(@{$s->{types}||[]}){
   ($type_file,$type_line)=@$d{qw(file line)};
@@ -979,7 +1077,9 @@ sub validate_types {
  my(%functions,%native_symbols);for my $f(@{$s->{functions}}){my @params;
   for my $arg(comma_parts($f->{args})){my($name,$t)=split /\s*:\s*/,$arg,2;defined $t or fail('function parameter requires a type',$s->{file},$f->{line});push @params,[$name,$type->($t)];}
   my %seen;for my $p(@params){$seen{$p->[0]}++ and fail("duplicate function parameter $p->[0]",$s->{file},$f->{line})}
-  $functions{$f->{name}}={params=>\@params,returns=>$type->($f->{returns}),async=>$f->{async}};
+   $functions{$f->{name}}={params=>\@params,returns=>$type->($f->{returns}),async=>$f->{async}};
+   my $ret=$functions{$f->{name}}{returns};
+   $f->{callable_signature}='Fn('.join(',',map {$_->[1]} @params).')->'.($f->{async}?"Task<$ret>":$ret);
   if(($f->{foreign}||'') eq 'c'){
    my %param_names;
    for my $p(@params){$p->[0]=~/^[A-Za-z_]\w*$/ && !$param_names{$p->[0]}++ or fail('invalid or duplicate native parameter',$s->{file},$f->{line});}
@@ -1007,10 +1107,52 @@ sub validate_types {
   $_=$type->($_) for @{$op->{inputs}},@{$op->{outputs}};
   $op->{params}=join(', ',map {my($n,$t)=split /\s*:\s*/,$_,2;$n.': '.$type->($t)} comma_parts($op->{params}));
  }
- my ($infer,$block,$observed_returns);
- $infer=sub{my($e,$env,$caps)=@_;return 'Void' unless $e;my $k=$e->{k};my $v=$e->{v}//'';
+  my ($infer,$block,$observed_returns);
+  my %metavar_types=(This=>'Any',Args=>'Vec<Any>',Argv=>'Vec<Any>',Type=>'String',Constructor=>'Any');
+  my $table_write=sub{my($key,$key_type,$value_type)=@_;
+   defined($key_type) && $key_type eq 'Void'
+    and fail('table key cannot be nil',$s->{file},1);
+   if($key && $key->{k} eq 'str' && $key->{v} eq '*Constructor' && $value_type ne 'Void'){
+    $must->('%Table',$value_type,'table prototype');
+   }
+  };
+  my $check_member=sub{my($e,$receiver)=@_;my $name=$e->{v};
+   delete $e->{projection};
+   if($data{$receiver}){
+    my $projection=$s->{type_members}{$receiver}{$name}
+     or fail("unknown member '$name' of $receiver",$s->{file},1);
+    $e->{projection}=$projection;
+    return $norm->($s->{type_ops}{$projection}{returns});
+   }
+   return 'Any' if $receiver eq 'Any' || $receiver eq '%Table';
+   fail("member access requires a table or nominal value, got $receiver",$s->{file},1);
+  };
+  my $check_call=sub{my($callee,$name,@args)=@_;
+   return 'Any' if $callee eq 'Any' && $opt{T} eq 'python3';
+   my($params,$ret)=function_type_parts($callee);
+   defined $ret or fail("expression is not callable ($callee)",$s->{file},1);
+   my @params=comma_parts($params);
+   @params==@args or fail("function $name expects ".scalar(@params).' arguments, got '.scalar(@args),$s->{file},1);
+   $must->($params[$_],$args[$_],"function $name") for 0..$#params;return $ret;
+  };
+  $infer=sub{my($e,$env,$caps)=@_;return 'Void' unless $e;my $k=$e->{k};my $v=$e->{v}//'';
   if($k eq 'num'){if(($e->{type}||'') eq 'Int'){my $n=Math::BigInt->new($e->{literal});($n>=Math::BigInt->new('-9223372036854775808') && $n<=Math::BigInt->new('9223372036854775807')) or fail('Int literal out of signed 64-bit range',$s->{file},1)}if(($e->{type}||'') eq 'Float64' && !POSIX::isfinite($e->{v})){fail('Float64 literal is out of range',$s->{file},1)}return $e->{type}||'Float64';}return 'String' if $k eq 'str';
-  if($k eq 'list'){my @ts=map {$infer->($_,$env,$caps)} @{$e->{args}};my $t=@ts?$ts[0]:'Any';$must->($t,$_,'list') for @ts;return "Vec<$t>";}
+   if($k eq 'list'){my @ts=map {$infer->($_,$env,$caps)} @{$e->{args}};my $t=@ts?$ts[0]:'Any';$must->($t,$_,'list') for @ts;return "Vec<$t>";}
+   if($k eq 'table'){
+    for my $entry(@{$e->{entries}}){
+     my $key_type=exists($entry->{key})?$infer->($entry->{key},$env,$caps):undef;
+     $table_write->($entry->{key},$key_type,$infer->($entry->{value},$env,$caps));
+    }
+    return '%Table';
+   }
+   if($k eq 'metavar'){return $metavar_types{$v}}
+   if($k eq 'member'){return $check_member->($e,$infer->($e->{a},$env,$caps))}
+   if($k eq 'method'){
+    my $receiver=$infer->($e->{a},$env,$caps);
+    $must->('%Table',$receiver,'method receiver');
+    $infer->($_,$env,$caps) for @{$e->{args}};
+    return 'Any';
+   }
    if($k eq 'name'){
     if(my $op=$s->{type_ops}{$v}){
      return $norm->('Fn('.join(',',@{$op->{params}}).')->'.$op->{returns});
@@ -1026,7 +1168,7 @@ sub validate_types {
    if(my $f=$functions{$v}){return 'Fn('.join(',',map {$_->[1]} @{$f->{params}}).')->'.($f->{async}?"Task<$f->{returns}>":$f->{returns})}
    return 'Any';
   }
-  if($k eq 'await'){my $t=$infer->($e->{a},$env,$caps);$t=~/^Task<(.+)>$/ or fail("await requires a Task, got $t",$s->{file},1);return $1}
+   if($k eq 'await'){my $t=$infer->($e->{a},$env,$caps);return 'Any' if $t eq 'Any';$t=~/^Task<(.+)>$/ or fail("await requires a Task, got $t",$s->{file},1);return $1}
   if($k eq 'closure'){
    my %inner=%$env;my @params;
    for my $p(@{$e->{params}}){my $t=$type->($p->{type});$inner{$p->{name}}=$t;push @params,$t}
@@ -1034,18 +1176,19 @@ sub validate_types {
    my %locals=map {$_->{name}=>1} @{$e->{params}};
    my $returns=$block->($e->{body},\%inner,$caps,$ret,\%locals);$observed_returns=$outer_returns;
    $returns || $ret eq 'Void' or fail("closure may finish without returning $ret",$s->{file},1);
-   return 'Fn('.join(',',@params).')->'.($e->{async}?"Task<$ret>":$ret);
+    return $e->{callable_signature}='Fn('.join(',',@params).')->'.($e->{async}?"Task<$ret>":$ret);
   }
   if($k eq 'index'){
    my $a=$infer->($e->{a},$env,$caps);my $b=$infer->($e->{b},$env,$caps);
    if($a =~ /^Vec<(.+)>$/){$must->('Int',$b,'vector index');return $1}
-   if($a =~ /^Map<(.*)>$/){my($key,$value)=comma_parts($1);$must->($key,$b,'table index');return $value}
+    if($a =~ /^Map<(.*)>$/){my($key,$value)=comma_parts($1);$must->($key,$b,'table index');return $value}
+    return 'Any' if $a eq '%Table';
    fail("indexing requires a vector or table, got $a",$s->{file},1) unless $a eq 'Any';return 'Any';
   }
   if($k eq 'un'){my $a=$infer->($e->{a},$env,$caps);$must->('Bool',$a,'logical negation') if $v eq '!';return $v eq '!'?'Bool':$a}
   if($k eq 'bin'){
    my $a=$infer->($e->{a},$env,$caps);my $b=$infer->($e->{b},$env,$caps);
-   if($v eq 'in'){if($b =~ /^Map<(.*)>$/){my($key)=comma_parts($1);$must->($key,$a,'membership')}elsif($b =~ /^Vec<(.+)>$/){$must->($1,$a,'membership')}else{fail('membership requires a table or vector',$s->{file},1)}return 'Bool'}
+    if($v eq 'in'){if($b =~ /^Map<(.*)>$/){my($key)=comma_parts($1);$must->($key,$a,'membership')}elsif($b =~ /^Vec<(.+)>$/){$must->($1,$a,'membership')}elsif($b ne '%Table' && $b ne 'Any'){fail('membership requires a table or vector',$s->{file},1)}return 'Bool'}
    if($v =~ /^(?:&&|\|\|)$/){$must->('Bool',$_,'logical expression') for ($a,$b);return 'Bool'}
    if($v =~ /^(?:==|!=)$/){$must->($a,$b,'comparison') unless $compatible->($b,$a);return 'Bool'}
    for($a,$b){/^(?:Int|Float64|Any)$/ or fail("operator $v requires numeric operands, got $_",$s->{file},1)}
@@ -1056,7 +1199,7 @@ sub validate_types {
    my $name=$e->{a}{k} eq 'name'?$e->{a}{v}:'';my @args=map {$infer->($_,$env,$caps)} @{$e->{args}};
    if($ops{$name}){my @params=map {(split /\s*:\s*/,$_,2)[1]} comma_parts($ops{$name}{params});for my $i(0..$#params){$must->($params[$i],$args[$i],"IR operand $name")}(my $t=$name)=~s/\.[^.]+$/.Op/;return $t}
    if($name =~ /^(push|emit|pop|top|reverse|len|final_stack_height)$/){
-    my $vec=$args[0]||'';return 'Any' if $vec eq 'Any';if($name eq 'len'&&$vec =~ /^(?:String|Map<)/){return 'Int'}
+     my $vec=$args[0]||'';return 'Any' if $vec eq 'Any';if($name eq 'len'&&$vec =~ /^(?:String$|%Table$|Map<)/){return 'Int'}
     $vec =~ /^Vec<(.+)>$/ or fail("$name requires a vector, got $vec",$s->{file},1);my $elem=$1;
     if($name eq 'push'||$name eq 'emit'){$must->($elem,$args[1],$name);return 'Void'}
     return 'Int' if $name eq 'len'||$name eq 'final_stack_height';return $vec if $name eq 'reverse';return $elem;
@@ -1064,16 +1207,13 @@ sub validate_types {
    return 'Void' if $name eq 'print';
    my $execution_builtin=!exists($env->{$name}) && !exists($functions{$name});
    if($name eq 'sleep' && $execution_builtin){$must->('Float64',$args[0],'sleep');return 'Void'}
-   if(($name eq 'spawn'||$name eq 'join') && $execution_builtin){
+    if(($name eq 'spawn'||$name eq 'join') && $execution_builtin){
+     return 'Any' if $args[0] eq 'Any';
     $args[0]=~/^Task<(.+)>$/ or fail("$name requires a Task, got $args[0]",$s->{file},1);
     return $name eq 'join'?$1:$args[0];
    }
    if($name =~ /^(abs|min|max|is_finite)$/){$must->('Float64',$_,$name) for @args;return $name eq 'is_finite'?'Bool':(grep {$_ eq 'Float64'} @args)?'Float64':$args[0]}
-   my $callee=$infer->($e->{a},$env,$caps);
-   my @fn=function_type_parts($callee);@fn or fail("expression is not callable ($callee)",$s->{file},1);
-   my($params,$ret)=@fn;my @params=comma_parts($params);
-   @params==@args or fail("function $name expects ".scalar(@params).' arguments, got '.scalar(@args),$s->{file},1);
-   $must->($params[$_],$args[$_],"function $name") for 0..$#params;return $ret;
+    return $check_call->($infer->($e->{a},$env,$caps),$name,@args);
   }
   fail("unsupported expression $k",$s->{file},1);
  };
@@ -1082,14 +1222,27 @@ sub validate_types {
    if($k eq 'let'){exists(($locals||$env)->{$st->{name}}) and fail("duplicate local $st->{name}",$s->{file},1);my $got=$infer->($st->{expr},$env,$caps);my $t=$st->{type}?$type->($st->{type}):$got;$must->($t,$got,'local initializer');$env->{$st->{name}}=$t;$locals->{$st->{name}}=1 if $locals;}
    elsif($k eq 'return'){my $got=$infer->($st->{expr},$env,$caps);$must->($ret,$got,'return') if defined $ret;push @$observed_returns,$got if defined $observed_returns;$returns=1;}
    elsif($k eq 'exec'){$infer->($st->{expr},$env,$caps)}
-   elsif($k eq 'assign'){my $lhs=$st->{lhs};if($lhs->{k} eq 'name' && $lhs->{v}!~/^@/ && !exists $env->{$lhs->{v}}){fail("assignment to undeclared local $lhs->{v}",$s->{file},1)}$must->($infer->($lhs,$env,$caps),$infer->($st->{rhs},$env,$caps),'assignment');}
+    elsif($k eq 'assign'){
+     my $lhs=$st->{lhs};if($lhs->{k} eq 'name' && !$lhs->{dynamic_free} && $lhs->{v}!~/^@/ && !exists $env->{$lhs->{v}}){fail("assignment to undeclared local $lhs->{v}",$s->{file},1)}
+     my $want=$infer->($lhs,$env,$caps);my $got=$infer->($st->{rhs},$env,$caps);
+     $lhs->{k} eq 'member' && $lhs->{projection} and fail('nominal fields are immutable',$s->{file},1);
+     if($lhs->{k} eq 'index' && $infer->($lhs->{a},$env,$caps) eq '%Table'){
+      $table_write->($lhs->{b},$infer->($lhs->{b},$env,$caps),$got);
+     }
+     $must->($want,$got,'assignment');
+    }
    elsif($k eq 'require'||$k eq 'throw'){
     $must->('Bool',$infer->($st->{cond},$env,$caps),'require condition') if $k eq 'require';
     my $types=$exceptions{$st->{name}};for my $i(0..$#{$st->{args}}){$must->($types->[$i],$infer->($st->{args}[$i],$env,$caps),$st->{name})}$returns=1 if $k eq 'throw';
    }
    elsif($k eq 'grab'){my $table=$tables{substr($st->{table},1)};$must->($table->[0],$infer->($st->{key},$env,$caps),'grab key');my $t=$type->($st->{type});$must->($t,$table->[1],'grab type');$env->{$st->{var}}=$t;}
    elsif($k eq 'while'){$must->('Bool',$infer->($st->{cond},$env,$caps),'while condition');$block->($st->{body},{%$env},$caps,$ret,$locals?{%$locals}:undef)}
-   elsif($k eq 'for'){my $t=$infer->($st->{items},$env,$caps);$t=~/^Vec<(.+)>$/ or fail('for requires a vector',$s->{file},1);$block->($st->{body},{%$env,$st->{var}=>$1},$caps,$ret,$locals?{%$locals,$st->{var}=>1}:undef)}
+    elsif($k eq 'for'){
+     my $t=$infer->($st->{items},$env,$caps);
+     my $item=$t eq '%Table' || ($t eq 'Any' && $opt{T} eq 'python3')?'Any':$t=~/^Vec<(.+)>$/?$1:undef;
+     defined $item or fail('for requires a vector or table',$s->{file},1);
+     $block->($st->{body},{%$env,$st->{var}=>$item},$caps,$ret,$locals?{%$locals,$st->{var}=>1}:undef)
+    }
    elsif($k eq 'if'){$must->('Bool',$infer->($st->{cond},$env,$caps),'if condition');my $a=$block->($st->{yes},{%$env},$caps,$ret,$locals?{%$locals}:undef);my $b=$block->($st->{no},{%$env},$caps,$ret,$locals?{%$locals}:undef);$returns=1 if $a && $b;}
    elsif($k eq 'on'){$block->($st->{body},{%$env},$caps,$ret,$locals?{%$locals}:undef);}
   }

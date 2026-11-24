@@ -86,20 +86,27 @@ sub meta_expr {
   pop @{$c->{stack}};
   return $result;
  }
- if($k eq 'num'||$k eq 'str'){return meta_clone($e,$c)}
+  if($k eq 'num'||$k eq 'str'||$k eq 'metavar'){return meta_clone($e,$c)}
  my $result=meta_clone($e,$c);
  if($k eq 'bin'||$k eq 'index'){$result->{a}=meta_expr($c,$e->{a},$env,$definition);$result->{b}=meta_expr($c,$e->{b},$env,$definition)}
-  elsif($k eq 'un'||$k eq 'await'){$result->{a}=meta_expr($c,$e->{a},$env,$definition)}
+   elsif($k eq 'un'||$k eq 'await'||$k eq 'member'){$result->{a}=meta_expr($c,$e->{a},$env,$definition)}
   elsif($k eq 'closure'){
    my %inner=%$env;my %seen;my @params;
    for my $param(@{$e->{params}}){
-    push @params,{%$param,name=>meta_bind($c,$param->{name},\%inner,\%seen)};
+    push @params,{%$param,name=>meta_bind($c,$param->{name},\%inner,\%seen,$definition),
+                 (!$definition?(source_name=>$param->{name}):())};
    }
    $result->{params}=\@params;
    $result->{body}=meta_block($c,$e->{body},\%inner,$definition,\%seen);
   }
  elsif($k eq 'list'){$result->{args}=[map {meta_expr($c,$_,$env,$definition)} @{$e->{args}}]}
- elsif($k eq 'call'){
+  elsif($k eq 'table'){
+   $result->{entries}=[map {my $entry=$_;
+    +{(exists($entry->{key})?(key=>meta_expr($c,$entry->{key},$env,$definition)):()),
+      value=>meta_expr($c,$entry->{value},$env,$definition)}
+   } @{$e->{entries}}];
+  }
+  elsif($k eq 'call'||$k eq 'method'){
   $result->{a}=meta_expr($c,$e->{a},$env,$definition);
   $result->{args}=[map {meta_expr($c,$_,$env,$definition)} @{$e->{args}}];
  }else{meta_error($c,"unsupported expression '$k' during expansion")}
@@ -107,12 +114,12 @@ sub meta_expr {
 }
 
 sub meta_bind {
- my($c,$name,$env,$seen)=@_;
+ my($c,$name,$env,$seen,$definition)=@_;
  $name =~ /^(?:[A-Za-z_]\w*|t'[A-Za-z_]\w*)$/ or meta_error($c,"invalid local binder '$name'");
  exists($c->{defs}{$name}) and meta_error($c,"local binder '$name' conflicts with compile-time declaration");
  $seen->{$name}++ and meta_error($c,"duplicate local '$name'");
  my $fresh=meta_fresh($c);
- $env->{$name}={k=>'name',v=>$fresh};
+ $env->{$name}={k=>'name',v=>$fresh,(!$definition?(source_name=>$name):())};
  return $fresh;
 }
 
@@ -142,13 +149,15 @@ sub meta_block {
   my $new=meta_clone($st,$c);
   if($k eq 'let'){
    $new->{expr}=meta_expr($c,$st->{expr},$env,$definition);
-   $new->{name}=meta_bind($c,$st->{name},$env,\%seen);
+   $new->{name}=meta_bind($c,$st->{name},$env,\%seen,$definition);
+   $new->{source_name}=$st->{name} unless $definition;
   }elsif($k eq 'grab'){
    if($definition && ($c->{globals}{$st->{table}}||'') ne 'table'){
     meta_error($c,"unknown table '$st->{table}' in definition");
    }
    $new->{key}=meta_expr($c,$st->{key},$env,$definition);
-   $new->{var}=meta_bind($c,$st->{var},$env,\%seen);
+   $new->{var}=meta_bind($c,$st->{var},$env,\%seen,$definition);
+   $new->{source_name}=$st->{var} unless $definition;
   }elsif($k eq 'return'||$k eq 'exec'){$new->{expr}=meta_expr($c,$st->{expr},$env,$definition)}
   elsif($k eq 'assign'){
    $new->{lhs}=meta_expr($c,$st->{lhs},$env,$definition);
@@ -166,7 +175,8 @@ sub meta_block {
   }elsif($k eq 'for'){
    $new->{items}=meta_expr($c,$st->{items},$env,$definition);
    my %inner=%$env;
-   $new->{var}=meta_bind($c,$st->{var},\%inner,{});
+   $new->{var}=meta_bind($c,$st->{var},\%inner,{},$definition);
+   $new->{source_name}=$st->{var} unless $definition;
    $new->{body}=meta_block($c,$st->{body},\%inner,$definition);
   }elsif($k eq 'if'){
    $new->{cond}=meta_expr($c,$st->{cond},$env,$definition);
@@ -232,14 +242,16 @@ sub meta_compile_actions {
   for my $f(@{$s->{functions}}){
    next if $f->{foreign};
   $c->{where}={file=>$s->{file},line=>$f->{line}};
-  my(%env,%seen);my @args;
+  my(%env,%seen);my (@args,@params);
   for my $arg(comma_parts($f->{args})){
    my($name,$type)=split /\s*:\s*/,$arg,2;
-   my $fresh=meta_bind($c,strip_ws($name),\%env,\%seen);
+   $name=strip_ws($name);
+   my $fresh=meta_bind($c,$name,\%env,\%seen);
    push @args,$fresh.(defined($type)?': '.$type:'');
+   push @params,{name=>$fresh,type=>$type,source_name=>$name};
   }
   $f->{args}=join(', ',@args);
-  $f->{parameters}=[map {my($name,$type)=split /\s*:\s*/,$_,2;{name=>$name,type=>$type}} @args];
+  $f->{parameters}=\@params;
   $f->{code}=meta_block($c,$f->{code},\%env,0,\%seen);
  }
  $c->{where}={file=>$s->{file},line=>1};

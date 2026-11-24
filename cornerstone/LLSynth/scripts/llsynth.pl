@@ -301,25 +301,160 @@ class DataValue:
 class FunctionRef:
     name: str
 
+@dataclass(frozen=True)
+class ModuleReceiver:
+    id: str
+    def __deepcopy__(self, memo): return self
+
+MODULE_RECEIVERS = {key: ModuleReceiver(key) for key in SPEC.get('module_receivers', {})}
+
 @dataclass
 class Cell:
     value: Any
 
-class Environment(MutableMapping):
-    """A lexical scope owns a name map; closures retain the referenced cells."""
-    def __init__(self, values=()):
-        self.cells = {k: Cell(v) for k, v in dict(values).items()}
-    def __getitem__(self, key): return self.cells[key].value
+class DeferredCell:
+    """Remember a definition-site binding without boxing its value yet."""
+    def __init__(self, frame, key):
+        self.frame, self.key, self.cell = frame, key, None
+    def box(self):
+        if self.cell is None:
+            frame = self.frame
+            self.cell = frame.slots[self.key] = Cell(frame.slots[self.key])
+            del frame.pending[self.key]
+            self.frame = None
+        return self.cell
+    def __deepcopy__(self, memo):
+        # Copy only this binding, sharing that copy with sibling captures
+        # without boxing the source frame just because a task snapshots it.
+        if self.cell is not None: return copy.deepcopy(self.cell, memo)
+        result = memo[id(self)] = Cell(None)
+        result.value = copy.deepcopy(self.frame.slots[self.key], memo)
+        return result
+
+class TableKey:
+    """Keep reference keys alive and compare them by identity, even after deepcopy."""
+    def __init__(self, value): self.value = value
+    def __hash__(self): return id(self.value)
+    def __eq__(self, other): return isinstance(other, TableKey) and self.value is other.value
+
+class Table:
+    """One insertion-ordered key space for indexed and named fields."""
+    PROTOTYPE = '*Constructor'
+    MISSING = object()
+
+    def __init__(self): self.entries = {}
+
+    @staticmethod
+    def key(value):
+        if type(value) in (int, float): return ('number', value)
+        if type(value) in (str, bool): return (type(value), value)
+        return TableKey(value)
+
+    def lookup(self, key):
+        if key is None or (type(key) is float and math.isnan(key)):
+            return self.MISSING
+        key = self.key(key)
+        prototype_key = self.key(self.PROTOTYPE)
+        table, seen = self, set()
+        while table is not None:
+            if table in seen:
+                raise LanguageError('SEM', 'table prototype cycle')
+            seen.add(table)
+            if key in table.entries: return table.entries[key]
+            # The prototype link is local metadata, not an inherited field.
+            if key == prototype_key: break
+            table = table.entries.get(prototype_key)
+        return self.MISSING
+
+    def __getitem__(self, key):
+        value = self.lookup(key)
+        return None if value is self.MISSING else value
+
     def __setitem__(self, key, value):
-        if key in self.cells: self.cells[key].value = value
-        else: self.define(key, value)
-    def __delitem__(self, key): del self.cells[key]
-    def __iter__(self): return iter(self.cells)
-    def __len__(self): return len(self.cells)
-    def define(self, key, value): self.cells[key] = Cell(value)
-    def capture(self, names=None):
+        if key is None or (type(key) is float and math.isnan(key)):
+            raise LanguageError('SEM', 'table key cannot be nil or NaN')
+        if type(key) is str and key == self.PROTOTYPE and value is not None and not isinstance(value, Table):
+            raise LanguageError('SEM', f'{self.PROTOTYPE} expects a table or nil')
+        key = self.key(key)
+        if value is None: self.entries.pop(key, None)
+        else: self.entries[key] = value
+
+    def __contains__(self, key): return self.lookup(key) is not self.MISSING
+    def __iter__(self):
+        return (key.value if isinstance(key, TableKey) else key[1] for key in self.entries)
+    def __len__(self): return len(self.entries)
+    def __bool__(self): return True
+
+class Environment(MutableMapping):
+    """Local slots stay unboxed until a lexical closure captures them."""
+    def __init__(self, values=(), parent=None, metavars=None):
+        self.slots = dict(values)
+        self.source_names = {key: key for key in self.slots}
+        self.pending = {}
+        self.parent = parent
+        self.metavars = metavars
+    def binding(self, key):
+        frame = self
+        while frame is not None:
+            if key in frame.slots: return frame
+            frame = frame.parent
+        return None
+    def __getitem__(self, key):
+        frame = self.binding(key)
+        if frame is None: raise KeyError(key)
+        return frame.local_value(key)
+    def __setitem__(self, key, value):
+        frame = self.binding(key)
+        if frame is None: self.define(key, value)
+        elif isinstance(frame.slots[key], Cell): frame.slots[key].value = value
+        else: frame.slots[key] = value
+    def __delitem__(self, key):
+        if key in self.pending: self.pending[key].box()
+        del self.slots[key]
+        del self.source_names[key]
+    def __iter__(self):
+        seen, frame = set(), self
+        while frame is not None:
+            for key in frame.slots:
+                if key not in seen:
+                    seen.add(key)
+                    yield key
+            frame = frame.parent
+    def __len__(self): return sum(1 for _ in self)
+    def local_value(self, key):
+        value = self.slots[key]
+        return value.value if isinstance(value, Cell) else value
+    def resolve(self, key, source_name):
+        if key in self.slots: return self, key
+        frame = self.parent
+        while frame is not None:
+            for slot in reversed(frame.source_names):
+                if frame.source_names[slot] == source_name: return frame, slot
+            frame = frame.parent
+        return None, None
+    def update_binding(self, key, value):
+        if isinstance(self.slots[key], Cell): self.slots[key].value = value
+        else: self.slots[key] = value
+    def define(self, key, value, source_name=None):
+        if key in self.pending: self.pending[key].box()
+        self.slots[key] = value
+        self.source_names[key] = source_name or key
+    def capture(self, names):
         result = Environment()
-        result.cells = {k: v for k, v in self.cells.items() if names is None or k in names}
+        for key, source_name in sorted(names.items()):
+            frame, slot = self.resolve(key, source_name)
+            if frame is None: continue
+            value = frame.slots[slot]
+            if not isinstance(value, Cell):
+                if slot not in frame.pending: frame.pending[slot] = DeferredCell(frame, slot)
+                value = frame.pending[slot]
+            result.slots[key] = value
+            result.source_names[key] = frame.source_names[slot]
+        return result
+    def activate(self):
+        result = Environment()
+        result.slots = {k: v.box() if isinstance(v, DeferredCell) else v for k, v in self.slots.items()}
+        result.source_names = self.source_names.copy()
         return result
 
 @dataclass
@@ -346,7 +481,7 @@ class ExecutionBudget:
 
 class Task:
     """Single-shot lazy computation. No mutable DSL value crosses a thread boundary."""
-    def __init__(self, owner, callee, args):
+    def __init__(self, owner, callee, args, *, metavars=None):
         self.owner, self.generation = owner, owner.budget
         self.thread = None
         self.observed = False
@@ -357,8 +492,8 @@ class Task:
         child.budget, child.depth, child.node = owner.budget, 0, owner.node
         memo = {id(owner): child}
         try:
-            child.state, child.tables, self.callee, self.args = copy.deepcopy(
-                (owner.state, owner.tables, callee, args), memo)
+            child.state, child.tables, self.callee, self.args, self.metavars = copy.deepcopy(
+                (owner.state, owner.tables, callee, args, metavars), memo)
         except LanguageError: raise
         except Exception as exc: raise LanguageError('TASK', f'value cannot be copied into task: {exc}') from None
         with owner.budget.lock:
@@ -377,7 +512,8 @@ class Task:
                     raise LanguageError('RESOURCE', f'cannot start task: {exc}') from None
         return self
     def run(self):
-        try: self.value = self.context.invoke(self.callee, self.args, run_async=True)
+        try:
+            self.value = self.context.invoke(self.callee, self.args, run_async=True, metavars=self.metavars)
         except Exception as exc:
             self.error = exc if isinstance(exc, LanguageError) else LanguageError('SEM', str(exc))
     def result(self, receiver):
@@ -395,19 +531,20 @@ def closure_names(node, bound=()):
     """Free lexical names, respecting parameter/local shadowing and declaration order."""
     bound = set(bound)
     if isinstance(node, list):
-        names = set()
+        names = {}
         for item in node:
             names.update(closure_names(item, bound))
             if item.get('k') == 'let': bound.add(item['name'])
             if item.get('k') == 'grab': bound.add(item['var'])
         return names
-    if not isinstance(node, dict): return set()
+    if not isinstance(node, dict): return {}
     kind = node.get('k')
     if kind == 'closure':
-        return closure_names(node['body'], {p['name'] for p in node['params']}) - bound
+        return {k: v for k, v in closure_names(node['body'], {p['name'] for p in node['params']}).items()
+                if k not in bound}
     if kind == 'for':
         return closure_names(node['items'], bound) | closure_names(node['body'], bound | {node['var']})
-    names = {node['v']} - bound if kind == 'name' else set()
+    names = {node['v']: node.get('source_name', node['v'])} if kind == 'name' and node['v'] not in bound else {}
     for value in node.values():
         if isinstance(value, (list, dict)): names.update(closure_names(value, bound))
     return names
@@ -570,11 +707,72 @@ class Context:
         if name not in caps:
             raise LanguageError('SEM', f'capture ${name} is not bound in this production')
         return caps[name]
+    def expression_instruction(self, opcode, operand, env):
+        if opcode == 'PUSH_METAVAR':
+            bindings = env.metavars if isinstance(env, Environment) else None
+            if bindings is None or operand not in bindings:
+                raise LanguageError('SEM', f'metavariable *{operand} is unavailable outside a colon call')
+            return bindings[operand]
+        raise LanguageError('SEM', f'unknown semantic opcode {opcode}')
+    def invoke_member(self, receiver, name, callee, args, env, caps, *, lexical):
+        if not isinstance(callee, (Closure, FunctionRef)):
+            raise LanguageError('SEM', f'member {name!r} is not callable')
+        try:
+            if not lexical:
+                caller = env if isinstance(env, Environment) else Environment(env)
+                return self.invoke(callee, args, caller=caller, caller_caps=caps)
+            argv = list(args)
+            constructor = receiver[Table.PROTOTYPE] if isinstance(receiver, Table) else None
+            bindings = {'This': receiver, 'Args': argv, 'Argv': argv, 'Constructor': constructor}
+            return self.invoke(callee, args, metavars=bindings)
+        except TypeError as exc:
+            raise LanguageError('SEM', f'calling member {name!r}: {exc}') from None
+    @staticmethod
+    def callable_type(params, returns, is_async=False):
+        result = f'Task<{returns}>' if is_async else returns
+        return f"Fn({','.join(params)})->{result}"
+    def read_member(self, receiver, name):
+        if isinstance(receiver, ModuleReceiver):
+            module = SPEC['module_receivers'][receiver.id]
+            exports = module['exports'].get(name, {})
+            if 'function' in exports: return FunctionRef(exports['function'])
+            if '@' in exports: return self.state[exports['@']]
+            if '#' in exports: return self.tables[exports['#']]
+            raise LanguageError('SEM', f"module {module['name']!r} does not export runtime member {name!r}")
+        if isinstance(receiver, Table): return receiver[name]
+        if isinstance(receiver, DataValue):
+            projection = SPEC['type_members'].get(receiver.owner, {}).get(name)
+            if projection is None:
+                raise LanguageError('SEM', f'{receiver.owner} has no member {name!r}')
+            op = SPEC['type_ops'][projection]
+            if receiver.tag != op['tag']:
+                raise LanguageError('SEM', f"expected {op['tag']}, got {receiver.tag}")
+            return receiver.fields[op['index']]
+        raise LanguageError('SEM', 'member access requires a table, module or nominal value')
+    @staticmethod
+    def write_member(receiver, name, value):
+        if isinstance(receiver, Table): receiver[name] = value
+        elif isinstance(receiver, DataValue):
+            raise LanguageError('SEM', 'nominal fields are immutable')
+        else:
+            raise LanguageError('SEM', 'member assignment requires a table')
     def eval(self, e, env, caps):
         k = e['k']
         if k == 'num': return int(e.get('literal', e['v'])) if e.get('type') == 'Int' else float(e['v'])
         if k == 'str': return e['v']
         if k == 'list': return [self.eval(t, env, caps) for t in e['args']]
+        if k == 'metavar': return self.expression_instruction('PUSH_METAVAR', e['v'], env)
+        if k == 'table':
+            table, next_key = Table(), 1
+            for entry in e['entries']:
+                if entry.get('key') is not None:
+                    key = self.eval(entry['key'], env, caps)
+                else:
+                    key, next_key = next_key, next_key + 1
+                table[key] = self.eval(entry['value'], env, caps)
+            return table
+        if k == 'member':
+            return self.read_member(self.eval(e['a'], env, caps), e['v'])
         if k == 'closure':
             scope = env if isinstance(env, Environment) else Environment(env)
             return Closure(e, scope.capture(closure_names(e)), dict(caps), self, self.budget)
@@ -587,26 +785,39 @@ class Context:
             if name.startswith('$'): return self.capture(name[1:], caps)
             if name.startswith('&'): return FunctionRef(name[1:])
             if name in SPEC['type_ops']: return FunctionRef(name)
-            if name.startswith('t\''): return env[name]
             if name == 'true': return True
             if name == 'false': return False
             if name in ('None', 'nil'): return None
             if name in SPEC['op_by_name']: return Operation(name)
-            if name in env: return env[name]
+            dynamic = isinstance(env, Environment) and env.parent is not None
+            if dynamic:
+                source_name = e.get('source_name', name)
+                frame, slot = env.resolve(name, source_name)
+                if frame is not None: return frame.local_value(slot)
+            elif name in env: return env[name]
+            elif name.startswith("t'"): return env[name]
+            if e.get('dynamic_free') and not dynamic:
+                raise LanguageError('SEM', f'no lexical binding for {e.get("source_name", name)!r}')
             if any(f['name'] == name for f in SPEC['functions']): return FunctionRef(name)
+            if dynamic and name not in ('spawn', 'join', 'sleep', 'is_finite', 'abs', 'min', 'max',
+                                         'reverse', 'len', 'pop', 'top', 'push', 'emit', 'print', 'final_stack_height'):
+                raise LanguageError('SEM', f'no dynamic binding for {source_name!r}')
             return name
         if k == 'un':
             a = self.eval(e['a'], env, caps)
             return checked_int(-a) if e['v'] == '-' and type(a) is int else -a if e['v'] == '-' else not a
         if k == 'index':
-            return self.eval(e['a'], env, caps)[self.eval(e['b'], env, caps)]
+            receiver, key = self.eval(e['a'], env, caps), self.eval(e['b'], env, caps)
+            try: return receiver[key]
+            except TypeError as exc: raise LanguageError('SEM', str(exc)) from None
         if k == 'bin':
             op = e['v']
             a = self.eval(e['a'], env, caps)
             if op == '&&': return bool(a) and bool(self.eval(e['b'], env, caps))
             if op == '||': return bool(a) or bool(self.eval(e['b'], env, caps))
             b = self.eval(e['b'], env, caps)
-            if e.get('type') == 'Int' or (e.get('type') == 'Any' and type(a) is int and type(b) is int):
+            if op in ('+', '-', '*', '/') and (e.get('type') == 'Int' or
+                    (e.get('type') == 'Any' and type(a) is int and type(b) is int)):
                 if op == '/':
                     if b == 0: raise LanguageError('SEM', 'division by zero')
                     return checked_int((abs(a) // abs(b)) * (-1 if (a < 0) != (b < 0) else 1))
@@ -615,9 +826,19 @@ class Context:
                     '/': lambda: a/b, '==': lambda: a==b, '!=': lambda: a!=b,
                     '<': lambda: a<b, '>': lambda: a>b, '<=': lambda: a<=b,
                     '>=': lambda: a>=b, 'in': lambda: a in b}[op]()
+        if k == 'method' or (k == 'call' and e['a']['k'] == 'member'):
+            member = e if k == 'method' else e['a']
+            receiver = self.eval(member['a'], env, caps)
+            callee = self.read_member(receiver, member['v'])
+            args = [self.eval(item, env, caps) for item in e['args']]
+            return self.invoke_member(receiver, member['v'], callee, args, env, caps, lexical=k == 'method')
         if k == 'call':
             callee = self.eval(e['a'], env, caps)
             args = [self.eval(item, env, caps) for item in e['args']]
+            if 'receiver' in e:
+                receiver = MODULE_RECEIVERS[e['receiver']]
+                return self.invoke_member(receiver, e['a']['v'], callee, args, env, caps,
+                                          lexical=bool(e.get('colon')))
             if isinstance(callee, Operation): return Operation(callee.name, tuple(args))
             if isinstance(callee, FunctionRef):
                 return self.invoke(callee, args)
@@ -657,7 +878,7 @@ class Context:
         if not isinstance(value, Task): raise LanguageError('TASK', 'expected a Task')
         if value.generation is not self.budget: raise LanguageError('TASK', 'task belongs to another execution')
         return value
-    def invoke(self, callee, args, run_async=False):
+    def invoke(self, callee, args, run_async=False, *, caller=None, caller_caps=None, metavars=None):
         if isinstance(callee, FunctionRef) and callee.name in SPEC['type_ops']:
             op = SPEC['type_ops'][callee.name]
             if len(args) != len(op['params']):
@@ -674,18 +895,29 @@ class Context:
             if callee.owner is not self or callee.generation is not self.budget:
                 raise LanguageError('SEM', 'closure belongs to another context or execution')
             definition = callee.definition
-            keys = [p['name'] for p in definition['params']]
-            env, caps, code = callee.env.capture(), callee.caps, definition['body']
+            params, code = definition['params'], definition['body']
         else:
+            if not isinstance(callee, FunctionRef): raise LanguageError('SEM', f'undefined callable {callee!r}')
             definition = next((f for f in SPEC['functions'] if f['name'] == callee.name), None)
             if not definition: raise LanguageError('SEM', f'undefined function {callee.name}')
-            keys = [p['name'] for p in definition['parameters']]
-            env, caps, code = Environment(), {}, definition.get('code', [])
-        if len(keys) != len(args):
-            raise LanguageError('SEM', f'function expects {len(keys)} arguments, got {len(args)}')
+            params, code = definition['parameters'], definition.get('code', [])
+        if len(params) != len(args):
+            raise LanguageError('SEM', f'function expects {len(params)} arguments, got {len(args)}')
+        if metavars is not None:
+            metavars['Type'] = definition.get('callable_signature') or self.callable_type(
+                [p['type'] for p in params], definition['returns'], definition.get('async'))
+        if definition.get('async') and caller is not None:
+            raise LanguageError('TASK', 'async dot calls cannot use a live caller frame; use a colon call')
         if definition.get('foreign'): return interop_call(definition, args)
-        if definition.get('async') and not run_async: return Task(self, callee, args)
-        for key, value in zip(keys, args): env.define(key, value)
+        if definition.get('async') and not run_async: return Task(self, callee, args, metavars=metavars)
+        if caller is not None:
+            env, caps = Environment(parent=caller), caller_caps or {}
+        elif isinstance(callee, Closure):
+            env, caps = callee.env.activate(), callee.caps
+        else:
+            env, caps = Environment(), {}
+        env.metavars = metavars
+        for param, value in zip(params, args): env.define(param['name'], value, param.get('source_name'))
         if self.depth >= 128: raise LanguageError('RESOURCE', 'function recursion limit exceeded')
         self.depth += 1
         try: return self.exec_block(code, env, caps)[1]
@@ -719,18 +951,31 @@ class Context:
                     self.raise_error(stmt['name'], [self.eval(a, env, caps) for a in stmt['args']])
             elif k == 'throw':
                 self.raise_error(stmt['name'], [self.eval(a, env, caps) for a in stmt['args']])
-            elif k == 'let': env.define(stmt['name'], self.eval(stmt['expr'], env, caps))
+            elif k == 'let': env.define(stmt['name'], self.eval(stmt['expr'], env, caps), stmt.get('source_name'))
             elif k == 'grab':
                 key = self.eval(stmt['key'], env, caps)
                 table = self.tables[stmt['table'][1:]]
                 if key not in table: raise LanguageError('SEM', f'key {key!r} not in {stmt["table"]}')
-                env[stmt['var']] = table[key]
+                if stmt['var'] in env.slots: env.update_binding(stmt['var'], table[key])
+                else: env.define(stmt['var'], table[key], stmt.get('source_name'))
             elif k == 'assign':
                 lhs = stmt['lhs']; value = self.eval(stmt['rhs'], env, caps)
-                if lhs['k'] == 'index':
-                    self.eval(lhs['a'], env, caps)[self.eval(lhs['b'], env, caps)] = value
+                if lhs['k'] == 'member':
+                    self.write_member(self.eval(lhs['a'], env, caps), lhs['v'], value)
+                elif lhs['k'] == 'index':
+                    receiver, key = self.eval(lhs['a'], env, caps), self.eval(lhs['b'], env, caps)
+                    try: receiver[key] = value
+                    except TypeError as exc: raise LanguageError('SEM', str(exc)) from None
                 elif lhs['k'] == 'name' and lhs['v'].startswith('@'):
                     self.state[lhs['v'][1:]] = value
+                elif env.parent is not None:
+                    name = lhs.get('source_name', lhs['v'])
+                    frame, slot = env.resolve(lhs['v'], name)
+                    if frame is None: raise LanguageError('SEM', f'no dynamic binding for {name!r}')
+                    frame.update_binding(slot, value)
+                elif lhs.get('dynamic_free'):
+                    name = lhs.get('source_name', lhs['v'])
+                    raise LanguageError('SEM', f'no lexical binding for {name!r}')
                 else: env[lhs['v']] = value
             elif k == 'exec': self.eval(stmt['expr'], env, caps)
             elif k == 'return': return True, self.eval(stmt['expr'], env, caps)
@@ -742,7 +987,8 @@ class Context:
             elif k == 'for':
                 for item in list(self.eval(stmt['items'], env, caps)):
                     self.tick()
-                    env[stmt['var']] = item
+                    if stmt['var'] in env.slots: env.update_binding(stmt['var'], item)
+                    else: env.define(stmt['var'], item, stmt.get('source_name'))
                     done, val = self.exec_block(stmt['body'], env, caps)
                     if done: return True, val
             elif k == 'if':
@@ -921,9 +1167,20 @@ def interpret(source):
 def compile(source, target=DEFAULT_TARGET):
     return Context().compile(source, target)
 
-def format_value(value):
+def format_value(value, seen=None):
     if type(value) is bool: return 'true' if value else 'false'
     if isinstance(value, float): return format(value, '.15g')
+    if isinstance(value, Table):
+        if seen is None: seen = set()
+        if value in seen: return '{...}'
+        if len(seen) >= 64: return '{...}'
+        seen.add(value)
+        try:
+            def show(item):
+                return repr(item) if isinstance(item, str) else format_value(item, seen)
+            return '{' + ', '.join(f'{show(key)}: {show(value[key])}' for key in value) + '}'
+        finally:
+            seen.remove(value)
     return str(value)
 
 BYTECODE_OPS = ('PUSH_F64', 'ADD', 'SUB', 'MUL', 'DIV', 'NEG', 'DUP', 'SWAP', 'DROP', 'PRINT')
@@ -1413,6 +1670,15 @@ static Val eval(Context *c,Json *e,Map *env,Map *caps){Val nil=LLS_ZERO;if(!e||c
  if(strcmp(kind,"num")==0){if(jeq(jo(e,"type"),"Int"))return vint((int64_t)strtoll(jg(e,"literal"),NULL,10));return vnum(jnumber(jo(e,"v")));}
  if(strcmp(kind,"str")==0)return vstr(jg(e,"v"));
  if(strcmp(kind,"list")==0){Vec *v=new_vec(c);Json *items=jo(e,"args");for(int i=0;i<jlen(items);i++)vec_push(c,v,eval(c,ji(items,i),env,caps));return vvec(v);}
+ if(strcmp(kind,"member")==0){
+  Val data=eval(c,jo(e,"a"),env,caps);const char *field=jg(e,"v");
+  if(c->error[0])return nil;
+  if(data.tag!=VDATA){error(c,"SEM: member '%s' requires a nominal value",field);return nil;}
+  Json *projection=jo(jo(jo(lls_spec(c),"type_members"),data.s),field);
+  if(!projection){error(c,"SEM: %s has no member '%s'",data.s,field);return nil;}
+  Vec *args=new_vec(c);vec_push(c,args,data);
+  return eval_call(c,vtag(VFN,js(projection)),args);
+ }
  if(strcmp(kind,"name")==0){const char *name=jg(e,"v");if(name[0]=='@')return map_get(c->states,name+1);
   if(name[0]=='#')return map_get(c->tables,name+1);
   if(name[0]=='$'){if(!map_has(caps,name+1))error(c,"SEM: unbound capture %s",name);return map_get(caps,name+1);}

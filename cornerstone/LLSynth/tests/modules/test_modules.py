@@ -82,6 +82,140 @@ return helper(x);
             run = self.run_command(self.work / "tool", stdin="40")
             self.assertEqual(run.stdout, "43\n")
 
+    def test_arrow_accessors_and_colon_calls(self):
+        self.write("Lib/Words.llsynth", """.library "Lib.Words"
+.export Number, increment, @count, #symbols, !Bad, %Value
+.type %Value = Int
+.state @count: %Value = 1
+.symtbl #symbols: String -> %Value
+.exception !Bad(reason: String) "{reason}"
+.init
+#symbols["x"] = 2;
+.end
+.token DIGITS: Int = /[0-9]+/
+.rule Number
+'syntax: n:DIGITS
+'semantics: return $n;
+.end
+.function increment(x: %Value) -> %Value
+return x + 1;
+.end
+.function private() -> Int
+return 0;
+.end
+""")
+        source = """.import qualified Lib.Words
+.import Lib.Words as W
+.alias &W->increment &inc
+.function twice (x: %W->Value) -> %Lib.Words->Value
+return W:increment(&Lib.Words->increment(x));
+.end
+.rule Start
+'syntax: n:Lib.Words->Number EOF
+'semantics:
+require @W->count == 1 else Throw(!W->Bad, "count");
+return Lib.Words:increment(twice($n)) + &inc(#W->symbols["x"]) + W__increment(0);
+.end
+"""
+        self.write("main.llsynth", source)
+        for target, filename in (("python3", "tool.py"), ("c99", "tool.c")):
+            self.generate("-T", target, "-o", filename)
+        self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="40").stdout, "47\n")
+        if shutil.which("cc"):
+            self.run_command("cc", "-std=c99", "tool.c", "-lm", "-o", "tool")
+            self.assertEqual(self.run_command(self.work / "tool", stdin="40").stdout, "47\n")
+        for old, new, diagnostic in (
+            ("W:increment(", "W:private(", "does not export private"),
+            ("&Lib.Words->increment(", "&W->private(", "does not export private"),
+            ("@W->count", "@Missing->count", "unknown module alias 'Missing'"),
+            ("Lib.Words->Number", "W->DIGITS", "does not export DIGITS"),
+        ):
+            with self.subTest(reference=new):
+                self.write("main.llsynth", source.replace(old, new))
+                self.assertIn(diagnostic, self.generate("--check", code=1).stderr)
+
+    def test_colons_and_arrows_preserve_table_methods_and_function_types(self):
+        self.write("lib.llsynth", """.library "Lib"
+.type %Value = Int
+.function increment(x: Int) -> Int
+return x + 1;
+.end
+.function table_result() -> Int
+let t = [["increment":fn(x:Int)->Int { return x + 2; }, "value":3]];
+t.value = t:increment(t.value);
+return t.value;
+.end
+""")
+        self.write("main.llsynth", """.import "lib.llsynth" as W
+.import "lib.llsynth" as Point
+.type %Number = Int
+.prodtype %Record
+increment: Int
+.end
+.function apply(W:Fn(Int)->Int) -> Int
+return W(4);
+.end
+.rule Start
+'syntax: "ok" EOF
+'semantics:
+let W = [["increment":fn(x:Int)->Int { return x + 10; }]];
+let cb:%Callable[%Number->Int] = &W->increment;
+let typed: %Callable[%Int -> %W->Value] = cb;
+let Point = %Record(7);
+return W:increment(apply(typed)) + (W):increment(1) + W:table_result() + Point.increment;
+.end
+""")
+        self.generate("-o", "tool.py")
+        self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="ok").stdout, "29\n")
+
+    def test_colon_receiver_follows_the_reexporting_library(self):
+        self.write("origin.llsynth", """.library "Origin"
+.export read, step, @count
+.state @count: Int = 3
+.function step(x: Int) -> Int
+return x + 1;
+.end
+.function read(x: Int) -> Int
+return *This.step(*Argv[0]) + *This.count;
+.end
+""")
+        self.write("wrapper.llsynth", """.library "Wrapper"
+.export read, step, @count
+.import "origin.llsynth" as O
+.alias &O->read &read
+.state @count: Int = 10
+.function step(x: Int) -> Int
+return x + 2;
+.end
+.function private() -> Int
+return 100;
+.end
+""")
+        source = """.import "origin.llsynth" as O
+.import "wrapper.llsynth" as W
+.rule Start
+'syntax: EOF
+'semantics:
+@W->count = 20;
+return O:read(5) + W:read(5);
+.end
+"""
+        self.write("main.llsynth", source)
+        self.generate("-o", "tool.py")
+        self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="").stdout, "36\n")
+        result = self.generate("-T", "c99", "--check", code=1)
+        self.assertIn("method context require the python3 tool target", result.stderr)
+        self.write("main.llsynth", source.replace("O:read(5) + W:read(5)", "&W->read(5)"))
+        self.generate("-o", "tool.py")
+        result = self.run_command(sys.executable, "tool.py", stdin="", code=1)
+        self.assertIn("metavariable *This is unavailable outside a colon call", result.stderr)
+        origin = (self.work / "origin.llsynth").read_text()
+        self.write("origin.llsynth", origin.replace("*This.step(*Argv[0]) + *This.count", "*This.private()"))
+        self.write("main.llsynth", source.replace("O:read(5) + W:read(5)", "W:read(5)"))
+        self.generate("-o", "tool.py")
+        result = self.run_command(sys.executable, "tool.py", stdin="", code=1)
+        self.assertIn("module 'Wrapper' does not export runtime member 'private'", result.stderr)
+
     def test_import_once_diamond_aliases_and_include_fingerprints(self):
         self.basic()
         self.write("left.llsynth", """.module Left
@@ -397,9 +531,11 @@ return Ops.VALUE(x);
 'semantics: return 7;
 .end
 """)
-        self.write("main.llsynth", '.import "entry.llsynth"\n.start "Entry__Start"\n')
-        self.generate("-o", "tool.py")
-        self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="ok").stdout, "7\n")
+        for start in ('"Entry__Start"', 'Entry->Start'):
+            with self.subTest(start=start):
+                self.write("main.llsynth", f'.import "entry.llsynth"\n.start {start}\n')
+                self.generate("-o", "tool.py")
+                self.assertEqual(self.run_command(sys.executable, "tool.py", stdin="ok").stdout, "7\n")
 
     def test_reserved_names_and_function_shadowing_have_diagnostics(self):
         self.basic()

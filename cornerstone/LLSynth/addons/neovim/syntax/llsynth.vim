@@ -30,7 +30,8 @@ syn match llsynthInterpolation /${[A-Za-z_][A-Za-z0-9_]*}/ contained
 
 " Captures, state, symbol tables, exceptions, aliases and function references.
 syn match llsynthSigil /[@$#%!&][A-Za-z_][A-Za-z0-9_]*/
-syn match llsynthType /\<\%(Int\|Int64\|Float64\|Bool\|String\|Void\|Unit\|Any\|Vec\|Task\|Fn\|Callable\|Op\)\>/
+syn match llsynthMetavariable /\*\%(This\|Args\|Argv\|Type\|Constructor\)\>/
+syn match llsynthType /\<\%(Int\|Int64\|Float64\|Bool\|String\|Void\|Unit\|Any\|Vec\|Table\|Task\|Fn\|Callable\|Op\)\>/
 syn match llsynthBoolean /\<\%(true\|false\|nil\|None\)\>/
 syn match llsynthKeyword /\<\%(let\|return\|if\|else\|while\|for\|in\|fn\|async\|await\|throw\|grab\|require\|on\|discard\|call\|spawn\|join\)\>/
 syn match llsynthBuiltin /\<\%(len\|push\|pop\|top\|emit\|print\|reverse\|min\|max\|abs\|is_finite\|final_stack_height\|sleep\|Throw\)\>\ze\s*(/
@@ -58,6 +59,7 @@ hi def link llsynthSingleString String
 hi def link llsynthEscape SpecialChar
 hi def link llsynthInterpolation Special
 hi def link llsynthSigil Identifier
+hi def link llsynthMetavariable Special
 hi def link llsynthType Type
 hi def link llsynthBoolean Boolean
 hi def link llsynthKeyword Keyword

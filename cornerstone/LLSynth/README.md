@@ -64,8 +64,8 @@ using `..` to close the rule or `'end` to finish a facet are still accepted.
   `std.Collections`, `std.Parsec`, and other libraries from your specification.
 * [Instruction selection](docs/isel.md): import `std.ISel` to select Sandstone
   ArchML instruction forms and emit `.insn` assembly for a legalized IR.
-* [Closures, async functions, and concurrency](docs/execution.md): lexical
-  closures, lazy tasks, spawning, and joining with isolated task snapshots.
+* [Tables, closures, and concurrency](docs/execution.md): hybrid tables,
+  dynamic and lexical method calls, and lazy tasks with isolated snapshots.
   These execution features currently require the Python tool target.
 * [Templates and hygienic macros](docs/metaprogramming.md): expression
   templates and statement macros expand action ASTs before type checking.

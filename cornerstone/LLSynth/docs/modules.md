@@ -34,8 +34,8 @@ return x + 1;
 .import "words.llsynth" as W
 
 .rule Start
-'syntax: n:W__Number EOF
-'semantics: return &W__increment($n);
+'syntax: n:W->Number EOF
+'semantics: return W:increment($n);
 .end
 ```
 
@@ -46,8 +46,12 @@ printf '41' | python3 example.py
 # 42
 ```
 
-Both `W__Number` and `W.Number` refer to the same exported rule. The linker
-resolves qualification before the grammar and action lexers run.
+`W->Number`, `W__Number`, and `W.Number` refer to the same exported rule.
+Use `W:increment(x)` for a direct library call and `&W->increment` for a
+function reference, which you can save, pass, or call as `&W->increment(x)`.
+The `&` is required for function references with `->`, so unprefixed arrows
+can remain part of callable type syntax.
+The linker resolves qualification before the grammar and action lexers run.
 
 ## Choosing an import form
 
@@ -55,9 +59,11 @@ For a library declared `.library "Library.Words"`:
 
 | Import | How to call its exported function |
 | --- | --- |
-| `.import "Library.Words"` | `increment(x)` (also `Words__increment(x)`) |
-| `.import qualified "Library.Words"` | `Library__Words__increment(x)` or `Library.Words.increment(x)` |
-| `.import "Library.Words" as W` | `W__increment(x)` or `W.increment(x)` |
+| `.import "Library.Words"` | `increment(x)` or `Words:increment(x)` |
+| `.import qualified "Library.Words"` | `Library.Words:increment(x)` |
+| `.import "Library.Words" as W` | `W:increment(x)` |
+
+Legacy spellings such as `W__increment(x)` and `W.increment(x)` remain valid.
 
 `qualified` may also follow the name. The `as` form uses only the chosen
 alias. Ambiguous plain imports and collisions with local declarations are
@@ -134,13 +140,30 @@ Access through alias `M` looks like:
 
 | Declaration | Reference |
 | --- | --- |
-| Rule/token | `n:M__Number` in a syntax facet |
-| Function | `&M__increment(x)` or `M__increment(x)` |
-| State | `@M__counter` |
-| Symbol table | `#M__symbols["key"]` |
-| Exception | `Throw(!M__Failure, "reason")` |
-| Type alias | `%M__Value` |
-| IR operation/type | `M__Stack.PUSH(x)`, `M__Stack.Op` |
+| Rule/token | `n:M->Number` in a syntax facet |
+| Function | `M:increment(x)` or `&M->increment` |
+| State | `@M->counter` |
+| Symbol table | `#M->symbols["key"]` |
+| Exception | `Throw(!M->Failure, "reason")` |
+| Type alias | `%M->Value` |
+| IR operation/type | `M->Stack.PUSH(x)`, `M->Stack.Op` |
+
+Write the `->` and `:` qualifiers without spaces. Use spaces around a type
+separator when it could be confused with an alias, as in
+`.symtbl #examples: %Key -> Int`. `n:` in a syntax facet remains a
+capture label, even if `n` is also an import alias.
+
+In a Python-generated tool, `M:increment(x)` binds the colon-call metavariables
+for the duration of the call. `*Argv[0]` is the first explicit argument, and
+`*This` exposes the imported library's exported functions, states and symbol
+tables by name without their sigils. State reads see the live state. When a
+library re-exports a function alias, `*This` refers to the re-exporting library,
+not the file that implements the function. An ordinary call such as
+`&M->increment(x)` does not bind these metavariables. C supports `M:increment(x)`
+when the called code does not require metavariables.
+
+A compact `M:method(...)` with a known import alias is a library call. To call a
+table method on a local with the same name, write `(M):method(...)`.
 
 A module uses its own declarations without qualification. Dependencies require
 explicit imports inside that module; importer aliases are not inherited.
@@ -169,7 +192,8 @@ the usual EOF-terminated entry rule and mode-appropriate facets.
 
 Without an explicit `.start`, the default is the first rule belonging to the
 entry specification (including its textual includes), **not** an imported rule.
-An explicit `.start M__Start` or `.start "M__Start"` may select an exported rule.
+An explicit `.start M->Start` may select an exported rule. The legacy spellings
+`.start M__Start` and `.start "M__Start"` also work.
 
 Lexing remains one combined language lexer. Importing tokens and `.skip` rules
 contributes lexical behavior even when those declarations are private; export
@@ -261,9 +285,11 @@ extensions, it also links:
   metaprograms use ordinary qualified calls such as `M__double(x)`. Their names
   and parameters follow the same no-shadowing rule as callable declarations.
 
-The loader first links source records. The action compiler then parses those
-records and expands metaprogram ASTs before action/type validation. This preserves
-module definition-site references without combining unlinked macro dictionaries.
+The loader first links source records. It marks `M:func(...)` calls so the
+action compiler can distinguish them from ordinary calls and function-reference
+calls. The action compiler parses the linked records and expands metaprogram ASTs
+before action/type validation. This preserves module definition-site references
+without combining unlinked macro dictionaries.
 The linker-level regression test `tests/modules/extensions.t` verifies textual
 binding and opaque foreign strings; `tests/integration/test_features.py` verifies
 combined macro, closure, async, native-import, and module behavior.

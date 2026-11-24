@@ -66,7 +66,9 @@ contexts:
   atoms:
     - match: '[@$#%!&][A-Za-z_][A-Za-z_0-9]*'
       scope: variable.other.sigil.llsynth
-    - match: '\b(?:Int64|Int|Float64|Bool|String|Void|Unit|Any|Vec|Task|Fn|Callable|Op)\b'
+    - match: '\*(?:This|Args|Argv|Type|Constructor)\b'
+      scope: variable.language.llsynth
+    - match: '\b(?:Int64|Int|Float64|Bool|String|Void|Unit|Any|Vec|Table|Task|Fn|Callable|Op)\b'
       scope: storage.type.llsynth
     - match: '\b(?:true|false|nil|None)\b'
       scope: constant.language.llsynth

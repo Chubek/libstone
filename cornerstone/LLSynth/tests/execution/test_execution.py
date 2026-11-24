@@ -106,6 +106,99 @@ return ops[0](2);
 """)
         self.assertEqual(module.Context().interpret("40"), 42)
 
+    def test_dot_uses_live_caller_and_colon_uses_escaping_shared_cells(self):
+        module = self.generate("""
+let t = factory(10);
+let x = 100;
+let dynamic = t.add(Identity(2));
+let lexical = t:add(3);
+return [dynamic, lexical, x, t:read()];
+""", """.template Identity(a) = a
+.function factory(x: Int) -> Any
+return [["add": fn(n: Int) -> Int { x = x + n; return x; },
+         "read": fn() -> Int { return x; }]];
+.end
+""")
+        self.assertEqual(module.Context().interpret("0"), [102, 13, 102, 13])
+
+    def test_dot_rejects_missing_dynamic_binding(self):
+        module = self.generate("""
+let x = 10;
+let t = [["read": fn() -> Int { return x; }]];
+return call_it(t);
+""", """.function call_it(t: Any) -> Int
+return t.read();
+.end
+""")
+        with self.assertRaisesRegex(module.LanguageError, "no dynamic binding for 'x'"):
+            module.Context().interpret("0")
+
+    def test_colon_rejects_a_caller_only_binding(self):
+        for body in ("return x;", "x = 42; return 0;"):
+            with self.subTest(body=body):
+                module = self.generate(f"""
+let t = [["method": fn() -> Int {{ {body} }}]];
+let x = 42;
+return t:method();
+""")
+                with self.assertRaisesRegex(module.LanguageError, "no lexical binding for 'x'"):
+                    module.Context().interpret("0")
+
+    def test_dot_does_not_box_a_definition_site_binding(self):
+        module = self.generate("""
+let t = factory(10);
+let x = 100;
+discard t.read();
+return t;
+""", """.function factory(x: Int) -> Any
+return [["read": fn() -> Int { return x; }]];
+.end
+""")
+        ctx = module.Context()
+        table = ctx.interpret("0")
+        closure = table["read"]
+        capture = closure.env.slots["x"]
+        self.assertIsInstance(capture, module.DeferredCell)
+        self.assertIsNone(capture.cell)
+        self.assertEqual(ctx.invoke_member(table, "read", closure, [], {}, {}, lexical=True), 10)
+        self.assertIsInstance(capture.cell, module.Cell)
+
+    def test_colon_metavars_and_dot_isolation(self):
+        module = self.generate("""
+let proto = [["tag": "base"]];
+let t = [["*Constructor": proto, "field": "value",
+         "info": fn(n: String) -> Vec<Any> {
+             return [*This.field, *Args[0], *Argv[0], *Type, *Constructor.tag];
+         }]];
+return t:info("explicit");
+""")
+        self.assertEqual(module.Context().interpret("0"),
+                         ["value", "explicit", "explicit", "Fn(String)->Vec<Any>", "base"])
+        module = self.generate("""
+let t = [["read": fn() -> String { return *Type; },
+         "outer": fn() -> String { return *This.read(); }]];
+return t:outer();
+""")
+        with self.assertRaisesRegex(module.LanguageError, r"\*Type is unavailable"):
+            module.Context().interpret("0")
+
+    def test_async_colon_snapshots_metavars_but_async_dot_is_rejected(self):
+        module = self.generate("""
+let t = [["x": 10, "read": async fn(n: Int) -> Vec<Any> {
+    return [*This.x + *Args[0], *Type];
+}]];
+let work: Task<Vec<Any>> = t:read(2);
+t.x = 20;
+return await work;
+""")
+        self.assertEqual(module.Context().interpret("0"), [12, "Fn(Int)->Task<Vec<Any>>"])
+        module = self.generate("""
+let t = [["read": async fn() -> Int { return 1; }]];
+return t.read();
+""")
+        with self.assertRaisesRegex(module.LanguageError, "async dot calls cannot use a live caller frame"):
+            module.Context().interpret("0")
+
     def test_async_returns_await_and_async_closure(self):
         module = self.generate("""
 let twice = async fn(x: Int) -> Int { return await plus(x) + 1; };

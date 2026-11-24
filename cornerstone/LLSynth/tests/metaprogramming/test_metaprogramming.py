@@ -133,6 +133,27 @@ PrintSize([len, helper]);
 return test(4);
 """), b"2\n7\n")
 
+    def test_dot_and_colon_preserve_source_scope_with_templates(self):
+        source = spec("""
+.template Sum(a, b) = a + b
+.function make(seed: Int) -> %Table
+return [[ "read": fn() -> Int { seed = Sum(seed, 1); return seed; } ]];
+.end
+.function call_dot(values: %Table, seed: Int) -> Int
+discard values.read();
+return seed;
+.end
+""", """
+let values = make(9);
+let seed = 30;
+discard values.read();
+return Sum(seed, Sum(call_dot(values, 0), values:read()));
+""")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tool = self.generate(root, source)
+            self.assertEqual(run(*tool, cwd=root, data=b"0\n"), b"42\n")
+
     def test_macro_returns_and_parameter_assignment_are_local(self):
         self.parity(spec(
             """

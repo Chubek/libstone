@@ -42,10 +42,12 @@ Input `40` prints `42`.
 | --- | --- |
 | `%Point(x, y)` | Construct a product, in declared field order. |
 | `%Point.X(p)` | Read field `X`. |
+| `p.X` | Read the same field with dot access. |
 | `%Selection.Found(p)` | Construct a sum with the `Found` tag and its one payload. |
 | `%Selection.Missing(nil)` | Construct a variant with a unit payload. |
 | `%Selection.is_Found(item)` | Test whether the tag is `Found`. |
 | `%Selection.get_Found(item)` | Read the payload; a different active variant raises a `SEM` error. |
+| `item.Found` | Read the same payload with dot access. |
 
 Each declaration introduces a distinct **nominal** type. An identically shaped
 type declared elsewhere does not match it. Declarations can refer forward and

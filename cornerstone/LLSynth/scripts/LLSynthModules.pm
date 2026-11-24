@@ -8,6 +8,8 @@ use Digest::SHA qw(sha256_hex);
 # Specification modules are linked before the ordinary frontend runs.
 our @module_paths;
 my $module_name=qr/[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*/;
+my $module_arrow=qr/${module_name}->$module_name/;
+my $module_ref=qr/(?:$module_arrow|$module_name)/;
 my $stdlib_dir=File::Spec->catdir(dirname(__FILE__),'..','stdlib');
 
 sub module_prefix {
@@ -55,7 +57,8 @@ sub module_block {
 }
 
 sub read_module_spec_lines {
- my($file,$deps)=@_;
+ my($file,$deps,$receivers)=@_;
+ $receivers//={};
  my(%units,%names,@stack,@out);
  my $load;
  $load=sub {
@@ -175,7 +178,7 @@ sub read_module_spec_lines {
       $unit->{decls}{$key}={name=>$name,kind=>$kind,file=>$origin,line=>$ln};
       $member_owner=$unit->{decls}{$key};
       $member_owner->{constructor}=1 if $l =~ /^\.prodtype\b/;
-      $member_owner->{type_base}=$1 if $l =~ /^\.type\s+%\w+\s*=\s*%($module_name)$/;
+      $member_owner->{type_base}=$1 if $l =~ /^\.type\s+%\w+\s*=\s*%($module_ref)$/;
     }
     $block=module_block($l);
     }elsif(ends_spec_block($block,$l)){
@@ -220,7 +223,8 @@ sub read_module_spec_lines {
  };
   my $root=$load->($file);
  # Preserve the old frontend byte-for-byte when there are no module directives.
- if(keys(%units)==1 && !$root->{name} && !keys %{$root->{imports}} && !keys %{$root->{aliases}||{}}){
+  if(keys(%units)==1 && !$root->{name} && !keys %{$root->{imports}} && !keys %{$root->{aliases}||{}} &&
+     !grep {index($_->[0],'LLSMod_colon_')>=0} @out){
   return map {[@$_[0..2]]} @out;
  }
  # A default entry rule must belong to the entry specification, not whichever
@@ -238,6 +242,7 @@ sub read_module_spec_lines {
       and fail("declaration '$d->{name}' conflicts with module alias '$alias'",$d->{file},$d->{line});
    }
   }
+  local $unit->{receivers}=$receivers;
   module_rewrite_unit($unit);
  }
  return map {[@$_[0..2]]} @out;
@@ -246,7 +251,8 @@ sub read_module_spec_lines {
 # Tokens retain their original spelling. Strings and comments are opaque; this
 # is symbol linking, not substitution inside regexes, templates, or messages.
 sub module_lex {
- my($text,$state)=@_;my @tokens;my $local_state='';$state||=\$local_state;
+ my($text,$state,$mode,$unit)=@_;my @tokens;my $local_state='';$state||=\$local_state;
+ $mode//='';
  while(length $text){
   if($$state || $text =~ /^["']/){
    my $quote=$$state||substr($text,0,1);
@@ -263,6 +269,19 @@ sub module_lex {
   if($text =~ s/^(\/\/[^\n]*|\#\s+[^\n]*)//s){
    push @tokens,{raw=>$1};next;
   }
+  if($mode ne '' && $text =~ /^([\@#!%&]?)($module_name)->($module_name)/){
+   my($sigil,$alias,$member)=($1,$2,$3);
+   # A type arrow can also be an ordinary separator, e.g. %Local->Int
+   # inside a callable type. Only bound aliases qualify a type.
+   my $is_qualified=$mode eq 'grammar' ||
+                    ($mode eq 'type' || $sigil eq '%' ? module_import_target($unit,$alias)
+                     : $sigil ne '' || $member =~ /\./ && module_import_target($unit,$alias));
+   if($is_qualified){
+    my $reference=$sigil.$alias.'->'.$member;
+    substr($text,0,length($reference),'');
+    push @tokens,{raw=>$reference,name=>$reference};next;
+   }
+  }
   if($text =~ s/^(t'[A-Za-z_]\w*|[\@#\$!%&]?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)//){
    push @tokens,{raw=>$1,name=>$1};next;
   }
@@ -271,27 +290,59 @@ sub module_lex {
  return \@tokens;
 }
 
+sub module_import_target {
+ my($unit,$alias)=@_;
+ $alias =~ s/\./__/g;
+ return $unit->{imports}{$alias};
+}
+
+sub module_receiver {
+ my($unit,$target)=@_;
+ my $id=substr(sha256_hex('module:'.$target->{name}),0,24);
+ unless(exists $unit->{receivers}{$id}){
+  my %exports;
+  for my $d(values %{$target->{decls}}){
+   next unless $d->{public};
+   my $kind=$d->{kind};
+   $exports{$d->{name}}{$kind}=$d->{linked} if $kind eq 'function' || $kind eq '@' || $kind eq '#';
+  }
+  $unit->{receivers}{$id}={name=>$target->{name},exports=>\%exports};
+ }
+ return $id;
+}
+
 sub module_resolve {
  my($unit,$kind,$name,$file,$line)=@_;
  $name =~ /^LLSMod_/ and fail("reserved module linker name '$name'",$file,$line);
  my @kinds=$kind eq 'callable'?('function','meta','action_op'):($kind);
+ if($name =~ /^($module_name)->($module_name)$/){
+  my($alias,$short)=($1,$2);
+  my $target=module_import_target($unit,$alias) or fail("unknown module alias '$alias'",$file,$line);
+  return module_exported($target,$kind,$short,\@kinds,$file,$line);
+ }
  for my $category(@kinds){
   if(my $d=$unit->{decls}{"$category:$name"} // $unit->{opened}{"$category:$name"}){return $d->{linked}}
  }
  for my $alias(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
   next unless index($name,$alias.'__')==0;
   my $short=substr($name,length($alias)+2);my $target=$unit->{imports}{$alias};
-  for my $category(@kinds){
-   my $d=$target->{decls}{"$category:$short"};
-   return $d->{linked} if $d && $d->{public};
-  }
-  fail("module '$target->{name}' does not export ".($kind=~/^[\@#!%]$/?$kind:'').$short,$file,$line);
+  return module_exported($target,$kind,$short,\@kinds,$file,$line);
  }
  return undef;
 }
 
+sub module_exported {
+ my($target,$kind,$short,$kinds,$file,$line)=@_;
+ for my $category(@$kinds){
+  my $d=$target->{decls}{"$category:$short"};
+  return $d->{linked} if $d && $d->{public};
+ }
+ fail("module '$target->{name}' does not export ".($kind=~/^[\@#!%]$/?$kind:'').$short,$file,$line);
+}
+
 sub module_normalize_name {
  my($unit,$name)=@_;
+ return $name if $name =~ /->/; # explicit qualifier, not a legacy dotted name
  for my $alias(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
   (my $dotted=$alias)=~s/__/./g;
   return $alias.'__'.$1 if $name =~ /^\Q$dotted\E\.(.+)$/;
@@ -305,7 +356,7 @@ sub module_normalize_name {
 sub module_read_alias {
  my($unit,$text,$file,$line)=@_;
  $text =~ s{\s*//.*$}{};
- $text =~ /^\.alias\s+([\@#!%&]?)($module_name)\s+([\@#!%&]?)([A-Za-z_]\w*)$/
+ $text =~ /^\.alias\s+([\@#!%&]?)($module_ref)\s+([\@#!%&]?)([A-Za-z_]\w*)$/
     or fail('expected .alias SOURCE NEW',$file,$line);
  my($fromsig,$from,$sig,$new)=($1,$2,$3,$4);
  ($sig eq $fromsig || $fromsig eq '%' && !$sig)
@@ -319,6 +370,12 @@ sub module_read_alias {
 
 sub alias_scope {
  my($unit,$name)=@_;$name=module_normalize_name($unit,$name);
+ if($name =~ /^($module_name)->($module_name)$/){
+  my($alias,$short)=($1,$2);
+  my $target=module_import_target($unit,$alias);
+  return ($target,$short) if $target;
+  return ($unit,$name);
+ }
  for my $prefix(sort {length($b)<=>length($a) || $a cmp $b} keys %{$unit->{imports}}){
   return ($unit->{imports}{$prefix},substr($name,length($prefix)+2)) if index($name,$prefix.'__')==0;
  }
@@ -398,18 +455,70 @@ sub module_bind_aliases {
  $inherit->($_,{}) for grep {$_->{type_base}} values %{$unit->{decls}};
 }
 
+# A compact Alias:name followed by '(' is a direct module function call in
+# actions only. Do not confuse a local's Fn(...) -> ... type with a call.
+sub module_colon_call {
+ my($tokens,$i,$unit)=@_;
+ return if $i+3>$#$tokens;
+ my $alias=$tokens->[$i]{name}//'';
+ return unless $alias =~ /^$module_name$/ && module_import_target($unit,$alias) &&
+               $tokens->[$i+1]{raw} eq ':';
+ my $name=$tokens->[$i+2]{name}//'';
+ return unless $name =~ /^[A-Za-z_]\w*$/;
+ my $arg=$i+3;
+ $arg++ while $arg<@$tokens && $tokens->[$arg]{raw} =~ /^\s+$/;
+ return if $arg>=@$tokens || $tokens->[$arg]{raw} ne '(';
+ if($name eq 'Fn' || $name eq 'fn'){
+  my $depth=0;
+  for(my $j=$arg;$j<@$tokens;$j++){
+   my $raw=$tokens->[$j]{raw};
+   $depth++ if $raw eq '(';
+   next unless $raw eq ')' && !--$depth;
+   $j++;$j++ while $j<@$tokens && $tokens->[$j]{raw} =~ /^\s+$/;
+   return if $j<$#$tokens && $tokens->[$j]{raw} eq '-' && $tokens->[$j+1]{raw} eq '>';
+   last;
+  }
+ }
+ return ($alias,$name);
+}
+
 sub module_rewrite_text {
  my($text,$unit,$mode,$file,$line)=@_;
- my $tokens=module_lex($text,\$unit->{$mode.'_quote'});
+ my $tokens=module_lex($text,\$unit->{$mode.'_quote'},$mode,$unit);
  for my $i(0..$#$tokens){
   my $t=$tokens->[$i];next unless defined $t->{name};
   my $name=$t->{name};
   $name =~ /^(?:[\@#\$!%&])?LLSMod_/ and fail("reserved module linker name '$name'",$file,$line);
   next if $name =~ /^(?:\$|t')/;
-  if($mode eq 'action'){
-   my $previous=$i-1;$previous-- while $previous>=0 && $tokens->[$previous]{raw}=~/^\s+$/;
-   next if $previous>=0 && $tokens->[$previous]{raw} eq 'on'; # branch capture label
-  }
+   if($mode eq 'action'){
+    my $previous=$i-1;$previous-- while $previous>=0 && $tokens->[$previous]{raw}=~/^\s+$/;
+    # Branch captures, metavariables and property names following a
+    # parenthesized/indexed receiver do not name module declarations.
+    next if $previous>=0 && $tokens->[$previous]{raw} =~ /^(?:on|\.)$/;
+    next if $previous>=0 && $tokens->[$previous]{raw} eq '*' &&
+            $name =~ /^(?:This|Args|Argv|Type|Constructor)(?:\.|$)/;
+    if(($previous<0 || $tokens->[$previous]{raw} ne 'let') &&
+       (my($alias,$member)=module_colon_call($tokens,$i,$unit))){
+     my $resolved=module_resolve($unit,'function',"${alias}->$member",$file,$line);
+     my $receiver=module_receiver($unit,module_import_target($unit,$alias));
+     # Preserve direct-call provenance for the action parser and metavar
+     # binding without changing the declaration or function-reference name.
+     $t->{raw}="LLSMod_colon_${receiver}_".$resolved;
+     for my $j($i+1,$i+2){$tokens->[$j]={raw=>''}}
+     next;
+    }
+    if($previous>=0 && $tokens->[$previous]{raw} eq ':' && $name =~ /^[A-Za-z_]\w*$/){
+     my $before=$previous-1;
+     $before-- while $before>=0 && $tokens->[$before]{raw}=~/^\s+$/;
+     # Preserve the method name when a local or an expression is the
+     # receiver. Quoted table keys can still be followed by function calls.
+     next if $before>=0 && ($tokens->[$before]{name} ||
+                            $tokens->[$before]{raw}=~/^(?:\)|\])$/);
+    }
+    # A known local can have a property whose spelling looks like a
+    # legacy dotted module qualifier. Explicit arrow accesses still link.
+    next if $name !~ /->/ && $name =~ /^([A-Za-z_]\w*)\./ && $unit->{locals}{$1};
+   }
    my($sigil,$bare)=$name =~ /^([\@#!%&]?)(.*)$/;
    $bare=module_normalize_name($unit,$bare);
   my($kind,$suffix)=('','');
@@ -417,9 +526,9 @@ sub module_rewrite_text {
    my $next=join('',map {$_->{raw}} @$tokens[$i+1..$#$tokens]);
    next if $next =~ /^\s*:/; # capture labels are not declarations
    $kind='grammar';
-   }elsif($sigil eq '%' && $bare =~ /^(\w+)(\.\w+)$/){($bare,$suffix,$kind)=($1,$2,'%')}
-   elsif($sigil ne ''){$kind=$sigil eq '&'?'function':$sigil}
-  elsif($bare =~ /^(\w+)(\.\w+)$/){($bare,$suffix)=($1,$2);$kind='ir'}
+    }elsif($sigil eq '%' && $bare =~ /^((?:${module_name}->)?\w+)(\.\w+)$/){($bare,$suffix,$kind)=($1,$2,'%')}
+    elsif($sigil ne ''){$kind=$sigil eq '&'?'function':$sigil}
+   elsif($bare =~ /^((?:${module_name}->)?\w+)(\.\w+)$/){($bare,$suffix)=($1,$2);$kind='ir'}
   elsif($mode eq 'meta'){$kind='meta'}
   else{$kind='callable'}
   my $resolved=module_resolve($unit,$kind,$bare,$file,$line);
@@ -432,16 +541,17 @@ sub module_rewrite_text {
     }
     $t->{raw}=$sigil.$resolved.$suffix;
    }
-   elsif(!$unit->{root} && !($kind eq '%' && builtin_sigil_type($bare)) && ($kind eq 'grammar' && $bare ne 'EOF' || $sigil ne '' || $kind eq 'ir')){
-   # An unresolved module reference must never bind to an entry-file symbol.
-   fail("undeclared ".($kind eq 'grammar'?'grammar symbol':$kind eq 'ir'?'IR namespace':"symbol $sigil")." '$bare' in module '$unit->{name}'",$file,$line);
+    elsif(!$unit->{root} && !($kind eq '%' && builtin_sigil_type($bare)) && ($kind eq 'grammar' && $bare ne 'EOF' || $sigil ne '')){
+    # An unresolved module reference must never bind to an entry-file symbol.
+    # Unresolved bare dotted names may instead be ordinary member accesses.
+    fail("undeclared ".($kind eq 'grammar'?'grammar symbol':"symbol $sigil")." '$bare' in module '$unit->{name}'",$file,$line);
   }
  }
  return join('',map {$_->{raw}} @$tokens);
 }
 
 sub module_action_locals {
- my($text,$state)=@_;my $tokens=module_lex($text,$state);
+ my($text,$state,$unit)=@_;my $tokens=module_lex($text,$state);
  my @t=grep {defined($_->{name}) || $_->{raw} !~ /^\s+$/} @$tokens;my %locals;
  for my $i(0..$#t){
   my $name=$t[$i]{name}//'';
@@ -451,7 +561,7 @@ sub module_action_locals {
    if($name =~ /^[A-Za-z_]\w*$/ && $i<$#t && $t[$i+1]{raw} eq '=' && ($i+2>$#t || $t[$i+2]{raw} ne '=')){
     $locals{$name}=1;
    }
-   if($name =~ /^[A-Za-z_]\w*$/ && $i<$#t && $t[$i+1]{raw} eq ':'){
+   if($name =~ /^[A-Za-z_]\w*$/ && $i<$#t && $t[$i+1]{raw} eq ':' && !module_colon_call(\@t,$i,$unit)){
     $locals{$name}=1; # typed closure parameters and local declarations
    }
   if($name eq 'into' && $i+3<=$#t && $t[$i+2]{raw} eq '('){
@@ -463,13 +573,13 @@ sub module_action_locals {
 
 sub module_rewrite_types {
  my($text,$unit,$file,$line)=@_;
- my $tokens=module_lex($text);
+ my $tokens=module_lex($text,undef,'type',$unit);
  for my $t(@$tokens){
   next unless defined $t->{name};
-   if($t->{name} =~ /^%($module_name)$/){
-    my $name=module_normalize_name($unit,$1);
-    $t->{raw}='%'.(module_resolve($unit,'%',$name,$file,$line)//$name);
-   }elsif($t->{name} =~ /^($module_name)\.Op$/){
+    if($t->{name} =~ /^%($module_ref)$/){
+     my $name=module_normalize_name($unit,$1);
+     $t->{raw}='%'.(module_resolve($unit,'%',$name,$file,$line)//$name);
+    }elsif($t->{name} =~ /^($module_ref)\.Op$/){
     my $name=module_normalize_name($unit,$1);
     $t->{raw}=(module_resolve($unit,'ir',$name,$file,$line)//$name).'.Op';
   }
@@ -499,7 +609,7 @@ sub module_rewrite_unit {
   if($block eq 'rule' && $l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:/){$facet=$1}
   if($block eq 'function'||$block eq 'init'||$block eq 'macro'||($block eq 'rule' && $facet ne 'syntax')){
    (my $action=$entry->[0]) =~ s/^\s*'\w+\s*:\s*//;
-   %action_locals=(%action_locals,module_action_locals($action,\$quote));
+    %action_locals=(%action_locals,module_action_locals($action,\$quote,$unit));
   }
  }
  %locals=(%locals,%action_locals);$unit->{locals}=\%locals;
@@ -525,7 +635,7 @@ sub module_rewrite_unit {
   if(!$block){
    my($kind,$name)=module_header($l);
    if(defined $kind){
-    my $d=$unit->{decls}{"$kind:$name"};
+     my $d=$unit->{decls}{"$kind:$name"};
     if($kind eq '@'){
      if($raw =~ /^(.+?=\s*)(.*)$/){
       my($header,$value)=($1,$2);
@@ -548,16 +658,16 @@ sub module_rewrite_unit {
       $raw.=' symbol "'.$name.'"';
      }
     $raw =~ s/^(\s*\.(?:async\s+function|extern\s+c|\w+)\s+[\@#!%]?)\Q$name\E\b/$1$d->{linked}/;
-   }elsif($l =~ /^\.start\s+(?:"($module_name)"|($module_name))\s*$/){
+    }elsif($l =~ /^\.start\s+(?:"($module_ref)"|($module_ref))\s*$/){
     my $name=module_normalize_name($unit,$1//$2);
     $raw='.start '.(module_resolve($unit,'grammar',$name,$file,$line)//$name);
    }elsif($l =~ /^\.precedence\s+(left|right|nonassoc)\s+(.+)$/){
     $raw=".precedence $1 ".module_rewrite_text($2,$unit,'grammar',$file,$line);
-   }elsif($l =~ /^\.rewrite\s+(\w+)\s*:\s*($module_name)\s*$/){
+    }elsif($l =~ /^\.rewrite\s+(\w+)\s*:\s*($module_ref)\s*$/){
     my($name,$ir)=($1,module_normalize_name($unit,$2));
     $name=module_prefix($unit).$name unless $unit->{root};
     $raw=".rewrite $name: ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
-   }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+($module_name)\s*$/){
+    }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+($module_ref)\s*$/){
     my($target,$ir)=($1,module_normalize_name($unit,$2));
     $raw=".backend $target for ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
    }

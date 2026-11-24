@@ -40,7 +40,8 @@ local updates its shared binding cell; sibling closures observe that update,
 and the cell survives its defining call returning. Separate factory calls have
 separate cells. Parameters and `let` declarations inside a closure shadow
 outer names; a local's initializer can still read the outer binding before
-the new declaration. Captures are lexical, never resolved through the caller.
+the new declaration. Ordinary calls and `:` calls use lexical capture. A
+direct `.` call on a member is the exception described below.
 Only names referenced freely by the closure are retained. `$grammar` captures
 retain their bound values too. `@state` and `#tables` use the owning context.
 
@@ -53,6 +54,66 @@ Closures belong to one `Context` execution. An embedding host may retain and
 invoke a returned closure using `ctx.invoke(closure, arguments)` until the next
 reset/interpret/compile/analyze call on that context. Invoking it through another
 context or after a reset raises `LanguageError`, rather than using stale state.
+
+## Hybrid tables and method calls
+
+`%Table` is a mutable, first-class value, distinct from a vector (`[...]`)
+and a declared `.symtbl`. A `[[...]]` literal mixes keyed and unkeyed
+entries:
+
+```text
+.state @data: %Table = [[ "a": 1, 12, 44, "b": fn() -> Int { return 0; } ]];
+```
+
+Use `[ [1] ]` for a vector containing a single vector, rather than the
+table literal `[[1]]`.
+
+Unkeyed entries are assigned integer keys starting at **1**; keyed entries do
+not advance that counter. `@data.a` and `@data["a"]` read the same field.
+`@data[1]` is `12`, while `@data[2]` is `44`. Assignment updates the table in
+place; a missing key reads as `nil`, and assigning `nil` removes an entry.
+Tables compare by identity. The `in` operator checks for a key, `for` iterates
+own keys in insertion order, and `len` counts own entries.
+
+Calling the member directly selects its scope:
+
+```text
+.function make(seed: Int) -> %Table
+    return [[ "read": fn() -> Int { return seed; } ]];
+.end
+
+// In a semantic action:
+let values = make(10);
+let seed = 32;
+let caller = values.read();  // 32: resolves seed in the caller's frame
+return caller + values:read(); // 42: the second call sees make's seed
+```
+
+A direct dot call does not use lexical captures or expose metavariables. A
+colon call uses the closure's definition-site bindings (shared cells), and
+provides these metavariables to the called function:
+
+| Metavariable | Value |
+| --- | --- |
+| `*This` | The original receiver, including when a method is inherited; a library receiver exposes its exported functions, state, and symbol tables. |
+| `*Args`, `*Argv` | The explicit arguments as a zero-based vector, without the receiver. |
+| `*Type` | The called function's signature. |
+| `*Constructor` | The receiver table's prototype, or `nil` without one. |
+
+Set a prototype using the reserved `"*Constructor"` key. Reads of absent
+keys then fall back to the prototype; writes always affect the receiver.
+For instance, if `prototype` defines `score`, the call in
+`let child = [[ "*Constructor": prototype ]]; return child:score();`
+looks up `score` on `prototype` but binds `*This` to `child`. Accessing a
+member without immediately calling it simply returns the stored value;
+calling that value separately is an ordinary call with no metavariables.
+Use a colon to call an async method: a task takes a snapshot at call time
+and cannot retain the live caller frame required by a dot call.
+A synchronous `fn` written directly in a table literal can also refer to
+caller-only locals. Such references raise an error in a lexical call.
+
+First-class tables and call metavariables require the Python tool target.
+Dot projection on nominal product and sum values also works on native targets.
 
 ## Async functions and task values
 

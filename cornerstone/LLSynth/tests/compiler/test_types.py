@@ -151,6 +151,17 @@ return twice(f(%Unit())(size(xs) + 19));""")
         self.run_targets(DATA + rule("return %Pair.X(%Opt.get_Full(%Opt.Empty(nil)));"),
                          "expected %Choice.Full, got %Choice.Empty", runtime_error=True)
 
+    def test_dot_projects_nominal_fields_and_active_variants(self):
+        self.run_targets(DATA + rule("""
+let choice: %Opt = %Opt.Full(%Pair(40, 2));
+return choice.Full.X + choice.Full.Y;"""), "42")
+        self.run_targets(DATA + rule("""
+let choice: Any = %Opt.Full(%Pair(40, 2));
+let result: Int = choice.Full.X + choice.Full.Y;
+return result;"""), "42")
+        self.run_targets(DATA + rule("return %Opt.Empty(nil).Full.X;"),
+                         "expected %Choice.Full, got %Choice.Empty", runtime_error=True)
+
     def test_member_alias_in_module(self):
         (self.dir / "lib.llsynth").write_text(".module Lib\n.export %New, %Read, make, wrap, unwrap\n" + DATA +
                                              ".alias %Point.X %Read\n.type %Point = %Pair\n"
