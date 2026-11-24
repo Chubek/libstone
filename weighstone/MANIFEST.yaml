@@ -7,6 +7,12 @@ distribution: header-only
 requires: []
 optional_backends_integrated: []
 files:
+  - path: '../third_party/boost/LICENSE_1_0.txt'
+    purpose: 'Boost Software License for the bundled headers under ../third_party/boost/include'
+    status: implemented-or-documentation
+  - path: '../third_party/boost/README.md'
+    purpose: 'Provenance and scope of the bundled Boost.Multiprecision headers'
+    status: implemented-or-documentation
   - path: '.github/workflows/ci.yml'
     purpose: 'Continuous integration compilation and CTest execution'
     status: implemented-or-documentation
@@ -252,10 +258,4 @@ files:
     status: implemented-or-documentation
   - path: 'tools/build_manual.py'
     purpose: 'Deterministically regenerate all forty manual chapters and YAML manifest'
-    status: implemented-or-documentation
-  - path: 'vendor/boost/LICENSE_1_0.txt'
-    purpose: 'Boost Software License for the bundled headers under vendor/boost/include'
-    status: implemented-or-documentation
-  - path: 'vendor/boost/README.md'
-    purpose: 'Provenance and scope of the bundled Boost.Multiprecision headers'
     status: implemented-or-documentation

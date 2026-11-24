@@ -10,7 +10,7 @@ At every compiler optimization boundary it is necessary to identify what is know
 
 ## Method and API contract
 
-Link the Weighstone::Weighstone CMake target to propagate include paths. For a direct build from the Weighstone directory use -std=c++20 -Ivendor/boost/include -Iinclude -I.
+Link the Weighstone::Weighstone CMake target to propagate include paths. For a direct build from the Weighstone directory use -std=c++20 -I../third_party/boost/include -Iinclude -I.
 
 When implementing or extending the API, document preconditions, output guarantees, exceptional situations, and complexity. Use exact integer values for mathematical reasoning; when the source language describes fixed-width behavior, perform arithmetic through `BitVector` or a formally specified adapter. A query should return an explicit `unknown` if it lacks enough evidence, rather than guessing from an example.
 

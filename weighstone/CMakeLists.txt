@@ -2,11 +2,12 @@ cmake_minimum_required(VERSION 3.20)
 project(Weighstone VERSION 0.1.0 LANGUAGES CXX)
 include(CTest)
 include(GNUInstallDirs)
+get_filename_component(weighstone_boost_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/boost" ABSOLUTE)
 add_library(Weighstone INTERFACE)
 add_library(Weighstone::Weighstone ALIAS Weighstone)
 target_compile_features(Weighstone INTERFACE cxx_std_20)
 target_include_directories(Weighstone INTERFACE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/boost/include>
+  $<BUILD_INTERFACE:${weighstone_boost_dir}/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/weighstone/vendor/boost/include>
@@ -49,6 +50,7 @@ if(WEIGHSTONE_BUILD_TESTS)
   target_link_libraries(weighstone_header_checks PRIVATE Weighstone)
 endif()
 install(TARGETS Weighstone EXPORT WeighstoneTargets)
-install(DIRECTORY include support vendor DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/weighstone)
+install(DIRECTORY include support DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/weighstone)
+install(DIRECTORY "${weighstone_boost_dir}" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/weighstone/vendor)
 install(EXPORT WeighstoneTargets NAMESPACE Weighstone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Weighstone)
 install(FILES cmake/WeighstoneConfig.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Weighstone)
