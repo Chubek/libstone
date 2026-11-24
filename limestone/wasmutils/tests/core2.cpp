@@ -4,7 +4,7 @@
 #include <set>
 
 using limestone::wasmutils::Error;
-namespace core = limestone::wasmutils::core2;
+namespace core = limestone::wasmutils::core;
 
 namespace {
 

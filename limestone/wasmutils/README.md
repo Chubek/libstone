@@ -8,8 +8,8 @@ nonzero exit status.
 
 ## Core 2.0 binary instructions
 
-[`WASM-Core2.hpp`](WASM-Core2.hpp) provides `core2::lookup`, `core2::decode`,
-and `core2::encode` for all 437 binary forms in the
+[`WASM-Core.hpp`](WASM-Core.hpp) provides `core::lookup`, `core::decode`,
+and `core::encode` for all 437 binary forms in the
 [W3C Core 2.0 instruction index](https://www.w3.org/TR/2025/CRD-wasm-core-2-20250616/#index-instr),
 counting separate encodings for `select` and the `else`/`end` delimiters. It
 includes the 236 fixed-width SIMD forms, bulk memory and table operations,
@@ -19,8 +19,8 @@ relaxed SIMD, and GC.
 
 The codec accepts valid padded LEB128 and writes canonical LEB128, preserving
 floating-point payloads and SIMD bytes. It does not check operand types, index
-ranges, memory alignment, or lane bounds. `core2::check_expression` checks
-delimiter nesting and the terminal `end`. `core2::decode_code_section`
+ranges, memory alignment, or lane bounds. `core::check_expression` checks
+delimiter nesting and the terminal `end`. `core::decode_code_section`
 extracts local declarations and instruction streams from defined function
 bodies in a binary module; it skips other sections and does not validate the
 module.
@@ -39,7 +39,7 @@ build/wasmutils/wasm-disassemble --module input.wasm
 The CLI listing is diagnostic text, not round-trippable WAT. Without either
 option the CLI decodes a raw sequence without checking nesting. To refresh the
 checked-in inventory, download the dated W3C HTML linked above and run
-`python3 limestone/wasmutils/tools/generate_core2_opcodes.py PATH_TO_HTML`.
+`python3 limestone/wasmutils/tools/generate_core_opcodes.py PATH_TO_HTML`.
 `--check` verifies it without writing. The normal build needs neither Python
 nor the spec download.
 
@@ -132,7 +132,7 @@ find_package(Limestone CONFIG REQUIRED COMPONENTS wasmutils)
 target_link_libraries(my_tool PRIVATE Limestone::wasmutils)
 ```
 
-The API is in `limestone::wasmutils`. Include `<wasmutils/WASM-Core2.hpp>`
+The API is in `limestone::wasmutils`. Include `<wasmutils/WASM-Core.hpp>`
 for the Core 2.0 codec, `<wasmutils/WASM-Binutils.hpp>` for that codec and the
 legacy profile's raw instruction tools, `<wasmutils/WASM-Runtime.hpp>` for execution,
 `<wasmutils/WASM-CC.hpp>` for C generation, `<wasmutils/WATCompiler.hpp>` for

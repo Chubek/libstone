@@ -1,4 +1,4 @@
-add_library(wasmutils STATIC WASM-Binutils.cpp WASM-Core2.cpp WASM-Core2-Opcodes.cpp
+add_library(wasmutils STATIC WASM-Binutils.cpp WASM-Core.cpp WASM-Core-Opcodes.cpp
   WASM-Runtime.cpp WASM-CC.cpp WAT.cpp WIT.cpp)
 target_link_libraries(wasmutils PUBLIC limestone_foundation)
 target_compile_features(wasmutils PUBLIC cxx_std_20)
@@ -20,7 +20,7 @@ if(LIMESTONE_BUILD_TESTS)
   target_link_libraries(limestone-wasmutils-test PRIVATE wasmutils)
   libstone_warnings(limestone-wasmutils-test)
   add_test(NAME wasmutils COMMAND limestone-wasmutils-test "${CMAKE_CURRENT_SOURCE_DIR}/WASM.aml")
-  foreach(suite IN ITEMS binutils core2 runtime_memory)
+  foreach(suite IN ITEMS binutils core runtime_memory)
     add_executable(limestone-wasmutils-${suite}-test tests/${suite}.cpp)
     target_link_libraries(limestone-wasmutils-${suite}-test PRIVATE wasmutils)
     libstone_warnings(limestone-wasmutils-${suite}-test)

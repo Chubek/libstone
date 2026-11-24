@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-namespace limestone::wasmutils::core2 {
+namespace limestone::wasmutils::core {
 
 // The Core 2.0 instruction encoding, not a complete module validator.
 struct Opcode {
@@ -100,4 +100,4 @@ struct FunctionBody {
 // Other sections are skipped; this is not a module validator or loader.
 std::vector<FunctionBody> decode_code_section(std::span<const std::uint8_t> module);
 
-} // namespace limestone::wasmutils::core2
+} // namespace limestone::wasmutils::core

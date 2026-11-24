@@ -1,13 +1,13 @@
-#include "WASM-Core2.hpp"
+#include "WASM-Core.hpp"
 
 #include <algorithm>
 #include <iterator>
 
-namespace limestone::wasmutils::core2 {
+namespace limestone::wasmutils::core {
 namespace {
 
 constexpr OpcodeInfo inventory[] = {
-#include "WASM-Core2-Opcodes.inc"
+#include "WASM-Core-Opcodes.inc"
 };
 
 static_assert(std::size(inventory) == 437);
@@ -38,4 +38,4 @@ const OpcodeInfo* lookup(std::string_view mnemonic, bool typed_select) noexcept 
     return nullptr;
 }
 
-} // namespace limestone::wasmutils::core2
+} // namespace limestone::wasmutils::core

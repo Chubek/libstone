@@ -1,4 +1,4 @@
-set(file "${BINARY}/core2.ops")
+set(file "${BINARY}/core.ops")
 # 04 40 | 41 01 | 05 | 41 02 | 0b | 0b
 string(ASCII 4 64 65 1 5 65 2 11 11 bytes)
 file(WRITE "${file}" "${bytes}")

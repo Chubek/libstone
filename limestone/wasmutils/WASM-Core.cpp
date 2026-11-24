@@ -1,11 +1,11 @@
-#include "WASM-Core2.hpp"
+#include "WASM-Core.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <limits>
 #include <utility>
 
-namespace limestone::wasmutils::core2 {
+namespace limestone::wasmutils::core {
 namespace {
 
 constexpr bool is_prefix(std::uint8_t byte) {
@@ -492,4 +492,4 @@ std::vector<FunctionBody> decode_code_section(std::span<const std::uint8_t> modu
   return functions;
 }
 
-} // namespace limestone::wasmutils::core2
+} // namespace limestone::wasmutils::core

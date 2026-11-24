@@ -1,5 +1,5 @@
 #include "CLI.hpp"
-#include "WASM-Core2.hpp"
+#include "WASM-Core.hpp"
 
 #include <iomanip>
 #include <locale>
@@ -7,7 +7,7 @@
 #include <type_traits>
 
 namespace wasm = limestone::wasmutils;
-namespace core = wasm::core2;
+namespace core = wasm::core;
 namespace {
 
 std::string_view type_name(core::Type type) {
