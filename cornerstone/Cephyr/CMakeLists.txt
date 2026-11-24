@@ -78,6 +78,21 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/sandslab_catalog.hpp"
   DEPENDS cmake/project_sandslab.py "${cephyr_x86_isa}" "${cephyr_repo}/sandstone/isa/simple_isa.py"
   VERBATIM)
 find_package(Perl REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CEPHYR_YAML REQUIRED IMPORTED_TARGET yaml-0.1)
+if(NOT EXISTS "${cephyr_vendor}/valijson/include/valijson/validator.hpp")
+  message(FATAL_ERROR "Cephyr requires third_party/valijson; run scripts/get-deps.sh valijson")
+endif()
+find_path(CEPHYR_JSON_INCLUDE_DIR nlohmann/json.hpp HINTS "${cephyr_vendor}/nlohmann-json/include"
+  "${cephyr_vendor}/libglr/third_party/libshell/third_party/taskflow/3rd-party")
+if(NOT CEPHYR_JSON_INCLUDE_DIR)
+  message(FATAL_ERROR "Cephyr requires nlohmann/json.hpp; run scripts/get-deps.sh nlohmann-json")
+endif()
+
+set(cephyr_c11_schema "${CMAKE_CURRENT_SOURCE_DIR}/contracts/C11Syntax.schema.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${cephyr_c11_schema}")
+file(READ "${cephyr_c11_schema}" cephyr_c11_schema_json)
+configure_file(cmake/C11SyntaxSchema.hpp.in C11SyntaxSchema.hpp @ONLY)
 
 set(cephyr_llsynth "${cephyr_repo}/cornerstone/LLSynth/scripts")
 set(cephyr_qml "${CMAKE_CURRENT_SOURCE_DIR}/qml")
@@ -149,7 +164,7 @@ set(cephyr_native "${cephyr_archon}/archon/irgen/native")
 set(cephyr_satie "${cephyr_vendor}/satie")
 add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
-  src/preprocess.cpp src/parser.cpp src/semantics.cpp src/lower.cpp
+  src/preprocess.cpp src/parser.cpp src/syntax.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
   src/embedding.cpp src/moonstone_tools.cpp src/qml_rewrite.cpp src/blackstone_opt.cpp
   extension/lua_extensions.cpp extension/native_plugins.cpp
@@ -184,9 +199,11 @@ set_property(TARGET cephyr_compiler APPEND PROPERTY LINK_DEPENDS "${cephyr_expor
 target_include_directories(cephyr_compiler PRIVATE "${cephyr_native}" "${cephyr_weighstone}")
 target_include_directories(cephyr_compiler SYSTEM PRIVATE
   "${cephyr_repo}"
+  "${cephyr_vendor}/valijson/include"
+  "${CEPHYR_JSON_INCLUDE_DIR}"
   "${cephyr_satie}/include" "${cephyr_satie}/third_party/memtkx/include")
 target_link_libraries(cephyr_compiler PRIVATE cephyr_diagnostics cephyr_cparser cephyr_ucpp cephyr_tomlc99
-  libstone_kaguya Blackstone::blackstone ${CMAKE_DL_LIBS})
+  libstone_kaguya Blackstone::blackstone PkgConfig::CEPHYR_YAML ${CMAKE_DL_LIBS})
 if(TARGET Wetstone::wetstone)
   target_link_libraries(cephyr_compiler PRIVATE Wetstone::wetstone)
 endif()
@@ -237,6 +254,7 @@ target_compile_features(cephyr PRIVATE cxx_std_20)
 set_target_properties(cephyr PROPERTIES CXX_EXTENSIONS OFF)
 
 set(cephyr_data_dir "${CMAKE_INSTALL_DATADIR}/cephyr")
+install(FILES "${cephyr_c11_schema}" DESTINATION "${cephyr_data_dir}/contracts")
 include(cmake/NativePackages.cmake)
 include(cmake/NativeTools.cmake)
 file(RELATIVE_PATH cephyr_lib_relative_resources
@@ -335,6 +353,8 @@ if(CEPHYR_BUILD_TESTS)
   target_compile_features(cephyr-cpp-api-test PRIVATE cxx_std_20)
   target_link_libraries(cephyr-cpp-api-test PRIVATE Cephyr::Cephyr Threads::Threads)
   add_test(NAME cephyr.cpp-api COMMAND cephyr-cpp-api-test)
+  add_test(NAME cephyr.c11-ast COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_ast.py" "$<TARGET_FILE:cephyr>")
   set_tests_properties(cephyr.c-api cephyr.cpp-api PROPERTIES TIMEOUT 60)
   add_executable(cephyr-sdk-test tests/sdk.c)
   set_target_properties(cephyr-sdk-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)

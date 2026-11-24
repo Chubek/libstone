@@ -881,6 +881,15 @@ bool valid_directive_output(std::string_view text) {
 Location Preprocessed::locate(unsigned line, unsigned column) const {
     if (line == 0)
         return {file, 0, column};
+    if (!line_runs.empty()) {
+        const auto next = std::ranges::upper_bound(line_runs, line, {}, &decltype(line_runs)::value_type::first);
+        if (next != line_runs.begin()) {
+            const auto &[physical, loc] = *std::prev(next);
+            const auto mapped = std::min<std::uint64_t>(std::uint64_t{loc.line} + line - physical,
+                                                        std::numeric_limits<unsigned>::max());
+            return {loc.file, static_cast<unsigned>(mapped), column};
+        }
+    }
     if (line <= lines.size()) {
         Location location = lines[line - 1];
         location.column = column;

@@ -1,0 +1,6 @@
+#pragma once
+
+// Embedded at configure time from the installed, public contract.
+inline constexpr char c11_syntax_schema[] = R"cephyr_schema(
+@cephyr_c11_schema_json@
+)cephyr_schema";

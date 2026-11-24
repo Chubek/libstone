@@ -15,6 +15,9 @@ See [the libc inventory](stdlib/README.md) and
 
 Building the compiler requires CMake 3.20+, a C/C++20 toolchain, Python 3.10+
 (Archon and build-time generators), and Perl (QML frontend generation).
+The AST reader/writer uses libyaml (development headers and `pkg-config`),
+Valijson, and nlohmann/json. Use `scripts/get-deps.sh valijson nlohmann-json`
+to fetch the JSON dependencies if they are missing.
 Packaging bundled Linux libc additionally needs `ar` and a GNU target compiler
 for each of `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `riscv64-linux-gnu`.
 Set `CEPHYR_PACKAGE_CC_AMD64`, `CEPHYR_PACKAGE_CC_AArch64`, or
@@ -31,6 +34,8 @@ ctest --test-dir build-cephyr --output-on-failure
 
 build-cephyr/cephyr -E -Iinclude example.c
 build-cephyr/cephyr -fsyntax-only example.c
+build-cephyr/cephyr --emit-ast=json example.c -o example.json
+build-cephyr/cephyr -c example.json -o example.o
 build-cephyr/cephyr --emit-mir example.c -o example.mir
 build-cephyr/cephyr -S example.c -o example.s
 build-cephyr/cephyr -c example.c -o example.o
@@ -57,6 +62,9 @@ Cephyr can also be enabled
 from LibStone's root build with `-DLIBSTONE_BUILD_CEPHYR=ON`. Use
 `cmake --install build-cephyr --prefix PREFIX` for an installed compiler,
 target definitions, Archon resources, and libc sources.
+
+See [C11 syntax documents](docs/C11Syntax.md) for parse-only output, format
+details, and how to compile a saved AST.
 
 ## Embedding and extensions
 

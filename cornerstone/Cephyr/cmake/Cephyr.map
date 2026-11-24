@@ -4,6 +4,7 @@ CEPHYR_1 {
         cephyr_python_version;
         cephyr_version;
         cephyr_compile;
+        cephyr_parse_c11;
         cephyr_result_output;
         cephyr_result_diagnostics;
         cephyr_result_destroy;

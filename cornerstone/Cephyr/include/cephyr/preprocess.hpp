@@ -46,6 +46,8 @@ struct Preprocessed {
 
     // One entry per one-based line in `text`.
     std::vector<Location> lines;
+    // Serialized inputs use sparse runs instead of expanding file names.
+    std::vector<std::pair<unsigned, Location>> line_runs;
     std::string file;
     // Target property for semantic analysis, independent of user CPP macros.
     bool plain_char_signed = false;

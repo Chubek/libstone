@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cephyr C11 syntax document",
+  "description": "Versioned parsed C translation unit with preprocessed replay data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ast", "source"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "ast": {
+      "allOf": [
+        { "$ref": "#/definitions/node" },
+        { "properties": { "kind": { "const": "list" } } }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "text", "line_map"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "text": { "type": "string" },
+        "line_map": {
+          "description": "Runs of presumed locations: if nonempty, starts at physical line 1; starts increase within the source.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["physical", "file", "line"],
+            "properties": {
+              "physical": { "$ref": "#/definitions/positive_coordinate" },
+              "file": { "type": "string" },
+              "line": { "$ref": "#/definitions/positive_coordinate" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "positive_coordinate": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "identifier", "list", "sizeof", "alignof", "offsetof", "function_decl",
+            "type_decl", "variable_decl", "parameter_decl", "field_decl", "enumerator_decl",
+            "asm", "break", "case", "compound_stmt", "continue", "do", "for", "goto",
+            "if", "label", "return", "switch", "while", "integer", "real", "string",
+            "character", "cast", "unary_plus", "bit_not", "logical_not", "pre_decrement",
+            "pre_increment", "post_decrement", "post_increment", "address_of", "indirect_ref",
+            "nop", "shift_left", "shift_right", "bit_or", "bit_xor", "bit_and",
+            "logical_and", "logical_or", "add", "subtract", "multiply", "divide", "remainder",
+            "array_ref", "member_ref", "less", "less_equal", "greater", "greater_equal",
+            "equal", "not_equal", "assign", "compound_expr", "conditional", "call",
+            "void_type", "integer_type", "real_type", "enum_type", "bool_type", "pointer_type",
+            "function_type", "array_type", "struct_type", "union_type", "static_assert",
+            "generic", "generic_association", "designated_init", "array_designator", "compound_literal"
+          ]
+        },
+        "line": { "$ref": "#/definitions/positive_coordinate" },
+        "flags": { "$ref": "#/definitions/positive_coordinate" },
+        "children": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/node" }]
+          }
+        },
+        "items": { "type": "array", "items": { "$ref": "#/definitions/node" } },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["boolean", "integer", "string", "array"],
+            "items": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+          }
+        }
+      },
+      "if": { "properties": { "kind": { "const": "list" } } },
+      "then": { "required": ["items"], "not": { "required": ["children"] } },
+      "else": { "not": { "required": ["items"] } }
+    }
+  }
+}

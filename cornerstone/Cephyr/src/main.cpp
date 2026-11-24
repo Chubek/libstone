@@ -7,6 +7,7 @@
 #include "moonstone_tools.hpp"
 #include "qml_rewrite.hpp"
 #include "sdk_internal.hpp"
+#include "syntax.hpp"
 #include "../FactIR.hpp"
 #include "../extension/lua_extensions.hpp"
 #include "../extension/native_plugins.hpp"
@@ -58,8 +59,9 @@ using detail::MemoryFile;
 using detail::save;
 using detail::TempDirectory;
 
-enum class Stage { link, object, assembly, preprocess, syntax, mir };
-enum class Language { automatic, c, preprocessed, assembly, assembly_cpp, link, link_option };
+enum class Stage { link, object, assembly, preprocess, syntax, ast, mir };
+enum class Language { automatic, c, preprocessed, ast_json, ast_yaml, ast_sexp,
+                      assembly, assembly_cpp, link, link_option };
 
 struct Input {
     Language language;
@@ -71,6 +73,7 @@ struct Input {
 
 struct Options {
     Stage stage = Stage::link;
+    cephyr_ast_format ast_format{};
     std::vector<Input> inputs;
     fs::path output, config_file, sysroot;
     fs::path profile_output;
@@ -98,6 +101,7 @@ struct Invocation {
     std::ostream *cli_output = nullptr;
     std::span<const std::shared_ptr<const detail::TranslationUnit>> units{};
     const detail::HostSymbols *symbols = nullptr;
+    cephyr_ast_format ast_format{};
 
     bool embedding() const { return !cli_output; }
 };
@@ -107,11 +111,15 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
 
   -E                        Preprocess only
   -fsyntax-only             Check the C frontend without invoking target tools
+  --emit-ast=FORMAT         Parse one C11 input and write JSON, YAML or S-expressions
+                            (json, yaml, sexp; default output is stdout)
   --emit-mir                Write Archon MachineIR text
   -S                        Compile to assembly
   -c                        Compile/assemble to a relocatable object
   -o FILE                   Write the result to FILE (default link: a.out)
   -x LANG                   c, cpp-output, assembler, assembler-with-cpp, none
+                            c11-ast-json, c11-ast-yaml, c11-ast-sexp
+  AST file suffixes: .json, .yaml, .yml, .sexp, .sexpr, .sxp
   -std=c11                  Select ISO C11
   -I DIR, -isystem DIR      Add user or system include paths
   -D NAME[=VALUE], -U NAME  Define or undefine a macro
@@ -153,9 +161,19 @@ Moonstone tools (optional build; select as the first argument):
   --moonstone-qmr-check [--jobs=N] FILE...
 )";
 
+cephyr_ast_format input_ast_format(Language kind)
+{
+    switch (kind) {
+    case Language::ast_json: return CEPHYR_AST_JSON;
+    case Language::ast_yaml: return CEPHYR_AST_YAML;
+    case Language::ast_sexp: return CEPHYR_AST_SEXP;
+    default: return {};
+    }
+}
+
 bool c_input(Language kind)
 {
-    return kind == Language::c || kind == Language::preprocessed;
+    return kind == Language::c || kind == Language::preprocessed || input_ast_format(kind);
 }
 
 bool source_input(Language kind)
@@ -174,7 +192,7 @@ bool for_stage(Language kind, Stage stage)
 {
     if (stage == Stage::link)
         return true;
-    if (stage == Stage::syntax || stage == Stage::mir)
+    if (stage == Stage::syntax || stage == Stage::mir || stage == Stage::ast)
         return c_input(kind);
     return source_input(kind);
 }
@@ -186,6 +204,9 @@ Language infer_language(const std::string &name)
     const auto ext = fs::path(name).extension();
     if (ext == ".c") return Language::c;
     if (ext == ".i") return Language::preprocessed;
+    if (ext == ".json") return Language::ast_json;
+    if (ext == ".yaml" || ext == ".yml") return Language::ast_yaml;
+    if (ext == ".sexp" || ext == ".sexpr" || ext == ".sxp") return Language::ast_sexp;
     if (ext == ".s") return Language::assembly;
     if (ext == ".S" || ext == ".sx") return Language::assembly_cpp;
     return Language::link;
@@ -201,6 +222,9 @@ std::optional<Language> language(std::string_view value)
     if (value == "none") return Language::automatic;
     if (value == "c") return Language::c;
     if (value == "cpp-output") return Language::preprocessed;
+    if (value == "c11-ast-json") return Language::ast_json;
+    if (value == "c11-ast-yaml") return Language::ast_yaml;
+    if (value == "c11-ast-sexp" || value == "c11-ast-sexpr") return Language::ast_sexp;
     if (value == "assembler") return Language::assembly;
     if (value == "assembler-with-cpp") return Language::assembly_cpp;
     return std::nullopt;
@@ -233,8 +257,13 @@ std::optional<unsigned> positive_unsigned(std::string_view text)
 
 bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
                    Options &opts, Diagnostics &diag,
-                   std::span<const std::shared_ptr<const detail::TranslationUnit>> units)
+                   std::span<const std::shared_ptr<const detail::TranslationUnit>> units,
+                   cephyr_ast_format ast_format)
 {
+    if (ast_format) {
+        opts.stage = Stage::ast;
+        opts.ast_format = ast_format;
+    }
     bool positional = false, input_dash = false;
     Language current = Language::automatic;
     const auto stage = [&](Stage selected) {
@@ -293,6 +322,19 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
             stage(Stage::preprocess);
         } else if (token == "-fsyntax-only") {
             stage(Stage::syntax);
+        } else if (option("--emit-ast")) {
+            stage(Stage::ast);
+            const auto value = argument("--emit-ast");
+            cephyr_ast_format format{};
+            if (value == "json") format = CEPHYR_AST_JSON;
+            if (value == "yaml") format = CEPHYR_AST_YAML;
+            if (value == "sexp" || value == "sexpr") format = CEPHYR_AST_SEXP;
+            if (!format && !value.empty())
+                diag.error("cephyr.option", "unsupported AST format '" + value + "'");
+            else if (opts.ast_format && format != opts.ast_format)
+                diag.error("cephyr.option", "conflicting AST formats");
+            else
+                opts.ast_format = format;
         } else if (token == "--emit-mir") {
             stage(Stage::mir);
         } else if (token == "-S") {
@@ -460,6 +502,12 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
         diag.error("cephyr.option", "linking translation units requires a C input operand '-', -shared and -o -");
     if (opts.help || opts.version)
         return diag.error_count() == 0;
+    if (opts.stage == Stage::ast && (opts.inputs.size() != 1 || !c_input(opts.inputs.front().language)))
+        diag.error("cephyr.option", "--emit-ast requires exactly one C or C11 AST input");
+    if (opts.stage == Stage::preprocess && std::ranges::any_of(opts.inputs, [](const Input &input) {
+            return input_ast_format(input.language) != 0;
+        }))
+        diag.error("cephyr.option", "-E cannot preprocess a serialized AST");
     if (opts.inputs.empty()) {
         if (!opts.verbose)
             diag.error("cephyr.option", "no input files");
@@ -483,8 +531,8 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
         diag.error("cephyr.option", "-shared and -static cannot be combined");
     if (opts.shared && opts.stage != Stage::link)
         diag.error("cephyr.option", "-shared requires the link stage; use -fPIC to compile an object");
-    if (opts.moonstone_analysis && opts.stage == Stage::preprocess)
-        diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires C lowering, not -E");
+    if (opts.moonstone_analysis && (opts.stage == Stage::preprocess || opts.stage == Stage::ast))
+        diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires C lowering");
     else if (opts.moonstone_analysis && !opts.inputs.empty() &&
              std::none_of(opts.inputs.begin(), opts.inputs.end(), [](const auto &input) {
                  return c_input(input.language);
@@ -651,13 +699,16 @@ PreprocessOptions preprocessor_options(const Options &opts, const Config &config
 std::optional<std::string> read_input(const Input &input, const Invocation &invocation,
                                       Diagnostics &diag)
 {
-    constexpr std::size_t max_input = detail::max_source_size;
+    const bool serialized = input_ast_format(input.language);
+    const std::size_t max_input = serialized ? syntax::max_document_bytes : detail::max_source_size;
+    const char *limit_message = serialized ? "input exceeds the 64 MiB syntax document limit" :
+                                             "input exceeds the 16 MiB source limit";
     const std::string name = input.unit ? input.name() : input.argument == "-" ? "<stdin>" : input.argument;
     if (input.argument == "-" && !invocation.cli_input) {
         const auto &request = invocation.request;
         const auto size = input.unit ? input.unit->source.size() : request.stdin_size;
         if (size > max_input) {
-            diag.error("cephyr.limit", "input exceeds the 16 MiB source limit", Location{name});
+            diag.error("cephyr.limit", limit_message, Location{name});
             return std::nullopt;
         }
         const std::string_view source = input.unit ? std::string_view(input.unit->source) :
@@ -683,7 +734,7 @@ std::optional<std::string> read_input(const Input &input, const Invocation &invo
     while (stream->read(buffer, sizeof(buffer)) || stream->gcount()) {
         const auto count = static_cast<std::size_t>(stream->gcount());
         if (count > max_input - result.size()) {
-            diag.error("cephyr.limit", "input exceeds the 16 MiB source limit", Location{name});
+            diag.error("cephyr.limit", limit_message, Location{name});
             return std::nullopt;
         }
         result.append(buffer, count);
@@ -850,6 +901,7 @@ bool check_factir_outputs(const Options &opts, const Config &config,
     if (opts.factir_smtlib.empty() && opts.factir_facts.empty())
         return true;
     if (!config.factir_enabled || opts.stage == Stage::syntax || opts.stage == Stage::preprocess ||
+        opts.stage == Stage::ast ||
         std::count_if(opts.inputs.begin(), opts.inputs.end(),
                       [](const Input &input) { return c_input(input.language); }) != 1) {
         diag.error("cephyr.factir.output", "FactIR artifacts require enabled FactIR and exactly one C input being lowered");
@@ -1239,7 +1291,8 @@ bool link(const Config &config, const Target &target, const Options &opts,
 bool check_auto_tools(const Options &opts, const Config &config, const Target &target,
                       Diagnostics &diag)
 {
-    if (opts.stage == Stage::preprocess || opts.stage == Stage::syntax || opts.stage == Stage::mir)
+    if (opts.stage == Stage::preprocess || opts.stage == Stage::syntax ||
+        opts.stage == Stage::ast || opts.stage == Stage::mir)
         return true;
     const auto check = [&](std::string_view role, const Command &command) {
         return check_auto_tool(target, role, command, diag);
@@ -1299,7 +1352,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
         return false;
     auto &sdk = merged ? *merged : request_sdk;
     std::optional<qml::Pipeline> qml_pipeline;
-    if (opts.stage != Stage::preprocess && opts.stage != Stage::syntax &&
+    if (opts.stage != Stage::preprocess && opts.stage != Stage::syntax && opts.stage != Stage::ast &&
         (!opts.qml_profile.empty() || config.qml_profile || !opts.qml.passes.empty() ||
          !opts.qml.files.empty() || opts.qml.fuel || !opts.qml.phase_fuel.empty()) &&
         std::any_of(opts.inputs.begin(), opts.inputs.end(),
@@ -1464,7 +1517,16 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
         }))
             return false;
         std::optional<Preprocessed> prep;
-        if (input.language == Language::preprocessed) {
+        std::optional<ParsedUnit> parsed;
+        if (const auto format = input_ast_format(input.language)) {
+            auto unit = measured(profile, "read_ast", name, [&] {
+                return syntax::read(format, *source, name, diag);
+            });
+            if (!unit)
+                return false;
+            prep = std::move(unit->source);
+            parsed = std::move(unit->parsed);
+        } else if (input.language == Language::preprocessed) {
             prep = measured(profile, "read_preprocessed", name, [&] {
                 return read_preprocessed(*source, name, diag);
             });
@@ -1477,6 +1539,17 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
         const bool expects_preprocessor = input.language != Language::assembly;
         if ((expects_preprocessor && !prep) || diag.error_count())
             return false;
+        if (opts.stage == Stage::ast) {
+            if (!parsed)
+                parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
+            if (!parsed || diag.error_count())
+                return false;
+            const auto text = measured(profile, "emit_ast", name, [&] {
+                return syntax::emit(opts.ast_format, *parsed, *prep, diag);
+            });
+            return text && publish_text(opts.output.empty() ? fs::path("-") : opts.output,
+                                        *text, opts, invocation, diag);
+        }
         if (opts.stage == Stage::preprocess) {
             std::string_view text = prep ?
                 (input.language == Language::preprocessed && !preprocessor.line_markers ? prep->text : prep->output) :
@@ -1492,6 +1565,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
 
         std::string assembly;
         if (c_input(input.language)) {
+            const auto &source_name = prep->file;
             if (!provider && !custom_model) {
                 diag.error("cephyr.target",
                            "unsupported target for C lowering: " + target->architecture + "/" + target->abi +
@@ -1511,7 +1585,8 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             if (provider && !sdk_backend)
                 prep->bit_field_abi = provider->architecture == "AArch64" ?
                     Preprocessed::BitFieldABI::aapcs64 : Preprocessed::BitFieldABI::sysv_rv64;
-            auto parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
+            if (!parsed)
+                parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
             if (!parsed || diag.error_count())
                 return false;
             auto lowered = measured(profile, "lower", name, [&] {
@@ -1520,7 +1595,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             if (!lowered || diag.error_count())
                 return false;
             if (!measured(profile, "sdk_analyze", name, [&] {
-                return sdk.analyze(lowered->mir, *target, name, diag);
+                return sdk.analyze(lowered->mir, *target, source_name, diag);
             }))
                 return false;
             if (opts.stage == Stage::syntax)
@@ -1542,7 +1617,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             }
             bool rewritten = false;
             if (!measured(profile, "sdk_rewrite", name, [&] {
-                return sdk.rewrite(lowered->mir, *target, name, diag, &rewritten);
+                return sdk.rewrite(lowered->mir, *target, source_name, diag, &rewritten);
             }))
                 return false;
             if ((rewritten || (custom_backend && !qml_pipeline)) &&
@@ -1579,7 +1654,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             std::optional<std::string> result;
             if (custom_backend) {
                 result = measured(profile, "sdk_backend", name, [&] {
-                    return sdk.emit_assembly(lowered->mir, *target, name, pic, diag);
+                    return sdk.emit_assembly(lowered->mir, *target, source_name, pic, diag);
                 });
             } else {
                 result = measured(profile, "native_backend", name, [&] {
@@ -1820,7 +1895,8 @@ int drive(Invocation &invocation)
     try {
         const auto &request = invocation.request;
         SdkPipeline sdk(request.sdk);
-        if (invocation.units.empty() && request.argc && moonstone_tools::is_tool(request.argv[0])) {
+        if (!invocation.ast_format && invocation.units.empty() && request.argc &&
+            moonstone_tools::is_tool(request.argv[0])) {
             if (request.sdk || lua_options(request)) {
                 diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks or Lua extensions");
                 status = CEPHYR_INVALID_ARGUMENT;
@@ -1831,7 +1907,7 @@ int drive(Invocation &invocation)
                     status = CEPHYR_OK;
             }
         } else if (const bool parsed = parse_options(request.argc, request.argv, invocation.embedding(),
-                                                     opts, diag, invocation.units);
+                                                      opts, diag, invocation.units, invocation.ast_format);
                    !sdk.validate(diag)) {
             status = CEPHYR_INVALID_ARGUMENT;
         } else if (parsed) {
@@ -1908,7 +1984,8 @@ const char *cephyr_version(void) { return CEPHYR_VERSION; }
 
 int cephyr::detail::compile_units(const cephyr_request *request,
                                 std::span<const std::shared_ptr<const TranslationUnit>> units,
-                                const HostSymbols *symbols, cephyr_result **result)
+                                const HostSymbols *symbols, cephyr_result **result,
+                                cephyr_ast_format ast_format)
 {
     if (!result)
         return CEPHYR_INVALID_ARGUMENT;
@@ -1936,7 +2013,7 @@ int cephyr::detail::compile_units(const cephyr_request *request,
     try {
         cephyr::CompilationScope scope;
         auto storage = std::make_unique<cephyr_result>();
-        cephyr::Invocation invocation{*request, *storage, nullptr, nullptr, units, symbols};
+        cephyr::Invocation invocation{*request, *storage, nullptr, nullptr, units, symbols, ast_format};
         const int status = cephyr::drive(invocation);
         if (status != CEPHYR_OK)
             storage->loadable_output = false;
@@ -1950,6 +2027,16 @@ int cephyr::detail::compile_units(const cephyr_request *request,
 int cephyr_compile(const cephyr_request *request, cephyr_result **result)
 {
     return cephyr::detail::compile_units(request, {}, nullptr, result);
+}
+
+int cephyr_parse_c11(const cephyr_request *request, cephyr_ast_format format, cephyr_result **result)
+{
+    if (format != CEPHYR_AST_JSON && format != CEPHYR_AST_YAML && format != CEPHYR_AST_SEXP) {
+        if (result)
+            *result = nullptr;
+        return CEPHYR_INVALID_ARGUMENT;
+    }
+    return cephyr::detail::compile_units(request, {}, nullptr, result, format);
 }
 
 const char *cephyr_result_output(const cephyr_result *result, size_t *size)

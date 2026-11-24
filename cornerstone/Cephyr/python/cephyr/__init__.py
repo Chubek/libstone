@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Iterable
+from itertools import chain
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -17,7 +18,7 @@ from ._sdk import (
 
 __all__ = [
     "ABI_VERSION", "Compiler", "Diagnostic", "Hook", "HookInput", "HookResult",
-    "Result", "Severity", "Stage", "Status", "compile",
+    "Result", "Severity", "Stage", "Status", "compile", "parse_c11",
 ]
 
 ABI_VERSION = 1
@@ -200,6 +201,26 @@ class Compiler:
         """Return the native Cephyr version string."""
         return self._version
 
+    def parse_c11(
+        self,
+        argv: Iterable[_PathArg],
+        source: str | bytes | None = None,
+        *,
+        format: str = "json",
+        resource_root: _PathArg | None = None,
+        archon_root: _PathArg | None = None,
+        sdk: Iterable[Hook] | None = None,
+    ) -> Result:
+        """Parse one C input and return its versioned AST without lowering."""
+        if format not in ("json", "yaml", "sexp"):
+            raise ValueError("format must be 'json', 'yaml', or 'sexp'")
+        if isinstance(argv, (str, bytes, os.PathLike)):
+            raise TypeError("argv must be an iterable of arguments, not a string or path")
+        return self.compile(
+            chain((f"--emit-ast={format}",), argv), source,
+            resource_root=resource_root, archon_root=archon_root, sdk=sdk,
+        )
+
     def compile(
         self,
         argv: Iterable[_PathArg],
@@ -263,4 +284,20 @@ def compile(
     """Compile with Cephyr, resolving and ABI-checking the library on each call."""
     return Compiler(library).compile(
         argv, source, resource_root=resource_root, archon_root=archon_root, sdk=sdk
+    )
+
+
+def parse_c11(
+    argv: Iterable[_PathArg],
+    source: str | bytes | None = None,
+    *,
+    format: str = "json",
+    library: _PathArg | None = None,
+    resource_root: _PathArg | None = None,
+    archon_root: _PathArg | None = None,
+    sdk: Iterable[Hook] | None = None,
+) -> Result:
+    """Parse with Cephyr, resolving and ABI-checking the library on each call."""
+    return Compiler(library).parse_c11(
+        argv, source, format=format, resource_root=resource_root, archon_root=archon_root, sdk=sdk
     )

@@ -10,6 +10,12 @@ or sandbox callback code. Only register code that you would trust to run with
 your application's privileges. To load a trusted native plugin from an explicit
 file path, see [configuring extensions and plugins](extension/CONFIGURATION.md).
 
+To inspect a syntax tree without lowering, pass your SDK on the request to
+`cephyr_parse_c11`, or use `--emit-ast=json|yaml|sexp` in the driver arguments.
+Raw C runs desugar and directive hooks; AST emission does not run MIR hooks.
+Compiling a validated syntax document skips desugar and directives and runs the
+normal post-lowering hooks. See [C11 syntax documents](docs/C11Syntax.md).
+
 | Stage | Input | Result |
 | --- | --- | --- |
 | `CEPHYR_SDK_DESUGAR` | Raw C translation unit, before CPP | Optional replacement C text. This stage also runs for raw C with `-E`. It does not see the contents of includes and is skipped for `.i` and assembler inputs. |

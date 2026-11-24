@@ -147,7 +147,7 @@ typedef struct cephyr_sdk_directive {
  * registration data during that call. Invocation
  * is synchronous in array order within each hook stage, and in preprocessing
  * order for directives. Do not reenter
- * cephyr_compile on the callback's thread. Different concurrent compile
+ * cephyr_compile or cephyr_parse_c11 on the callback's thread. Different concurrent
  * calls may invoke the same hooks concurrently; synchronize mutable client
  * state accordingly. For explicitly configured native plugins, see
  * CephyrPlugin.h. */

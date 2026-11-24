@@ -11,7 +11,7 @@
 #   packages: all (default), cparser-iso11, cpp-httplib, ctl, dparser,
 #             kaguya, klib, libglr, lua, metatk, qamrpp, replxx, satie,
 #             sfsexp, termlib, tomlc99, ucpp, equinox-ng, exolangtk,
-#             memtkx, lmdbxx, isocline
+#             memtkx, lmdbxx, isocline, nlohmann-json, valijson
 #   options:
 #     --dir DIR    destination root (default: <mlvm>/third_party)
 #     --update     git pull --ff-only in existing checkouts
@@ -36,7 +36,7 @@ PACKAGES=()
 
 ALL_PACKAGES=(cparser-iso11 cpp-httplib ctl dparser kaguya klib libglr lua
   metatk qamrpp replxx satie sfsexp termlib tomlc99 ucpp
-  equinox-ng exolangtk memtkx lmdbxx isocline)
+  equinox-ng exolangtk memtkx lmdbxx isocline nlohmann-json valijson)
 
 # Repository names and directory names deliberately differ for a few packages.
 package_info() {
@@ -62,6 +62,8 @@ package_info() {
     memtkx) NAME=$1; REPO=Chubek/memtkx; FILES=(include/memtkx/space/free_list.hpp) ;;
     lmdbxx) NAME=$1; REPO=bendiken/lmdbxx; FILES=(lmdb++.h) ;;
     isocline) NAME=$1; REPO=daanx/isocline; FILES=(src/isocline.c include/isocline.h) ;;
+    nlohmann-json) NAME=$1; REPO=nlohmann/json; FILES=(include/nlohmann/json.hpp) ;;
+    valijson) NAME=$1; REPO=tristanpenman/valijson; FILES=(include/valijson/validator.hpp) ;;
     *) die "unknown package '$1' (expected: ${ALL_PACKAGES[*]} all)" ;;
   esac
 }

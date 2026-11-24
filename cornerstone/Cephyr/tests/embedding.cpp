@@ -71,6 +71,18 @@ int main()
     // Call a copied sink outside its callback. It must not touch expired state.
     if (state.saved.set_text(state.saved.context, {}))
         return 1;
+    // Parse-only still runs source hooks but must not invoke a MIR analysis hook.
+    const cephyr_sdk_hook ast_hooks[] = {
+        hook, {CEPHYR_SDK_ANALYZE, {"no-mir", 6}, {}, throwing_callback, nullptr}
+    };
+    const cephyr_sdk ast_sdk{sizeof(ast_sdk), CEPHYR_SDK_ABI_VERSION, ast_hooks, 2};
+    auto ast = cephyr::parse_c11({"-"}, CEPHYR_AST_YAML, "must be replaced",
+                                 {nullptr, nullptr, &ast_sdk});
+    if (!ast || !ast.output().starts_with("schema_version: 1\n") ||
+        ast.output().find("cephyr_cpp_sdk") == std::string_view::npos)
+        return 1;
+    if (!cephyr::compile({"-fsyntax-only", "-x", "c11-ast-yaml", "-"}, ast.output(), options))
+        return 1; // importing must not run desugar again
     hook.callback = throwing_callback;
     auto thrown = cephyr::compile({"-E", "-"}, "int untouched;\n", options);
     if (thrown.status() != CEPHYR_COMPILE_ERROR ||

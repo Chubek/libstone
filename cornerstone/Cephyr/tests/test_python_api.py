@@ -106,6 +106,24 @@ class CephyrPythonAPITests(unittest.TestCase):
         self.assertIsInstance(result.diagnostics, bytes)
         self.assertIn(b"cephyr_python_add:", result.output)
 
+    def test_parse_c11(self) -> None:
+        ast = self.compiler.parse_c11((*self.config_args, "-"),
+                                     "int python_ast(void) { return 42; }\n")
+        self.assertTrue(ast.ok, ast.diagnostics)
+        document = json.loads(ast.output)
+        self.assertEqual(next(iter(document)), "schema_version")
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["ast"]["items"][0]["kind"], "function_decl")
+        assembly = self.compiler.compile(
+            (*self.config_args, "-S", "-o", "-", "-x", "c11-ast-json", "-"), ast.output,
+        )
+        self.assertTrue(assembly.ok, assembly.diagnostics)
+        self.assertIn(b"python_ast:", assembly.output)
+        self.assertTrue(cephyr.parse_c11((*self.config_args, "-"), "int x;", format="sexp")
+                        .output.startswith(b"(1 "))
+        with self.assertRaises(ValueError):
+            self.compiler.parse_c11(("-",), "int x;", format="xml")
+
     def test_native_artifact_capture(self) -> None:
         result = self.compiler.compile(
             (*self.config_args, "-c", "-o", "-", "-"),

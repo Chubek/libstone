@@ -84,6 +84,23 @@ unsigned cephyr_python_version(void);
  */
 int cephyr_compile(const cephyr_request *request, cephyr_result **result);
 
+#define CEPHYR_C11_SYNTAX_SCHEMA_VERSION 1u
+typedef enum cephyr_ast_format {
+    CEPHYR_AST_JSON = 1,
+    CEPHYR_AST_YAML = 2,
+    CEPHYR_AST_SEXP = 3
+} cephyr_ast_format;
+
+/*
+ * Parse one C translation unit without lowering. Use the same request and
+ * ownership rules as cephyr_compile, with one input operand (e.g. "-" for
+ * stdin_data). Output defaults to the result buffer. This is equivalent to
+ * --emit-ast=FORMAT. For serialized input, call cephyr_compile with an AST
+ * filename, or with "-x", "c11-ast-FORMAT", "-" to use stdin_data.
+ */
+int cephyr_parse_c11(const cephyr_request *request, cephyr_ast_format format,
+                     cephyr_result **result);
+
 /*
  * Return a NUL-terminated buffer valid until result destruction. If size is
  * non-NULL, receive the byte count excluding the terminator. A NULL result

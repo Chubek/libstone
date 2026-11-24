@@ -10,6 +10,36 @@
     return 1; \
 } } while (0)
 
+static int test_parse_c11(void)
+{
+    const char *const args[] = {"-DVALUE=42", "-"};
+    const char *const compile_args[] = {"-S", "-o", "-", "-x", "c11-ast-json", "-"};
+    const char source[] = "int embedding_ast(void) { return VALUE; }\n";
+    cephyr_request request = {
+        .struct_size = offsetof(cephyr_request, lua), /* legacy request prefix */
+        .argc = sizeof(args) / sizeof(*args), .argv = args,
+        .stdin_data = source, .stdin_size = sizeof(source) - 1
+    };
+    cephyr_result *ast = NULL;
+    CHECK(CEPHYR_C11_SYNTAX_SCHEMA_VERSION == 1);
+    CHECK(cephyr_parse_c11(&request, CEPHYR_AST_JSON, &ast) == CEPHYR_OK && ast);
+    size_t bytes = 0;
+    const char *text = cephyr_result_output(ast, &bytes);
+    CHECK(text && bytes && strstr(text, "\"schema_version\": 1") && strstr(text, "\"42\""));
+    cephyr_result *compiled = ast;
+    CHECK(cephyr_parse_c11(&request, (cephyr_ast_format)0, &compiled) ==
+          CEPHYR_INVALID_ARGUMENT && !compiled);
+    request.argc = sizeof(compile_args) / sizeof(*compile_args);
+    request.argv = compile_args;
+    request.stdin_data = text;
+    request.stdin_size = bytes;
+    CHECK(cephyr_compile(&request, &compiled) == CEPHYR_OK && compiled);
+    CHECK(strstr(cephyr_result_output(compiled, NULL), "embedding_ast:"));
+    cephyr_result_destroy(compiled);
+    cephyr_result_destroy(ast);
+    return 0;
+}
+
 static int test_context(void)
 {
     char define[] = "-DCEPHYR_VALUE=19";
@@ -409,6 +439,7 @@ static int test_registered_symbols(void)
 
 int main(void)
 {
+    CHECK(test_parse_c11() == 0);
     const char *const preprocess[] = {"-E", "-P", "-x", "c", "-", "-o", "-"};
     const char *const syntax[] = {"-fsyntax-only", "-x", "c", "-"};
     const char *const sarif[] = {"-fsyntax-only", "--diagnostics-format=sarif", "-"};

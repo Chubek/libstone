@@ -248,3 +248,13 @@ threads can overlap; Cephyr releases the caller's GIL for native compilation
 and Python SDK callbacks acquire it when entered.
 Pass `sdk=` with an iterable of trusted Python hooks to either compile function.
 See [the Python SDK](SDK.md#python) for supported stages and callback results.
+## Parse-only C11 and AST input
+
+Call `cephyr_parse_c11(request, CEPHYR_AST_JSON, &result)` or
+`cephyr::parse_c11({"-"}, CEPHYR_AST_JSON, source)` to get a syntax document
+in the result buffer. `CEPHYR_AST_YAML` and `CEPHYR_AST_SEXP` select other
+formats. To compile from a result buffer, use the ordinary compile API with
+`-x c11-ast-json -` (or `c11-ast-yaml` / `c11-ast-sexp`) and pass the document
+as stdin data. Contexts can use the same flags via `cephyr_context_compile`.
+The Python SDK exposes `cephyr.parse_c11` and `Compiler.parse_c11`.
+See [the format and CLI examples](docs/C11Syntax.md).
