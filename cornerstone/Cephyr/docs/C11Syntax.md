@@ -6,6 +6,9 @@ hooks. It uses Cephyr's existing [C11 frontend](../C11.md): parse-only may
 accept constructs that the code generator cannot lower, but does not add
 support for syntax the frontend itself rejects.
 
+For resolved file-scope declarations and target-specific type layouts rather
+than a syntax tree, use the [C11 declaration interface](C11Interface.md).
+
 ```sh
 cephyr --emit-ast=json example.c -o example.json
 cephyr --emit-ast=yaml example.c -o example.yaml

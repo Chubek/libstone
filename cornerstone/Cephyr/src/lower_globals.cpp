@@ -1,5 +1,7 @@
 #include <cephyr/lower.hpp>
 
+#include "declarations.hpp"
+
 #include <AbstractSyntaxTree.h>
 
 #include <algorithm>
@@ -414,15 +416,14 @@ std::optional<Relocation> symbol_relocation(const TypeContext &context, const CT
     return Relocation{std::move(storage->name), storage->offset};
 }
 
-bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
-                            Image &image, std::uint64_t offset, const Function *scope,
-                            std::optional<BitField> bit_field = std::nullopt) {
+std::optional<Constant> static_arithmetic_initializer(Unit &unit, const CType &type,
+                                                     Node *initializer, const Function *scope) {
     bool valid = false;
     initializer = scalar_initializer(initializer, valid);
     if (!valid) {
         unit.error(initializer, "scalar initializer has more than one value",
                    "cephyr.global.initializer");
-        return false;
+        return {};
     }
     const auto errors = unit.diagnostics.error_count();
     auto value = arithmetic_initializer_constant(initializer, type, TypeContext(unit, scope));
@@ -432,8 +433,16 @@ bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
                 initializer,
                  "static initializer is not a supported arithmetic constant expression",
                  "cephyr.global.initializer");
-        return false;
     }
+    return value;
+}
+
+bool initialize_arithmetic(Unit &unit, const CType &type, Node *initializer,
+                            Image &image, std::uint64_t offset, const Function *scope,
+                            std::optional<BitField> bit_field = std::nullopt) {
+    const auto value = static_arithmetic_initializer(unit, type, initializer, scope);
+    if (!value)
+        return false;
     if (bit_field) {
         const auto field = *bit_field;
         const auto mask = field.mask() << field.shift;
@@ -758,6 +767,42 @@ bool define_global_object(Unit &unit, Symbol &symbol, Node *initializer,
 }
 
 } // namespace
+
+bool validate_interface_initializer(Unit &unit, Symbol &symbol) {
+    const TypeContext context(unit);
+    auto *declaration = static_cast<cparser::VarDeclASTNode *>(symbol.definition);
+    auto *initializer = declaration->getInit();
+    auto type = symbol.type;
+    std::optional<std::vector<ObjectInitEntry>> plan;
+    if (type.aggregate()) {
+        plan = plan_object_initializer(context, type, initializer);
+        if (!plan)
+            return false;
+    }
+    if (!size_of(type)) {
+        unit.error(declaration, "definition requires a complete object type", "cephyr.global.layout");
+        return false;
+    }
+    // Share the static-initializer rules without allocating an object image,
+    // producing relocations, or imposing native image-size limits.
+    const auto check = [&](const CType &destination, Node *value) {
+        if (destination.arithmetic())
+            return static_arithmetic_initializer(unit, destination, value, nullptr).has_value();
+        if (destination.pointer())
+            return initialize_pointer(context, destination, value, nullptr);
+        unit.error(value, "static structure or union initializers must use braces", "cephyr.global.type");
+        return false;
+    };
+    if (plan) {
+        for (const auto &entry : *plan)
+            if (!entry.clear && !entry.bytes && !check(entry.type, entry.source))
+                return false;
+    } else if (!check(type, initializer)) {
+        return false;
+    }
+    symbol.type = std::move(type);
+    return true;
+}
 
 bool define_global(Unit &unit, Symbol &symbol, const Function *scope) {
     auto *definition = symbol.definition;

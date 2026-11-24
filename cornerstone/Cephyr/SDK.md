@@ -16,6 +16,12 @@ Raw C runs desugar and directive hooks; AST emission does not run MIR hooks.
 Compiling a validated syntax document skips desugar and directives and runs the
 normal post-lowering hooks. See [C11 syntax documents](docs/C11Syntax.md).
 
+To inspect resolved C11 file-scope declarations, call `cephyr_emit_interface`
+or pass `--emit-interface=sexp` to the driver. Like AST emission, this runs
+desugar and directive hooks on raw C, but skips the MIR analysis, rewrite,
+and assembly hooks. It returns a [declaration interface](docs/C11Interface.md),
+not a mutable compiler IR handle.
+
 | Stage | Input | Result |
 | --- | --- | --- |
 | `CEPHYR_SDK_DESUGAR` | Raw C translation unit, before CPP | Optional replacement C text. This stage also runs for raw C with `-E`. It does not see the contents of includes and is skipped for `.i` and assembler inputs. |

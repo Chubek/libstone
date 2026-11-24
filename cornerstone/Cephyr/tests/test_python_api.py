@@ -124,6 +124,48 @@ class CephyrPythonAPITests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.compiler.parse_c11(("-",), "int x;", format="xml")
 
+    def test_emit_interface(self) -> None:
+        events = []
+
+        def desugar(data):
+            events.append(data.stage)
+            return "typedef unsigned long count_t;\nextern count_t python_interface;\n"
+
+        def analyze(data):
+            events.append(data.stage)
+            return None
+
+        result = self.compiler.emit_interface(
+            (*self.config_args, "-"),
+            "replace this input",
+            sdk=(
+                cephyr.Hook(cephyr.Stage.DESUGAR, "interface-desugar", desugar),
+                cephyr.Hook(cephyr.Stage.ANALYZE, "interface-analyze", analyze),
+            ),
+        )
+        self.assertTrue(result.ok, result.diagnostics)
+        self.assertEqual(events, [cephyr.Stage.DESUGAR])
+        self.assertRegex(result.output, rb"^\(interface\s+1\b")
+        self.assertIn(b'"python_interface"', result.output)
+        self.assertIn(b'"count_t"', result.output)
+        plain = cephyr.emit_interface(
+            (*self.config_args, "-"),
+            b"typedef unsigned long count_t;\nextern count_t python_interface;\n",
+        )
+        self.assertTrue(plain.ok, plain.diagnostics)
+        self.assertEqual(result.output, plain.output)
+
+        invalid = self.compiler.emit_interface(
+            (*self.config_args, "--diagnostics-format=sarif", "-"),
+            '_Static_assert(0, "python interface assertion");\n',
+        )
+        self.assertEqual(invalid.status, cephyr.Status.COMPILE_ERROR)
+        self.assertEqual(invalid.output, b"")
+        self.assertTrue(any(
+            "python interface assertion" in diagnostic["message"]["text"]
+            for diagnostic in invalid.sarif()["runs"][0]["results"]
+        ), invalid.diagnostics)
+
     def test_native_artifact_capture(self) -> None:
         result = self.compiler.compile(
             (*self.config_args, "-c", "-o", "-", "-"),

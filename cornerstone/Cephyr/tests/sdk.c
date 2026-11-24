@@ -549,6 +549,13 @@ static void test_custom_object(void)
                                sizeof(args) / sizeof(args[0]), args, CEPHYR_OK);
     cephyr_result_destroy(result);
     CHECK(calls == 1);
+
+    /* An SDK-only assembler does not define a C declaration interface ABI. */
+    const char *interface_args[] = {"--config", config, "--emit-interface=sexp", "-"};
+    failed(run(&sdk, "extern int answer(void);\n",
+               sizeof(interface_args) / sizeof(interface_args[0]), interface_args, CEPHYR_COMPILE_ERROR),
+           "interface projection requires a supported target ABI");
+    CHECK(calls == 1);
     free(config);
 
     FILE *object = fopen(path, "rb");

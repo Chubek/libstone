@@ -35,6 +35,7 @@ ctest --test-dir build-cephyr --output-on-failure
 build-cephyr/cephyr -E -Iinclude example.c
 build-cephyr/cephyr -fsyntax-only example.c
 build-cephyr/cephyr --emit-ast=json example.c -o example.json
+build-cephyr/cephyr --emit-interface=sexp example.c -o example.interface
 build-cephyr/cephyr -c example.json -o example.o
 build-cephyr/cephyr --emit-mir example.c -o example.mir
 build-cephyr/cephyr -S example.c -o example.s
@@ -64,7 +65,9 @@ from LibStone's root build with `-DLIBSTONE_BUILD_CEPHYR=ON`. Use
 target definitions, Archon resources, and libc sources.
 
 See [C11 syntax documents](docs/C11Syntax.md) for parse-only output, format
-details, and how to compile a saved AST.
+details, and how to compile a saved AST. The
+[C11 declaration interface](docs/C11Interface.md) instead reports resolved
+file-scope declarations and target layouts without generating code.
 
 ## Embedding and extensions
 
@@ -153,9 +156,9 @@ script unless it repeats the TOML triple (or repeats the built-in default when
 TOML omits `target`). A non-empty `paths.triple_script` bypasses auto detection;
 if no concrete triple is supplied, the script supplies it. For auto builds
 Cephyr checks that the effective tools for the requested stage are executable
-before compiling; `-E`, `-fsyntax-only` and ordinary `--emit-mir` need no external tools. Tool
-discovery does not validate an overridden tool's target flags, linker sysroot,
-or library availability.
+before compiling. `-E`, `-fsyntax-only`, `--emit-interface=sexp`, and ordinary
+`--emit-mir` need no external tools. Tool discovery does not validate an
+overridden tool's target flags, linker sysroot, or library availability.
 
 See the [target bank](triples/README.md#automatic-selection) for how additional
 host mappings become eligible.

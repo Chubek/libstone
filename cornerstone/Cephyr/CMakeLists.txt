@@ -164,7 +164,7 @@ set(cephyr_native "${cephyr_archon}/archon/irgen/native")
 set(cephyr_satie "${cephyr_vendor}/satie")
 add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
-  src/preprocess.cpp src/parser.cpp src/syntax.cpp src/semantics.cpp src/lower.cpp
+  src/preprocess.cpp src/parser.cpp src/syntax.cpp src/interface.cpp src/semantics.cpp src/lower.cpp
   src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
   src/embedding.cpp src/moonstone_tools.cpp src/qml_rewrite.cpp src/blackstone_opt.cpp
   extension/lua_extensions.cpp extension/native_plugins.cpp
@@ -355,6 +355,8 @@ if(CEPHYR_BUILD_TESTS)
   add_test(NAME cephyr.cpp-api COMMAND cephyr-cpp-api-test)
   add_test(NAME cephyr.c11-ast COMMAND "${Python3_EXECUTABLE}" -B
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_ast.py" "$<TARGET_FILE:cephyr>")
+  add_test(NAME cephyr.c11-interface COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_c11_interface.py" "$<TARGET_FILE:cephyr>")
   set_tests_properties(cephyr.c-api cephyr.cpp-api PROPERTIES TIMEOUT 60)
   add_executable(cephyr-sdk-test tests/sdk.c)
   set_target_properties(cephyr-sdk-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)

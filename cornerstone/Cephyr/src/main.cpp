@@ -3,6 +3,7 @@
 #include "driver.hpp"
 #include "driver_io.hpp"
 #include "embedding_internal.hpp"
+#include "interface.hpp"
 #include "mir_verify.h"
 #include "moonstone_tools.hpp"
 #include "qml_rewrite.hpp"
@@ -59,7 +60,7 @@ using detail::MemoryFile;
 using detail::save;
 using detail::TempDirectory;
 
-enum class Stage { link, object, assembly, preprocess, syntax, ast, mir };
+enum class Stage { link, object, assembly, preprocess, syntax, ast, interface_, mir };
 enum class Language { automatic, c, preprocessed, ast_json, ast_yaml, ast_sexp,
                       assembly, assembly_cpp, link, link_option };
 
@@ -102,6 +103,7 @@ struct Invocation {
     std::span<const std::shared_ptr<const detail::TranslationUnit>> units{};
     const detail::HostSymbols *symbols = nullptr;
     cephyr_ast_format ast_format{};
+    bool emit_interface = false;
 
     bool embedding() const { return !cli_output; }
 };
@@ -113,6 +115,7 @@ Compile C11 for an Archon target (default: x86_64-linux-gnu).
   -fsyntax-only             Check the C frontend without invoking target tools
   --emit-ast=FORMAT         Parse one C11 input and write JSON, YAML or S-expressions
                             (json, yaml, sexp; default output is stdout)
+  --emit-interface=sexp     Resolve and write one C11 declaration interface (default: stdout)
   --emit-mir                Write Archon MachineIR text
   -S                        Compile to assembly
   -c                        Compile/assemble to a relocatable object
@@ -192,7 +195,8 @@ bool for_stage(Language kind, Stage stage)
 {
     if (stage == Stage::link)
         return true;
-    if (stage == Stage::syntax || stage == Stage::mir || stage == Stage::ast)
+    if (stage == Stage::syntax || stage == Stage::mir || stage == Stage::ast ||
+        stage == Stage::interface_)
         return c_input(kind);
     return source_input(kind);
 }
@@ -258,9 +262,11 @@ std::optional<unsigned> positive_unsigned(std::string_view text)
 bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
                    Options &opts, Diagnostics &diag,
                    std::span<const std::shared_ptr<const detail::TranslationUnit>> units,
-                   cephyr_ast_format ast_format)
+                   cephyr_ast_format ast_format, bool emit_interface)
 {
-    if (ast_format) {
+    if (emit_interface) {
+        opts.stage = Stage::interface_;
+    } else if (ast_format) {
         opts.stage = Stage::ast;
         opts.ast_format = ast_format;
     }
@@ -335,6 +341,11 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
                 diag.error("cephyr.option", "conflicting AST formats");
             else
                 opts.ast_format = format;
+        } else if (option("--emit-interface")) {
+            stage(Stage::interface_);
+            const auto value = argument("--emit-interface");
+            if (!value.empty() && value != "sexp")
+                diag.error("cephyr.option", "unsupported interface format '" + value + "'; use sexp");
         } else if (token == "--emit-mir") {
             stage(Stage::mir);
         } else if (token == "-S") {
@@ -504,6 +515,8 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
         return diag.error_count() == 0;
     if (opts.stage == Stage::ast && (opts.inputs.size() != 1 || !c_input(opts.inputs.front().language)))
         diag.error("cephyr.option", "--emit-ast requires exactly one C or C11 AST input");
+    if (opts.stage == Stage::interface_ && (opts.inputs.size() != 1 || !c_input(opts.inputs.front().language)))
+        diag.error("cephyr.option", "--emit-interface requires exactly one C or C11 AST input");
     if (opts.stage == Stage::preprocess && std::ranges::any_of(opts.inputs, [](const Input &input) {
             return input_ast_format(input.language) != 0;
         }))
@@ -531,7 +544,8 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
         diag.error("cephyr.option", "-shared and -static cannot be combined");
     if (opts.shared && opts.stage != Stage::link)
         diag.error("cephyr.option", "-shared requires the link stage; use -fPIC to compile an object");
-    if (opts.moonstone_analysis && (opts.stage == Stage::preprocess || opts.stage == Stage::ast))
+    if (opts.moonstone_analysis &&
+        (opts.stage == Stage::preprocess || opts.stage == Stage::ast || opts.stage == Stage::interface_))
         diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires C lowering");
     else if (opts.moonstone_analysis && !opts.inputs.empty() &&
              std::none_of(opts.inputs.begin(), opts.inputs.end(), [](const auto &input) {
@@ -901,7 +915,7 @@ bool check_factir_outputs(const Options &opts, const Config &config,
     if (opts.factir_smtlib.empty() && opts.factir_facts.empty())
         return true;
     if (!config.factir_enabled || opts.stage == Stage::syntax || opts.stage == Stage::preprocess ||
-        opts.stage == Stage::ast ||
+        opts.stage == Stage::ast || opts.stage == Stage::interface_ ||
         std::count_if(opts.inputs.begin(), opts.inputs.end(),
                       [](const Input &input) { return c_input(input.language); }) != 1) {
         diag.error("cephyr.factir.output", "FactIR artifacts require enabled FactIR and exactly one C input being lowered");
@@ -1292,7 +1306,7 @@ bool check_auto_tools(const Options &opts, const Config &config, const Target &t
                       Diagnostics &diag)
 {
     if (opts.stage == Stage::preprocess || opts.stage == Stage::syntax ||
-        opts.stage == Stage::ast || opts.stage == Stage::mir)
+        opts.stage == Stage::ast || opts.stage == Stage::interface_ || opts.stage == Stage::mir)
         return true;
     const auto check = [&](std::string_view role, const Command &command) {
         return check_auto_tool(target, role, command, diag);
@@ -1353,6 +1367,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
     auto &sdk = merged ? *merged : request_sdk;
     std::optional<qml::Pipeline> qml_pipeline;
     if (opts.stage != Stage::preprocess && opts.stage != Stage::syntax && opts.stage != Stage::ast &&
+        opts.stage != Stage::interface_ &&
         (!opts.qml_profile.empty() || config.qml_profile || !opts.qml.passes.empty() ||
          !opts.qml.files.empty() || opts.qml.fuel || !opts.qml.phase_fuel.empty()) &&
         std::any_of(opts.inputs.begin(), opts.inputs.end(),
@@ -1395,13 +1410,21 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             provider = nullptr;
     }
     const bool sdk_backend = sdk.has_backend(*target);
-    const bool native_rv64_lp64 = provider && !sdk_backend &&
+    // A declaration projection describes the target itself, not a custom
+    // SDK assembly hook which happens to be registered for that target.
+    const bool native_layout = provider && (!sdk_backend || opts.stage == Stage::interface_);
+    const bool native_rv64_lp64 = native_layout &&
         provider->architecture == "RISCV64IM" && provider->abi == "LP64";
-    const bool native_scalar_fp = provider && !sdk_backend &&
+    const bool native_scalar_fp = native_layout &&
         (provider->architecture == "AMD64" || provider->architecture == "AArch64");
     // An exact SDK backend for an explicitly selected target may opt into
     // Cephyr's generic little-endian LP64 frontend, not a built-in ISA/ABI.
     const bool custom_model = !provider && !automatic && sdk_backend && target->abi == "LP64";
+    if (opts.stage == Stage::interface_ && !provider) {
+        diag.error("cephyr.target", "interface projection requires a supported target ABI: " +
+                   target->architecture + "/" + target->abi);
+        return false;
+    }
     if (opts.stage == Stage::link) {
         if (config.stdlib == "cephyr" && !(opts.no_start && opts.no_libraries) &&
             (!target->is_linux || !provider || !config.static_link)) {
@@ -1582,13 +1605,22 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             prep->native_amd64_x87 = native_scalar_fp && provider->architecture == "AMD64";
             prep->native_aarch64_stdarg = native_scalar_fp && provider->architecture == "AArch64";
             prep->native_rv64_record_abi = native_rv64_lp64;
-            if (provider && !sdk_backend)
+            if (native_layout)
                 prep->bit_field_abi = provider->architecture == "AArch64" ?
                     Preprocessed::BitFieldABI::aapcs64 : Preprocessed::BitFieldABI::sysv_rv64;
             if (!parsed)
                 parsed = measured(profile, "parse", name, [&] { return parse(*prep, diag); });
             if (!parsed || diag.error_count())
                 return false;
+            if (opts.stage == Stage::interface_) {
+                const auto text = measured(profile, "emit_interface", name, [&] {
+                    return project_interface(parsed->root(), *prep, diag, preprocessor.hosted,
+                                             target->triple, target->abi);
+                });
+                return text && !diag.error_count() &&
+                    publish_text(opts.output.empty() ? fs::path("-") : opts.output,
+                                 *text, opts, invocation, diag);
+            }
             auto lowered = measured(profile, "lower", name, [&] {
                 return lower(parsed->root(), *prep, diag, preprocessor.hosted, analysis);
             });
@@ -1895,7 +1927,7 @@ int drive(Invocation &invocation)
     try {
         const auto &request = invocation.request;
         SdkPipeline sdk(request.sdk);
-        if (!invocation.ast_format && invocation.units.empty() && request.argc &&
+        if (!invocation.ast_format && !invocation.emit_interface && invocation.units.empty() && request.argc &&
             moonstone_tools::is_tool(request.argv[0])) {
             if (request.sdk || lua_options(request)) {
                 diag.error("cephyr.moonstone.tool", "standalone Moonstone tools do not run SDK hooks or Lua extensions");
@@ -1907,7 +1939,8 @@ int drive(Invocation &invocation)
                     status = CEPHYR_OK;
             }
         } else if (const bool parsed = parse_options(request.argc, request.argv, invocation.embedding(),
-                                                      opts, diag, invocation.units, invocation.ast_format);
+                                                      opts, diag, invocation.units, invocation.ast_format,
+                                                      invocation.emit_interface);
                    !sdk.validate(diag)) {
             status = CEPHYR_INVALID_ARGUMENT;
         } else if (parsed) {
@@ -1985,7 +2018,7 @@ const char *cephyr_version(void) { return CEPHYR_VERSION; }
 int cephyr::detail::compile_units(const cephyr_request *request,
                                 std::span<const std::shared_ptr<const TranslationUnit>> units,
                                 const HostSymbols *symbols, cephyr_result **result,
-                                cephyr_ast_format ast_format)
+                                cephyr_ast_format ast_format, bool emit_interface)
 {
     if (!result)
         return CEPHYR_INVALID_ARGUMENT;
@@ -2013,7 +2046,8 @@ int cephyr::detail::compile_units(const cephyr_request *request,
     try {
         cephyr::CompilationScope scope;
         auto storage = std::make_unique<cephyr_result>();
-        cephyr::Invocation invocation{*request, *storage, nullptr, nullptr, units, symbols, ast_format};
+        cephyr::Invocation invocation{*request, *storage, nullptr, nullptr, units, symbols, ast_format,
+                                      emit_interface};
         const int status = cephyr::drive(invocation);
         if (status != CEPHYR_OK)
             storage->loadable_output = false;
@@ -2037,6 +2071,11 @@ int cephyr_parse_c11(const cephyr_request *request, cephyr_ast_format format, ce
         return CEPHYR_INVALID_ARGUMENT;
     }
     return cephyr::detail::compile_units(request, {}, nullptr, result, format);
+}
+
+int cephyr_emit_interface(const cephyr_request *request, cephyr_result **result)
+{
+    return cephyr::detail::compile_units(request, {}, nullptr, result, {}, true);
 }
 
 const char *cephyr_result_output(const cephyr_result *result, size_t *size)

@@ -43,6 +43,8 @@ if(NOT EXISTS "${prefix}/${INSTALL_DATADIR}/cephyr/contracts/C11Syntax.schema.js
 endif()
 run("${TEST_PYTHON}" -B "${SOURCE_DIR}/tests/test_c11_ast.py"
   "${prefix}/${INSTALL_BINDIR}/cephyr")
+run("${TEST_PYTHON}" -B "${SOURCE_DIR}/tests/test_c11_interface.py"
+  "${prefix}/${INSTALL_BINDIR}/cephyr")
 run("${TEST_PYTHON}" "${SOURCE_DIR}/tests/test_cephyr_cli_regression.py"
   "${prefix}/${INSTALL_BINDIR}/cephyr" CephyrCLIRegressionTests.test_40_packaged_tools_cold_cache)
 set(qml_assets "${prefix}/${INSTALL_DATADIR}/cephyr/qml")

@@ -40,6 +40,53 @@ static int test_parse_c11(void)
     return 0;
 }
 
+static uint32_t interface_directive(const cephyr_sdk_input *input, const cephyr_sdk_output *output,
+                                    void *user)
+{
+    const char declaration[] = "extern int embedding_directive;";
+    const cephyr_sdk_text replacement = {declaration, sizeof(declaration) - 1};
+    if (input->stage != CEPHYR_SDK_DIRECTIVE || input->text.size)
+        return CEPHYR_SDK_REJECT;
+    ++*(unsigned *)user;
+    return output->set_text(output->context, replacement) ? CEPHYR_SDK_OK : CEPHYR_SDK_REJECT;
+}
+
+static int test_emit_interface(void)
+{
+    const char *const args[] = {"--target=x86_64-linux-gnu", "-DCOUNT=3", "-"};
+    const char source[] = "extern const int embedding_array[COUNT];\n"
+                          "#pragma cephyr project\n";
+    unsigned calls = 0;
+    const cephyr_sdk_directive directive = {{"project", 7}, {0}, interface_directive, &calls};
+    const cephyr_sdk sdk = {
+        .struct_size = sizeof(sdk), .abi_version = CEPHYR_SDK_ABI_VERSION,
+        .directives = &directive, .directive_count = 1
+    };
+    cephyr_request request = {
+        .struct_size = sizeof(request),
+        .argc = sizeof(args) / sizeof(*args), .argv = args,
+        .stdin_data = source, .stdin_size = sizeof(source) - 1, .sdk = &sdk
+    };
+    cephyr_result *result = NULL;
+    CHECK(cephyr_emit_interface(&request, &result) == CEPHYR_OK && result);
+    size_t bytes = 0;
+    const char *text = cephyr_result_output(result, &bytes);
+    CHECK(text && bytes == strlen(text) && strstr(text, "(interface") &&
+          strstr(text, "\"embedding_array\"") && !strstr(text, "COUNT"));
+    CHECK(calls == 1 && strstr(text, "\"embedding_directive\""));
+    cephyr_result_destroy(result);
+
+    const char broken[] = "int broken_array[;\n";
+    request.stdin_data = broken;
+    request.stdin_size = sizeof(broken) - 1;
+    CHECK(cephyr_emit_interface(&request, &result) == CEPHYR_COMPILE_ERROR && result);
+    CHECK(cephyr_result_output(result, &bytes) && bytes == 0);
+    CHECK(strstr(cephyr_result_diagnostics(result, NULL), "cephyr.parse"));
+    cephyr_result_destroy(result);
+    CHECK(cephyr_emit_interface(NULL, &result) == CEPHYR_INVALID_ARGUMENT && !result);
+    return 0;
+}
+
 static int test_context(void)
 {
     char define[] = "-DCEPHYR_VALUE=19";
@@ -440,6 +487,7 @@ static int test_registered_symbols(void)
 int main(void)
 {
     CHECK(test_parse_c11() == 0);
+    CHECK(test_emit_interface() == 0);
     const char *const preprocess[] = {"-E", "-P", "-x", "c", "-", "-o", "-"};
     const char *const syntax[] = {"-fsyntax-only", "-x", "c", "-"};
     const char *const sarif[] = {"-fsyntax-only", "--diagnostics-format=sarif", "-"};

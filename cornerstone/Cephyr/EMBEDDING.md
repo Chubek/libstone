@@ -258,3 +258,34 @@ formats. To compile from a result buffer, use the ordinary compile API with
 as stdin data. Contexts can use the same flags via `cephyr_context_compile`.
 The Python SDK exposes `cephyr.parse_c11` and `Compiler.parse_c11`.
 See [the format and CLI examples](docs/C11Syntax.md).
+
+## Resolved C11 declarations
+
+Call `cephyr_emit_interface(&request, &result)` with the same request and
+result types as `cephyr_compile`. Omit the stage option from `request.argv`;
+the entry point selects `--emit-interface=sexp`. By default the interface
+text is returned by `cephyr_result_output`. Check the status, read any
+diagnostics with `cephyr_result_diagnostics`, and release the result with
+`cephyr_result_destroy` as usual.
+
+```cpp
+auto result = cephyr::emit_interface({"--target=x86_64-linux-gnu", "-"},
+                                     "typedef unsigned long word;\nextern word count;\n");
+```
+
+```python
+result = compiler.emit_interface(
+    ["--target=x86_64-linux-gnu", "-"],
+    "typedef unsigned long word;\nextern word count;\n",
+)
+if not result.ok:
+    raise RuntimeError(result.diagnostics.decode("utf-8", errors="replace"))
+print(result.output.decode("utf-8"))
+```
+
+The Python convenience function `cephyr.emit_interface(...)` accepts the
+same arguments and an optional `library=` override.
+
+This operation resolves declarations for the selected C target but does not
+lower function bodies or emit machine code. For the output format, scope, and
+limits, see [C11 declaration interfaces](docs/C11Interface.md).

@@ -1,5 +1,6 @@
 #include <cephyr/lower.hpp>
 
+#include "declarations.hpp"
 #include "floating_arithmetic.hpp"
 
 #include <cephyr/preprocess.hpp>
@@ -1429,12 +1430,15 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
     }
     case cparser::NK_ENUMERAL_TYPE: {
         auto *enumeration = static_cast<cparser::EnumeralTypeASTNode *>(node);
-        if (!evaluate_enumerators(enumeration->getBody(), context))
-            return {};
         // C11 6.7.2.2p4: choose int as the compatible type. Keep identity
         // for comparisons between enumerated types, not for enumerators.
         auto type = integer_type();
         type.enum_identity = enumeration->getIdentity();
+        if (!type.enum_identity)
+            type.enum_identity = node;
+        TagObserver::notify(context.unit, node, type);
+        if (!evaluate_enumerators(enumeration->getBody(), context))
+            return {};
         return qualify_node(type);
     }
     case cparser::NK_POINTER_TYPE: {

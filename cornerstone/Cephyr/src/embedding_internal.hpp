@@ -30,7 +30,7 @@ using HostSymbols = std::map<std::string, HostSymbol>;
 int compile_units(const cephyr_request *request,
                   std::span<const std::shared_ptr<const TranslationUnit>> units,
                   const HostSymbols *symbols, cephyr_result **result,
-                  cephyr_ast_format ast_format = {});
+                  cephyr_ast_format ast_format = {}, bool emit_interface = false);
 }
 
 #endif

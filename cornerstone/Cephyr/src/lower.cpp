@@ -1,5 +1,7 @@
 #include <cephyr/lower.hpp>
 
+#include "declarations.hpp"
+
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
 #include "moonstone_analysis.hpp"
 #endif
@@ -90,9 +92,9 @@ bool valid_main(const CType &type, const Preprocessed &source)
 }
 
 Symbol *linkage_entity(Unit &unit, const std::string &name, Node *declaration, Node *name_node,
-                       const CType &type, bool internal)
+                       const CType &type, bool internal, bool native_symbols = true)
 {
-    if (!symbol_name(name, true) || name.starts_with(reserved_prefix)) {
+    if (native_symbols && (!symbol_name(name, true) || name.starts_with(reserved_prefix))) {
         unit.error(name_node, "unsupported or reserved C identifier for native output");
         return nullptr;
     }
@@ -111,10 +113,11 @@ Symbol *linkage_entity(Unit &unit, const std::string &name, Node *declaration, N
     // Keep backend tokens ASCII. This namespace is reserved above, even for
     // block-scope externs, so no spelling of a user identifier can alias it.
     const bool extended = std::any_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0x80; });
-    std::string native_name = extended ? std::string(reserved_prefix) + "unicode_" +
+    std::string native_name = !native_symbols ? name :
+        extended ? std::string(reserved_prefix) + "unicode_" +
         std::to_string(unit.symbols.size()) :
         internal ? std::string(reserved_prefix) + "local_" + name : name;
-    if (!symbol_name(native_name)) {
+    if (native_symbols && !symbol_name(native_name)) {
         unit.error(name_node, "identifier exceeds the native backend's symbol limit");
         return nullptr;
     }
@@ -136,7 +139,7 @@ bool check_function_specifiers(Unit &unit, const std::string &name, unsigned fla
 // later name must not accidentally satisfy an earlier C use.
 Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
                 unsigned flags, bool is_definition, bool has_initializer,
-                std::optional<unsigned> alignment = std::nullopt)
+                std::optional<unsigned> alignment, bool native_symbols)
 {
     const std::string name = identifier(name_node);
     const bool function = type.kind == CType::Kind::function;
@@ -151,7 +154,7 @@ Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
     auto *prior = unit.find_file_symbol(name);
     const bool inherits = !static_spec && (extern_spec || function);
     const bool internal = static_spec || (inherits && prior && prior->internal);
-    auto *entity = linkage_entity(unit, name, declaration, name_node, type, internal);
+    auto *entity = linkage_entity(unit, name, declaration, name_node, type, internal, native_symbols);
     if (!entity)
         return nullptr;
     auto &symbol = *entity;
@@ -185,6 +188,8 @@ Symbol *declare(Unit &unit, Node *declaration, Node *name_node, CType type,
     return &symbol;
 }
 
+} // namespace
+
 bool check_linkage_alignment(Unit &unit, const Symbol &symbol) {
     if (symbol.alignment_declarations.empty())
         return true;
@@ -210,6 +215,8 @@ bool check_linkage_alignment(Unit &unit, const Symbol &symbol) {
     }
     return true;
 }
+
+namespace {
 
 void write_edge(std::ostream &out, const Edge &edge, const std::vector<Id> &blocks,
                 const std::vector<Id> &values)
@@ -1004,10 +1011,11 @@ CType read_record_type(Node *node, const TypeContext &context)
     CType type;
     type.kind = CType::Kind::record;
     type.record = &layout;
+    layout.is_union = !structure;
+    TagObserver::notify(context.unit, node, type);
     if (!present(body) || layout.size || layout.defining)
         return type;
 
-    layout.is_union = !structure;
     layout.defining = true;
     struct FinishDefinition {
         RecordLayout &layout;
@@ -1863,6 +1871,172 @@ std::vector<bool> reachable_blocks(const std::vector<Block> &blocks)
     return result;
 }
 
+void resolve_file_declarations(Unit &unit, Node *root, Node *&at, const DeclarationConsumer &consumer)
+{
+    using namespace cparser;
+    const bool native_symbols = !consumer.projection;
+    const TypeContext context(unit);
+    std::set<std::string> typedef_names;
+    std::set<std::string> ordinary_function_declarations;
+    const auto declarations = elements(root);
+    // Determine C11 6.7.4's TU-wide property without making any later
+    // declaration visible to a function body or initializer.
+    for (Node *node : declarations) {
+        if (node->getKind() != NK_FUNCTION_DECL &&
+            (native_symbols || node->getKind() != NK_VAR_DECL))
+            continue;
+        auto *type = node->getKind() == NK_FUNCTION_DECL
+            ? static_cast<FunctionDeclASTNode *>(node)->getType()
+            : static_cast<VarDeclASTNode *>(node)->getType();
+        if (node->getKind() == NK_VAR_DECL && (!present(type) || type->getKind() != NK_FUNCTION_TYPE))
+            continue;
+        const auto flags = node->getFlags() |
+            (!native_symbols && present(type) ? type->getFlags() : 0);
+        if (!(flags & FS_INLINE) || (flags & SCS_EXTERN)) {
+            auto *name = node->getKind() == NK_FUNCTION_DECL
+                ? static_cast<FunctionDeclASTNode *>(node)->getName()
+                : static_cast<VarDeclASTNode *>(node)->getName();
+            ordinary_function_declarations.insert(identifier(name));
+        }
+    }
+
+    for (Node *node : declarations) {
+        at = node;
+        switch (node->getKind()) {
+        case NK_STATIC_ASSERT:
+            check_static_assert(context, node);
+            break;
+        case NK_TYPE_DECL: {
+            auto &decl = *static_cast<TypeDeclASTNode *>(node);
+            auto name = identifier(decl.getName());
+            if (!name.empty() && unit.find_file_symbol(name))
+                unit.error(decl.getName(), "typedef conflicts with '" + name + "'");
+            if (!name.empty())
+                typedef_names.insert(name);
+            if (consumer.type) {
+                auto type = read_type(decl.getBody(), context, true);
+                if (type.valid())
+                    consumer.type(node, std::move(name), std::move(type));
+            } else {
+                bind_typedef_bounds(decl.getBody(), context);
+            }
+            break;
+        }
+        case NK_FUNCTION_DECL: {
+            auto &decl = *static_cast<FunctionDeclASTNode *>(node);
+            const auto name = identifier(decl.getName());
+            if (typedef_names.contains(name)) {
+                unit.error(decl.getName(), "function name conflicts with a typedef");
+                break;
+            }
+            const bool definition = present(decl.getBody());
+            auto type = declaration_type(decl, unit);
+            const auto flags = decl.getFlags() |
+                (present(decl.getType()) ? decl.getType()->getFlags() : 0);
+            if (!check_function_specifiers(unit, name, flags, decl.getName()))
+                break;
+            auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags, definition,
+                                   false, std::nullopt, native_symbols);
+            if (!symbol)
+                break;
+            if (definition) {
+                symbol->inline_only = !symbol->internal && !ordinary_function_declarations.contains(name);
+                if (!native_symbols && unit.hosted && name == "main" &&
+                    (symbol->internal || !valid_main(symbol->type, unit.source))) {
+                    unit.error(decl.getName(), "hosted 'main' must have external linkage and type int(void) or int(int, char **)");
+                    break;
+                }
+                if (!native_symbols && symbol->type.element->kind != CType::Kind::void_ &&
+                    !size_of(*symbol->type.element)) {
+                    unit.error(decl.getName(), "function definition requires a complete return type");
+                    break;
+                }
+            }
+            if (consumer.function)
+                consumer.function(node, name, *symbol, flags);
+            break;
+        }
+        case NK_VAR_DECL: {
+            auto &decl = *static_cast<VarDeclASTNode *>(node);
+            const auto name = identifier(decl.getName());
+            if (typedef_names.contains(name)) {
+                unit.error(decl.getName(), "object name conflicts with a typedef");
+                break;
+            }
+            auto type = read_type(decl.getType(), context, true);
+            const auto flags = decl.getFlags() |
+                (present(decl.getType()) ? decl.getType()->getFlags() : 0);
+            const bool initialized = present(decl.getInit());
+            if (type.kind == CType::Kind::void_ ||
+                (type.kind == CType::Kind::function && initialized)) {
+                unit.error(decl.getName(), "invalid file-scope object type or initializer");
+                break;
+            }
+            const bool definition = type.kind != CType::Kind::function &&
+                (initialized || !(flags & SCS_EXTERN));
+            if (type.kind == CType::Kind::record && definition && !initialized &&
+                (flags & SCS_STATIC) && !size_of(type)) {
+                unit.error(decl.getName(), "internal tentative definition has incomplete structure or union type");
+                break;
+            }
+            if (type.kind == CType::Kind::array && definition && !initialized &&
+                (flags & SCS_STATIC) && !type.count) {
+                const auto *prior = unit.find_file_symbol(name);
+                if (!prior || prior->type.kind != CType::Kind::array || !prior->type.count) {
+                    unit.error(decl.getName(),
+                               "tentative definition with internal linkage has incomplete array type");
+                    break;
+                }
+            }
+            const auto requested = alignment_specifiers(decl.getAlignments(), context);
+            if (!requested ||
+                !check_object_alignment(*requested, align_of(type), decl.getName(), context))
+                break;
+            const auto alignment = present(decl.getAlignments()) ? requested : std::nullopt;
+            auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags,
+                                   definition, initialized, alignment, native_symbols);
+            // Initializers see exactly the declarations visible here. Complete
+            // `char s[] = "...";` before any later use of sizeof(s).
+            if (symbol && consumer.object && consumer.object(node, name, *symbol, flags) &&
+                definition && initialized) {
+                if (!compatible(symbol->linkage_type, symbol->type))
+                    unit.error(decl.getName(), "conflicting types for '" + name + "'");
+                else
+                    symbol->linkage_type = composite_type(symbol->linkage_type, symbol->type);
+            }
+            break;
+        }
+        case NK_STRUCT_TYPE:
+        case NK_UNION_TYPE:
+        case NK_ENUMERAL_TYPE:
+            (void)read_type(node, context, true);
+            break;
+        default:
+            unit.error(node, "unsupported file-scope C construct");
+            break;
+        }
+    }
+}
+
+bool finish_tentative_object(Unit &unit, Symbol &symbol)
+{
+    auto &type = symbol.type;
+    if (type.kind == CType::Kind::array && !type.count) {
+        if (symbol.internal) {
+            unit.error(symbol.definition, "tentative definition with internal linkage has incomplete array type",
+                       "cephyr.global.incomplete-array");
+            return false;
+        }
+        type.count = 1; // C11 6.9.2 tentative incomplete array.
+    }
+    if (!size_of(type)) {
+        unit.error(symbol.definition, "tentative definition requires a complete object type",
+                   "cephyr.global.layout");
+        return false;
+    }
+    return true;
+}
+
 } // namespace cephyr::detail
 
 namespace cephyr {
@@ -1924,84 +2098,45 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
 
     Unit unit(source, diagnostics, hosted);
     std::vector<std::string> functions;
-    std::set<std::string> typedef_names;
-    std::set<std::string> ordinary_function_declarations;
     std::size_t instruction_count = 0;
     const auto before = diagnostics.error_count();
     Node *at = root;
     try {
-        const auto declarations = elements(root);
-        // Determine C11 6.7.4's TU-wide property without making any later
-        // declaration visible to a function body or initializer.
-        for (Node *node : declarations) {
-            if (!present(node) || node->getKind() != NK_FUNCTION_DECL)
-                continue;
-            auto &decl = *static_cast<FunctionDeclASTNode *>(node);
-            if (!(decl.getFlags() & FS_INLINE) || (decl.getFlags() & SCS_EXTERN))
-                ordinary_function_declarations.insert(identifier(decl.getName()));
-        }
-        for (Node *node : declarations) {
-            at = node;
-            if (!present(node))
-                continue;
-            if (node->getKind() == NK_STATIC_ASSERT) {
-                check_static_assert(TypeContext(unit), node);
-                continue;
-            }
-            if (node->getKind() == NK_TYPE_DECL) {
-                auto &decl = *static_cast<TypeDeclASTNode *>(node);
-                const auto name = identifier(decl.getName());
-                if (!name.empty() && unit.find_file_symbol(name))
-                    unit.error(decl.getName(), "typedef conflicts with '" + name + "'");
-                if (!name.empty())
-                    typedef_names.insert(name);
-                bind_typedef_bounds(decl.getBody(), TypeContext(unit));
-                continue;
-            }
-            if (node->getKind() == NK_FUNCTION_DECL) {
+        resolve_file_declarations(unit, root, at, DeclarationConsumer{
+            false,
+            {},
+            [&](Node *node, const std::string &name, Symbol &entity, unsigned) {
                 auto &decl = *static_cast<FunctionDeclASTNode *>(node);
-                if (typedef_names.contains(identifier(decl.getName()))) {
-                    unit.error(decl.getName(), "function name conflicts with a typedef");
-                    continue;
-                }
-                const bool definition = present(decl.getBody());
-                auto type = declaration_type(decl, unit);
-                const auto flags = decl.getFlags() |
-                    (present(decl.getType()) ? decl.getType()->getFlags() : 0);
-                const auto name = identifier(decl.getName());
-                if (!check_function_specifiers(unit, name, flags, decl.getName()))
-                    continue;
-                auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags, definition, false);
-                if (!symbol || !definition)
-                    continue;
-                symbol->inline_only = !symbol->internal && !ordinary_function_declarations.contains(name);
+                if (!present(decl.getBody()))
+                    return;
+                auto *symbol = &entity;
                 if (const auto error = record_abi_error(unit.source, symbol->type); !error.empty()) {
                     unit.error(decl.getName(), error, "cephyr.abi.aggregate");
-                    continue;
+                    return;
                 }
-                  if (symbol->type.variadic && !unit.source.native_scalar_stdarg()) {
-                       unit.error(decl.getName(), "variadic definitions require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
-                     continue;
-                 }
-                 auto signature = symbol->type;
-                 // Named scalar slots have the same ABI as a fixed signature.
-                 // Do not admit aggregate slots in this variadic profile.
-                 if (signature.variadic && signature.element &&
-                     (signature.element->scalar() || signature.element->kind == CType::Kind::void_) &&
-                     std::all_of(signature.params.begin(), signature.params.end(),
-                                 [](const CType &param) { return param.scalar(); }))
-                     signature.variadic = false;
-                 if (!backend_signature(unit.source, signature)) {
+                if (symbol->type.variadic && !unit.source.native_scalar_stdarg()) {
+                    unit.error(decl.getName(), "variadic definitions require a bundled SysV AMD64, AAPCS64 or RV64IM LP64 backend");
+                    return;
+                }
+                auto signature = symbol->type;
+                // Named scalar slots have the same ABI as a fixed signature.
+                // Do not admit aggregate slots in this variadic profile.
+                if (signature.variadic && signature.element &&
+                    (signature.element->scalar() || signature.element->kind == CType::Kind::void_) &&
+                    std::all_of(signature.params.begin(), signature.params.end(),
+                                [](const CType &param) { return param.scalar(); }))
+                    signature.variadic = false;
+                if (!backend_signature(unit.source, signature)) {
                     unit.error(decl.getName(), "function signature is unsupported by the native backend");
-                    continue;
+                    return;
                 }
-                if (hosted && identifier(decl.getName()) == "main" &&
+                if (hosted && name == "main" &&
                     (symbol->internal || !valid_main(symbol->type, unit.source))) {
                     unit.error(decl.getName(), "hosted 'main' must have external linkage and type int(void) or int(int, char **)");
-                    continue;
+                    return;
                 }
                 const auto errors = diagnostics.error_count();
-                Function f(unit, *symbol, identifier(decl.getName()));
+                Function f(unit, *symbol, name);
                 lower_function_body(f, decl.getPrms(), decl.getBody());
                 if (symbol->inline_internal_reference)
                     unit.error(symbol->inline_internal_reference,
@@ -2009,7 +2144,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                 // Always use the external definition, even for same-TU calls.
                 // The inline-only body was checked but supplies no native definition.
                 if (symbol->inline_only)
-                    continue;
+                    return;
                 if (errors == diagnostics.error_count()) {
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
                     if (analysis)
@@ -2021,64 +2156,12 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
                     if (symbol->internal || pair)
                         unit.locals.push_back(name);
                 }
-                continue;
-            }
-            if (node->getKind() == NK_VAR_DECL) {
+            },
+            [&](Node *node, const std::string &, Symbol &symbol, unsigned) {
                 auto &decl = *static_cast<VarDeclASTNode *>(node);
-                if (typedef_names.contains(identifier(decl.getName()))) {
-                    unit.error(decl.getName(), "object name conflicts with a typedef");
-                    continue;
-                }
-                auto type = read_type(decl.getType(), TypeContext(unit), true);
-                const auto flags = decl.getFlags() |
-                    (present(decl.getType()) ? decl.getType()->getFlags() : 0);
-                const bool initialized = present(decl.getInit());
-                if (type.kind == CType::Kind::void_ ||
-                    (type.kind == CType::Kind::function && initialized)) {
-                    unit.error(decl.getName(), "invalid file-scope object type or initializer");
-                    continue;
-                }
-                const bool definition = type.kind != CType::Kind::function &&
-                    (initialized || !(flags & SCS_EXTERN));
-                if (type.kind == CType::Kind::record && definition && !initialized &&
-                    (flags & SCS_STATIC) && !size_of(type)) {
-                    unit.error(decl.getName(), "internal tentative definition has incomplete structure or union type");
-                    continue;
-                }
-                if (type.kind == CType::Kind::array && definition && !initialized &&
-                    (flags & SCS_STATIC) && !type.count) {
-                    const auto *prior = unit.find_file_symbol(identifier(decl.getName()));
-                    if (!prior || prior->type.kind != CType::Kind::array || !prior->type.count) {
-                        unit.error(decl.getName(),
-                                   "tentative definition with internal linkage has incomplete array type");
-                        continue;
-                    }
-                }
-                const auto requested = alignment_specifiers(decl.getAlignments(), TypeContext(unit));
-                if (!requested ||
-                    !check_object_alignment(*requested, align_of(type), decl.getName(), TypeContext(unit)))
-                    continue;
-                const auto alignment = present(decl.getAlignments()) ? requested : std::nullopt;
-                auto *symbol = declare(unit, node, decl.getName(), std::move(type), flags,
-                                       definition, initialized, alignment);
-                // Initializers see exactly the declarations visible here.
-                // This also completes `char s[] = "...";` before any later
-                // use of sizeof(s). Tentative definitions are finalized below.
-                if (symbol && definition && initialized && define_global(unit, *symbol)) {
-                    if (!compatible(symbol->linkage_type, symbol->type))
-                        unit.error(decl.getName(), "conflicting types for '" + identifier(decl.getName()) + "'");
-                    else
-                        symbol->linkage_type = composite_type(symbol->linkage_type, symbol->type);
-                }
-                continue;
-            }
-            if (node->getKind() == NK_STRUCT_TYPE || node->getKind() == NK_UNION_TYPE ||
-                node->getKind() == NK_ENUMERAL_TYPE) {
-                (void)read_type(node, TypeContext(unit), true);
-                continue;
-            }
-            unit.error(node, "unsupported file-scope C construct");
-        }
+                return !present(decl.getInit()) || define_global(unit, symbol);
+            },
+        });
 
         std::vector<std::pair<std::string, CType>> imports = unit.signatures;
         for (const auto &[name, type] : unit.soft_fp_helpers) {

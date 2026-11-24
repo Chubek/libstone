@@ -102,6 +102,14 @@ int cephyr_parse_c11(const cephyr_request *request, cephyr_ast_format format,
                      cephyr_result **result);
 
 /*
+ * Emit the resolved declaration interface of one C translation unit as an
+ * S-expression, without generating code. Use the same request and ownership
+ * rules as cephyr_compile, with one input operand (e.g. "-" for stdin_data).
+ * Output defaults to the result buffer. Equivalent to --emit-interface=sexp.
+ */
+int cephyr_emit_interface(const cephyr_request *request, cephyr_result **result);
+
+/*
  * Return a NUL-terminated buffer valid until result destruction. If size is
  * non-NULL, receive the byte count excluding the terminator. A NULL result
  * returns NULL and sets the size to zero.
@@ -125,6 +133,7 @@ typedef struct cephyr_context_options {
  * storage are borrowed only during that call, and result handling is the
  * same as in cephyr_compile. This single-source call ignores the translation
  * units and host symbols registered with the additive API below.
+ * Include --emit-interface=sexp in the fixed arguments to project declarations.
  * A context can be shared by concurrent callers under the normal compile
  * rules; destruction must not overlap its use. Destroy accepts NULL.
  */

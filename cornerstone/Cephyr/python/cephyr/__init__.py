@@ -18,7 +18,7 @@ from ._sdk import (
 
 __all__ = [
     "ABI_VERSION", "Compiler", "Diagnostic", "Hook", "HookInput", "HookResult",
-    "Result", "Severity", "Stage", "Status", "compile", "parse_c11",
+    "Result", "Severity", "Stage", "Status", "compile", "emit_interface", "parse_c11",
 ]
 
 ABI_VERSION = 1
@@ -221,6 +221,23 @@ class Compiler:
             resource_root=resource_root, archon_root=archon_root, sdk=sdk,
         )
 
+    def emit_interface(
+        self,
+        argv: Iterable[_PathArg],
+        source: str | bytes | None = None,
+        *,
+        resource_root: _PathArg | None = None,
+        archon_root: _PathArg | None = None,
+        sdk: Iterable[Hook] | None = None,
+    ) -> Result:
+        """Emit the resolved declarations of one C input as an S-expression."""
+        if isinstance(argv, (str, bytes, os.PathLike)):
+            raise TypeError("argv must be an iterable of arguments, not a string or path")
+        return self.compile(
+            chain(("--emit-interface=sexp",), argv), source,
+            resource_root=resource_root, archon_root=archon_root, sdk=sdk,
+        )
+
     def compile(
         self,
         argv: Iterable[_PathArg],
@@ -300,4 +317,19 @@ def parse_c11(
     """Parse with Cephyr, resolving and ABI-checking the library on each call."""
     return Compiler(library).parse_c11(
         argv, source, format=format, resource_root=resource_root, archon_root=archon_root, sdk=sdk
+    )
+
+
+def emit_interface(
+    argv: Iterable[_PathArg],
+    source: str | bytes | None = None,
+    *,
+    library: _PathArg | None = None,
+    resource_root: _PathArg | None = None,
+    archon_root: _PathArg | None = None,
+    sdk: Iterable[Hook] | None = None,
+) -> Result:
+    """Emit an interface with Cephyr, ABI-checking the library on each call."""
+    return Compiler(library).emit_interface(
+        argv, source, resource_root=resource_root, archon_root=archon_root, sdk=sdk
     )

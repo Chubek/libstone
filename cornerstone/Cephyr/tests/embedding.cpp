@@ -22,12 +22,13 @@ struct CallbackState {
     cephyr_sdk_output saved{};
 };
 
+constexpr std::string_view replacement_source = "extern long double cephyr_cpp_sdk;\n";
+
 uint32_t desugar(const cephyr_sdk_input *, const cephyr_sdk_output *output, void *user)
 {
     auto &state = *static_cast<CallbackState *>(user);
     state.saved = *output;
-    constexpr std::string_view source = "int cephyr_cpp_sdk;\n";
-    const cephyr_sdk_text replacement{source.data(), source.size()};
+    const cephyr_sdk_text replacement{replacement_source.data(), replacement_source.size()};
     std::thread other([&] {
         state.wrong_thread_accepted = output->set_text(output->context, replacement) != 0;
     });
@@ -71,18 +72,31 @@ int main()
     // Call a copied sink outside its callback. It must not touch expired state.
     if (state.saved.set_text(state.saved.context, {}))
         return 1;
-    // Parse-only still runs source hooks but must not invoke a MIR analysis hook.
-    const cephyr_sdk_hook ast_hooks[] = {
-        hook, {CEPHYR_SDK_ANALYZE, {"no-mir", 6}, {}, throwing_callback, nullptr}
+    // Frontend-only calls still run source hooks, but not MIR or backend hooks.
+    const cephyr_sdk_hook frontend_hooks[] = {
+        hook,
+        {CEPHYR_SDK_ANALYZE, {"no-mir", 6}, {}, throwing_callback, nullptr},
+        {CEPHYR_SDK_REWRITE, {"no-rewrite", 10}, {}, throwing_callback, nullptr},
+        {CEPHYR_SDK_ASSEMBLY, {"no-backend", 10}, {"x86_64-linux-gnu", 16}, throwing_callback, nullptr}
     };
-    const cephyr_sdk ast_sdk{sizeof(ast_sdk), CEPHYR_SDK_ABI_VERSION, ast_hooks, 2};
+    const cephyr_sdk frontend_sdk{
+        sizeof(frontend_sdk), CEPHYR_SDK_ABI_VERSION, frontend_hooks, std::size(frontend_hooks)
+    };
     auto ast = cephyr::parse_c11({"-"}, CEPHYR_AST_YAML, "must be replaced",
-                                 {nullptr, nullptr, &ast_sdk});
+                                 {nullptr, nullptr, &frontend_sdk});
     if (!ast || !ast.output().starts_with("schema_version: 1\n") ||
         ast.output().find("cephyr_cpp_sdk") == std::string_view::npos)
         return 1;
     if (!cephyr::compile({"-fsyntax-only", "-x", "c11-ast-yaml", "-"}, ast.output(), options))
         return 1; // importing must not run desugar again
+    // An assembly override must not suppress the builtin target's C model.
+    auto interface_text = cephyr::emit_interface(
+        {"--target=x86_64-linux-gnu", "-"}, "must be replaced", {nullptr, nullptr, &frontend_sdk});
+    auto expected = cephyr::emit_interface({"--target=x86_64-linux-gnu", "-"}, replacement_source);
+    if (!interface_text || !expected ||
+        interface_text.output().find("\"cephyr_cpp_sdk\"") == std::string_view::npos ||
+        interface_text.output() != expected.output())
+        return 1;
     hook.callback = throwing_callback;
     auto thrown = cephyr::compile({"-E", "-"}, "int untouched;\n", options);
     if (thrown.status() != CEPHYR_COMPILE_ERROR ||

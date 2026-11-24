@@ -46,6 +46,9 @@ private:
     friend CompileResult parse_c11(const cephyr_request &, cephyr_ast_format) noexcept;
     friend CompileResult parse_c11(const std::vector<std::string> &, cephyr_ast_format,
                                    std::string_view, CompileOptions);
+    friend CompileResult emit_interface(const cephyr_request &) noexcept;
+    friend CompileResult emit_interface(const std::vector<std::string> &, std::string_view,
+                                        CompileOptions);
 
     CompileResult(int status, cephyr_result *result) noexcept
         : status_(static_cast<cephyr_status>(status)), result_(result, cephyr_result_destroy) {}
@@ -108,6 +111,26 @@ inline CompileResult parse_c11(const std::vector<std::string> &args, cephyr_ast_
 inline CompileResult parse_c11(std::initializer_list<std::string> args, cephyr_ast_format format,
                                 std::string_view stdin_data = {}, CompileOptions options = {}) {
     return parse_c11(std::vector<std::string>(args), format, stdin_data, options);
+}
+
+inline CompileResult emit_interface(const cephyr_request &request) noexcept {
+    cephyr_result *result = nullptr;
+    const int status = cephyr_emit_interface(&request, &result);
+    return CompileResult(status, result);
+}
+
+inline CompileResult emit_interface(const std::vector<std::string> &args,
+                                    std::string_view stdin_data = {},
+                                    CompileOptions options = {}) {
+    return CompileResult::from_args(args, stdin_data, options, [](const cephyr_request &request) {
+        return emit_interface(request);
+    });
+}
+
+inline CompileResult emit_interface(std::initializer_list<std::string> args,
+                                    std::string_view stdin_data = {},
+                                    CompileOptions options = {}) {
+    return emit_interface(std::vector<std::string>(args), stdin_data, options);
 }
 
 } // namespace cephyr
