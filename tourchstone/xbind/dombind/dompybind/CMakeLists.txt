@@ -4,7 +4,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 find_package(Python 3.13 REQUIRED COMPONENTS Interpreter Development)
 file(GLOB _dompybind_q CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.q"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../domqlib/q/*.py")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../domqlib/q/*.py")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/dompybind/capi.h"
   COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate.py"
     "${CMAKE_CURRENT_BINARY_DIR}/include/dompybind/capi.h"

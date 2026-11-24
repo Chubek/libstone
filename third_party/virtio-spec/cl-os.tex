@@ -1,0 +1,2093 @@
+44eb958fbd78 & 19 Apr 2022 & Cornelia Huck & { Revert "iommu: offered -> negotiated"
+\newline
+
+
+This reverts commit 071d283887352e5353e3d212fbd672861b1e550b.
+\newline
+
+This change needs more discussion, and proper voting.
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+02105f0bf900 & 19 Apr 2022 & Michael S. Tsirkin & { packed-ring: fix some typos
+\newline
+
+
+The VIRTQ_DESC_F_INDIRECT flag is misnamed in a couple of places.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+a987975583fd & 20 Apr 2022 & Michael S. Tsirkin & { packed-ring.tex: link conformance statements
+\newline
+
+
+Link conformance statements into conformance chapter.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+81a54ad91fdb & 20 Apr 2022 & Michael S. Tsirkin & { content.tex: drop space after \textbackslash field
+\newline
+
+
+Always use \textbackslash field\{foo\} not \textbackslash field \{foo\}, the latter confuses
+latexdiff.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+7c5cbf957b1b & 20 Apr 2022 & Michael S. Tsirkin & { fixupdiff: escape caret
+\newline
+
+
+Since commit:
+\newline
+
+commit 1e30753d53d222fbe955f0643583d756105d557e
+Author: Jan Kiszka <jan.kiszka@siemens.com>\newline
+Date:   Fri Oct 11 13:43:41 2019 +0200\newline
+
+    Trying to escaping escape caret here only leaves the backslash in the output.
+\newline
+
+    Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+    Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+\newline
+
+we have plain escape caret inside listing. Escape it with textbackslash  but only
+if not already escaped (as output of diff with old source will be).
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+5da7c1414e7e & 13 Jun 2022 & Stefan Hajnoczi & { virtio-blk: document that the capacity field can change
+\newline
+
+
+Block devices can change size during operation. A configuration change
+notification is sent by the device and the driver detects that the field
+has changed. Document this behavior that has already been implemented in
+Linux and QEMU since 2011.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/136}\newline
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+ad2e1674bb69 & 13 Jun 2022 & Laura Loghin & { vsock: add documentation about len header field
+\newline
+
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/137}\newline
+
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Signed-off-by: Laura Loghin <lauralg@amazon.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+fca015771bc9 & 13 Jun 2022 & Xuan Zhuo & { virtio-net: support reset queue
+\newline
+
+
+A separate reset queue function introduced by Virtqueue Reset.
+\newline
+
+However, it is currently not defined what to do if the destination queue is
+being reset when virtio-net is steering in multi-queue mode.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/138}\newline
+
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Signed-off-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+6328f51e21b5 & 24 Jun 2022 & Yuri Benditovich & { virtio-net: define guest USO features
+\newline
+
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/120}\newline
+
+Add definition for large UDP packets device-to-driver.
+\newline
+
+Signed-off-by: Yuri Benditovich <yuri.benditovich@daynix.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+49ff7805924c & 24 Jun 2022 & Anton Yakovlev & { virtio-snd: add support for audio controls
+\newline
+
+
+This patch extends the virtio sound device specification by adding
+support for audio controls. Audio controls can be used to set the volume
+level, mute/unmute the audio signal, switch different modes/states of
+the virtual sound device, etc.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/107}\newline
+
+Signed-off-by: Anton Yakovlev <anton.yakovlev@opensynergy.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+4d9068effa81 & 11 Jul 2022 & Alvaro Karsz & { Introduction of Virtio Network device notifications coalescing feature.
+\newline
+
+
+Control a network device notifications coalescing parameters using the control virtqueue.
+A new control class was added: VIRTIO_NET_CTRL_NOTF_COAL.
+\newline
+
+This class provides 2 commands:
+\newline
+
+- VIRTIO_NET_CTRL_NOTF_COAL_TX_SET:
+  Ask the network device to change the tx_usecs and tx_max_packets parameters.
+  - tx_usecs: Maximum number of usecs to delay a TX notification.
+  - tx_max_packets: Maximum number of packets to send before a TX notification.
+\newline
+
+
+- VIRTIO_NET_CTRL_NOTF_COAL_RX_SET:
+  Ask the network device to change the rx_usecs and rx_max_packets parameters.
+  - rx_usecs: Maximum number of usecs to delay a RX notification.
+  - rx_max_packets: Maximum number of packets to receive before a RX notification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/141}\newline
+
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Signed-off-by: Alvaro Karsz <alvaro.karsz@solid-run.com>\newline
+[CH: fixed commit message]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+685a46bd33dd & 20 Jul 2022 & Cornelia Huck & { Merge branch 'virtio-1.3'
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+abbe8afda8db & 03 Aug 2022 & Lei He & { virtio-crypto: introduce akcipher service
+\newline
+
+
+Introduce akcipher (asymmetric key cipher) service type, several
+asymmetric algorithms and relevent information:
+  - RSA(padding algorithm, ASN.1 schema definition)
+  - ECDSA(ECC algorithm)
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/129}\newline
+
+Signed-off-by: zhenwei pi <pizhenwei@bytedance.com>\newline
+Signed-off-by: Lei He <helei.sig11@bytedance.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+26ed30ccb049 & 03 Aug 2022 & Stefano Garzarella & { virtio-vsock: add VIRTIO_VSOCK_F_NO_IMPLIED_STREAM feature bit
+\newline
+
+
+Initially virtio-vsock only supported the stream type, which is why
+there was no feature. Later we added the seqpacket type and in the future
+we may have other types (e.g. datagram).
+\newline
+
+seqpacket is an extension of stream, so it might be implied that if
+seqpacket is supported, stream is too, but this might not be true for
+other types.
+\newline
+
+As we discussed here [1] should be better to add a new
+VIRTIO_VSOCK_F_NO_IMPLIED_STREAM feature bit to avoid this implication.
+\newline
+
+Let's also add normative sections to better define the behavior when
+VIRTIO_VSOCK_F_NO_IMPLIED_STREAM is negotiated or not.
+\newline
+
+[1] \url{http://markmail.org/message/2s3qd74drgjxkvte}
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/142}\newline
+
+Suggested-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+a7251b0cb4d9 & 14 Nov 2022 & Hrishivarya Bhageeradhan & { content: reserve device ID 43 for Camera device
+\newline
+
+
+The virtio-camera device allows to stream a camera video with
+ability to change controls, formats and get camera captures.
+This patch is to reserve the next available device ID for
+virtio-camera.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/148}\newline
+
+Signed-off-by: Hrishivarya Bhageeradhan <hrishivarya.bhageeradhan@opensynergy.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+b4e8efa0fa6c & 05 Dec 2022 & Dmitry Fomichev & { virtio-blk: add zoned block device specification
+\newline
+
+
+Introduce support for Zoned Block Devices to virtio.
+\newline
+
+Zoned Block Devices (ZBDs) aim to achieve a better capacity, latency
+and/or cost characteristics compared to commonly available block
+devices by getting the entire LBA space of the device divided to block
+regions that are much larger than the LBA size. These regions are
+called zones and they can only be written sequentially. More details
+about ZBDs can be found at
+\newline
+
+\url{https://zonedstorage.io/docs/introduction/zoned-storage} .
+\newline
+
+In its current form, the virtio protocol for block devices (virtio-blk)
+is not aware of ZBDs but it allows the driver to successfully scan a
+host-managed drive provided by the virtio block device. As the result,
+the host-managed drive is recognized by virtio driver as a regular,
+non-zoned drive that will operate erroneously under the most common
+write workloads. Host-aware ZBDs are currently usable, but their
+performance may not be optimal because the driver can only see them as
+non-zoned block devices.
+\newline
+
+To fix this, the virtio-blk protocol needs to be extended to add the
+capabilities to convey the zone characteristics of ZBDs at the device
+side to the driver and to provide support for ZBD-specific commands -
+Report Zones, four zone operations (Open, Close, Finish and Reset) and
+(optionally) Zone Append. The proposed standard extension aims to
+define this new functionality.
+\newline
+
+This patch extends the virtio-blk section of virtio specification with
+the minimum set of requirements that are necessary to support ZBDs.
+The resulting device model is a subset of the models defined in ZAC/ZBC
+and ZNS standards documents. The included functionality mirrors
+the existing Linux kernel block layer ZBD support and should be
+sufficient to handle the host-managed and host-aware HDDs that are on
+the market today as well as ZNS SSDs that are entering the market at
+the time of submission of this patch.
+\newline
+
+I would like to thank the following people for their useful feedback
+and suggestions while working on the initial iterations of this patch.
+\newline
+
+Damien Le Moal <damien.lemoal@opensource.wdc.com>
+Matias Bjørling <Matias.Bjorling@wdc.com>
+Niklas Cassel <Niklas.Cassel@wdc.com>
+Hans Holmberg <Hans.Holmberg@wdc.com>
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/143}\newline
+
+Signed-off-by: Dmitry Fomichev <dmitry.fomichev@wdc.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Reviewed-by: Damien Le Moal <damien.lemoal@opensource.wdc.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+985bbf397db4 & 07 Dec 2022 & Xuan Zhuo & { content: reserve device ID 44 for ISM device
+\newline
+
+
+The virtio-ism device provides the ability to share memory between
+different guests on a host. A guest's memory got from ism device can be
+shared with multiple peers at the same time. This shared relationship
+can be dynamically created and released.
+\newline
+
+The shared memory obtained from the device is divided into multiple ism
+regions for share. ISM device provides a mechanism to notify other ism
+region referrers of content update events.
+\newline
+
+This patch is to reserve the next available device ID for virtio-ism.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/150}\newline
+
+Signed-off-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Jiang Liu <gerry@linux.alibaba.com>\newline
+Signed-off-by: Dust Li <dust.li@linux.alibaba.com>\newline
+Signed-off-by: Tony Lu <tonylu@linux.alibaba.com>\newline
+Signed-off-by: Helin Guo <helinguo@linux.alibaba.com>\newline
+Signed-off-by: Hans Zhang <hans@linux.alibaba.com>\newline
+Signed-off-by: He Rongguang <herongguang@linux.alibaba.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+f2b28698a28a & 30 Jan 2023 & Parav Pandit & { virtio-net: Maintain network device spec in separate directory
+\newline
+
+
+Move virtio network device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+81694cddc4c1 & 30 Jan 2023 & Parav Pandit & { virtio-net: Fix spelling errors
+\newline
+
+
+Fix two spelling errors in the virtio network device specification.
+\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+335342f5cd88 & 30 Jan 2023 & Parav Pandit & { virtio-blk: Maintain block device spec in separate directory
+\newline
+
+
+Move virtio block device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d3d06187eabb & 30 Jan 2023 & Parav Pandit & { virtio-console: Maintain console device spec in separate directory
+\newline
+
+
+Move virtio console device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c71e88e86d35 & 30 Jan 2023 & Parav Pandit & { virtio-entropy: Maintain entropy device spec in separate directory
+\newline
+
+
+Move virtio entropy device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c06f3b670dd6 & 30 Jan 2023 & Parav Pandit & { virtio-balloon: Maintain mem balloon device spec in separate directory
+\newline
+
+
+Move virtio memory balloon device specification to its own file
+similar to recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d404f1c4e886 & 30 Jan 2023 & Parav Pandit & { virtio-scsi: Maintain scsi host device spec in separate directory
+\newline
+
+
+Move virtio SCSI host device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+442bb643a9ad & 30 Jan 2023 & Parav Pandit & { virtio-gpu: Maintain gpu device spec in separate directory
+\newline
+
+
+Move virtio gpu device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c9686f241819 & 30 Jan 2023 & Parav Pandit & { virtio-input: Maintain input device spec in separate directory
+\newline
+
+
+Move virtio input device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+8463bba27c79 & 30 Jan 2023 & Parav Pandit & { virtio-crypto: Maintain crypto device spec in separate directory
+\newline
+
+
+Move virtio crypto device specification to its own file similar to
+recent virtio devices.
+While at it, place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+828754b98e3b & 30 Jan 2023 & Parav Pandit & { virtio-vsock: Maintain socket device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+8632f80e251f & 30 Jan 2023 & Parav Pandit & { virtio-fs: Maintain file system device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+b067de47a506 & 30 Jan 2023 & Parav Pandit & { virtio-rpmb: Maintain rpmb device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+b1cf73e96173 & 30 Jan 2023 & Parav Pandit & { virtio-iommu: Maintain iommu device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+6813e3cc271e & 30 Jan 2023 & Parav Pandit & { virtio-sound: Maintain sound device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+5042a5031502 & 30 Jan 2023 & Parav Pandit & { virtio-mem: Maintain memory device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+00b9935238bf & 30 Jan 2023 & Parav Pandit & { virtio-i2c: Maintain i2c device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+674489b191ab & 30 Jan 2023 & Parav Pandit & { virtio-scmi: Maintain scmi device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+6c9c04d2bf5e & 30 Jan 2023 & Parav Pandit & { virtio-gpio: Maintain gpio device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d04d253b1055 & 30 Jan 2023 & Parav Pandit & { virtio-pmem: Maintain pmem device spec in separate directory
+\newline
+
+
+Place device specification, its driver and device
+conformance into its own directory to have self contained device
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/153}\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+b1fb6b62495f & 02 Feb 2023 & Parav Pandit & { virtio-net: Clarify VLAN filter table configuration
+\newline
+
+
+The filtering behavior of the VLAN filter commands is not very clear as
+discussed in thread [1].
+\newline
+
+Hence, add the command description and device requirements for it.
+\newline
+
+[1] \url{https://lists.oasis-open.org/archives/virtio-dev/202301/msg00210.html}
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/147}\newline
+
+Suggested-by: Si-Wei Liu <si-wei.liu@oracle.com>\newline
+Reviewed-by: Si-Wei Liu <si-wei.liu@oracle.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+53b0cb13169c & 02 Feb 2023 & Parav Pandit & { virtio-net: Avoid confusing device configuration text
+\newline
+
+
+The added text in commit of Fixes tag was redundant and
+confusing in context of VLAN filtering description.
+\newline
+
+Hence remove it as discussed in [1] and [2].
+\newline
+
+[1] \url{https://lists.oasis-open.org/archives/virtio-dev/202301/msg00282.html}
+[2] \url{https://lists.oasis-open.org/archives/virtio-dev/202301/msg00286.html}
+\newline
+
+Fixes: 296303444f6b ("virtio-net: Clarify VLAN filter table configuration")\newline
+
+Suggested-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: applied as editorial change]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+3b9b6acb0936 & 09 Feb 2023 & Michael S. Tsirkin & { audio->sound
+\newline
+
+
+Spec calls the device "sound device". Make the name in the
+ID section match.
+\newline
+
+MST: applied as editorial change.\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+0ce03bc6995a & 14 Feb 2023 & Parav Pandit & { virtio-net: Avoid confusion between a card and a device
+\newline
+
+
+Historically virtio network device is documented as an Ethernet card.
+A modern card in the industry has one to multiple ports, one to multiple
+PCI functions. However the virtio network device is usually just a
+single link/port network interface controller.
+\newline
+
+Hence, avoid this confusing term 'card' and align the specification
+to adhere to widely used specification term as 'device' used for all
+virtio device types.
+\newline
+
+Replaced 'card' with 'network interface controller'.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/154}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+be2ce1ee17e0 & 15 Feb 2023 & Parav Pandit & { content.tex Fix Driver notifications label
+\newline
+
+
+Driver notifications section is under "Basic Facilities of a Virtio
+Device". However, the label is placed under "Virtqueues" section.
+\newline
+
+Fix the label references.
+\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: pushed as an editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+2ea4627093fb & 20 Feb 2023 & Alvaro Karsz & { virtio-net: Mention VIRTIO_NET_F_HASH_REPORT dependency on VIRTIO_NET_F_CTRL_VQ
+\newline
+
+
+If the VIRTIO_NET_F_HASH_REPORT feature is negotiated, the driver may
+send VIRTIO_NET_CTRL_MQ_HASH_CONFIG commands, thus, the control VQ
+feature should be negotiated.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/158}\newline
+Signed-off-by: Alvaro Karsz <alvaro.karsz@solid-run.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+73ce5bb02003 & 01 Mar 2023 & Alvaro Karsz & { virtio-net: Fix and update VIRTIO_NET_F_NOTF_COAL feature
+\newline
+
+
+This patch makes several improvements to the notification coalescing
+feature, including:
+\newline
+
+
+- Consolidating virtio_net_ctrl_coal_tx and virtio_net_ctrl_coal_rx
+  into a single struct, virtio_net_ctrl_coal, as they are identical.
+\newline
+
+- Emphasizing that the coalescing commands are best-effort.
+\newline
+
+- Defining the behavior of coalescing with regards to delivering
+  notifications when a change occur.
+\newline
+
+- Stating that the commands should apply to all the receive/transmit
+  virtqueues.
+\newline
+
+- Stating that every receive/transmit virtqueue should count it's own
+  packets.
+\newline
+
+- A new intro explaining the entire coalescing operation.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/159}\newline
+
+Signed-off-by: Alvaro Karsz <alvaro.karsz@solid-run.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+3508347769af & 01 Mar 2023 & Parav Pandit & { virtio-net: Improve introductory description
+\newline
+
+
+The control VQ of the virtio network device is used beyond advance
+steering control. The control VQ dynamically changes multiple features
+of the initialized device.
+\newline
+
+Hence, update this area of control VQ introductory description at few
+places and also place the link to its description.
+\newline
+
+Also update the introduction section to better describe receive and
+transmit virtqueues.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/156}\newline
+
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+91a469991433 & 10 Mar 2023 & Parav Pandit & { transport-pci: Split PCI transport to its own file
+\newline
+
+
+Place PCI transport specification in its own file to better maintain it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+9e88ba9c47d0 & 10 Mar 2023 & Parav Pandit & { transport-mmio: Split MMIO transport to its own file
+\newline
+
+
+Place MMIO transport specification in its own file to better maintain it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+0af264f9d4ea & 10 Mar 2023 & Parav Pandit & { transport-ccw: Split Channel IO transport to its own file
+\newline
+
+
+Place Channel IO transport specification in its own file to
+better maintain it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+deb0aa0c7faa & 10 Mar 2023 & Parav Pandit & { transport-pci: Fix spellings and white spaces
+\newline
+
+
+Now that we have individual files, fix reported spelling errors.
+\newline
+
+While at it, remove trailing white spaces.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+ca97719ea35e & 10 Mar 2023 & Parav Pandit & { transport-mmio: Fix spellings and white spaces
+\newline
+
+
+Now that we have individual files, fix reported spelling errors.
+\newline
+
+While at it, remove trailing white spaces.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+8797f4d4e410 & 10 Mar 2023 & Parav Pandit & { transport-ccw: Fix spellings and white spaces
+\newline
+
+
+Now that we have individual files, fix reported spelling errors.
+\newline
+
+While at it, remove extra white spaces.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/157}\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d3f832b6605d & 15 Mar 2023 & Parav Pandit & { virtio-net: Describe dev cfg fields read only
+\newline
+
+
+Device configuration fields are read only. Avoid duplicating this
+description for multiple fields.
+\newline
+
+Instead describe it one time and do it in the driver requirements
+section.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/161}\newline
+
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+115ceb97f813 & 15 Mar 2023 & Parav Pandit & { virtio-net: Define cfg fields before description
+\newline
+
+
+Currently some fields of the virtio_net_config structure are defined
+before introducing the structure and some are defined after.
+Better to define the configuration layout first followed by
+description of all the fields.
+\newline
+
+Device configuration fields are described in the section. Change wording
+from 'listed' to 'described' as suggested in patch [1].
+\newline
+
+[1] \url{https://lists.oasis-open.org/archives/virtio-dev/202302/msg00004.html}
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/161}\newline
+
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+2d1d8dfa3474 & 15 Mar 2023 & Parav Pandit & { virtio-net: Fix virtqueues spelling error
+\newline
+
+
+Correct spelling from virtqueus to virtqueues.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Jiri Pirko <jiri@nvidia.com>\newline
+[CH: pushed as editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+2d5495083c12 & 15 Mar 2023 & Parav Pandit & { transport-pci: Remove duplicate word structure
+\newline
+
+
+Remove duplicate word structure.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Reviewed-by: Jiri Pirko <jiri@nvidia.com>\newline
+[CH: pushed as editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+f6fe1647aab6 & 15 Mar 2023 & Michael S. Tsirkin & { makediff: make it work for fresh checkout
+\newline
+
+
+1st time one checks out our repo, latexdiff submodule
+is not initialized. Pass --init to update command
+to initialize it. It seems to be harmless if already
+initialized.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Cornelia Huck <cohuck@redhat.com>\newline
+Tested-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+b0414098602f & 15 Mar 2023 & Parav Pandit & { virtio-blk: Define dev cfg layout before its fields
+\newline
+
+
+Define device configuration layout structure before describing its
+individual fields.
+\newline
+
+This is an editorial change.
+\newline
+
+Suggested-by: Cornelia Huck <cohuck@redhat.com>\newline
+Reviewed-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+
+ } \\
+\hline
+380ed02bdb88 & 04 Apr 2023 & Parav Pandit & { transport-pci: Remove empty line at end of file
+\newline
+
+
+Remove empty line at end of file.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+
+ } \\
+\hline
+1ed0754c6134 & 11 Apr 2023 & Heng Qi & { virtio-net: support the virtqueue coalescing moderation
+\newline
+
+
+Currently, coalescing parameters are grouped for all transmit and receive
+virtqueues. This patch supports setting or getting the parameters for a
+specified virtqueue, and a typical application of this function is netdim[1].
+\newline
+
+When the traffic between virtqueues is unbalanced, for example, one virtqueue
+is busy and another virtqueue is idle, then it will be very useful to
+control coalescing parameters at the virtqueue granularity.
+\newline
+
+[1] \url{https://docs.kernel.org/networking/net_dim.html}
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/166}\newline
+
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+362ebd007271 & 11 Apr 2023 & Alvaro Karsz & { virtio-net: define the VIRTIO_NET_F_CTRL_RX_EXTRA feature bit
+\newline
+
+
+The VIRTIO_NET_F_CTRL_RX_EXTRA feature bit is mentioned in the spec
+since version 1.0, but it's not properly defined.
+\newline
+
+This patch defines the feature bit and defines the dependency on VIRTIO_NET_F_CTRL_VQ.
+\newline
+
+Since this dependency is missing in previous versions, we add it now as
+a "SHOULD".
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/162}\newline
+
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Alvaro Karsz <alvaro.karsz@solid-run.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d3b2a19bc369 & 21 Apr 2023 & Parav Pandit & { device-types/multiple: replace queues with enqueues
+\newline
+
+
+Queue is a verb and noun both. Replacing it with enqueue avoids
+ambiguity around plural queues noun vs verb; similar to virtio fs device
+description.
+\newline
+
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: pushed as editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+aadefe688680 & 19 May 2023 & Michael S. Tsirkin & { virtio: document forward compatibility guarantees
+\newline
+
+
+Feature negotiation forms the basis of forward compatibility
+guarantees of virtio but has never been properly documented.
+Do it now.
+\newline
+
+Suggested-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+f3ce853c8a91 & 19 May 2023 & Michael S. Tsirkin & { admin: introduce device group and related concepts
+\newline
+
+
+Each device group has a type. For now, define one initial group type:
+\newline
+
+SR-IOV type - PCI SR-IOV virtual functions (VFs) of a given
+PCI SR-IOV physical function (PF). This group may contain zero or more
+virtio devices according to NumVFs configured.
+\newline
+
+Each device within a group has a unique identifier. This identifier
+is the group member identifier.
+\newline
+
+Note: one can argue both ways whether the new device group handling\newline
+functionality (this and following patches) is closer
+to a new device type or a new transport type.
+\newline
+
+However, it's expected that we will add more features in the near
+future. To facilitate this as much as possible of the text is located in
+the new admin chapter.
+\newline
+
+Effort was made to minimize transport-specific text.
+\newline
+
+There's a bit of duplication with 0x1 repeated twice and
+no special section for group type identifiers.
+It seems ok to defer adding these until we have more group
+types.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+
+ } \\
+\hline
+2cbaaa19b15a & 19 May 2023 & Michael S. Tsirkin & { admin: introduce group administration commands
+\newline
+
+
+This introduces a general structure for group administration commands,
+used to control device groups through their owner.
+\newline
+
+Following patches will introduce specific commands and an interface for
+submitting these commands to the owner.
+\newline
+
+Note that the commands are focused on controlling device groups:
+this is why group related fields are in the generic part of
+the structure.
+Without this the admin vq would become a "whatever" vq which does not do
+anything specific at all, just a general transport like thing.
+I feel going this way opens the design space to the point where
+we no longer know what belongs in e.g. config space
+what in the control q and what in the admin q.
+As it is, whatever deals with groups is in the admin q; other
+things not in the admin q.
+\newline
+
+There are specific exceptions such as query but that's an exception that
+proves the rule ;)
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+5f1a8ac61c15 & 19 May 2023 & Michael S. Tsirkin & { admin: introduce virtio admin virtqueues
+\newline
+
+
+The admin virtqueues will be the first interface used to issue admin commands.
+\newline
+
+Currently the virtio specification defines control virtqueue to manipulate
+features and configuration of the device it operates on:
+virtio-net, virtio-scsi, etc all have existing control virtqueues. However,
+control virtqueue commands are device type specific, which makes it very
+difficult to extend for device agnostic commands.
+\newline
+
+Keeping the device-specific virtqueue separate from the admin virtqueue
+is simpler and has fewer potential problems. I don't think creating
+common infrastructure for device-specific control virtqueues across
+device types worthwhile or within the scope of this patch series.
+\newline
+
+To support this requirement in a more generic way, this patch introduces
+a new admin virtqueue interface.
+The admin virtqueue can be seen as the virtqueue analog to a transport.
+The admin queue thus does nothing device type-specific (net, scsi, etc)
+and instead focuses on transporting the admin commands.
+\newline
+
+We also support more than one admin virtqueue, for QoS and
+scalability requirements.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+
+ } \\
+\hline
+677aeaebf6a7 & 19 May 2023 & Michael S. Tsirkin & { pci: add admin vq registers to virtio over pci
+\newline
+
+
+Add new registers to the PCI common configuration structure.
+\newline
+
+These registers will be used for querying the indices of the admin
+virtqueues of the owner device. To configure, reset or enable the admin
+virtqueues, the driver should follow existing queue configuration/setup
+sequence.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+a9a59f70be46 & 19 May 2023 & Michael S. Tsirkin & { mmio: document ADMIN_VQ as reserved
+\newline
+
+
+Adding relevant registers needs more work and it's not
+clear what the use-case will be as currently only
+the PCI transport is supported. But let's keep the
+door open on this.
+We already say it's reserved in a central place, but it
+does not hurt to remind implementers to mask it.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+
+ } \\
+\hline
+325046c1460e & 19 May 2023 & Michael S. Tsirkin & { ccw: document ADMIN_VQ as reserved
+\newline
+
+
+Adding relevant registers needs more work and it's not
+clear what the use-case will be as currently only
+the PCI transport is supported. But let's keep the
+door open on this.
+We already say it's reserved in a central place, but it
+does not hurt to remind implementers to mask it.
+\newline
+
+Note: there are more features to add to this list.\newline
+Will be done later with a patch on top.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+3dc7196cba2d & 19 May 2023 & Michael S. Tsirkin & { admin: command list discovery
+\newline
+
+
+Add commands to find out which commands does each group support,
+as well as enable their use by driver.
+This will be especially useful once we have multiple group types.
+\newline
+
+An alternative is per-type VQs. This is possible but will
+require more per-transport work. Discovery through the vq
+helps keep things contained.
+\newline
+
+e.g. lack of support for some command can switch to a legacy mode
+\newline
+
+note that commands are expected to be avolved by adding new
+fields to command specific data at the tail, so
+we generally do not need feature bits for compatibility.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+bf1d6b0d24ae & 19 May 2023 & Michael S. Tsirkin & { admin: conformance clauses
+\newline
+
+
+Add conformance clauses for admin commands and admin virtqueues.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/171}\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+
+ } \\
+\hline
+b04be31f0bf0 & 19 May 2023 & Michael S. Tsirkin & { ccw: document more reserved features
+\newline
+
+
+vq reset and shared memory are unsupported, too.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/160}\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Reviewed-by: Zhu Lingshan <lingshan.zhu@intel.com>\newline
+
+ } \\
+\hline
+619f60ae4ccf & 19 May 2023 & Parav Pandit & { admin: Fix reference and table formation
+\newline
+
+
+This patch brings three fixes.
+\newline
+
+1. Opcode table has 3 columns, only two were enumerated. Due to this
+pdf generation script stops. Fix it and also have resizeable description
+column as it needs wrap.
+\newline
+
+2. Status description column content needs to wrap. Without it pdf
+   does not read good. Fix it by having resizeable description column.
+\newline
+
+3. Fix the broken link to the Device groups.
+\newline
+
+Fixes: 2cbaaa1 ("admin: introduce group administration commands")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c1cd68b97611 & 19 May 2023 & Parav Pandit & { transport-pci: Improve config msix vector description
+\newline
+
+
+config_msix_vector is the register that holds the MSI-X vector number
+for receiving configuration change related interrupts.
+\newline
+
+It is not "for MSI-X".
+\newline
+
+Hence, replace the confusing text with appropriate one.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/169}\newline
+Reviewed-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+0f433d62e81d & 19 May 2023 & Parav Pandit & { transport-pci: Improve queue msix vector register desc
+\newline
+
+
+queue_msix_vector register is for receiving virtqueue notification
+interrupts from the device for the virtqueue.
+\newline
+
+"for MSI-X" is confusing term.
+\newline
+
+Also it is the register that driver "writes" to, similar to
+many other registers such as queue_desc, queue_driver etc.
+\newline
+
+Hence, replace the verb from use to write.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/169}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+b0fbccd4062f & 19 May 2023 & Parav Pandit & { content: Add vq index text
+\newline
+
+
+Introduce vq index and its range so that subsequent patches can refer
+to it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+362f1cac2516 & 19 May 2023 & Parav Pandit & { content.tex Replace virtqueue number with index
+\newline
+
+
+Replace virtqueue number with index to align to rest of the
+specification.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+cc4a5604b259 & 19 May 2023 & Parav Pandit & { content: Rename confusing queue_notify_data and vqn names
+\newline
+
+
+Currently queue_notify_data register indicates the device
+internal queue notification content. This register is
+meaningful only when feature bit VIRTIO_F_NOTIF_CONFIG_DATA is
+negotiated.
+\newline
+
+However, above register name often get confusing association with
+very similar feature bit VIRTIO_F_NOTIFICATION_DATA.
+\newline
+
+When VIRTIO_F_NOTIFICATION_DATA feature bit is negotiated,
+notification really involves sending additional queue progress
+related information (not queue identifier or index).
+\newline
+
+Hence
+1. to avoid any misunderstanding and association of
+queue_notify_data with similar name VIRTIO_F_NOTIFICATION_DATA,
+\newline
+
+and
+2. to reflect that queue_notify_data is the actual device
+internal virtqueue identifier/index/data/cookie,
+\newline
+
+a. rename queue_notify_data to queue_notif_config_data.
+\newline
+
+b. rename ambiguous vqn to a union of vq_index and vq_config_data
+\newline
+
+c. The driver notification section assumes that queue notification contains
+vq index always. CONFIG_DATA feature bit introduction missed to
+update the driver notification section. Hence, correct it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Acked-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+
+ } \\
+\hline
+fbb119dad56d & 19 May 2023 & Parav Pandit & { transport-pci: Avoid first vq index reference
+\newline
+
+
+Drop reference to first virtqueue as it is already
+covered now by the generic section in first patch.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Acked-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+a7a21e451987 & 19 May 2023 & Parav Pandit & { transport-mmio: Rename QueueNum register
+\newline
+
+
+These are further named differently between pci and mmio transport.
+PCI transport indicates queue size as queue_size.
+\newline
+
+To bring consistency between pci and mmio transport,
+rename the QueueNumMax and QueueNum
+registers to QueueSizeMax and QueueSize respectively.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+Reviewed-by: Jiri Pirko <jiri@nvidia.com>\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+9ddc59553984 & 19 May 2023 & Parav Pandit & { transport-mmio: Avoid referring to zero based index
+\newline
+
+
+VQ range is already described in the first patch in basic virtqueue
+section. Hence remove the duplicate reference to it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Acked-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+e7a764f66598 & 19 May 2023 & Parav Pandit & { transport-ccw: Rename queue depth/size to other transports
+\newline
+
+
+max_num field reflects the maximum queue size/depth. Hence align name of
+this field with similar field in PCI and MMIO transport to
+max_queue_size.
+Similarly rename 'num' to 'size'.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+c3092410ac51 & 19 May 2023 & Parav Pandit & { transport-ccw: Refer to the vq by its index
+\newline
+
+
+Currently specification uses virtqueue index and
+number interchangeably to refer to the virtqueue.
+\newline
+
+Instead refer to it by its index.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+d6f310dbb3bf & 19 May 2023 & Parav Pandit & { virtio-net: Avoid duplicate receive queue example
+\newline
+
+
+Receive queue number/index example is duplicate which is already defined
+in the Setting RSS parameters section.
+\newline
+
+Hence, avoid such duplicate example and prepare it for the subsequent
+patch to describe using receive queue handle.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+da0e16928d0b & 19 May 2023 & Parav Pandit & { virtio-net: Describe RSS using rss rq id
+\newline
+
+
+The content of the indirection table and unclassified_queue were
+originally described based on mathematical operations. In order to
+make it easier to understand and to avoid intermixing the array
+index with the vq index, introduce a structure
+rss_rq_id (RSS receive queue
+ID) and use it to describe the unclassified_queue and
+indirection_table fields.
+\newline
+
+As part of it, have the example that uses non-zero virtqueue
+index which helps to have better mapping between receiveX
+object with virtqueue index and the actual value in the
+indirection table.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+f9ff777fba59 & 19 May 2023 & Parav Pandit & { virtio-net: Update vqn to vq_index for cvq cmds
+\newline
+
+
+Replace field name vqn to vq_index for recent virtqueue level commands.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/163}\newline
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+74460ef69d5f & 19 May 2023 & Parav Pandit & { transport-mmio: Replace virtual queue with virtqueue
+\newline
+
+
+Basic facilities define the virtqueue construct for device <-> driver
+communication.
+\newline
+
+PCI transport and individual devices description also refers to it as
+virtqueue.
+\newline
+
+MMIO refers to it as 'virtual queue'.
+\newline
+
+Align MMIO transport description to call such object a virtqueue.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/168}\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+92295f3cb947 & 24 May 2023 & Michael S. Tsirkin & { fix: content: Rename confusing queue_notify_data and vqn names
+\newline
+
+
+when applying the patch, I omitted adding notifications-data-le.c
+As a result, build fails.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/172}\newline
+Message-ID: <20230505014614.571520-4-parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+cc4a5604b259b3d6e18d50748423177b8eda3288
+\newline
+
+ } \\
+\hline
+6724756eaf0a & 07 Jul 2023 & Parav Pandit & { admin: Split opcode table rows with a line
+\newline
+
+
+Currently all opcode appears to be in a single row.
+Separate them with a line similar to other tables.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+[CH: pushed as editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+1518c9ce2cde & 07 Jul 2023 & Parav Pandit & { admin: Fix section numbering
+\newline
+
+
+Requirements are put one additional level down. Fix it.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+[CH: pushed as editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+9c3ba1ec6acb & 14 Jul 2023 & Heng Qi & { virtio-net: support inner header hash
+\newline
+
+
+1. Currently, a received encapsulated packet has an outer and an inner header, but
+the virtio device is unable to calculate the hash for the inner header. The same
+flow can traverse through different tunnels, resulting in the encapsulated
+packets being spread across multiple receive queues (refer to the figure below).
+However, in certain scenarios, we may need to direct these encapsulated packets of
+the same flow to a single receive queue. This facilitates the processing
+of the flow by the same CPU to improve performance (warm caches, less locking, etc.).
+\newline
+
+               client1                    client2
+                  |        +-------+         |
+                  +------->|tunnels|<--------+
+                           +-------+
+                              |  |
+                              v  v
+                      +-----------------+
+                      | monitoring host |
+                      +-----------------+
+\newline
+
+To achieve this, the device can calculate a symmetric hash based on the inner headers
+of the same flow.
+\newline
+
+2. For legacy systems, they may lack entropy fields which modern protocols have in
+the outer header, resulting in multiple flows with the same outer header but
+different inner headers being directed to the same receive queue. This results in
+poor receive performance.
+\newline
+
+To address this limitation, inner header hash can be used to enable the device to advertise
+the capability to calculate the hash for the inner packet, regaining better receive performance.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/173}\newline
+
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: added missing lstlisting and hyperref escapes, fixed references]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+73c2fd96af96 & 17 Jul 2023 & Haixu Cui & { virtio-spi: define the DEVICE ID for virtio SPI master
+\newline
+
+
+Define the DEVICE ID of virtio SPI master device as 45.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/174}\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+03c2d32e5093 & 21 Jul 2023 & Parav Pandit & { admin: Add group member legacy register access commands
+\newline
+
+
+Introduce group member legacy common configuration and legacy device
+configuration access read/write commands.
+\newline
+
+Group member legacy registers access commands enable group owner driver
+software to access legacy registers on behalf of the guest virtual
+machine.
+\newline
+
+Usecase:\newline
+========
+1. A hypervisor/system needs to provide transitional
+   virtio devices to the guest VM at scale of thousands,
+   typically, one to eight devices per VM.
+\newline
+
+2. A hypervisor/system needs to provide such devices using a
+   vendor agnostic driver in the hypervisor system.
+\newline
+
+3. A hypervisor system prefers to have single stack regardless of
+   virtio device type (net/blk) and be future compatible with a
+   single vfio stack using SR-IOV or other scalable device
+   virtualization technology to map PCI devices to the guest VM.
+   (as transitional or otherwise)
+\newline
+
+Motivation/Background:
+=====================
+The existing virtio transitional PCI device is missing support for
+PCI SR-IOV based devices. Currently it does not work beyond
+PCI PF, or as software emulated device in reality. Currently it
+has below cited system level limitations:
+\newline
+
+[a] PCIe spec citation:
+VFs do not support I/O Space and thus VF BARs shall not indicate I/O Space.
+\newline
+
+[b] cpu arch citiation:
+Intel 64 and IA-32 Architectures Software Developer’s Manual:
+The processor’s I/O address space is separate and distinct from
+the physical-memory address space. The I/O address space consists
+of 64K individually addressable 8-bit I/O ports, numbered 0 through FFFFH.
+\newline
+
+[c] PCIe spec citation:
+If a bridge implements an I/O address range,...I/O address range will be
+aligned to a 4 KB boundary.
+\newline
+
+Overview:\newline
+=========
+Above usecase requirements is solved by PCI PF group owner accessing
+its group member PCI VFs legacy registers using the administration
+commands of the group owner PCI PF.
+\newline
+
+Two types of administration commands are added which read/write PCI VF
+registers.
+\newline
+
+Software usage example:
+=======================
+\newline
+
+1. One way to use and map to the guest VM is by using vfio driver
+framework in Linux kernel.
+\newline
+
+                +----------------------+
+                |pci_dev_id = 0x100X   |
++---------------|pci_rev_id = 0x0      |-----+
+|vfio device    |BAR0 = I/O region     |     |
+|               |Other attributes      |     |
+|               +----------------------+     |
+|                                            |
++   +--------------+     +-----------------+ |
+|   |I/O BAR to AQ |     | Other vfio      | |
+|   |rd/wr mapper\& |     | functionalities | |
+|   | forwarder    |     |                 | |
+|   +--------------+     +-----------------+ |
+|                                            |
++------+-------------------------+-----------+
+       |                         |
+   Config region                 |
+     access                Driver notifications
+       |                         |
+  +----+------------+       +----+------------+
+  | +-----+         |       | PCI VF device A |
+  | | AQ  |-------------+---->+-------------+ |
+  | +-----+         |   |   | | legacy regs | |
+  | PCI PF device   |   |   | +-------------+ |
+  +-----------------+   |   +-----------------+
+                        |
+                        |   +----+------------+
+                        |   | PCI VF device N |
+                        +---->+-------------+ |
+                            | | legacy regs | |
+                            | +-------------+ |
+                            +-----------------+
+\newline
+
+2. Continue to use the virtio pci driver to bind to the
+   listed device id and use it as in the host.
+\newline
+
+3. Use it in a light weight hypervisor to run bare-metal OS.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/167}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+7fe9191b9666 & 04 Aug 2023 & Cornelia Huck & { edit: remove old changelog
+\newline
+
+
+Move it to cl-cs02-12.tex.
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+f023dfa76316 & 09 Aug 2023 & Cornelia Huck & { edit: add changelog for 1.3
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+2985fdc7676f & 25 Aug 2023 & Michael S. Tsirkin & { changelog: tweak column width
+\newline
+
+
+make description column wide and the others narrow
+likely won't work well if we change page size but oh well
+\newline
+
+[CH: tweaked the tweak]
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+6234e8719405 & 25 Aug 2023 & Michael S. Tsirkin & { changelog: formatting fixes
+\newline
+
+
+Used lstlisting for ascii art. Note: if we want to we can also
+break up large ascii art in the last half.
+Forced no index on patch subject (looked ugly to me).
+Added vspace after subject and before signature tags.
+Reformatted nested lists in one commit using itemize (did not bother with
+all of them but be my guest).
+Liberally added paragraph breaks where it seemed appropriate.
+\newline
+
+[CH: added a bunch more enumerate/itemize, except where I was not able
+to figure it out]
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+f23778dea9ed & 25 Aug 2023 & Michael S. Tsirkin & { work around extra row
+\newline
+
+
+latex seems to think we have an extra row in the table.
+could not figure out why, but at least let's make it look
+cleaner by adding cell boundaries.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c28a45d100bc & 25 Aug 2023 & Cornelia Huck & { acknowledgements: update for 1.3
+\newline
+
+
+Move some names to the section for previous versions, add names of new
+contributors, etc.
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+8e661c999085 & 25 Aug 2023 & Cornelia Huck & { editorial: update copyright date in PDF footer to 2023
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+d401d40faf81 & 25 Aug 2023 & Cornelia Huck & { change revisions: diff from v1.2, current v1.3
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+0f8579cec4c5 & 25 Aug 2023 & Cornelia Huck & { title: note that 1.3 supercedes 1.2
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+1547af778060 & 25 Aug 2023 & Cornelia Huck & { revision: update date
+\newline
+
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline

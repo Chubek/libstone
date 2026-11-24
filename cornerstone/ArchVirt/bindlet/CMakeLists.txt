@@ -9,8 +9,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 #  Dependencies
 # ═══════════════════════════════════════════════════════════════════
 
-# DomPyBind (header-only; config included once at root level)
-include("${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libstone/tourchstone/xbind/dombind/dompybind/cmake/DomPyBind.cmake")
+# DomPyBind from the enclosing Libstone source tree, also for standalone builds.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../../tourchstone/xbind/dombind/dompybind/cmake/DomPyBind.cmake")
 
 
 # Python 3 development libraries

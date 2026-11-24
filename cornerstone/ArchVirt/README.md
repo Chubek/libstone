@@ -20,8 +20,12 @@ build-riscv/archvirt --machine x86_64 --backend kvm --boot-mode bios \
 Linux dependencies: CMake 3.24+, a C++20 compiler, Make or Ninja, Perl, Python
 3.13+ development headers (and tkinter for the optional bindlet generator),
 Clang and LLD for the freestanding guest targets, SDL2, Lua 5.4, Zydis, and
-readline, plus NASM for the PC ROM. GoogleTest enables the native unit suites. ArchML, ImGui, TOML, and
-JSON sources are taken from `third_party/`; no sibling checkout is required.
+readline, plus NASM for the PC ROM. GoogleTest enables the native unit suites.
+Build from the Libstone checkout: ArchVirt uses its ArchML and DomPyBind sources
+directly, and uses ImGui, TOML, and JSON from the repository's root
+[`third_party/`](../../third_party/). The VirtIO specification is also kept there.
+If you previously built against ArchVirt's private Libstone copy, configure
+in a fresh build directory so CMake does not reuse the old dependency paths.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

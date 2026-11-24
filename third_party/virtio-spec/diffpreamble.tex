@@ -1,0 +1,48 @@
+%% diffpreable.tex start
+% latexdiff tends to leave empty itemize/enumerate lists around
+% instead of deleting lists.
+% this makes latex stop with an error:
+%    Something's wrong--perhaps a missing \item
+% suppress the error.
+\makeatletter
+\let\@noitemerr\relax
+\makeatother
+
+%DIF FONTSTRIKE PREAMBLE
+\RequirePackage[normalem]{ulem}
+\definecolor{darkgreen}{RGB}{00,153,00}
+\definecolor{neongreen}{RGB}{0,128,60}
+
+\providecommand{\DIFadd}[1]{\protect\textcolor{darkgreen}{\sf #1}}
+\providecommand{\DIFdel}[1]{\protect\textcolor{red}{\footnotesize \sout{#1}}}
+%DIF END FONTSTRIKE PREAMBLE
+
+%DIF COLOR PREAMBLE
+\RequirePackage{color}
+\providecommand{\DIFaddbegin}{}
+\providecommand{\DIFaddend}{}
+\providecommand{\DIFdelbegin}{}
+\providecommand{\DIFdelend}{}
+
+%DIF END COLOR PREAMBLE
+\providecommand{\DIFaddtext}[1]{\textcolor{darkgreen}{\sf #1}}
+\providecommand{\DIFdeltext}[1]{\textcolor{red}{\footnotesize \sout{#1}}}
+
+%DIF FLOATSAFE PREAMBLE: SEEMS UNUSED BUT JUST IN CASE
+\providecommand{\DIFaddFL}[1]{\DIFaddtex{#1}}
+\providecommand{\DIFdelFL}[1]{\DIFdeltex{#1}}
+\providecommand{\DIFaddbeginFL}{}
+\providecommand{\DIFaddendFL}{}
+\providecommand{\DIFdelbeginFL}{}
+\providecommand{\DIFdelendFL}{}
+\renewenvironment{DIFnomarkup}
+{
+}
+{
+}
+%DIF END FLOATSAFE PREAMBLE
+
+\providecommand{\DIFmodbegin}{}
+\providecommand{\DIFmodend}{}
+
+%% diffpreable.tex end

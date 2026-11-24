@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parent
-qlib = root.parents[1] / "domqlib"
+qlib = root.parent / "domqlib"
 sys.path.insert(0, str(qlib))
 from q import QCompiler
 

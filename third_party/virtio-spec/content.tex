@@ -1,0 +1,1044 @@
+\chapter{Basic Facilities of a Virtio Device}\label{sec:Basic Facilities of a Virtio Device}
+
+A virtio device is discovered and identified by a bus-specific method
+(see the bus specific sections: \ref{sec:Virtio Transport Options / Virtio Over PCI Bus}~\nameref{sec:Virtio Transport Options / Virtio Over PCI Bus},
+\ref{sec:Virtio Transport Options / Virtio Over MMIO}~\nameref{sec:Virtio Transport Options / Virtio Over MMIO} and \ref{sec:Virtio Transport Options / Virtio Over Channel I/O}~\nameref{sec:Virtio Transport Options / Virtio Over Channel I/O}).  Each
+device consists of the following parts:
+
+\begin{itemize}
+\item Device status field
+\item Feature bits
+\item Notifications
+\item Device Configuration space
+\item One or more virtqueues
+\end{itemize}
+
+\section{\field{Device Status} Field}\label{sec:Basic Facilities of a Virtio Device / Device Status Field}
+During device initialization by a driver,
+the driver follows the sequence of steps specified in
+\ref{sec:General Initialization And Device Operation / Device
+Initialization}.
+
+The \field{device status} field provides a simple low-level
+indication of the completed steps of this sequence.
+It's most useful to imagine it hooked up to traffic
+lights on the console indicating the status of each device.  The
+following bits are defined (listed below in the order in which
+they would be typically set):
+\begin{description}
+\item[ACKNOWLEDGE (1)] Indicates that the guest OS has found the
+  device and recognized it as a valid virtio device.
+
+\item[DRIVER (2)] Indicates that the guest OS knows how to drive the
+  device.
+  \begin{note}
+    There could be a significant (or infinite) delay before setting
+    this bit.  For example, under Linux, drivers can be loadable modules.
+  \end{note}
+
+\item[DRIVER_OK (4)] Indicates that the driver is set up and ready to
+  drive the device.
+
+\item[FEATURES_OK (8)] Indicates that the driver has acknowledged all the
+  features it understands, and feature negotiation is complete.
+
+\item[SUSPEND (16)] When VIRTIO_F_SUSPEND is negotiated, indicates that the
+  device has been suspended by the driver.
+
+\item[DEVICE_NEEDS_RESET (64)] Indicates that the device has experienced
+  an error from which it can't recover.
+
+\item[FAILED (128)] Indicates that something went wrong in the guest,
+  and it has given up on the device. This could be an internal
+  error, or the driver didn't like the device for some reason, or
+  even a fatal error during device operation.
+\end{description}
+
+The \field{device status} field starts out as 0, and is reinitialized to 0 by
+the device during reset.
+
+\drivernormative{\subsection}{Device Status Field}{Basic Facilities of a Virtio Device / Device Status Field}
+The driver MUST update \field{device status},
+setting bits to indicate the completed steps of the driver
+initialization sequence specified in
+\ref{sec:General Initialization And Device Operation / Device
+Initialization}.
+The driver MUST NOT clear a
+\field{device status} bit.  If the driver sets the FAILED bit,
+the driver MUST later reset the device before attempting to re-initialize.
+
+The driver SHOULD NOT rely on completion of operations of a
+device if DEVICE_NEEDS_RESET is set.
+\begin{note}
+For example, the driver can't assume requests in flight will be
+completed if DEVICE_NEEDS_RESET is set, nor can it assume that
+they have not been completed.  A good implementation will try to
+recover by issuing a reset.
+\end{note}
+
+\devicenormative{\subsection}{Device Status Field}{Basic Facilities of a Virtio Device / Device Status Field}
+
+The device MUST NOT consume buffers or send any used buffer
+notifications to the driver before DRIVER_OK.
+
+\label{sec:Basic Facilities of a Virtio Device / Device Status Field / DEVICENEEDSRESET}The device SHOULD set DEVICE_NEEDS_RESET when it enters an error state
+that a reset is needed.  If DRIVER_OK is set, after it sets DEVICE_NEEDS_RESET, the device
+MUST send a device configuration change notification to the driver.
+
+\section{Feature Bits}\label{sec:Basic Facilities of a Virtio Device / Feature Bits}
+
+Each virtio device offers all the features it understands.  During
+device initialization, the driver reads this and tells the device the
+subset that it accepts.  The only way to renegotiate is to reset
+the device.
+
+This allows for forwards and backwards compatibility: if the device is
+enhanced with a new feature bit, older drivers will not write that
+feature bit back to the device.  Similarly, if a driver is enhanced with a feature
+that the device doesn't support, it see the new feature is not offered.
+
+Feature bits are allocated as follows:
+
+\begin{description}
+\item[0 to 23, 41, 42 and 50 to 127] Feature bits for the specific device type
+
+\item[24 to 40, and 43] Feature bits reserved for extensions to the queue and
+  feature negotiation mechanisms, see \ref{sec:Reserved Feature Bits}
+
+\item[44 to 49, and 128 and above] Feature bits reserved for future extensions.
+\end{description}
+
+\begin{note}
+For example, feature bit 0 for a network device (i.e.
+Device ID 1) indicates that the device supports checksumming of
+packets.
+\end{note}
+
+In particular, new fields in the device configuration space are
+indicated by offering a new feature bit.
+
+To keep the feature negotiation mechanism extensible, it is
+important that devices \em{do not} offer any feature bits that
+they would not be able to handle if the driver accepted them
+(even though drivers are not supposed to accept any unspecified,
+reserved, or unsupported features even if offered, according to
+the specification.) Likewise, it is important that drivers \em{do
+not} accept feature bits they do not know how to handle (even
+though devices are not supposed to offer any unspecified,
+reserved, or unsupported features in the first place,
+according to the specification.) The preferred
+way for handling reserved and unexpected features is that the
+driver ignores them.
+
+In particular, this is
+especially important for features limited to specific transports,
+as enabling these for more transports in future versions of the
+specification is highly likely to require changing the behaviour
+from drivers and devices.  Drivers and devices supporting
+multiple transports need to carefully maintain per-transport
+lists of allowed features.
+
+\drivernormative{\subsection}{Feature Bits}{Basic Facilities of a Virtio Device / Feature Bits}
+The driver MUST NOT accept a feature which the device did not offer,
+and MUST NOT accept a feature which requires another feature which was
+not accepted.
+
+The driver MUST validate the feature bits offered by the device.
+The driver MUST ignore and MUST NOT accept any feature bit that is
+\begin{itemize}
+\item not described in this specification,
+\item marked as reserved,
+\item not supported for the specific transport,
+\item not defined for the device type.
+\end{itemize}
+
+The driver SHOULD go into backwards compatibility mode
+if the device does not offer a feature it understands, otherwise MUST
+set the FAILED \field{device status} bit and cease initialization.
+
+By contrast, the driver MUST NOT fail solely because a feature
+it does not understand has been offered by the device.
+
+\devicenormative{\subsection}{Feature Bits}{Basic Facilities of a Virtio Device / Feature Bits}
+The device MUST NOT offer a feature which requires another feature
+which was not offered.  The device SHOULD accept any valid subset
+of features the driver accepts, otherwise it MUST fail to set the
+FEATURES_OK \field{device status} bit when the driver writes it.
+
+The device MUST NOT offer feature bits corresponding to features
+it would not support if accepted by the driver (even if the
+driver is prohibited from accepting the feature bits by the
+specification); for the sake of clarity, this refers to feature
+bits not described in this specification, reserved feature bits
+and feature bits reserved or not supported for the specific
+transport or the specific device type, but this does not preclude
+devices written to a future version of this specification from
+offering such feature bits should such a specification have a
+provision for devices to support the corresponding features.
+
+If a device has successfully negotiated a set of features
+at least once (by accepting the FEATURES_OK \field{device
+status} bit during device initialization), then it SHOULD
+NOT fail re-negotiation of the same set of features after
+a device or system reset.  Failure to do so would interfere
+with resuming from suspend and error recovery.
+
+\subsection{Legacy Interface: A Note on Feature
+Bits}\label{sec:Basic Facilities of a Virtio Device / Feature
+Bits / Legacy Interface: A Note on Feature Bits}
+
+Transitional Drivers MUST detect Legacy Devices by detecting that
+the feature bit VIRTIO_F_VERSION_1 is not offered.
+Transitional devices MUST detect Legacy drivers by detecting that
+VIRTIO_F_VERSION_1 has not been acknowledged by the driver.
+
+In this case device is used through the legacy interface.
+
+Legacy interface support is OPTIONAL.
+Thus, both transitional and non-transitional devices and
+drivers are compliant with this specification.
+
+Requirements pertaining to transitional devices and drivers
+is contained in sections named 'Legacy Interface' like this one.
+
+When device is used through the legacy interface, transitional
+devices and transitional drivers MUST operate according to the
+requirements documented within these legacy interface sections.
+Specification text within these sections generally does not apply
+to non-transitional devices.
+
+\section{Notifications}\label{sec:Basic Facilities of a Virtio Device
+/ Notifications}
+
+The notion of sending a notification (driver to device or device
+to driver) plays an important role in this specification. The
+modus operandi of the notifications is transport specific.
+
+There are three types of notifications: 
+\begin{itemize}
+\item configuration change notification
+\item available buffer notification
+\item used buffer notification. 
+\end{itemize}
+
+Configuration change notifications and used buffer notifications are sent
+by the device, the recipient is the driver. A configuration change
+notification indicates that the device configuration space has changed; a
+used buffer notification indicates that a buffer may have been made used
+on the virtqueue designated by the notification.
+
+Available buffer notifications are sent by the driver, the recipient is
+the device. This type of notification indicates that a buffer may have
+been made available on the virtqueue designated by the notification.
+
+The semantics, the transport-specific implementations, and other
+important aspects of the different notifications are specified in detail
+in the following chapters.
+
+Most transports implement notifications sent by the device to the
+driver using interrupts. Therefore, in previous versions of this
+specification, these notifications were often called interrupts.
+Some names defined in this specification still retain this interrupt
+terminology. Occasionally, the term event is used to refer to
+a notification or a receipt of a notification.
+
+\section{Device Reset}\label{sec:Basic Facilities of a Virtio Device / Device Reset}
+
+The driver may want to initiate a device reset at various times; notably,
+it is required to do so during device initialization and device cleanup.
+
+The mechanism used by the driver to initiate the reset is transport specific.
+
+\devicenormative{\subsection}{Device Reset}{Basic Facilities of a Virtio Device / Device Reset}
+
+A device MUST reinitialize \field{device status} to 0 after receiving a reset.
+
+A device MUST NOT send notifications or interact with the queues after
+indicating completion of the reset by reinitializing \field{device status}
+to 0, until the driver re-initializes the device.
+
+\drivernormative{\subsection}{Device Reset}{Basic Facilities of a Virtio Device / Device Reset}
+
+The driver SHOULD consider a driver-initiated reset complete when it
+reads \field{device status} as 0.
+
+\section{Device Configuration Space}\label{sec:Basic Facilities of a Virtio Device / Device Configuration Space}
+
+Device configuration space is generally used for rarely-changing or
+initialization-time parameters.  Where configuration fields are
+optional, their existence is indicated by feature bits: Future
+versions of this specification will likely extend the device
+configuration space by adding extra fields at the tail.
+
+\begin{note}
+The device configuration space uses the little-endian format
+for multi-byte fields.
+\end{note}
+
+Each transport also provides a generation count for the device configuration
+space, which will change whenever there is a possibility that two
+accesses to the device configuration space can see different versions of that
+space.
+
+\drivernormative{\subsection}{Device Configuration Space}{Basic Facilities of a Virtio Device / Device Configuration Space}
+Drivers MUST NOT assume reads from
+fields greater than 32 bits wide are atomic, nor are reads from
+multiple fields: drivers SHOULD read device configuration space fields like so:
+
+\begin{lstlisting}
+u32 before, after;
+do {
+        before = get_config_generation(device);
+        // read config entry/entries.
+        after = get_config_generation(device);
+} while (after != before);
+\end{lstlisting}
+
+For optional configuration space fields, the driver MUST check that the
+corresponding feature is offered before accessing that part of the configuration
+space.
+\begin{note}
+See section \ref{sec:General Initialization And Device Operation / Device Initialization} for details on feature negotiation.
+\end{note}
+
+Drivers MUST
+NOT limit structure size and device configuration space size.  Instead,
+drivers SHOULD only check that device configuration space is {\em large enough} to
+contain the fields necessary for device operation.
+
+\begin{note}
+For example, if the specification states that device configuration
+space 'includes a single 8-bit field' drivers should understand this to mean that
+the device configuration space might also include an arbitrary amount of
+tail padding, and accept any device configuration space size equal to or
+greater than the specified 8-bit size.
+\end{note}
+
+\devicenormative{\subsection}{Device Configuration Space}{Basic Facilities of a Virtio Device / Device Configuration Space}
+The device MUST allow reading of any device-specific configuration
+field before FEATURES_OK is set by the driver.  This includes fields which are
+conditional on feature bits, as long as those feature bits are offered
+by the device.
+
+\subsection{Legacy Interface: A Note on Device Configuration Space endian-ness}\label{sec:Basic Facilities of a Virtio Device / Device Configuration Space / Legacy Interface: A Note on Configuration Space endian-ness}
+
+Note that for legacy interfaces, device configuration space is generally the
+guest's native endian, rather than PCI's little-endian.
+The correct endian-ness is documented for each device.
+
+\subsection{Legacy Interface: Device Configuration Space}\label{sec:Basic Facilities of a Virtio Device / Device Configuration Space / Legacy Interface: Device Configuration Space}
+
+Legacy devices did not have a configuration generation field, thus are
+susceptible to race conditions if configuration is updated.  This
+affects the block \field{capacity} (see \ref{sec:Device Types /
+Block Device / Device configuration layout}) and
+network \field{mac} (see \ref{sec:Device Types / Network Device /
+Device configuration layout}) fields;
+when using the legacy interface, drivers SHOULD
+read these fields multiple times until two reads generate a consistent
+result.
+
+\section{Virtqueues}\label{sec:Basic Facilities of a Virtio Device / Virtqueues}
+
+The mechanism for bulk data transport on virtio devices is
+pretentiously called a virtqueue. Each device can have zero or more
+virtqueues\footnote{For example, the simplest network device has one virtqueue for
+transmit and one for receive.}.
+
+A virtio device can have maximum of 65536 virtqueues. Each virtqueue is
+identified by a virtqueue index. A virtqueue index has a value in the
+range of 0 to 65535.
+
+Driver makes requests available to device by adding
+an available buffer to the queue, i.e., adding a buffer
+describing the request to a virtqueue, and optionally triggering
+a driver event, i.e., sending an available buffer notification
+to the device.
+
+Device executes the requests and - when complete - adds
+a used buffer to the queue, i.e., lets the driver
+know by marking the buffer as used. Device can then trigger
+a device event, i.e., send a used buffer notification to the driver.
+
+Device reports the number of bytes it has written to memory for
+each buffer it uses. This is referred to as ``used length''.
+
+Device is not generally required to use buffers in
+the same order in which they have been made available
+by the driver.
+
+Some devices always use descriptors in the same order in which
+they have been made available. These devices can offer the
+VIRTIO_F_IN_ORDER feature. If negotiated, this knowledge
+might allow optimizations or simplify driver and/or device code.
+
+Each virtqueue can consist of up to 3 parts:
+\begin{itemize}
+\item Descriptor Area - used for describing buffers
+\item Driver Area - extra data supplied by driver to the device
+\item Device Area - extra data supplied by device to driver
+\end{itemize}
+
+\begin{note}
+Note that previous versions of this spec used different names for
+these parts (following \ref{sec:Basic Facilities of a Virtio Device / Split Virtqueues}):
+\begin{itemize}
+\item Descriptor Table - for the Descriptor Area
+\item Available Ring - for the Driver Area
+\item Used Ring - for the Device Area
+\end{itemize}
+
+\end{note}
+
+Two formats are supported: Split Virtqueues (see \ref{sec:Basic
+Facilities of a Virtio Device / Split
+Virtqueues}~\nameref{sec:Basic Facilities of a Virtio Device /
+Split Virtqueues}) and Packed Virtqueues (see \ref{sec:Basic
+Facilities of a Virtio Device / Packed
+Virtqueues}~\nameref{sec:Basic Facilities of a Virtio Device /
+Packed Virtqueues}).
+
+Every driver and device supports either the Packed or the Split
+Virtqueue format, or both.
+
+\subsection{Virtqueue Reset}\label{sec:Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset}
+
+When VIRTIO_F_RING_RESET is negotiated, the driver can reset a virtqueue
+individually. The way to reset the virtqueue is transport specific.
+
+Virtqueue reset is divided into two parts. The driver first resets a queue and
+can afterwards optionally re-enable it.
+
+\subsubsection{Virtqueue Reset}\label{sec:Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Reset}
+
+\devicenormative{\paragraph}{Virtqueue Reset}{Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Reset}
+
+After a queue has been reset by the driver, the device MUST NOT execute
+any requests from that virtqueue, or notify the driver for it.
+
+The device MUST reset any state of a virtqueue to the default state,
+including the available state and the used state.
+
+\drivernormative{\paragraph}{Virtqueue Reset}{Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Reset}
+
+After the driver tells the device to reset a queue, the driver MUST verify that
+the queue has actually been reset.
+
+After the queue has been successfully reset, the driver MAY release any
+resource associated with that virtqueue.
+
+\subsubsection{Virtqueue Re-enable}\label{sec:Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Re-enable}
+
+This process is the same as the initialization process of a single queue during
+the initialization of the entire device.
+
+\devicenormative{\paragraph}{Virtqueue Re-enable}{Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Re-enable}
+
+The device MUST observe any queue configuration that may have been
+changed by the driver, like the maximum queue size.
+
+\drivernormative{\paragraph}{Virtqueue Re-enable}{Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset / Virtqueue Re-enable}
+
+When re-enabling a queue, the driver MUST configure the queue resources
+as during initial virtqueue discovery, but optionally with different
+parameters.
+
+\input{split-ring.tex}
+
+\input{packed-ring.tex}
+
+\section{Driver Notifications} \label{sec:Basic Facilities of a Virtio Device / Driver notifications}
+The driver is sometimes required to send an available buffer
+notification to the device.
+
+When VIRTIO_F_NOTIFICATION_DATA has not been negotiated,
+this notification contains either a virtqueue index if
+VIRTIO_F_NOTIF_CONFIG_DATA is not negotiated or device supplied virtqueue
+notification config data if VIRTIO_F_NOTIF_CONFIG_DATA is negotiated.
+
+The notification method and supplying any such virtqueue notification config data
+is transport specific.
+
+However, some devices benefit from the ability to find out the
+amount of available data in the queue without accessing the virtqueue in memory:
+for efficiency or as a debugging aid.
+
+To help with these optimizations, when VIRTIO_F_NOTIFICATION_DATA
+has been negotiated, driver notifications to the device include
+the following information:
+
+\begin{description}
+\item [vq_index or vq_notif_config_data] Either virtqueue index or device
+      supplied queue notification config data corresponding to a virtqueue.
+\item [next_off] Offset
+      within the ring where the next available ring entry
+      will be written.
+      When VIRTIO_F_RING_PACKED has not been negotiated this refers to the
+      15 least significant bits of the available index.
+      When VIRTIO_F_RING_PACKED has been negotiated this refers to the offset
+      (in units of descriptor entries)
+      within the descriptor ring where the next available
+      descriptor will be written.
+\item [next_wrap] Wrap Counter.
+      With VIRTIO_F_RING_PACKED this is the wrap counter
+      referring to the next available descriptor.
+      Without VIRTIO_F_RING_PACKED this is the most significant bit
+      (bit 15) of the available index.
+\end{description}
+
+Note that the driver can send multiple notifications even without
+making any more buffers available. When VIRTIO_F_NOTIFICATION_DATA
+has been negotiated, these notifications would then have
+identical \field{next_off} and \field{next_wrap} values.
+
+\input{shared-mem.tex}
+
+\section{Exporting Objects}\label{sec:Basic Facilities of a Virtio Device / Exporting Objects}
+
+When an object created by one virtio device needs to be
+shared with a separate virtio device, the first device can
+export the object by generating a UUID which can then
+be passed to the second device to identify the object.
+
+What constitutes an object, how to export objects, and
+how to import objects are defined by the individual device
+types. It is RECOMMENDED that devices generate version 4
+UUIDs as specified by \hyperref[intro:rfc4122]{[RFC4122]}.
+
+\input{admin.tex}
+\input{device-parts.tex}
+
+\chapter{General Initialization And Device Operation}\label{sec:General Initialization And Device Operation}
+
+We start with an overview of device initialization, then expand on the
+details of the device and how each step is performed.  This section
+is best read along with the bus-specific section which describes
+how to communicate with the specific device.
+
+\section{Device Initialization}\label{sec:General Initialization And Device Operation / Device Initialization}
+
+\drivernormative{\subsection}{Device Initialization}{General Initialization And Device Operation / Device Initialization}
+The driver MUST follow this sequence to initialize a device:
+
+\begin{enumerate}
+\item Reset the device.
+
+\item Set the ACKNOWLEDGE status bit: the guest OS has noticed the device.
+
+\item Set the DRIVER status bit: the guest OS knows how to drive the device.
+
+\item\label{itm:General Initialization And Device Operation /
+Device Initialization / Read feature bits} Read device feature bits, and write the subset of feature bits
+   understood by the OS and driver to the device.  During this step the
+   driver MAY read (but MUST NOT write) the device-specific configuration fields to check that it can support the device before accepting it.
+
+\item\label{itm:General Initialization And Device Operation / Device Initialization / Set FEATURES-OK} Set the FEATURES_OK status bit.  The driver MUST NOT accept
+   new feature bits after this step.
+
+\item\label{itm:General Initialization And Device Operation / Device Initialization / Re-read FEATURES-OK} Re-read \field{device status} to ensure the FEATURES_OK bit is still
+   set: otherwise, the device does not support our subset of features
+   and the device is unusable.
+
+\item\label{itm:General Initialization And Device Operation / Device Initialization / Device-specific Setup} Perform device-specific setup, including discovery of virtqueues for the
+   device, optional per-bus setup, reading and possibly writing the
+   device's virtio configuration space, and population of virtqueues.
+
+\item\label{itm:General Initialization And Device Operation / Device Initialization / Set DRIVER-OK} Set the DRIVER_OK status bit.  At this point the device is
+   ``live''.
+\end{enumerate}
+
+If any of these steps go irrecoverably wrong, the driver SHOULD
+set the FAILED status bit to indicate that it has given up on the
+device (it can reset the device later to restart if desired).  The
+driver MUST NOT continue initialization in that case.
+
+The driver MUST NOT send any buffer available notifications to
+the device before setting DRIVER_OK.
+
+\subsection{Legacy Interface: Device Initialization}\label{sec:General Initialization And Device Operation / Device Initialization / Legacy Interface: Device Initialization}
+Legacy devices did not support the FEATURES_OK status bit, and thus did
+not have a graceful way for the device to indicate unsupported feature
+combinations.  They also did not provide a clear mechanism to end
+feature negotiation, which meant that devices finalized features on
+first-use, and no features could be introduced which radically changed
+the initial operation of the device.
+
+Legacy driver implementations often used the device before setting the
+DRIVER_OK bit, and sometimes even before writing the feature bits
+to the device.
+
+The result was the steps \ref{itm:General Initialization And
+Device Operation / Device Initialization / Set FEATURES-OK} and
+\ref{itm:General Initialization And Device Operation / Device
+Initialization / Re-read FEATURES-OK} were omitted, and steps
+\ref{itm:General Initialization And Device Operation /
+Device Initialization / Read feature bits},
+\ref{itm:General Initialization And Device Operation / Device Initialization / Device-specific Setup} and \ref{itm:General Initialization And Device Operation / Device Initialization / Set DRIVER-OK}
+were conflated.
+
+Therefore, when using the legacy interface:
+\begin{itemize}
+\item
+The transitional driver MUST execute the initialization
+sequence as described in \ref{sec:General Initialization And Device
+Operation / Device Initialization}
+but omitting the steps \ref{itm:General Initialization And Device
+Operation / Device Initialization / Set FEATURES-OK} and
+\ref{itm:General Initialization And Device Operation / Device
+Initialization / Re-read FEATURES-OK}.
+
+\item
+The transitional device MUST support the driver
+writing device configuration fields
+before the step \ref{itm:General Initialization And Device Operation /
+Device Initialization / Read feature bits}.
+\item
+The transitional device MUST support the driver
+using the device before the step \ref{itm:General Initialization
+And Device Operation / Device Initialization / Set DRIVER-OK}.
+\end{itemize}
+
+\section{Device Operation}\label{sec:General Initialization And Device Operation / Device Operation}
+
+When operating the device, each field in the device configuration
+space can be changed by either the driver or the device.
+
+Whenever such a configuration change is triggered by the device,
+driver is notified. This makes it possible for drivers to
+cache device configuration, avoiding expensive configuration
+reads unless notified.
+
+
+\subsection{Notification of Device Configuration Changes}\label{sec:General Initialization And Device Operation / Device Operation / Notification of Device Configuration Changes}
+
+For devices where the device-specific configuration information can be
+changed, a configuration change notification is sent when a
+device-specific configuration change occurs.
+
+In addition, this notification is triggered by the device setting
+DEVICE_NEEDS_RESET (see \ref{sec:Basic Facilities of a Virtio Device / Device Status Field / DEVICENEEDSRESET}).
+
+\section{Device Cleanup}\label{sec:General Initialization And Device Operation / Device Cleanup}
+
+Once the driver has set the DRIVER_OK status bit, all the configured
+virtqueue of the device are considered live.  None of the virtqueues
+of a device are live once the device has been reset.
+
+\drivernormative{\subsection}{Device Cleanup}{General Initialization And Device Operation / Device Cleanup}
+
+A driver MUST NOT alter virtqueue entries for exposed buffers,
+i.e., buffers which have been
+made available to the device (and not been used by the device)
+of a live virtqueue.
+
+Thus a driver MUST ensure a virtqueue isn't live (by device reset) before removing exposed buffers.
+
+\section{Device Suspend}\label{sec:General Initialization And Device Operation / Device Suspend}
+
+If VIRTIO_F_SUSPEND is negotiated, the driver is eligible to suspend the device by setting the SUSPEND bit in \field{device status} to 1, and the device sets the DRIVER_OK bit to 0 once it has been suspended.
+
+If the device has been suspended, the driver can resume the device running by setting the DRIVER_OK bit in \field{device status} to 1, and the device sets the SUSPEND bit to 0 once it resumes running.
+
+\drivernormative{\subsection}{Device Suspend}{General Initialization And Device Operation / Device Suspend}
+
+The driver SHOULD NOT set SUSPEND bit if DRIVER_OK is not set or VIRTIO_F_SUSPEND is not negotiated.
+
+Once the driver sets SUSPEND bit in \field{device status} to 1:
+\begin{itemize}
+\item The driver MUST verify whether the device has been suspended by re-reading \field{device status}, examining whether the SUSPEND bit is set to 1 and the DRIVER_OK bit is set to 0.
+\item The driver MUST NOT make any more buffers available to the device.
+\item The driver MUST NOT send notifications for any virtqueues.
+\item The driver MUST NOT make any changes to Device Configuration Space except for \field{device status} if it is part of the Configuration Space.
+\end{itemize}
+
+When the device has been suspended, once the driver sets DRIVER_OK bit in \field{device status} to 1,
+the driver MUST wait for the SUSPEND bit in \field{device status} to turn 0 and the DRIVER_OK bit in \field{device_status} to turn 1
+before any normal operations."
+
+\devicenormative{\subsection}{Device Suspend}{General Initialization And Device Operation / Device Suspend}
+
+The device MUST ignore any operations on the SUSPEND bit from the driver if the device has not been completely initialized by the procedures in \ref{sec:General Initialization And Device Operation / Device Initialization}
+
+The device SHOULD ignore any write access to its Configuration Space while
+suspended, except for \field{device status} if it is part of the Configuration Space.
+
+A device MUST NOT send any notifications for any virtqueues,
+access any virtqueues, or modify any fields in
+its Configuration Space while suspended.
+
+If changes occur in the Configuration Space during suspended period,
+the device MUST NOT send any configuration change notifications.
+Instead, the device MUST send the notification when it resumes running.
+
+If the driver sets the SUSPEND bit in \field{device status} to 1,
+the device MUST either suspend itself or set the DEVICE_NEEDS_RESET bit in \field{device status} to 1 when it fails to suspend.
+
+If the device has been suspended and the driver resumes the device running by setting the DRIVER_OK bit in \field{device status} to 1,
+the device MUST either resume normal operation or set the DEVICE_NEEDS_RESET bit in \field{device status} to 1 when it fails to resume.
+
+When the driver sets the SUSPEND bit to 1,
+the device SHOULD perform the following actions before presenting the SUSPEND bit as 1 and DRIVER_OK bit as 0 in the \field{device status}:
+
+\begin{itemize}
+\item Stop consuming more buffers of any virtqueues.
+\item Wait until all buffers that are being processed have been used.
+\item Send used buffer notifications to the driver.
+\end{itemize}
+
+\chapter{Virtio Transport Options}\label{sec:Virtio Transport Options}
+
+Virtio can use various different buses, thus the standard is split
+into virtio general and bus-specific sections.
+
+\input{transport-pci.tex}
+\input{transport-mmio.tex}
+\input{transport-ccw.tex}
+
+\chapter{Device Types}\label{sec:Device Types}
+
+On top of the queues, config space and feature negotiation facilities
+built into virtio, several devices are defined.
+
+The following device IDs are used to identify different types of virtio
+devices.  Some device IDs are reserved for devices which are not currently
+defined in this standard.
+
+Discovering what devices are available and their type is bus-dependent.
+
+\begin{longtable} { |l|c| }
+\hline
+Device ID  &  Virtio Device    \\
+\hline \hline
+0          & reserved (invalid) \\
+\hline
+1          &   network device     \\
+\hline
+2          &   block device     \\
+\hline
+3          &      console       \\
+\hline
+4          &  entropy source    \\
+\hline
+5          & memory ballooning (traditional)  \\
+\hline
+6          &     ioMemory       \\
+\hline
+7          &       rpmsg        \\
+\hline
+8          &     SCSI host      \\
+\hline
+9          &   9P transport     \\
+\hline
+10         &   mac80211 wlan    \\
+\hline
+11         &   rproc serial     \\
+\hline
+12         &   virtio CAIF      \\
+\hline
+13         &  memory balloon    \\
+\hline
+16         &   GPU device       \\
+\hline
+17         &   RTC (Real Time Clock) device \\
+\hline
+18         &   Input device \\
+\hline
+19         &   Socket device \\
+\hline
+20         &   Crypto device \\
+\hline
+21         &   Signal Distribution Module \\
+\hline
+22         &   pstore device \\
+\hline
+23         &   IOMMU device \\
+\hline
+24         &   Memory device \\
+\hline
+25         &   Sound device \\
+\hline
+26         &   file system device \\
+\hline
+27         &   PMEM device \\
+\hline
+28         &   RPMB device \\
+\hline
+29         &   mac80211 hwsim wireless simulation device \\
+\hline
+30         &   Video encoder device \\
+\hline
+31         &   Video decoder device \\
+\hline
+32         &   SCMI device \\
+\hline
+33         &   NitroSecureModule \\
+\hline
+34         &   I2C adapter \\
+\hline
+35         &   Watchdog \\
+\hline
+36         &   CAN device \\
+\hline
+38         &   Parameter Server \\
+\hline
+39         &   Audio policy device \\
+\hline
+40         &   Bluetooth device \\
+\hline
+41         &   GPIO device \\
+\hline
+42         &   RDMA device \\
+\hline
+43         &   Camera device \\
+\hline
+44         &   ISM device \\
+\hline
+45         &   SPI controller \\
+\hline
+46         &   TEE device \\
+\hline
+47         &   CPU balloon device \\
+\hline
+48         &   Media device \\
+\hline
+49         &   USB controller \\
+\hline
+50         &   Video encoder/decoder device \\
+\hline
+\end{longtable}
+
+Some of the devices above are unspecified by this document,
+because they are seen as immature or especially niche.  Be warned
+that some are only specified by the sole existing implementation;
+they could become part of a future specification, be abandoned
+entirely, or live on outside this standard.  We shall speak of
+them no further.
+
+\input{device-types/net/description.tex}
+\input{device-types/blk/description.tex}
+\input{device-types/console/description.tex}
+\input{device-types/entropy/description.tex}
+\input{device-types/balloon/description.tex}
+\input{device-types/scsi/description.tex}
+\input{device-types/gpu/description.tex}
+\input{device-types/input/description.tex}
+\input{device-types/crypto/description.tex}
+\input{device-types/vsock/description.tex}
+\input{device-types/fs/description.tex}
+\input{device-types/rpmb/description.tex}
+\input{device-types/iommu/description.tex}
+\input{device-types/sound/description.tex}
+\input{device-types/mem/description.tex}
+\input{device-types/i2c/description.tex}
+\input{device-types/scmi/description.tex}
+\input{device-types/gpio/description.tex}
+\input{device-types/pmem/description.tex}
+\input{device-types/can/description.tex}
+\input{device-types/spi/description.tex}
+\input{device-types/media/description.tex}
+\input{device-types/rtc/description.tex}
+
+\chapter{Reserved Feature Bits}\label{sec:Reserved Feature Bits}
+
+Currently these device-independent feature bits are defined:
+
+\begin{description}
+  \item[VIRTIO_F_INDIRECT_DESC (28)] Negotiating this feature indicates
+  that the driver can use descriptors with the VIRTQ_DESC_F_INDIRECT
+  flag set, as described in \ref{sec:Basic Facilities of a Virtio
+Device / Virtqueues / The Virtqueue Descriptor Table / Indirect
+Descriptors}~\nameref{sec:Basic Facilities of a Virtio Device /
+Virtqueues / The Virtqueue Descriptor Table / Indirect
+Descriptors} and \ref{sec:Packed Virtqueues / Indirect Flag: Scatter-Gather Support}~\nameref{sec:Packed Virtqueues / Indirect Flag: Scatter-Gather Support}.
+  \item[VIRTIO_F_EVENT_IDX(29)] This feature enables the \field{used_event}
+  and the \field{avail_event} fields as described in
+\ref{sec:Basic Facilities of a Virtio Device / Virtqueues / Used Buffer Notification Suppression}, \ref{sec:Basic Facilities of a Virtio Device / Virtqueues / The Virtqueue Used Ring} and \ref{sec:Packed Virtqueues / Driver and Device Event Suppression}.
+
+
+  \item[VIRTIO_F_VERSION_1(32)] This indicates compliance with this
+    specification, giving a simple way to detect legacy devices or drivers.
+
+  \item[VIRTIO_F_ACCESS_PLATFORM(33)] This feature indicates that
+  the device can be used on a platform where device access to data
+  in memory is limited and/or translated. E.g. this is the case if the device can be located
+  behind an IOMMU that translates bus addresses from the device into physical
+  addresses in memory, if the device can be limited to only access
+  certain memory addresses or if special commands such as
+  a cache flush can be needed to synchronise data in memory with
+  the device. Whether accesses are actually limited or translated
+  is described by platform-specific means.
+  If this feature bit is set to 0, then the device
+  has same access to memory addresses supplied to it as the
+  driver has.
+  In particular, the device will always use physical addresses
+  matching addresses used by the driver (typically meaning
+  physical addresses used by the CPU)
+  and not translated further, and can access any address supplied to it by
+  the driver. When clear, this overrides any platform-specific description of
+  whether device access is limited or translated in any way, e.g.
+  whether an IOMMU may be present.
+  \item[VIRTIO_F_RING_PACKED(34)] This feature indicates
+  support for the packed virtqueue layout as described in
+  \ref{sec:Basic Facilities of a Virtio Device / Packed Virtqueues}~\nameref{sec:Basic Facilities of a Virtio Device / Packed Virtqueues}.
+  \item[VIRTIO_F_IN_ORDER(35)] This feature indicates
+  that all buffers are used by the device in the same
+  order in which they have been made available.
+  \item[VIRTIO_F_ORDER_PLATFORM(36)] This feature indicates
+  that memory accesses by the driver and the device are ordered
+  in a way described by the platform.
+
+  If this feature bit is negotiated, the ordering in effect for any
+  memory accesses by the driver that need to be ordered in a specific way
+  with respect to accesses by the device is the one suitable for devices
+  described by the platform. This implies that the driver needs to use
+  memory barriers suitable for devices described by the platform; e.g.
+  for the PCI transport in the case of hardware PCI devices.
+
+  If this feature bit is not negotiated, then the device
+  and driver are assumed to be implemented in software, that is
+  they can be assumed to run on identical CPUs
+  in an SMP configuration.
+  Thus a weaker form of memory barriers is sufficient
+  to yield better performance.
+  \item[VIRTIO_F_SR_IOV(37)] This feature indicates that
+  the device supports Single Root I/O Virtualization.
+  Currently only PCI devices support this feature.
+  \item[VIRTIO_F_NOTIFICATION_DATA(38)] This feature indicates
+  that the driver passes extra data (besides identifying the virtqueue)
+  in its device notifications.
+  See \ref{sec:Basic Facilities of a Virtio Device / Driver notifications}~\nameref{sec:Basic Facilities of a Virtio Device / Driver notifications}.
+
+  \item[VIRTIO_F_NOTIF_CONFIG_DATA(39)] This feature indicates that the driver
+  uses the data provided by the device as a virtqueue identifier in available
+  buffer notifications.
+  As mentioned in section \ref{sec:Basic Facilities of a Virtio Device / Driver notifications}, when the
+  driver is required to send an available buffer notification to the device, it
+  sends the virtqueue index to be notified. The method of delivering
+  notifications is transport specific.
+  With the PCI transport, the device can optionally provide a per-virtqueue value
+  for the driver to use in driver notifications, instead of the virtqueue index.
+  Some devices may benefit from this flexibility by providing, for example,
+  an internal virtqueue identifier, or an internal offset related to the
+  virtqueue index.
+
+  This feature indicates the availability of such value. The definition of the
+  data to be provided in driver notification and the delivery method is
+  transport specific.
+  For more details about driver notifications over PCI see \ref{sec:Virtio Transport Options / Virtio Over PCI Bus / PCI-specific Initialization And Device Operation / Available Buffer Notifications}.
+
+  \item[VIRTIO_F_RING_RESET(40)] This feature indicates
+  that the driver can reset a queue individually.
+  See \ref{sec:Basic Facilities of a Virtio Device / Virtqueues / Virtqueue Reset}.
+
+  \item[VIRTIO_F_ADMIN_VQ(41)] This feature indicates that the device exposes one or more
+  administration virtqueues.
+  At the moment this feature is only supported for devices using
+  \ref{sec:Virtio Transport Options / Virtio Over PCI
+	  Bus}~\nameref{sec:Virtio Transport Options / Virtio Over PCI Bus}
+	  as the transport and is reserved for future use for
+	  devices using other transports (see
+	  \ref{drivernormative:Basic Facilities of a Virtio Device / Feature Bits}
+	and
+	\ref{devicenormative:Basic Facilities of a Virtio Device / Feature Bits} for
+	handling features reserved for future use.
+
+  \item[VIRTIO_F_SUSPEND(43)] This feature indicates that the driver can
+   suspend the device by set the SUSPEND bit to 1.
+   See \ref{sec:Basic Facilities of a Virtio Device / Device Status Field}.
+
+\end{description}
+
+\drivernormative{\section}{Reserved Feature Bits}{Reserved Feature Bits}
+
+A driver MUST accept VIRTIO_F_VERSION_1 if it is offered.  A driver
+MAY fail to operate further if VIRTIO_F_VERSION_1 is not offered.
+
+A driver SHOULD accept VIRTIO_F_ACCESS_PLATFORM if it is offered, and it MUST
+then either disable the IOMMU or configure the IOMMU to translate bus addresses
+passed to the device into physical addresses in memory.  If
+VIRTIO_F_ACCESS_PLATFORM is not offered, then a driver MUST pass only physical
+addresses to the device.
+
+A driver SHOULD accept VIRTIO_F_RING_PACKED if it is offered.
+
+A driver SHOULD accept VIRTIO_F_ORDER_PLATFORM if it is offered.
+If VIRTIO_F_ORDER_PLATFORM has been negotiated, a driver MUST use
+the barriers suitable for hardware devices.
+
+If VIRTIO_F_SR_IOV has been negotiated, a driver MAY enable
+virtual functions through the device's PCI SR-IOV capability
+structure.  A driver MUST NOT negotiate VIRTIO_F_SR_IOV if
+the device does not have a PCI SR-IOV capability structure
+or is not a PCI device.  A driver MUST negotiate
+VIRTIO_F_SR_IOV and complete the feature negotiation
+(including checking the FEATURES_OK \field{device status}
+bit) before enabling virtual functions through the device's
+PCI SR-IOV capability structure.  After once successfully
+negotiating VIRTIO_F_SR_IOV, the driver MAY enable virtual
+functions through the device's PCI SR-IOV capability
+structure even if the device or the system has been fully
+or partially reset, and even without re-negotiating
+VIRTIO_F_SR_IOV after the reset.
+
+A driver SHOULD accept VIRTIO_F_NOTIF_CONFIG_DATA if it is offered.
+
+\devicenormative{\section}{Reserved Feature Bits}{Reserved Feature Bits}
+
+A device MUST offer VIRTIO_F_VERSION_1.  A device MAY fail to operate further
+if VIRTIO_F_VERSION_1 is not accepted.
+
+A device SHOULD offer VIRTIO_F_ACCESS_PLATFORM if its access to
+memory is through bus addresses distinct from and translated
+by the platform to physical addresses used by the driver, and/or
+if it can only access certain memory addresses with said access
+specified and/or granted by the platform.
+A device MAY fail to operate further if VIRTIO_F_ACCESS_PLATFORM is not
+accepted.
+
+If VIRTIO_F_IN_ORDER has been negotiated, a device MUST use
+buffers in the same order in which they have been available.
+
+A device MAY fail to operate further if
+VIRTIO_F_ORDER_PLATFORM is offered but not accepted.
+A device MAY operate in a slower emulation mode if
+VIRTIO_F_ORDER_PLATFORM is offered but not accepted.
+
+It is RECOMMENDED that an add-in card based PCI device
+offers both VIRTIO_F_ACCESS_PLATFORM and
+VIRTIO_F_ORDER_PLATFORM for maximum portability.
+
+A device SHOULD offer VIRTIO_F_SR_IOV if it is a PCI device
+and presents a PCI SR-IOV capability structure, otherwise
+it MUST NOT offer VIRTIO_F_SR_IOV.
+
+\section{Legacy Interface: Reserved Feature Bits}\label{sec:Reserved Feature Bits / Legacy Interface: Reserved Feature Bits}
+
+Transitional devices MAY offer the following:
+\begin{description}
+\item[VIRTIO_F_NOTIFY_ON_EMPTY (24)] If this feature
+  has been negotiated by driver, the device MUST issue
+  a used buffer notification if the device runs
+  out of available descriptors on a virtqueue, even though
+  notifications are suppressed using the VIRTQ_AVAIL_F_NO_INTERRUPT
+  flag or the \field{used_event} field.
+\begin{note}
+  An example of a driver using this feature is the legacy
+  networking driver: it doesn't need to know every time a packet
+  is transmitted, but it does need to free the transmitted
+  packets a finite time after they are transmitted. It can avoid
+  using a timer if the device notifies it when all the packets
+  are transmitted.
+\end{note}
+\end{description}
+
+Transitional devices MUST offer, and if offered by the device
+transitional drivers MUST accept the following:
+\begin{description}
+\item[VIRTIO_F_ANY_LAYOUT (27)] This feature indicates that the device
+  accepts arbitrary descriptor layouts, as described in Section
+  \ref{sec:Basic Facilities of a Virtio Device / Virtqueues / Message Framing / Legacy Interface: Message Framing}~\nameref{sec:Basic Facilities of a Virtio Device / Virtqueues / Message Framing / Legacy Interface: Message Framing}.
+
+\item[UNUSED (30)] Bit 30 is used by qemu's implementation to check
+  for experimental early versions of virtio which did not perform
+  correct feature negotiation, and SHOULD NOT be negotiated.
+\end{description}

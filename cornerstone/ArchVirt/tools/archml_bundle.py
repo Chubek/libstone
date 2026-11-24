@@ -8,8 +8,7 @@ still reject reserved encodings and unsupported features within each class.
 import pathlib
 import sys
 
-root, output = map(pathlib.Path, sys.argv[1:])
-spec = root / "third_party/libstone/sandstone/archml/stdspec"
+root, spec, output = map(pathlib.Path, sys.argv[1:])
 classes = {
     "pc-relative": (0x1F000000, 0x10000000),
     "add-sub-immediate": (0x1F000000, 0x11000000),

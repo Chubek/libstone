@@ -13,10 +13,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(DOMVIRT_THIRD_PARTY_DIR "${PROJECT_SOURCE_DIR}/third_party")
-set(LIBSTONE_DIR "${DOMVIRT_THIRD_PARTY_DIR}/libstone")
+get_filename_component(LIBSTONE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(ARCHML_DIR "${LIBSTONE_DIR}/sandstone/archml")
 include("${LIBSTONE_DIR}/cmake/LibstoneBuild.cmake")
+set(ARCHML_STDSPEC_DIR "${ARCHML_DIR}/stdspec")
 set(SANDSTONE_BUILD_TOOLS ON)
 set(SANDSTONE_BUILD_TESTS OFF)
 add_subdirectory("${ARCHML_DIR}" archml)
@@ -66,19 +66,19 @@ endfunction()
 if(NOT TARGET tomlplusplus)
   add_library(tomlplusplus INTERFACE)
   target_include_directories(tomlplusplus INTERFACE
-      "${LIBSTONE_DIR}/third_party/metatk/third_party/tomlplusplus/include")
+      "${LIBSTONE_METATK_SOURCE_DIR}/third_party/tomlplusplus/include")
 endif()
 
 if(NOT TARGET sol2)
   add_library(sol2 INTERFACE)
   target_include_directories(sol2 INTERFACE
-      "${LIBSTONE_DIR}/third_party/jiterati/third_party/sol2/include")
+      "${LIBSTONE_THIRD_PARTY_DIR}/jiterati/third_party/sol2/include")
 endif()
 
 if(NOT TARGET dynalo)
   add_library(dynalo INTERFACE)
   target_include_directories(dynalo INTERFACE
-      "${LIBSTONE_DIR}/third_party/libglr/third_party/dynalo/include")
+      "${LIBSTONE_THIRD_PARTY_DIR}/libglr/third_party/dynalo/include")
   if(UNIX)
     target_link_libraries(dynalo INTERFACE dl)
   elseif(WIN32)
@@ -89,11 +89,11 @@ endif()
 if(NOT TARGET nlohmann_json)
   add_library(nlohmann_json INTERFACE)
   target_include_directories(nlohmann_json INTERFACE
-      "${LIBSTONE_DIR}/third_party/libglr/third_party/libshell/third_party/taskflow/3rd-party")
+      "${LIBSTONE_THIRD_PARTY_DIR}/libglr/third_party/libshell/third_party/taskflow/3rd-party")
 endif()
 
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
-set(IMGUI_DIR "${DOMVIRT_THIRD_PARTY_DIR}/imgui")
+set(IMGUI_DIR "${LIBSTONE_THIRD_PARTY_DIR}/imgui")
 add_library(archvirt_imgui STATIC
     "${IMGUI_DIR}/imgui.cpp" "${IMGUI_DIR}/imgui_draw.cpp"
     "${IMGUI_DIR}/imgui_tables.cpp" "${IMGUI_DIR}/imgui_widgets.cpp"

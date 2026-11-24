@@ -1,0 +1,353 @@
+\chapter{Introduction}
+
+\input{abstract.tex}
+
+\begin{description}
+\item[Straightforward:] Virtio devices use normal bus mechanisms of
+  interrupts and DMA which should be familiar to any device driver
+  author. There is no exotic page-flipping or COW mechanism: it's just
+  a normal device.\footnote{This lack of page-sharing implies that the implementation of the
+device (e.g. the hypervisor or host) needs full access to the
+guest memory. Communication with untrusted parties (i.e.
+inter-guest communication) requires copying.
+}
+
+\item[Efficient:] Virtio devices consist of rings of descriptors
+  for both input and output, which are neatly laid out to avoid cache
+  effects from both driver and device writing to the same cache
+  lines.
+
+\item[Standard:] Virtio makes no assumptions about the environment in which
+  it operates, beyond supporting the bus to which device is attached.
+  In this specification, virtio
+  devices are implemented over MMIO, Channel I/O and PCI bus transports
+\footnote{The Linux implementation further separates the virtio
+transport code from the specific virtio drivers: these drivers are shared
+between different transports.
+}, earlier drafts
+  have been implemented on other buses not included here.
+
+\item[Extensible:] Virtio devices contain feature bits which are
+  acknowledged by the guest operating system during device setup.
+  This allows forwards and backwards compatibility: the device
+  offers all the features it knows about, and the driver
+  acknowledges those it understands and wishes to use.
+\end{description}
+
+\section{Normative References}\label{sec:Normative References}
+
+\begin{longtable}{l p{5in}}
+	\phantomsection\label{intro:rfc2119}\textbf{[RFC2119]} &
+Bradner S., ``Key words for use in RFCs to Indicate Requirement
+Levels'', BCP 14, RFC 2119, March 1997. \newline\url{http://www.ietf.org/rfc/rfc2119.txt}\\
+	\phantomsection\label{intro:rfc4122}\textbf{[RFC4122]} &
+Leach, P., Mealling, M., and R. Salz, ``A Universally Unique
+IDentifier (UUID) URN Namespace'', RFC 4122, DOI 10.17487/RFC4122,
+July 2005. \newline\url{http://www.ietf.org/rfc/rfc4122.txt}\\
+	\phantomsection\label{intro:S390 PoP}\textbf{[S390 PoP]} & z/Architecture Principles of Operation, IBM Publication SA22-7832, \newline\url{https://www.ibm.com/docs/en/SSQ2R2_15.0.0/com.ibm.tpf.toolkit.hlasm.doc/dz9zr006.pdf}, and any future revisions\\
+	\phantomsection\label{intro:S390 Common I/O}\textbf{[S390
+Common I/O]} & ESA/390 Common I/O-Device and Self-Description, IBM Publication SA22-7204, \newline\url{https://www.ibm.com/resources/publications/OutputPubsDetails?PubID=SA22720401}, and any future revisions\\
+	\phantomsection\label{intro:PCI}\textbf{[PCI]} &
+	Conventional PCI Specifications,
+	\newline\url{http://www.pcisig.com/specifications/conventional/},
+	PCI-SIG\\
+	\phantomsection\label{intro:PCIe}\textbf{[PCIe]} &
+	PCI Express Specifications
+	\newline\url{http://www.pcisig.com/specifications/pciexpress/},
+	PCI-SIG\\
+	\phantomsection\label{intro:IEEE 802}\textbf{[IEEE 802]} &
+	IEEE Standard for Local and Metropolitan Area Networks: Overview and Architecture,
+	\newline\url{http://www.ieee802.org/},
+	IEEE\\
+	\phantomsection\label{intro:IEEE 802.3-2022}\textbf{[IEEE 802.3-2022]} &
+	IEEE Standard for Ethernet,
+	\newline\url{https://doi.org/10.1109/IEEESTD.2022.9844436},
+	IEEE 802.3-2022\\
+	\phantomsection\label{intro:IEEE 802 Ethertypes}\textbf{[IEEE 802 Ethertypes]} &
+	IEEE 802 Ethertypes,
+	\newline\url{https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml},
+	IANA\\
+	\phantomsection\label{intro:IANA Protocol Numbers}\textbf{[IANA Protocol Numbers]} &
+	IANA Protocol Numbers,
+	\newline\url{https://www.iana.org/assignments/protocol-numbers},
+	IANA\\
+	\phantomsection\label{intro:SAM}\textbf{[SAM]} &
+        SCSI Architectural Model,
+        \newline\url{http://www.t10.org/cgi-bin/ac.pl?t=f&f=sam4r05.pdf}\\
+	\phantomsection\label{intro:SCSI MMC}\textbf{[SCSI MMC]} &
+        SCSI Multimedia Commands,
+        \newline\url{http://www.t10.org/cgi-bin/ac.pl?t=f&f=mmc6r00.pdf}\\
+	\phantomsection\label{intro:FUSE}\textbf{[FUSE]} &
+	Linux FUSE interface,
+	\newline\url{https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/fuse.h}\\
+	\phantomsection\label{intro:errno}\textbf{[errno]} &
+	Linux error names and numbers,
+	\newline\url{https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/errno-base.h}\\
+        \phantomsection\label{intro:eMMC}\textbf{[eMMC]} &
+        eMMC Electrical Standard (5.1), JESD84-B51,
+        \newline\url{http://www.jedec.org/sites/default/files/docs/JESD84-B51.pdf}\\
+	\phantomsection\label{intro:HDA}\textbf{[HDA]} &
+	High Definition Audio Specification,
+	\newline\url{https://www.intel.com/content/dam/www/public/us/en/documents/product-specifications/high-definition-audio-specification.pdf}\\
+	\phantomsection\label{intro:I2C}\textbf{[I2C]} &
+	I2C-bus specification and user manual,
+	\newline\url{https://www.nxp.com/docs/en/user-guide/UM10204.pdf}\\
+	\phantomsection\label{intro:SCMI}\textbf{[SCMI]} &
+	Arm System Control and Management Interface, DEN0056,
+	\newline\url{https://developer.arm.com/docs/den0056/c}, version C and any future revisions\\
+	\phantomsection\label{intro:rfc3447}\textbf{[RFC3447]} &
+    J. Jonsson.,``Public-Key Cryptography Standards (PKCS) \#1: RSA Cryptography'', February 2003.
+	\newline\url{https://www.ietf.org/rfc/rfc3447.txt}\\
+	\phantomsection\label{intro:NIST}\textbf{[FIPS186-3]} &
+     National Institute of Standards and Technology (NIST), FIPS Publication 180-3: Secure Hash Standard, October 2008.
+	\newline\url{https://csrc.nist.gov/csrc/media/publications/fips/186/3/archive/2009-06-25/documents/fips_186-3.pdf}\\
+	\phantomsection\label{intro:rfc5915}\textbf{[RFC5915]} &
+    ``Elliptic Curve Private Key Structure'', June 2010.
+	\newline\url{https://www.rfc-editor.org/rfc/rfc5915}\\
+	\phantomsection\label{intro:rfc6025}\textbf{[RFC6025]} &
+    C.Wallace., ``ASN.1 Translation'', October 2010.
+	\newline\url{https://www.ietf.org/rfc/rfc6025.txt}\\
+	\phantomsection\label{intro:rfc3279}\textbf{[RFC3279]} &
+    W.Polk., ``Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile'', April 2002.
+	\newline\url{https://www.ietf.org/rfc/rfc3279.txt}\\
+	\phantomsection\label{intro:SEC1}\textbf{[SEC1]} &
+    Standards for Efficient Cryptography Group(SECG), ``SEC1: Elliptic Cureve Cryptography'', Version 1.0, September 2000.
+	\newline\url{https://www.secg.org/sec1-v2.pdf}\\
+
+	\phantomsection\label{intro:rfc2784}\textbf{[RFC2784]} &
+    Generic Routing Encapsulation. This protocol is only specified for IPv4 and used as either the payload or delivery protocol.
+	\newline\url{https://datatracker.ietf.org/doc/rfc2784/}\\
+	\phantomsection\label{intro:rfc2890}\textbf{[RFC2890]} &
+    Key and Sequence Number Extensions to \hyperref[intro:rfc2784]{GRE}. This protocol describes extensions by which two fields, Key and
+    Sequence Number, can be optionally carried in the \hyperref[intro:rfc2784]{GRE} Header.
+	\newline\url{https://www.rfc-editor.org/rfc/rfc2890}\\
+	\phantomsection\label{intro:rfc7676}\textbf{[RFC7676]} &
+    IPv6 Support for Generic Routing Encapsulation (GRE). This protocol is specified for IPv6 and used as either the payload or
+    delivery protocol. Note that this does not change the GRE header format or any behaviors specified by RFC 2784 or RFC 2890.
+	\newline\url{https://datatracker.ietf.org/doc/rfc7676/}\\
+	\phantomsection\label{intro:rfc8086}\textbf{[GRE-in-UDP]} &
+    GRE-in-UDP Encapsulation. This specifies a method of encapsulating network protocol packets within GRE and UDP headers.
+    This protocol is specified for IPv4 and IPv6, and used as either the payload or delivery protocol.
+	\newline\url{https://www.rfc-editor.org/rfc/rfc8086}\\
+	\phantomsection\label{intro:vxlan}\textbf{[VXLAN]} &
+    Virtual eXtensible Local Area Network.
+	\newline\url{https://datatracker.ietf.org/doc/rfc7348/}\\
+	\phantomsection\label{intro:vxlan-gpe}\textbf{[VXLAN-GPE]} &
+    Generic Protocol Extension for VXLAN. This protocol describes extending Virtual eXtensible Local Area Network (VXLAN) via changes to the VXLAN header.
+	\newline\url{https://www.ietf.org/archive/id/draft-ietf-nvo3-vxlan-gpe-12.txt}\\
+	\phantomsection\label{intro:geneve}\textbf{[GENEVE]} &
+    Generic Network Virtualization Encapsulation.
+	\newline\url{https://datatracker.ietf.org/doc/rfc8926/}\\
+	\phantomsection\label{intro:ipip}\textbf{[IPIP]} &
+    IP Encapsulation within IP.
+	\newline\url{https://www.rfc-editor.org/rfc/rfc2003}\\
+	\phantomsection\label{intro:nvgre}\textbf{[NVGRE]} &
+    NVGRE: Network Virtualization Using Generic Routing Encapsulation
+	\newline\url{https://www.rfc-editor.org/rfc/rfc7637.html}\\
+	\phantomsection\label{intro:IP}\textbf{[IP]} &
+    INTERNET PROTOCOL
+	\newline\url{https://www.rfc-editor.org/rfc/rfc791}\\
+	\phantomsection\label{intro:Internet-Header-Format}\textbf{[Internet Header Format]} &
+    Internet Header Format
+	\newline\url{https://datatracker.ietf.org/doc/html/rfc791#section-3.1}\\
+	\phantomsection\label{intro:IPv6-Header-Format}\textbf{[IPv6 Header Format]} &
+    IPv6 Header Format
+	\newline\url{https://www.rfc-editor.org/rfc/rfc8200#section-3}\\
+	\phantomsection\label{intro:UDP}\textbf{[UDP]} &
+    User Datagram Protocol
+	\newline\url{https://www.rfc-editor.org/rfc/rfc768}\\
+	\phantomsection\label{intro:TCP}\textbf{[TCP]} &
+    TRANSMISSION CONTROL PROTOCOL
+	\newline\url{https://www.rfc-editor.org/rfc/rfc793}\\
+	\phantomsection\label{intro:TCP-Header-Format}\textbf{[TCP Header Format]} &
+    TCP Header Format
+	\newline\url{https://www.rfc-editor.org/rfc/rfc9293#name-header-format}\\
+	\phantomsection\label{intro:IPSEC}\textbf{[IPSEC]} &
+    IPsec Protocol
+	\newline\url{https://www.rfc-editor.org/rfc/rfc4301}\\
+	\phantomsection\label{intro:ESP}\textbf{[ESP]} &
+    IPsec ESP
+	\newline\url{https://www.rfc-editor.org/rfc/rfc4303}\\
+	\phantomsection\label{intro:ESN}\textbf{[ESN]} &
+    IPsec ESN
+	\newline\url{https://www.rfc-editor.org/rfc/rfc4304}\\
+	\phantomsection\label{intro:UDP-Encapsulation}\textbf{[UDP Encapsulation]} &
+    IPsec UDP Encapsulation
+	\newline\url{https://www.rfc-editor.org/rfc/rfc3948}\\
+	\phantomsection\label{intro:CAN}\textbf{[CAN]} &
+    ISO 11898-1:2015 Road vehicles -- Controller area network (CAN) -- Part 1: Data link layer and physical signalling\\
+	\phantomsection\label{intro:rfc8174}\textbf{[RFC8174]} &
+    Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP
+    14, RFC 8174, DOI 10.17487/RFC8174, May 2017
+        \newline\url{http://www.ietf.org/rfc/rfc8174.txt}\\
+	\phantomsection\label{intro:EPOCH}\textbf{[EPOCH]} &
+    POSIX.1-2024, Base Definitions, Seconds Since the Epoch
+	\newline\url{https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_19}\\
+	\phantomsection\label{intro:UTC-SLS}\textbf{[UTC-SLS]} &
+    UTC with Smoothed Leap Seconds (UTC-SLS)
+	\newline\url{https://www.cl.cam.ac.uk/~mgk25/time/utc-sls/}\\
+\end{longtable}
+
+\section{Non-Normative References}
+
+\begin{longtable}{l p{5in}}
+	\phantomsection\label{intro:Virtio PCI Draft}\textbf{[Virtio PCI Draft]} &
+	Virtio PCI Draft Specification
+	\newline\url{http://ozlabs.org/~rusty/virtio-spec/virtio-0.9.5.pdf}\\
+\end{longtable}
+
+\section{Terminology}\label{Terminology}
+
+The key words ``MUST'', ``MUST NOT'', ``REQUIRED'', ``SHALL'', ``SHALL NOT'',
+``SHOULD'', ``SHOULD NOT'', ``RECOMMENDED'', ``NOT RECOMMENDED'', ``MAY'', and
+``OPTIONAL'' in this document are to be interpreted as described in
+\hyperref[intro:rfc2119]{[RFC2119]} and \hyperref[intro:rfc8174]{[RFC8174]} when,
+and only when, they appear in all capitals, as shown here.
+\subsection{Legacy Interface: Terminology}\label{intro:Legacy
+Interface: Terminology}
+
+Specification drafts preceding version 1.0 of this specification
+(e.g. see \hyperref[intro:Virtio PCI Draft]{[Virtio PCI Draft]})
+defined a similar, but different
+interface between the driver and the device.
+Since these are widely deployed, this specification
+accommodates OPTIONAL features to simplify transition
+from these earlier draft interfaces.
+
+Specifically devices and drivers MAY support:
+\begin{description}
+\item[Legacy Interface]
+        is an interface specified by an earlier draft of this specification
+        (before 1.0)
+\item[Legacy Device]
+        is a device implemented before this specification was released,
+        and implementing a legacy interface on the host side
+\item[Legacy Driver]
+        is a driver implemented before this specification was released,
+        and implementing a legacy interface on the guest side
+\end{description}
+
+Legacy devices and legacy drivers are not compliant with this
+specification.
+
+To simplify transition from these earlier draft interfaces,
+a device MAY implement:
+
+\begin{description}
+\item[Transitional Device]
+        a device supporting both drivers conforming to this
+        specification, and allowing legacy drivers.
+\end{description}
+
+Similarly, a driver MAY implement:
+\begin{description}
+\item[Transitional Driver]
+        a driver supporting both devices conforming to this
+        specification, and legacy devices.
+\end{description}
+
+\begin{note}
+  Legacy interfaces are not required; ie. don't implement them unless you
+  have a need for backwards compatibility!
+\end{note}
+
+Devices or drivers with no legacy compatibility are referred to as
+non-transitional devices and drivers, respectively.
+
+\subsection{Transition from earlier specification drafts}\label{sec:Transition from earlier specification drafts}
+
+For devices and drivers already implementing the legacy
+interface, some changes will have to be made to support this
+specification.
+
+In this case, it might be beneficial for the reader to focus on
+sections tagged "Legacy Interface" in the section title.
+These highlight the changes made since the earlier drafts.
+
+\section{Structure Specifications}\label{sec:Structure Specifications}
+
+Many device and driver in-memory structure layouts are documented using
+the C struct syntax. All structures are assumed to be without additional
+padding. To stress this, cases where common C compilers are known to insert
+extra padding within structures are tagged using the GNU C
+__attribute__((packed))  syntax.
+
+For the integer data types used in the structure definitions, the following
+conventions are used:
+
+\begin{description}
+\item[u8, u16, u32, u64] An unsigned integer of the specified length in bits.
+
+\item[le16, le32, le64] An unsigned integer of the specified length in bits,
+in little-endian byte order.
+
+\item[be16, be32, be64] An unsigned integer of the specified length in bits,
+in big-endian byte order.
+\end{description}
+
+Some of the fields to be defined in this specification don't
+start or don't end on a byte boundary. Such fields are called bit-fields.
+A set of bit-fields is always a sub-division of an integer typed field.
+
+Bit-fields within integer fields are always listed in order,
+from the least significant to the most significant bit.  The
+bit-fields are considered unsigned integers of the specified
+width with the next in significance relationship of the bits
+preserved.
+
+For example:
+\begin{lstlisting}
+struct S {
+        be16 {
+                A : 15;
+                B : 1;
+        } x;
+        be16 y;
+};
+\end{lstlisting}
+documents the value A stored in the low 15 bit of \field{x} and
+the value B stored in the high bit of \field{x}, the 16-bit
+integer \field{x} in turn stored using the big-endian byte order
+at the beginning of the structure S,
+and being followed immediately by an unsigned integer \field{y}
+stored in big-endian byte order at an offset of 2 bytes (16 bits)
+from the beginning of the structure.
+
+Note that this notation somewhat resembles the C bitfield syntax but
+should not be naively converted to a bitfield notation for portable
+code: it matches the way bitfields are packed by C compilers on
+little-endian architectures but not the way bitfields are packed by C
+compilers on big-endian architectures.
+
+Assuming that CPU_TO_BE16 converts a 16-bit integer from a native
+CPU to the big-endian byte order, the following is the equivalent
+portable C code to generate a value to be stored into \field{x}:
+\begin{lstlisting}
+CPU_TO_BE16(B << 15 | A)
+\end{lstlisting}
+\section{Constant Specifications}\label{sec:Constant Specifications}
+
+In many cases, numeric values used in the interface between the device
+and the driver are documented using the C \#define and /* */
+comment syntax. Multiple related values are grouped together with
+a common name as a prefix, using _ as a separator.
+Using _XXX as a suffix refers to all values in a group.
+For example:
+
+\begin{lstlisting}
+/* Field Fld value A description */
+#define VIRTIO_FLD_A        (1 << 0)
+/* Field Fld value B description */
+#define VIRTIO_FLD_B        (1 << 1)
+\end{lstlisting}
+documents two numeric values for a field \field{Fld}, with
+\field{Fld} having value 1 referring to \field{A} and \field{Fld}
+having value 2 referring to \field{B}.
+Note that $<<$ refers to the shift-left operation.
+
+Further, in this case VIRTIO_FLD_A and VIRTIO_FLD_B
+refer to values 1 and 2 of Fld respectively. Further, VIRTIO_FLD_XXX refers to
+either VIRTIO_FLD_A or VIRTIO_FLD_B.
+
+\newpage
+

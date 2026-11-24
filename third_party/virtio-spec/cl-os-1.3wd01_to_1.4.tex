@@ -1,0 +1,2956 @@
+db68dc046b32 & 28 Sep 2023 & Cornelia Huck & { Revert "remove enumerate usage that makes the tool unhappy"
+\newline
+
+
+This reverts commit 3abace87db23ddceaf9688a405dd3fd540023977.
+\newline
+
+We can fix it properly instead.
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c7bef01491d0 & 28 Sep 2023 & Michael S. Tsirkin & { html: add missing enumitem package
+\newline
+
+
+makediffhtml.sh currently fails with:
+\newline
+
+! Missing number, treated as zero.
+<to be read again>
+                   \textbackslash c@*
+l.25850 \textbackslash begin\{enumerate\}[label=\textbackslash alph*
+                                      .]
+?
+! Emergency stop.
+<to be read again>
+                   \textbackslash c@*
+l.25850 \textbackslash begin\{enumerate\}[label=\textbackslash alph*
+                                      .]
+\newline
+
+Some web searches turned up suggestions to use enumitem and in fact,
+virtio.tex already does this - but virtio-html.tex doesn't.
+\newline
+
+Adding \textbackslash usepackage\{enumitem\} in virtio-html.tex too fixes the issue.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+3fdaa170307f & 30 Oct 2023 & jeshwank & { virtio-tee: Reserve device ID 46 for TEE device
+\newline
+
+
+In a virtual environment, an application running in guest VM may want
+to delegate security sensitive tasks to a Trusted Application (TA)
+running within a Trusted Execution Environment (TEE). A TEE is a trusted
+OS running in some secure environment, for example, TrustZone on ARM
+CPUs, or a separate secure co-processor etc.
+\newline
+
+A virtual TEE device emulates a TEE within a guest VM. Such a virtual
+TEE device supports multiple operations such as:
+\newline
+
+VIRTIO_TEE_CMD_OPEN_DEVICE – Open a communication channel with virtio
+                             TEE device.
+VIRTIO_TEE_CMD_CLOSE_DEVICE – Close communication channel with virtio
+                              TEE device.
+VIRTIO_TEE_CMD_GET_VERSION – Get version of virtio TEE.
+VIRTIO_TEE_CMD_OPEN_SESSION – Open a session to communicate with
+                              trusted application running in TEE.
+VIRTIO_TEE_CMD_CLOSE_SESSION – Close a session to end communication
+                               with trusted application running in TEE.
+VIRTIO_TEE_CMD_INVOKE_FUNC – Invoke a command or function in trusted
+                             application running in TEE.
+VIRTIO_TEE_CMD_CANCEL_REQ – Cancel an ongoing command within TEE.
+VIRTIO_TEE_CMD_REGISTER_MEM - Register shared memory with TEE.
+VIRTIO_TEE_CMD_UNREGISTER_MEM - Unregister shared memory from TEE.
+\newline
+
+We would like to reserve device ID 46 for Virtio-TEE device.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/175}\newline
+
+Signed-off-by: Jeshwanth Kumar <jeshwanthkumar.nk@amd.com>\newline
+Reviewed-by: Rijo Thomas <Rijo-john.Thomas@amd.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Sumit Garg <sumit.garg@linaro.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+42f389989823 & 30 Oct 2023 & Xuan Zhuo & { virtio-net: support device stats
+\newline
+
+
+This patch allows the driver to obtain some statistics from the device.
+\newline
+
+In the device implementation, we can count a lot of such information,
+which can be used for debugging and judging the running status of the
+device. We hope to directly display it to the user through ethtool.
+\newline
+
+To get stats atomically, try to get stats for all/multiple queue pairs
+in one command.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/180}\newline
+
+Signed-off-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Suggested-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+925b42e3f72f & 30 Oct 2023 & Parav Pandit & { conformance: Add missing virtqueue reset conformance references
+\newline
+
+
+Add the missing references to the virtqueue reset related conformance
+requirements.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+[CH: pushed as an editorial change]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+68d5cc4fe408 & 30 Oct 2023 & Parav Pandit & { packed-ring: Change host,guest to device,driver
+\newline
+
+
+Rest of the packed ring description already uses the device
+and driver terminology. Change the introductory line as well from
+host and guest to device and driver respectively.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+[CH: pushed as an editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+c8249d73d2fd & 30 Oct 2023 & Cornelia Huck & { editorial: allow for longer device id table
+\newline
+
+
+Move to "longtable" to allow the table to span multiple pages (it
+became too long to fit on one page with the latest addition.)
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+eb16e3397177 & 03 Nov 2023 & Cornelia Huck & { editorial: various fixes for 1.3-csd01
+\newline
+
+
+
+- Set approval date to 06 October 2023. (applies to front page subtitle,
+citation format, PDF page footers)
+\newline
+
+- Set filenames and URIs to show csd01 instead of wd01 (also PDF footers)
+\newline
+
+- Set "Previous stage" to "N/A" (don't list a different numbered Version)
+\newline
+
+- In "Related work", change (3x) text - "Latest version" to "Latest stage"
+\newline
+
+- In "Notices", set the copyright year to 2023.
+\newline
+
+
+- In the first line of Appendix D. Revision History, replace "the previous
+version" with "Version 1.2"
+\newline
+
+
+- In Section 1.3, apply the current IETF-recommended text:
+"The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+"SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+"OPTIONAL" in this document are to be interpreted as described in BCP 14
+[[RFC2119](\#link)] and [[RFC8174](\#link)] when, and only when, they appear
+in all capitals, as shown here."
+\newline
+
+- Also, add the RFC 8174 reference:
+[RFC8174]
+Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP
+14, RFC 8174, DOI 10.17487/RFC8174, May 2017,
+\url{https://www.rfc-editor.org/info/rfc8174.}
+\newline
+
+Reported-by: Paul Knight <paul.knight@oasis-open.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+43a948ec6a92 & 03 Nov 2023 & Cornelia Huck & { editorial: update "Computer Language Definitions" URL
+\newline
+
+
+Split out from the other fixes for 1.3-csd01 so that we can fixup the
+diff.
+\newline
+
+
+- In "Status", (fourth paragraph) change the hyperlink under (Computer
+Language Definitions) to be "
+\url{https://www.oasis-open.org/policies-guidelines/tc-process-2017-05-26/\#wpComponentsCompLang}
+"
+\newline
+
+Reported-by: Paul Knight <paul.knight@oasis-open.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+5fc35a7efb90 & 03 Nov 2023 & Cornelia Huck & { makediff: update list of cherry-picks
+\newline
+
+
+We don't need to apply the old commits anymore, but we have to apply
+the URL update to work around a not-yet-debugged latexdiff problem.
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+4cb03b12dc95 & 17 Nov 2023 & Parav Pandit & { description: Avoid splitting the word virtqueue
+\newline
+
+
+Don't split the word virtqueue.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: applied as editorial]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+878a5e7287d7 & 13 Feb 2024 & Shujun Xue & { Define the DEVICE ID of Virtio Cpu balloon device as 47.
+\newline
+
+
+The Virtio CPU balloon device is a primitive device for managing guest
+CPU capacity: the device asks for certain CPU cores to be online,
+offline or throttled, and the driver performs the requested operation.
+This allows the guest to adapt to changes in allowance of underlying
+CPU capacity.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/187}\newline
+
+Signed-off-by: Shujun Xue <shujunxue@google.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+07bb9f7f642d & 13 Feb 2024 & Harald Mommer & { virtio-can: Device specification.
+\newline
+
+
+virtio-can is a virtual CAN device. It provides a way to give access to
+a CAN controller from a driver guest. The device is aimed to be used by
+driver guests running a HLOS as well as by driver guests running a
+typical RTOS as used in controller environments.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/186}\newline
+
+Signed-off-by: Harald Mommer <Harald.Mommer@opensynergy.com>\newline
+Signed-off-by: Mikhail Golubev-Ciuchea <Mikhail.Golubev-Ciuchea@opensynergy.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+193daee1d7a3 & 13 Feb 2024 & Heng Qi & { virtio-net: support the RSS context
+\newline
+
+
+Commit 84a1d9c48200 ("net: ethtool: extend RXNFC API to support RSS spreading of
+filter matches") adds support for RSS context as a destination for receive flow filters
+(see WIP work: \url{https://lists.oasis-open.org/archives/virtio-comment/202308/msg00194.html).}
+\newline
+
+An RSS context consists of configurable parameters specified by receive-side scaling.
+\newline
+
+Some use cases:
+1. When users want some data flows to be steered to specific multiple rxqs, they can set
+   receive flow filter rules for these data flows to an RSS context with desired rxqs.
+2. Traffic isolation. Used when users want the traffic of certain applications to occupy
+   several queues without being distubed.
+\newline
+
+How to set/configure an RSS context:
+Assuming no RSS context has been created before.
+1. ethtool -X eth0 context new start 5 equal 8
+\newline
+
+This command creates an RSS context with an id=1 for eth0, and fills in the indirection
+table with rxq indexes 5-8 circularly. The hash key and hash types reuse the default
+RSS configuration.
+\newline
+
+Then, we can use 'ethtool -x eth0 context 1' to query the above configuration.
+\newline
+
+2. ethtool -X eth0 context new start 6 equal 7 \textbackslash 
+   hkey 8f:bf:dd:11:23:58:d2:8a:00:31:d0:32:a3:b5:1f:\textbackslash 
+   1f:e4:d1:fe:47:7f:64:42:fd:d0:61:16:b8:b0:f9:71:e8:2d:36:7f:18:dd:4d:c8:f3
+\newline
+
+This command creates an RSS context with an id=2 for eth0, and fills in the indirection
+table with rxq indexes 6-7 circularly. The hash key is 8f:bf:dd:11:23:58:d2:8a:00:31:d0\textbackslash 
+:32:a3:b5:1f:1f:e4:d1:fe:47:7f:64:42:fd:d0:61:16:b8:b0:f9:71:e8:2d:36:7f:18:dd:4d:c8:f3.
+Hash types reuse the default RSS configuration.
+\newline
+
+3. ethtool -N eth0 rx-flow-hash tcp4 sdfn context 1
+\newline
+
+This command specifies the hash types for the RSS context whose id=1 on eth0.
+Now this RSS context only has the hash key to reuse the default RSS configuration.
+\newline
+
+4. ethtool -N eth0 flow-type udp4 src-ip 1.1.1.1 context 1
+\newline
+
+This command configures a receive flow filter rule for eth0, and the data flow matching
+this rule will continue to select the final rxq according to the RSS context configuration
+with id=1.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/178}\newline
+
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Acked-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+bb11bf9b25cc & 13 Feb 2024 & Haixu Cui & { content: Rename SPI master to SPI controller
+\newline
+
+
+SPI master is an outdated term and should use SPI controller.
+\newline
+
+Signed-off-by: Haixu Cui <quic_haixcui@quicinc.com>\newline
+Reviewed-by: Viresh Kumar <viresh.kumar@linaro.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+a402acce814f & 13 Feb 2024 & Haixu Cui & { virtio-spi: add the device specification
+\newline
+
+
+The Virtio SPI (Serial Peripheral Interface) device is a virtual
+SPI controller that allows the driver to operate and use the SPI
+controller under the control of the host.
+\newline
+
+This patch adds the specification for virtio-spi.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/189}\newline
+
+Signed-off-by: Haixu Cui <quic_haixcui@quicinc.com>\newline
+Reviewed-by: Viresh Kumar <viresh.kumar@linaro.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+37c6a406678a & 16 Feb 2024 & Pape, Andreas (ADITG/ESS3) & { sound: add sampling rates 12000Hz and 24000Hz
+\newline
+
+
+24kHz is used for 'super wideband' voice transmission 12kHz is added 'for completeness'
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/184}\newline
+
+Signed-off-by: Andreas Pape <apape@de.adit-jv.com>\newline
+Reviewed-by: Anton Yakovlev <anton.yakovlev@opensynergy.com>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+
+ } \\
+\hline
+71fe8e907c9d & 21 May 2024 & Michael S. Tsirkin & { README.md: update mailing list info
+\newline
+
+
+As approved by the TC, we are moving to a less formal
+way of discussing the specification, on the mailing lists
+provided by the Linux Foundation:
+\newline
+
+\url{https://groups.oasis-open.org/higherlogic/ws/public/ballot?id=3820}
+\newline
+
+Update README.md, CONTRIBUTING.md and newdevice.tex accordingly.
+\newline
+
+Use this opportunity to explain when and how to use each
+mailing list.
+\newline
+
+Oh yes, and device numbers are reserved through virtio-comment
+not through virtio-dev. Correct that.
+\newline
+
+Message-Id: <\nolinkurl{8f5db33c96d685fcebca3579b05d09b64dd720d9.1715766697.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+6678bbf0ac15 & 11 Jul 2024 & Parav Pandit & { Add link for the feature bits section
+\newline
+
+
+Device common feature bits overview in the basic facilities and
+their actual description are apart by 24 chapters.
+\newline
+
+Help reader to directly reach out to feature bits definitions from
+the basic chapter.
+\newline
+
+MST: merged as a trivial editorial change\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240612073522.2571082-1-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+550b76062270 & 11 Jul 2024 & Michael S. Tsirkin & { can: drop a broken conformance link
+\newline
+
+
+CAN device has a single device conformance section, drop
+a link to a non-existent section, fixing a Latex error.
+\newline
+
+Fixes: 07bb9f7 ("virtio-can: Device specification.")\newline
+Message-ID: <87a6c3c4463e9f304cdd5dd5fac2194a95a8bcd2.1720724591.git.mst@redhat.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+d7c486b49283 & 11 Jul 2024 & Michael S. Tsirkin & { introduction: fix label
+\newline
+
+
+label to rfc8174 is incorrect, leading to undefined reference
+and multiple defined reference latex errors.
+\newline
+
+Fix it up.
+\newline
+
+Message-Id: <\nolinkurl{52b6fc16793e3b24284aefafda94322c739b9f7f.1720725332.git.mst@redhat.com}>\newline
+Fixes: eb16e33 ("editorial: various fixes for 1.3-csd01")\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+7e454b64747d & 11 Jul 2024 & Michael S. Tsirkin & { makediff: cherry pick label change
+\newline
+
+
+label changes tend to trip up makediff - this one
+causes an undefined reference from deleted section.
+To fix, cherry-pick it.
+\newline
+
+Message-Id: <\nolinkurl{216774e3fa811e0a6e994a3815f0804ddfc0bb03.1720731399.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+b495841a8e80 & 11 Jul 2024 & Michael S. Tsirkin & { transport-mmio: fix up makediff from 1.2
+\newline
+
+
+we fixed a typo in label name: in the diff old links become
+undefined. Add the old label back for now, we can drop it
+down the road.
+\newline
+
+Message-Id: <\nolinkurl{fc98549666e0fe74e890a7a62ca71248e709712b.1720731329.git.mst@redhat.com}>\newline
+Fixes: ca97719 ("transport-mmio: Fix spellings and white spaces")\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+75086cb72af6 & 11 Jul 2024 & Michael S. Tsirkin & { Merge tag 'v1.3-wd02' into virtio-1.4
+\newline
+
+
+Merge fixes from master branch (1.3) up to tag v1.3-wd02
+commit b495841 ("transport-mmio: fix up makediff from 1.2")
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+61b65cbade3e & 11 Jul 2024 & Cornelia Huck & { editorial: allow for longer device id table: makediff 1.3
+\newline
+
+
+Move to "longtable" to allow the table to span multiple pages (it
+became too long to fit on one page with the latest addition.)
+\newline
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+(cherry picked from commit c8249d73d2fdbbfd38e8bf45c8492057bc2485e9)
+\newline
+
+ } \\
+\hline
+6fa0087aa8d3 & 11 Jul 2024 & Michael S. Tsirkin & { Merge tag 'v1.3-wd02-makediff' into virtio-1.4
+\newline
+
+
+this is just so makediff can cherry pick a workaround
+for latexdiff.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+79b04be2e022 & 11 Jul 2024 & Michael S. Tsirkin & { makediff: update base version to 1.3
+\newline
+
+
+might cause minor conflicts if we merge 1.3 branch
+again, but seems cleaner than seeing full diff here.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+18e47c01207b & 11 Jul 2024 & Parav Pandit & { virtio-blk: Fix data type of num_queues field
+\newline
+
+
+Correct the endianness of num_queues field to be little endian.
+\newline
+
+Suggested-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Reviewed-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Message-Id: <\nolinkurl{20240521122119.2004071-1-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+008068153853 & 11 Jul 2024 & Parav Pandit & { virtio-net: Fix receive buffer size calculation text
+\newline
+
+
+Receive buffer size calculation is based on the following
+negotiated features.
+\newline
+
+The text has wrong calculation for IPv6 and also it has missed
+VIRTIO_NET_F_HASH_REPORT.
+\newline
+
+The problem of igorance of VIRTIO_NET_F_HASH_REPORT is reported
+in [1], however fix for ipv6 payload length must also be
+considered.
+\newline
+
+Since for the both the fixes touching same requirements, a
+new issue is created as [2].
+\newline
+
+This patch brings following fixes.
+\newline
+
+1. Fix annotating struct virtio_net_hdr as field
+2. Fix receive buffer calculation for guest GSO cases to consider
+   ipv6 payload length
+3. small grammar corrections for article
+4. reword the requirement to consider the virtio_ndr_hdr which is
+   depends on the negotiated feature, hence first clarify the
+   struct virtio_net_hdr size
+\newline
+
+[1] \url{https://github.com/oasis-tcs/virtio-spec/issues/170}
+[2] \url{https://github.com/oasis-tcs/virtio-spec/issues/183}
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/170}\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/183}\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-2-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+bf0fdf8ba828 & 11 Jul 2024 & Parav Pandit & { virtio-net: Clarify the size of the struct virtio_net_hdr for tx
+\newline
+
+
+The feature VIRTIO_NET_F_HASH_REPORT only applies to the receive side.
+However, when VIRTIO_NET_F_HASH_REPORT feature was introduced, it was
+not clarified that the size of the struct virtio_net_hdr on the packet
+transmission also uses higher size when VIRTIO_NET_F_HASH_REPORT is
+negotiated.
+\newline
+
+Explicitly clarify this.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/183}\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-3-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+6abd42fd2398 & 11 Jul 2024 & Parav Pandit & { virtio-net: Annotate virtio_net_hdr as field
+\newline
+
+
+At several places struct virtio_net_hdr missed out the field
+annotation. Add it.
+\newline
+
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-4-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+fdd39cfa7d76 & 11 Jul 2024 & Parav Pandit & { admin: Introduce self group
+\newline
+
+
+Define self group to control the self device itself.
+\newline
+
+Subsequent patches introduces the concept of device capabilities
+and device resources which utilizes the self group to access
+capabilities and uses device resources to refer to the device itself.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-2-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+bfe175d9e018 & 11 Jul 2024 & Parav Pandit & { admin: Use already defined names for the legacy commands
+\newline
+
+
+Instead of description, use the existing name for defining the legacy
+commands. While at it, prefer the shorter label names which
+are already unique and refer them as hyperreference in the table
+for quick naviation.
+\newline
+
+This is editorial change to align to subsequent patches.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-3-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+88a24d28db5b & 11 Jul 2024 & Parav Pandit & { admin: Add theory of operation for capability admin commands
+\newline
+
+
+Device capability indicates the supported functionality and
+resources of the device to the driver.
+\newline
+
+Driver capability indicates the supported functionality
+and resources which driver will be using. Driver capability is
+subset of the device capability.
+\newline
+
+Add theory of operation describing it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-4-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+72a91e6d6365 & 11 Jul 2024 & Parav Pandit & { admin: Prepare table for multipage listing
+\newline
+
+
+If the table spans across two pages, it is not readable.
+Make use of xltabular package that supports table spanning
+across multiple pages.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-5-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+d60a39072890 & 11 Jul 2024 & Parav Pandit & { admin: Add capability admin commands
+\newline
+
+
+Add three capabilities related administration commands.
+First to get the device capability.
+Second to set the driver capability.
+Third for the driver to discover which capabilities can be accessed.
+\newline
+
+Even though the current series restricts device capability reading
+to the self group type, same structure and command format etc will
+be reusable in future to read the capability from the owner device
+and also to set the device capability via owner device using
+new DEV_CAP_SET command.
+\newline
+
+Resource objects are introduced in subsequent patch which utilizes
+the capability, however some description around resource object
+limit is covered in this patch to keep things simple.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-6-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+738f0a213307 & 11 Jul 2024 & Parav Pandit & { admin: Add theory of operation for device resource objects
+\newline
+
+
+The driver controls the device by means of device resource objects.
+These operations include create, query, modify, and destroy the device
+resource objects.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-7-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+5040f36bd8c9 & 11 Jul 2024 & Parav Pandit & { admin: Add device resource objects admin commands
+\newline
+
+
+Add generic administration commands create, modify, query and destroy
+device resource object.
+\newline
+
+Each resource object defines resource specific attributes for the commands.
+Once the resource object is created by the driver, it can be query/modify or
+destroyed by the driver.
+\newline
+
+Each resource object is identified using a unique resource id per
+resource type.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-8-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+7b3bdd63d821 & 11 Jul 2024 & Parav Pandit & { virtio-net: Add theory of operation for flow filter
+\newline
+
+
+Currently packet allow/drop interface has following limitations.
+\newline
+
+1. Driver can either select which MAC and VLANs to consider
+for allowing/dropping packets, here, the driver has a
+limitation that driver needs to supply full mac
+table or full vlan table for each type. Driver cannot add or
+delete an individual entry.
+\newline
+
+2. Driver cannot select mac+vlan combination for which
+to allow/drop packet.
+\newline
+
+3. Driver cannot not set other commonly used packet match fields
+such as IP header fields, TCP, UDP, SCP header fields.
+\newline
+
+4. Driver cannot steer specific packets based on the match
+fields to specific receiveq.
+\newline
+
+5. Driver do not have multiple or dedicated virtqueues to
+   perform flow filter requests in accelerated manner in
+   the device.
+\newline
+
+Flow filter as a generic framework overcome above limitations.
+\newline
+
+As starting point it is useful to support at least two use cases.
+a. ARFS
+b. ethtool ntuple steering
+\newline
+
+In future it can be further extended for usecases such as
+switching device, connection tracking or may be more.
+\newline
+
+The flow filter has following properties.
+\newline
+
+1. It is an extendible object that driver can create, destroy.
+2. It belongs to a flow filter group.
+3. Each flow filter rule is identified using a unique id,
+   has priority, match key, destination(rq) and action(allow/drop).
+4. Flow filter key also refers to the mask to learn which fields
+   of the packets to match.
+\newline
+
+This patch adds theory of operation for flow filter functionality.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-9-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+899bb0ca24d8 & 11 Jul 2024 & Parav Pandit & { virtio-net: Add flow filter capability
+\newline
+
+
+Add first flow filter capability that indicates device resource
+limits such as number of flow filter rules, groups and selectors.
+\newline
+
+add second capability that indicates supported selectors defining
+which packet headers and their fields supported.
+\newline
+
+[Parav Pandit: resolve conflict: editorial: in spec links]
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-10-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+224e98b0f53c & 11 Jul 2024 & Parav Pandit & { virtio-net: Add flow filter group, classifier and rule resource objects
+\newline
+
+
+Flow filter rules depend on the flow filter group resource object.
+The device can have one or more flow filter groups. Each flow filter
+group has its own order. The group order defines the packet
+processing order in the flow filter domain.
+\newline
+
+Define flow filter classifier object which consists of one
+or multiple types of packet header fields to consider
+for matching. A mask can match on partial field or whole
+field if the device supports partial masking for a given
+mask type.
+\newline
+
+Define flow filter rule resource which consists of
+match key, reference to group and mask objects and
+an action.
+\newline
+
+Currently it covers the most common filter types and value
+of Ethernet header, IPV4 and IPV6 headers and TCP and UDP headers.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-11-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+3b7b7371dbed & 11 Jul 2024 & Parav Pandit & { virtio-net: Add flow filter device and driver requirements
+\newline
+
+
+Add device and driver flow filter requirements.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/179}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Heng Qi <hengqi@linux.alibaba.com>\newline
+Acked-by: Satananda Burla <sburla@marvell.com>\newline
+Message-Id: <\nolinkurl{20240604132903.2093195-12-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+9b3129fe7236 & 12 Jul 2024 & Martin Kröning & { virtio_pci_cap64: specify offset_hi, length_hi endianness
+\newline
+
+
+While the capability introduction says "This virtio structure capability uses little-endian format,"
+it might be preferrable to be explicit about the endianness of offset_hi and length_hi.
+\newline
+
+Signed-off-by: Martin Kröning <martin.kroening@eonerc.rwth-aachen.de>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/196}\newline
+Message-Id: <\nolinkurl{DF89BB0F-6BA4-4DAB-AEC3-03AAF858EC8E@eonerc.rwth-aachen.de}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+67141d1cb0fe & 12 Jul 2024 & Parav Pandit & { admin: Add theory of operation for device parts
+\newline
+
+
+A device can get and set the state of the device which is
+organized as multiple device parts. This can be useful
+in cases of VM snapshot, VM migration, debug or some other use
+cases.
+\newline
+
+Add the theory of operations on how to get/set device parts
+and how it affects when the device is stopped or resumed.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/176}\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240601145042.2074739-2-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+a1281addd9b2 & 12 Jul 2024 & Parav Pandit & { admin: Extend resource objects for sr-iov group type
+\newline
+
+
+occasionally the group owner device accesses the device parts
+of the member device. Extend the usage of resource objects
+for member device parts access.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/176}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240601145042.2074739-3-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+aa4f6f069ab3 & 12 Jul 2024 & Parav Pandit & { admin: Add admin commands for device parts
+\newline
+
+
+Add administration commands to handle device parts such as
+get/set device parts, get metadata of the device parts,
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/176}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240601145042.2074739-4-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+617aa2d62a88 & 12 Jul 2024 & Parav Pandit & { admin: Define common device parts
+\newline
+
+
+Define common device parts that represents the state of the device.
+The driver can get and set these device parts using administration
+commands.
+\newline
+
+[Parav Pandit: resolve conflict: editorial: empty blank line at end of file newdevice.tex]
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/176}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240601145042.2074739-5-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+52d320c8b3c5 & 12 Jul 2024 & Parav Pandit & { admin: Add requirements of device parts commands
+\newline
+
+
+Add device and driver side requirements for the device parts
+related commands.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/176}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240601145042.2074739-6-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+24e93e10fdd4 & 15 Jul 2024 & Parav Pandit & { editorial: replace hyperref with ref
+\newline
+
+
+Replace hyperreference with the name reference.
+Fix the broken reference link for the DEVICE_STATUS part.
+\newline
+
+Fixes: aa4f6f069ab3 ("admin: Add admin commands for device parts")\newline
+Fixes: 617aa2d62a88 ("admin: Define common device parts")\newline
+Suggested-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240714144023.3291803-1-parav@vr-arch-host06.mtvr.labs.mlnx}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+737935487b9e & 15 Jul 2024 & Michael S. Tsirkin & { makediff: look in subjects only
+\newline
+
+
+We currently use rev-list with -F to find commits.
+This helps if commit subject has any special characters
+but means that pattern can apply anywhere in the line.
+In particular, a common Fixes: (hash) "subject" pattern
+we started using implies that fixups are picked up
+instead of the commit.
+\newline
+
+For now, just switch to using regexp (dropping -F)
+and add escape caret in front to only look for the string at
+beginning of the line.
+\newline
+
+We'll worry about more elaborate logic later, if it's ever
+needed.
+\newline
+
+Message-Id: <\nolinkurl{1130700f4ae71a93d9887af35cf105731219f057.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+98ad5fcc88ab & 15 Jul 2024 & Michael S. Tsirkin & { makediff: cherry pick table env change
+\newline
+
+
+latexdiff can not cope with environment name changes.
+cherry pick to avoid confusing it.
+\newline
+
+Fixes: 72a91e6 ("admin: Prepare table for multipage listing")\newline
+Message-Id: <\nolinkurl{c210d1bf4c64145ad3aae7155ef6050433f23346.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+849b421941a4 & 15 Jul 2024 & Michael S. Tsirkin & { admin: switch to tabularx
+\newline
+
+
+xltabular seems to confuse htlatex. Switch to an older
+tabularx which seems to be sufficient for our purposes.
+\newline
+
+Message-Id: <\nolinkurl{29ebb999f6d3808edbf32cd6e95b69fefc1a6e34.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+8e81624195ba & 15 Jul 2024 & Michael S. Tsirkin & { admin-cmds-device-parts: switch to tabularx
+\newline
+
+
+xltabular seems to confuse htlatex. Switch to an older
+tabularx which seems to be sufficient for our purposes.
+\newline
+
+Message-Id: <\nolinkurl{bd3cf4e620485271d777f9cfc51d1ae9ee1b8169.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+886fc333de8b & 15 Jul 2024 & Michael S. Tsirkin & { device-parts: switch to tabularx
+\newline
+
+
+xltabular seems to confuse htlatex. Switch to an older
+tabularx which seems to be sufficient for our purposes.
+\newline
+
+Message-Id: <\nolinkurl{00f72154c624fbbe8c3da9dbdb4e4369c36b7f10.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+a5fb7b5edd8a & 15 Jul 2024 & Michael S. Tsirkin & { admin-cmds-resource-objects: switch to tabularx
+\newline
+
+
+xltabular seems to confuse htlatex. Switch to an older
+tabularx which seems to be sufficient for our purposes.
+\newline
+
+Message-Id: <\nolinkurl{3f7be88a42af0a384621ef07b65c7a31755ef42e.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+459f1aa9ef74 & 15 Jul 2024 & Michael S. Tsirkin & { virtio: replace xltabular with ltablex
+\newline
+
+
+now that we only use tabularx, switch to ltablex to
+make tabularx tables paginate properly.
+\newline
+
+Message-Id: <\nolinkurl{15b11ce5ac9bbe1aaa7818403b999ff39c74a479.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+e48de848f976 & 15 Jul 2024 & Michael S. Tsirkin & { makediff: cherry pick switch to tabularx
+\newline
+
+
+Message-Id: <\nolinkurl{88cdb7020f5b2771a6d201b1f65005da97e54f16.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+6c2340547951 & 15 Jul 2024 & Michael S. Tsirkin & { admin: get rid of _ in labels
+\newline
+
+
+it's not the 1st time we find out underscores in labels confuse
+latexdiff machinery when generating html.
+Errors look like this:
+\newline
+
+! Missing \textbackslash endcsname inserted.
+<to be read again>
+                   \textbackslash unhbox
+....
+\newline
+
+?
+! Emergency stop.
+<to be read again>
+                   \textbackslash unhbox
+\newline
+
+To fix, convert underscores in labels to dashes.
+\newline
+
+Message-Id: <\nolinkurl{3e773fcfd4246e66e6f39d3be95d2c0335e34532.1721062136.git.mst@redhat.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+2a5a957a2571 & 23 Oct 2024 & Viresh Kumar & { virtio-transport: Add a section to define mandatory transport requirements
+\newline
+
+
+The current Virtio documentation lacks a set of generic requirements
+applicable to all transports. Defining these generic requirements could
+be beneficial when integrating support for a new transport.
+\newline
+
+This section outlines the essential requirements that any transport
+method must adhere to.
+\newline
+
+Signed-off-by: Viresh Kumar <viresh.kumar@linaro.org>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/201}\newline
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/4c24ede14e2545b2e9c69e7d9b79dc15744fd965.1723647318.git.viresh.kumar@linaro.org}\newline
+
+ } \\
+\hline
+1d388440700d & 23 Oct 2024 & Parav Pandit & { device-parts: editorial: Add missing struct keyword
+\newline
+
+
+'struct' keyword was missing in the definition.
+Add it.
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: aa4f6f06 ("admin: Add admin commands for device parts")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-2-parav@nvidia.com}\newline
+
+ } \\
+\hline
+9081da1f1e58 & 23 Oct 2024 & Parav Pandit & { device-parts: editorial: Fix metadata type name
+\newline
+
+
+The description is for the type VIRTIO_ADMIN_CMD_DEV_PARTS_METADATA_TYPE_LIST;
+however, it referred to a non-existent definition. Correct it.
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: aa4f6f069ab3 ("admin: Add admin commands for device parts")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/205}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-3-parav@nvidia.com}\newline
+
+ } \\
+\hline
+b820c61e4840 & 23 Oct 2024 & Parav Pandit & { crypto: editorial: Fix spelling errors
+\newline
+
+
+Fix spelling errors.
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: a385dd3366a2 ("virtio-crypto: Add virtio crypto device specification")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/205}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-4-parav@nvidia.com}\newline
+
+ } \\
+\hline
+ec1845bd5a02 & 23 Oct 2024 & Parav Pandit & { gpu: editorial: Fix spelling errors
+\newline
+
+
+Fix spelling errors.
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: fed64230bf31 ("Add virtio gpu device specification.")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/205}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-5-parav@nvidia.com}\newline
+
+ } \\
+\hline
+9d60d8457df0 & 23 Oct 2024 & Parav Pandit & { common: editorial: Fix spelling errors
+\newline
+
+
+Fix spelling errors.
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: 5f1a8ac61c15 ("admin: introduce virtio admin virtqueues")\newline
+Fixes: 68f66ff7a3d9 ("content: define what an exported object is")\newline
+Fixes: ef16b644cc25 ("content.tex: spec text converted to latex")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/205}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-6-parav@nvidia.com}\newline
+
+ } \\
+\hline
+e98070a9573f & 03 Nov 2024 & Albert Esteve & { content: Reserve ID for media device
+\newline
+
+
+Reserve device ID 49 for media device.
+Compatible with video encoder, video decoder,
+and capture devices.
+\newline
+
+Signed-off-by: Albert Esteve <aesteve@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/202}\newline
+Link: \url{https://lore.kernel.org/r/20240906070833.1949727-1-aesteve@redhat.com}\newline
+
+ } \\
+\hline
+417fb28849c6 & 03 Nov 2024 & Parav Pandit & { virtio-gpu: Fix spelling error
+\newline
+
+
+Fix spelling error.
+\newline
+
+Fixes: fed64230bf31 ("Add virtio gpu device specification.")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/192}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+
+ } \\
+\hline
+d17c70ab971c & 03 Nov 2024 & Parav Pandit & { Revert "virtio-gpu: Fix spelling error"
+\newline
+
+
+This reverts commit 417fb28849c6ecac3b18a35e8a154c03f8dba66f.
+Reverted due to missing Link in commit log.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+4a5df407eca3 & 03 Nov 2024 & Parav Pandit & { virtio-gpu: Fix spelling error
+\newline
+
+
+Fix spelling error.
+\newline
+
+Fixes: fed64230bf31 ("Add virtio gpu device specification.")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/192}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20241027044457.495730-1-parav@nvidia.com}\newline
+
+ } \\
+\hline
+a1849e31ddeb & 25 Nov 2024 & Juraj Marcin & { virtio-mem: introduce VIRTIO_MEM_F_PERSISTENT_SUSPEND
+\newline
+
+
+Before, the behavior while suspending to a deep sleep state and waking
+up was not specified. For example, in x86 QEMU VM all devices receive a
+reset request during wake-up. This would lead to unplugging of all the
+plugged memory blocks. Due to this, suspending is disallowed in the
+Linux Kernel, when plugged memory is present and
+VIRTIO_MEM_F_PERSISTENT_SUSPEND feature flag is not advertised by the
+virtio-mem device.
+\newline
+
+This new flag should signal to the guest driver, that the device can
+correctly suspend to a deep sleep state and then wake up without
+disrupting the plugged memory blocks. This feature flag is already
+supported in the Linux Kernel [1] and also supported in QEMU [2].
+\newline
+
+[1]: \url{https://lore.kernel.org/all/20240318120645.105664-1-david@redhat.com/}
+[2]: \url{https://lore.kernel.org/all/20240904103722.946194-1-jmarcin@redhat.com/}
+\newline
+
+Reviewed-by: David Hildenbrand <david@redhat.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Juraj Marcin <jmarcin@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/207}\newline
+Link: \url{https://lore.kernel.org/r/20241009090202.10544-2-jmarcin@redhat.com}\newline
+
+ } \\
+\hline
+c8c01f247ef7 & 25 Nov 2024 & Parav Pandit & { device-parts: editorial: Replace duplicated part type
+\newline
+
+
+Device part type VIRTIO_DEV_PART_VQ_CFG was duplicated in
+the description; it is supposed to be VIRTIO_DEV_PART_VQ_NOTIFY_CFG.
+Fix it.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/209}\newline
+Fixes: 617aa2d62a88 ("Signed-off-by: Parav Pandit <parav@nvidia.com>")\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20241020114141.451478-2-parav@nvidia.com}\newline
+
+ } \\
+\hline
+f21f83160cf1 & 25 Nov 2024 & Parav Pandit & { device-parts: Add device type specific raw selector
+\newline
+
+
+The subsequent patch defines the device-type-specific parts. For
+these parts, the raw selector format is defined to ensure that
+each device type can specify its format accurately.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/209}\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20241020114141.451478-3-parav@nvidia.com}\newline
+Note: Merged with tab replaced with white spaces.\newline
+
+ } \\
+\hline
+b2990c8a6642 & 25 Nov 2024 & Parav Pandit & { virtio-net: Define cvq configuration related device parts
+\newline
+
+
+virtio net driver sends the control virtqueue commands for
+device configuration. Such driver configuration is currently
+not captured in the device parts.
+\newline
+
+This series adds several of such device parts which represents
+the network device specific configuration.
+\newline
+
+It is done by utilizing the existing device parts structure.
+A new generic selector format is added to enable device type
+specific device parts.
+\newline
+
+This series also reuses the existing control virtqueue command
+structures, fields, and values to define the network device parts.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/209}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20241020114141.451478-4-parav@nvidia.com}\newline
+
+ } \\
+\hline
+8e443f483843 & 20 Jan 2025 & Paolo Abeni & { virtio-net: clarify NEEDS_CSUM semantic for GSO packats.
+\newline
+
+
+The current wording is a bit unclear hinting to possible additional
+nested headers. For GSO packets virtio net (currently) supports
+offload for the checksum of single transport header, explicitly state
+that in both the driver and device sections.
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/81034d9f4b12f7bd7aa6f7f5266cb6d551d0823c.1732699986.git.pabeni@redhat.com}\newline
+
+ } \\
+\hline
+95c085b2f16d & 20 Jan 2025 & Paolo Abeni & { virtio-net: clarify DATA_VALID semantic for encap protos.
+\newline
+
+
+DATA_VALID allows offloading a single checksum level, leaving
+unspecified which header checksum is offloaded when one or more
+encapsulated protocols are present.
+\newline
+
+In such a case, the only option usable from the guest OS is
+offloading the outermost checksum. That also matches the existing
+implementation.
+\newline
+
+Explicitly state such the constraint, to remove any ambiguity and
+make later changes more straightforward.
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/ec6fdbfba2c4fc1969d83799836ebb694a01fb30.1732699986.git.pabeni@redhat.com}\newline
+
+ } \\
+\hline
+8cd457d8aa82 & 20 Jan 2025 & Paolo Abeni & { virtio-net: define UDP tunnel segmentation offload feature
+\newline
+
+
+The VIRTIO_NET_HDR_GSO_UDP_TUNNEL_IPV\{4,6\} are two gso_type flags
+allowing respectively GSO over UDPv4 tunnel and GSO over UDPv6 tunnel.
+They can be negotiated on both the host and guest sides.
+\newline
+
+One constraint addressed here is that the virtio side (either device or
+driver) receiving a UDP tunneled GSO packet must be able to reconstruct
+completely the inner and outer headers offset - to allow for later GSO.
+\newline
+
+To accommodate such need, new fields are introduced in the virtio_net
+header: outer_th_offset and inner_nh_offset.
+They map directly to the corresponding header information. The inner
+transport header is implied by the (inner) checksum offload.
+\newline
+
+Those fields are required because a virtio device H/W implementation
+performing segmentation for UDP tunneled packet will need to touch
+the outer transport protocol (for the UDP length filed), the
+inner network protocol (for the total length field, in the IPv4
+case).
+\newline
+
+Note that segmentation will additionally need to touch
+the outer network protocol and the inner transport protocol. The first
+is implied/easily found with trivial parsing, the latter is identified
+by the existing csum_start field.
+\newline
+
+Note that there is no concept of UDP tunnel type negotiation (e.g.
+vxlan, geneve, vxlan-gpe, etc.), as a virtio device H/W implementation
+can perform segmentation for every possible UDP-tunnel given the
+specified new fields.
+In the reverse direction, if a virtio device H/W implementation receives
+some traffic for an unknown or unsupported UDP tunnel, it will simply
+not aggregate the wire packet in a GSO one.
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/3e1c45071c8cf4efc7ca0ecc7b52a73c6bf983fe.1732699986.git.pabeni@redhat.com}\newline
+
+ } \\
+\hline
+3fea589bd7c6 & 20 Jan 2025 & Paolo Abeni & { virtio-net: define UDP tunnel checksum offload feature
+\newline
+
+
+This complements the previous change, additionally
+introducing the UDP tunnel checksum offload feature.
+\newline
+
+Differently from the plain checksum offload feature, this
+depends on UDP tunnel segmentation being available, as outer checksum
+computation for non GSO packets is cheap and H/W implementation of
+such a feature is complex.
+\newline
+
+UDP tunnel checksum offload does not introduce additional fields,
+instead it leverages the outer transport offset introduced by the
+UDP tunnel segmentation feature to locate the outer checksum
+inside the packet.
+\newline
+
+When UDP tunnel checksum offload is negotiated:
+\newline
+
+- the driver requests the outer UDP checksum offload setting the
+VIRTIO_NET_HDR_F_UDP_TUNNEL_CSUM bit in the flag field. Such bit
+is not allocated inside the gso_type field to prevent space
+exhaustion there.
+\newline
+
+- in the device -> driver direction, the VIRTIO_NET_HDR_F_DATA_VALID
+bit semantic is extended, covering both the inner and the outer
+checksum validation.
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/e87cf0c61f5ea3783cea0bcc4ea74f6e73f453d7.1732699986.git.pabeni@redhat.com}\newline
+
+ } \\
+\hline
+14d3f88cfd77 & 03 Feb 2025 & Parav Pandit & { virtio-net: Fix to avoid using reserved feature bits
+\newline
+
+
+Listed patches in the fixes tag, incorrectly used the reserved feature bits.
+Fix them to use the well defined device specific range.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/212}\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/213}\newline
+Fixes: 8cd457d8aa82 ("virtio-net: define UDP tunnel segmentation offload feature")\newline
+Fixes: 3fea589bd7c6 ("virtio-net: define UDP tunnel checksum offload feature")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250126062058.13695-1-parav@nvidia.com}\newline
+
+ } \\
+\hline
+124fcd0e97f2 & 24 Feb 2025 & Steffen Trumtrar & { virtio-net: Fix receive buffer size typo
+\newline
+
+
+The commit 00806815385340dd411cc67df3f6837935bb5e26 introduced a slight
+typo in the struct virtio_net_hdr size calculation depending on
+VIRTIO_NET_F_HASH_REPORT negotiation.
+\newline
+
+Without VIRTIO_NET_F_HASH_REPORT the struct is smaller than with the
+feature. This mix up only occurs in one instance; sizes are correct in
+all other occurences.
+\newline
+
+Fix this typo.
+\newline
+
+Fixes: 008068153853 ("virtio-net: Fix receive buffer size calculation text")\newline
+Signed-off-by: Steffen Trumtrar <s.trumtrar@pengutronix.de>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/216}\newline
+Link: \url{https://lore.kernel.org/r/20250207-v1-4-topic-virtio-net-receive-buffer-fix-v1-1-efcef167d6bc@pengutronix.de}\newline
+
+ } \\
+\hline
+a9b942e043d2 & 10 Mar 2025 & Parav Pandit & { virtio-net: Rename selectors_limit to classifiers_limit
+\newline
+
+
+A classifier object consists of one or more selectors. The number of
+selectors per classifier object is already annotated in the field
+selectors_per_classifier_limit.
+\newline
+
+The field selectors_limit is intended to reflect the limit of
+classifier objects. Hence, rename it to classifiers_limit.
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/215}\newline
+Fixes: 3b7b7371dbed ("virtio-net: Add flow filter device and driver requirements")\newline
+Fixes: 899bb0ca24d8 ("virtio-net: Add flow filter capability")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250215061158.21053-1-parav@nvidia.com}\newline
+
+ } \\
+\hline
+4c73a709a17a & 10 Apr 2025 & Parav Pandit & { conformance: Add missing virtqueue reset conformance references
+\newline
+
+
+Add the missing references to the virtqueue reset related conformance
+requirements.
+\newline
+
+(cherry picked from commit 925b42e3f72fdd113a5e4cc219b739c2c74dba23)
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+[CH: pushed as an editorial change]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-2-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+82b431347a5d & 10 Apr 2025 & Parav Pandit & { packed-ring: Change host,guest to device,driver
+\newline
+
+
+Rest of the packed ring description already uses the device
+and driver terminology. Change the introductory line as well from
+host and guest to device and driver respectively.
+\newline
+
+(cherry picked from commit 68d5cc4fe4081a49235885005647b095b7965c0b)
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+[CH: pushed as an editorial update]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-3-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+32a7417c4e99 & 10 Apr 2025 & Parav Pandit & { description: Avoid splitting the word virtqueue
+\newline
+
+
+Don't split the word virtqueue.
+\newline
+
+(cherry picked from commit 4cb03b12dc951f0152cd2cd9c79b24492e174e43)
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+[CH: applied as editorial]
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-4-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+36e90609bf5c & 10 Apr 2025 & Haixu Cui & { content: Rename SPI master to SPI controller
+\newline
+
+
+SPI master is an outdated term and should use SPI controller.
+\newline
+
+(cherry picked from commit bb11bf9b25cc86c6ff02bf9f243da55b0d383a32)
+\newline
+
+Signed-off-by: Haixu Cui <quic_haixcui@quicinc.com>\newline
+Reviewed-by: Viresh Kumar <viresh.kumar@linaro.org>\newline
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-5-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+8297084d5fcd & 10 Apr 2025 & Parav Pandit & { virtio-blk: Fix data type of num_queues field
+\newline
+
+
+Correct the endianness of num_queues field to be little endian.
+\newline
+
+(cherry picked from commit 18e47c01207b2983a7dfd1e2c7de1bdc408d391a)
+\newline
+
+Suggested-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Reviewed-by: Max Gurtovoy <mgurtovoy@nvidia.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>\newline
+Message-Id: <\nolinkurl{20240521122119.2004071-1-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-6-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+a22cd3e8f6f4 & 10 Apr 2025 & Parav Pandit & { virtio-net: Fix receive buffer size calculation text
+\newline
+
+
+Receive buffer size calculation is based on the following
+negotiated features.
+\newline
+
+The text has wrong calculation for IPv6 and also it has missed
+VIRTIO_NET_F_HASH_REPORT.
+\newline
+
+The problem of igorance of VIRTIO_NET_F_HASH_REPORT is reported
+in [1], however fix for ipv6 payload length must also be
+considered.
+\newline
+
+Since for the both the fixes touching same requirements, a
+new issue is created as [2].
+\newline
+
+This patch brings following fixes.
+\newline
+
+1. Fix annotating struct virtio_net_hdr as field
+2. Fix receive buffer calculation for guest GSO cases to consider
+   ipv6 payload length
+3. small grammar corrections for article
+4. reword the requirement to consider the virtio_ndr_hdr which is
+   depends on the negotiated feature, hence first clarify the
+   struct virtio_net_hdr size
+\newline
+
+[1] \url{https://github.com/oasis-tcs/virtio-spec/issues/170}
+[2] \url{https://github.com/oasis-tcs/virtio-spec/issues/183}
+\newline
+
+(cherry picked from commit 00806815385340dd411cc67df3f6837935bb5e26)
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/170}\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/183}\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-2-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-7-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+25d81013b392 & 10 Apr 2025 & Parav Pandit & { virtio-net: Clarify the size of the struct virtio_net_hdr for tx
+\newline
+
+
+The feature VIRTIO_NET_F_HASH_REPORT only applies to the receive side.
+However, when VIRTIO_NET_F_HASH_REPORT feature was introduced, it was
+not clarified that the size of the struct virtio_net_hdr on the packet
+transmission also uses higher size when VIRTIO_NET_F_HASH_REPORT is
+negotiated.
+\newline
+
+Explicitly clarify this.
+\newline
+
+(cherry picked from commit bf0fdf8ba828b694a22c44d45cb3fd34cf813e99)
+\newline
+
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/183}\newline
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-3-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-8-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+fb926ab38216 & 10 Apr 2025 & Parav Pandit & { virtio-net: Annotate virtio_net_hdr as field
+\newline
+
+
+At several places struct virtio_net_hdr missed out the field
+annotation. Add it.
+\newline
+
+(cherry picked from commit 6abd42fd2398718ff689dc51fa93d38ede97be8f)
+\newline
+
+Reviewed-by: Xuan Zhuo <xuanzhuo@linux.alibaba.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20240606102014.2103986-4-parav@nvidia.com}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-9-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+b16f382569e1 & 10 Apr 2025 & Martin Kröning & { virtio_pci_cap64: specify offset_hi, length_hi endianness
+\newline
+
+
+While the capability introduction says "This virtio structure capability uses little-endian format,"
+it might be preferrable to be explicit about the endianness of offset_hi and length_hi.
+\newline
+
+(cherry picked from commit 9b3129fe72360a78e76b6dd890d3abc5a45fa915)
+\newline
+
+Signed-off-by: Martin Kröning <martin.kroening@eonerc.rwth-aachen.de>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/196}\newline
+Message-Id: <\nolinkurl{DF89BB0F-6BA4-4DAB-AEC3-03AAF858EC8E@eonerc.rwth-aachen.de}>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-10-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+376348fe4047 & 10 Apr 2025 & Parav Pandit & { gpu: editorial: Fix spelling errors
+\newline
+
+
+Fix spelling errors.
+\newline
+
+(cherry picked from commit ec1845bd5a0261a65e29137f949ba03bf2fb44e2)
+\newline
+
+Branch: virtio-1.4\newline
+Fixes: fed64230bf31 ("Add virtio gpu device specification.")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/205}\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/20240916030835.68178-5-parav@nvidia.com}\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-11-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+12289b0cf007 & 10 Apr 2025 & Paolo Abeni & { virtio-net: clarify NEEDS_CSUM semantic for GSO packats.
+\newline
+
+
+The current wording is a bit unclear hinting to possible additional
+nested headers. For GSO packets virtio net (currently) supports
+offload for the checksum of single transport header, explicitly state
+that in both the driver and device sections.
+\newline
+
+(cherry picked from commit 8e443f483843c3d42a4128778f1c7548a02c48bf)
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/81034d9f4b12f7bd7aa6f7f5266cb6d551d0823c.1732699986.git.pabeni@redhat.com}\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-12-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+d3c2f14d3406 & 10 Apr 2025 & Paolo Abeni & { virtio-net: clarify DATA_VALID semantic for encap protos.
+\newline
+
+
+DATA_VALID allows offloading a single checksum level, leaving
+unspecified which header checksum is offloaded when one or more
+encapsulated protocols are present.
+\newline
+
+In such a case, the only option usable from the guest OS is
+offloading the outermost checksum. That also matches the existing
+implementation.
+\newline
+
+Explicitly state such the constraint, to remove any ambiguity and
+make later changes more straightforward.
+\newline
+
+(cherry picked from commit 95c085b2f16de4bcdcae9c42d7828d9b8efc7836)
+\newline
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Link: \url{https://lore.kernel.org/r/ec6fdbfba2c4fc1969d83799836ebb694a01fb30.1732699986.git.pabeni@redhat.com}\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-13-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+16718cb6912a & 10 Apr 2025 & Steffen Trumtrar & { virtio-net: Fix receive buffer size typo
+\newline
+
+
+The commit 00806815385340dd411cc67df3f6837935bb5e26 introduced a slight
+typo in the struct virtio_net_hdr size calculation depending on
+VIRTIO_NET_F_HASH_REPORT negotiation.
+\newline
+
+Without VIRTIO_NET_F_HASH_REPORT the struct is smaller than with the
+feature. This mix up only occurs in one instance; sizes are correct in
+all other occurences.
+\newline
+
+Fix this typo.
+\newline
+
+(cherry picked from commit 124fcd0e97f209aab19639e7369116d99ede22a2)
+\newline
+
+Fixes: 008068153853 ("virtio-net: Fix receive buffer size calculation text")\newline
+Signed-off-by: Steffen Trumtrar <s.trumtrar@pengutronix.de>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Acked-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/216}\newline
+Link: \url{https://lore.kernel.org/r/20250207-v1-4-topic-virtio-net-receive-buffer-fix-v1-1-efcef167d6bc@pengutronix.de}\newline
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250401133543.801184-14-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+8d76f64d2198 & 20 May 2025 & Kommula Shiva Shankar & { virtio-net: Introduce a new field to indicate outer network header offset
+\newline
+
+
+This patch introduces a new field in the virtio_net_hdr called outer_nh_offset, along with a new net device feature, VIRTIO_NET_F_OUT_NET_HEADER.
+\newline
+
+Currently, drivers lack a dedicated field to signal the start of the network header to the device when performing checksum offload
+and segmentation offload. This requires the device to read the packet in data path, which significantly affects performance.
+Additionally, some hardware implementations require knowledge of the outer L3 offset (aka L2 length) for inline IPsec hardware acceleration.
+\newline
+
+To address this limitation, we propose to introduce a new field in the virtio_net_hdr called
+outer_nh_offset.
+\newline
+
+The outer_nh_offset represents the start byte offset of the outer network header from the beginning of the packet.
+\newline
+
+This issue was briefly discussed on the mailing list in a different thread, which can be found here.
+\url{https://lore.kernel.org/all/DM4PR18MB4269FAAC3CFC7E57E25DFBD2DF8B2@DM4PR18MB4269.namprd18.prod.outlook.com/}
+\newline
+
+v4->v5
+ - Added padding bytes to virtio_net_hdr to ensure 64b alignment
+ - Addressed pending review comments
+v4:\url{https://lore.kernel.org/virtio-comment/20250304075955.208450-1-kshankar@marvell.com/}
+\newline
+
+v3 -> v4
+ - Removed the union of new flag with existing flags. Added as a separate field
+   in the virtio net header
+ - Renamed out_nh_offset to outer_nh_offset to maintain consistency with other fields
+ - Spellchecks in commit message description
+v3:\url{https://lore.kernel.org/all/20250217172509.107212-1-kshankar@marvell.com}
+\newline
+
+v2 -> v3:
+ - Rebase to virtio-1.4
+ - Addressed pending review comments related to wording.
+v2:\url{https://lore.kernel.org/all/20250128142152.3662988-1-kshankar@marvell.com/}
+\newline
+
+v1 -> v2:
+ - explicitly state that the out_nh_offset can be set only when a valid network header is present.
+ - updated out_nh_offset usage in the RX direction.
+ - minor word cleanup.
+v1: \url{https://lore.kernel.org/virtio-comment/20250114171636.3175670-1-kshankar@marvell.com/}
+\newline
+
+Signed-off-by: Kommula Shiva Shankar <kshankar@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/222}\newline
+Link: \url{https://lore.kernel.org/r/20250401195655.486230-1-kshankar@marvell.com}\newline
+
+ } \\
+\hline
+fa12149158bb & 20 May 2025 & Aiswarya Cyriac & { Reserve device ID 49 for Virtio USB controller device
+\newline
+
+
+Virtio USB controller device is a dual role device, which
+can function as a USB host controller or a USB device
+controller or support both roles. Additionally, device provides
+support for switching of roles between USB host and device.
+\newline
+
+Signed-off-by: Aiswarya Cyriac <quic_acyriac@quicinc.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/211}\newline
+Link: \url{https://lore.kernel.org/r/20241129111325.952-1-quic_acyriac@quicinc.com}\newline
+
+ } \\
+\hline
+c7553a71b7eb & 04 Jun 2025 & Srujana Challa & { virtio-crypto: Add IPsec service operation and Capabilities
+\newline
+
+
+This commit introduces the IPsec service operation to the Crypto
+device, enabling offloading of IPsec processing.
+\newline
+
+Capabilities:\newline
+
+1. IPsec Resource Capability (VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP):
+   Indicates the device's IPsec resource limits, such as the number of
+   outbound and inbound Security Associations (SAs).
+2. IPsec SA Capability (VIRTIO_CRYPTO_IPSEC_SA_CAP): Specifies the
+   supported IPsec modes, along with the supported cryptographic
+   algorithms, authentication algorithms, IPsec options and
+   anti-replay window size.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/226}\newline
+Link: \url{https://lore.kernel.org/r/20250429131953.1949757-2-schalla@marvell.com}\newline
+
+ } \\
+\hline
+9d2cf8dae5f7 & 04 Jun 2025 & Srujana Challa & { virtio-crypto: Add resource objects for IPsec outbound and inbound SAs
+\newline
+
+
+This commit introduces resource objects to enable the driver/device to
+create IPsec Security Associations (SAs) for both inbound and outbound
+directions.
+\newline
+
+The IPsec SA objects include essential parameters required for packet
+outbound and inbound processing, such as SPI, tunnel headers, IPsec mode,
+IPsec options and cipher/authentication specific data.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/226}\newline
+Link: \url{https://lore.kernel.org/r/20250429131953.1949757-3-schalla@marvell.com}\newline
+
+ } \\
+\hline
+4e0baa89787f & 04 Jun 2025 & Srujana Challa & { virtio-crypto: Add new IPsec opcodes to data request
+\newline
+
+
+Adds new IPsec opcodes, VIRTIO_CRYPTO_IPSEC_OUTBOUND and
+VIRTIO_CRYPTO_IPSEC_INBOUND and defines opcode specific
+data structures for IPsec data processing.
+\newline
+
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/226}\newline
+Link: \url{https://lore.kernel.org/r/20250429131953.1949757-4-schalla@marvell.com}\newline
+
+ } \\
+\hline
+dac8e793bae1 & 04 Jun 2025 & Srujana Challa & { virtio-crypto: Add device and driver requirements for IPsec operation
+\newline
+
+
+Add device and driver requirements for IPsec Operation.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/226}\newline
+Link: \url{https://lore.kernel.org/r/20250429131953.1949757-5-schalla@marvell.com}\newline
+
+ } \\
+\hline
+45809a3045e5 & 04 Jun 2025 & Srujana Challa & { virtio-net: Add IPsec operation, capabilities and resource objects
+\newline
+
+
+This commit introduces the IPsec Operation to the Net device
+along with the capabilities and resource objects. This enables
+the offloading of IPsec processing, both before transmission
+and after reception, thereby providing inline offload
+capabilities.
+\newline
+
+Capbilities:\newline
+
+1. IPsec Resource Capability (VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP):
+   Indicates the device's IPsec resource limits, such as the number of
+   encryption and decryption Security Associations (SAs).
+2. IPsec SA Capability (VIRTIO_CRYPTO_IPSEC_SA_CAP): Specifies the
+   supported IPsec modes, along with the supported cryptographic
+   algorithms, authentication algorithms, IPsec options and
+   anti-replay window size.
+\newline
+
+Resource objects:
+1. VIRTIO_NET_RESOURCE_OBJ_IPSEC_OUTB_SA
+2. VIRTIO_NET_RESOURCE_OBJ_IPSEC_INB_SA
+\newline
+
+These IPsec SA resource objects encompass parameters necessary
+for packet encryption and decryption. These include the SPI,
+tunnel headers, IPsec mode, IPsec options, and metadata specific
+to cipher and authentication.
+\newline
+
+This patch refers the Virtio-crypto IPsec service operation
+capabilities and resource objects data structures and crypto algorithm
+definitions to avoid duplication, however the admin command type vaule
+differs between Virtio-crypto and Virtio-net.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/227}\newline
+Link: \url{https://lore.kernel.org/r/20250520121924.2169258-2-schalla@marvell.com}\newline
+
+ } \\
+\hline
+a9604face331 & 04 Jun 2025 & Srujana Challa & { virtio-net: Add new flow filter selector and action for IPsec
+\newline
+
+
+This update introduces a new flow filter selector to match
+the ESP header and adds a new flow filter action for IPsec
+processing.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/227}\newline
+Link: \url{https://lore.kernel.org/r/20250520121924.2169258-3-schalla@marvell.com}\newline
+
+ } \\
+\hline
+fd15f89a870f & 04 Jun 2025 & Srujana Challa & { virtio-net: extend virtio_net_hdr for IPsec support
+\newline
+
+
+Add IPsec resource object identifiers to the virtio_net_hdr for
+identifying encryption/decryption operations on tx and rx side
+respectively, along with flags.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/227}\newline
+Link: \url{https://lore.kernel.org/r/20250520121924.2169258-4-schalla@marvell.com}\newline
+
+ } \\
+\hline
+a0b809a7ddbd & 04 Jun 2025 & Srujana Challa & { virtio-net: Add IPsec operation device and driver requirements
+\newline
+
+
+Add device and driver requirements for IPsec Operation.
+\newline
+
+Signed-off-by: Srujana Challa <schalla@marvell.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/227}\newline
+Link: \url{https://lore.kernel.org/r/20250520121924.2169258-5-schalla@marvell.com}\newline
+
+ } \\
+\hline
+c5e5810cb6cb & 09 Jul 2025 & Albert Esteve & { virtio-media: Add virtio media device specification
+\newline
+
+
+Virtio-media is an encapsulation of the V4L2 UAPI into
+virtio, able to virtualize any video device supported
+by V4L2.
+\newline
+
+Note that virtio-media does not require the use of a
+V4L2 device driver on the host or guest side -
+V4L2 is only used as a host-guest protocol,
+and both sides are free to convert it from/to any
+model that they wish to use.
+\newline
+
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Reviewed-by: Alexandre Courbot <gnurou@gmail.com>\newline
+Signed-off-by: Albert Esteve <aesteve@redhat.com>\newline
+
+ } \\
+\hline
+340d076eee2a & 15 Jul 2025 & Zhu Lingshan & { virtio: re-order device status bits
+\newline
+
+
+This commit re-arranges the device status bits,
+to list them in ascending order.
+\newline
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@amd.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/229}\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250704101739.354522-2-lingshan.zhu@amd.com}\newline
+
+ } \\
+\hline
+b1d6ef63b9f0 & 15 Jul 2025 & Zhu Lingshan & { virtio: document feature bit 42
+\newline
+
+
+This commit documents feture bit 42
+VIRTIO_NET_F_GUEST_RSC6
+\newline
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@amd.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: 94384142 ("content: Declare virtio-net legacy feature bits 41-42")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/229}\newline
+Reviewed-by: Jason Wang <jasowang@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250704101739.354522-3-lingshan.zhu@amd.com}\newline
+
+ } \\
+\hline
+f219feffa995 & 15 Jul 2025 & Zhu Lingshan & { virtio: introduce SUSPEND and RESUME feature
+\newline
+
+
+This commit allows the driver to suspend the
+device through a new device status bit SUSPEND
+and resume the device running by re-setting
+DRIVER_OK bit in device status.
+\newline
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@amd.com>\newline
+Signed-off-by: Jason Wang <jasowang@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/229}\newline
+Link: \url{https://lore.kernel.org/r/20250704101739.354522-4-lingshan.zhu@amd.com}\newline
+
+ } \\
+\hline
+6275e115286b & 15 Jul 2025 & Parav Pandit & { virtio-net: Fix ipsec broken conformance links
+\newline
+
+
+Fix the broken conformance links for ipsec device and driver
+requirements.
+\newline
+
+Fixes: a0b809a7ddbd ("virtio-net: Add IPsec operation device and driver requirements")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250709140049.507870-1-parav@nvidia.com}\newline
+
+ } \\
+\hline
+65645f272406 & 22 Sep 2025 & Peter Hilber & { virtio-rtc: Add initial device specification
+\newline
+
+
+The virtio-rtc device provides information about current time through
+one or more clocks. As such, it is a Real-Time Clock (RTC) device.
+\newline
+
+The normative statements for this device follow in the next patch.
+\newline
+
+For this device, there is a Linux kernel driver patch series which is
+being upstreamed, and a proprietary device implementation.
+\newline
+
+Miscellaneous
+\newline
+
+-------------
+\newline
+
+The spec does not specify how a driver should interpret clock readings,
+esp. also not how to perform clock synchronization.
+\newline
+
+The device uses the former "Timer/Clock" device id which is already part
+of the specification. This device id was registered a long time ago and
+should be unused according to the author's information. The name "RTC"
+was determined to be the best for a device which focuses on current
+time.
+\newline
+
+Signed-off-by: Peter Hilber <quic_philber@quicinc.com>\newline
+Link: \url{https://lore.kernel.org/r/20250710090648.1711-3-quic_philber@quicinc.com}\newline
+
+ } \\
+\hline
+f111987e3ff6 & 22 Sep 2025 & Peter Hilber & { virtio-rtc: Add initial normative statements
+\newline
+
+
+Add the normative statements for the initial device specification.
+\newline
+
+Signed-off-by: Peter Hilber <quic_philber@quicinc.com>\newline
+Link: \url{https://lore.kernel.org/r/20250710090648.1711-4-quic_philber@quicinc.com}\newline
+
+ } \\
+\hline
+0a6a441c3658 & 22 Sep 2025 & Peter Hilber & { virtio-rtc: Add alarm feature
+\newline
+
+
+Add the VIRTIO_RTC_F_ALARM feature (without normative statements).
+\newline
+
+The intended use case is: A driver needs to react when an alarm time has
+been reached, but at alarm time, the driver may be in a sleep state or
+powered off. The alarm feature can resume and notify the driver in this
+case. Alarms may be retained across device resets.
+\newline
+
+Peculiarities
+\newline
+
+-------------
+\newline
+
+Unlike usual alarm clocks, a virtio-rtc alarm-capable clock may step
+autonomously at any time: An alarm may change back from "expired" to
+"not expired" before the driver has started processing an alarm
+notification.
+\newline
+
+To address the above, and the device resets, define "alarm expiration"
+in such a way that the driver always has a chance to react to an alarm,
+and make the device always responsible for notifying the driver about an
+alarm expiration.
+\newline
+
+The VIRTIO_RTC_REQ_SET_ALARM_ENABLED request is there so that the Linux
+ioctls RTC_AIE_ON and RTC_AIE_OFF only need to emit one request.
+\newline
+
+Signed-off-by: Peter Hilber <quic_philber@quicinc.com>\newline
+Link: \url{https://lore.kernel.org/r/20250710090648.1711-5-quic_philber@quicinc.com}\newline
+
+ } \\
+\hline
+f978e0727353 & 22 Sep 2025 & Peter Hilber & { virtio-rtc: Add normative statements for alarm feature
+\newline
+
+
+Add the normative statements for the alarm feature added previously.
+\newline
+
+Signed-off-by: Peter Hilber <quic_philber@quicinc.com>\newline
+Link: \url{https://lore.kernel.org/r/20250710090648.1711-6-quic_philber@quicinc.com}\newline
+
+ } \\
+\hline
+928d969251bf & 23 Sep 2025 & Matias Ezequiel Vara Larsen & { git-publish: add profile
+\newline
+
+
+Add git-publish profile and document how to use it.
+\newline
+
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Reviewed-by: Stefano Garzarella <sgarzare@redhat.com>\newline
+Reviewed-by: Albert Esteve <aesteve@redhat.com>\newline
+Acked-by: Cornelia Huck <cohuck@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250305164546.1484029-1-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+d9742cb7b26c & 26 Sep 2025 & Matias Ezequiel Vara Larsen & { README.md: add example email for TC vote request
+\newline
+
+
+Signed-off-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250320114326.2075821-1-mvaralar@redhat.com}\newline
+
+ } \\
+\hline
+63aaa4bd96be & 13 Oct 2025 & Parav Pandit & { Merge branch 'virtio-1.4'
+\newline
+
+
+Resolved conflict in net device description.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+58ae15e84c02 & 28 Oct 2025 & Parav Pandit & { edit: remove old changelog
+\newline
+
+
+Prepare the changelog file for 1.4, so remove old change log and
+move it to cl-cs05.tex.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20251027174756.56284-2-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+9f903b20b702 & 28 Oct 2025 & Parav Pandit & { edit: add changelog for 1.4
+\newline
+
+
+Add the changelog for 1.4.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20251027174756.56284-3-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+b4899d24cd09 & 28 Oct 2025 & Parav Pandit & { edit: Remove annotation of special character
+\newline
+
+
+PDF generation parsing complains when special character
+annotation is listed in it. Remove such annotation in changelog.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Message-Id: <\nolinkurl{20251027174756.56284-4-parav@nvidia.com}>\newline
+
+ } \\
+\hline
+5e4a575fc2d1 & 28 Oct 2025 & Michael S. Tsirkin & { drop generated files
+\newline
+
+
+Generated files:
+    virtio-v1.3-csd01.aux
+    virtio-v1.3-csd01.log
+    virtio-v1.3-csd01.out
+    virtio-v1.3-csd01.pdf
+    virtio-v1.3-csd01.toc
+\newline
+
+have no business being in tree. Drop them.
+\newline
+
+Fixes: 63aaa4b ("Merge branch 'virtio-1.4'")\newline
+Cc: "Parav Pandit" <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+21e81faef360 & 06 Nov 2025 & Michael S. Tsirkin & { virtio-html: add missing makeatother
+\newline
+
+
+A workaround for F21 added \textbackslash makeatletter but not \textbackslash makeatother
+\newline
+
+I see no specific issues around this but theoretically can interfere
+with some packages.
+\newline
+
+Fix this up.
+\newline
+
+Fixes: 86e51b4 ("html: work around bug in html generation")\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+563b6c8abb59 & 07 Nov 2025 & Michael S. Tsirkin & { editorial: suppress noitem errors in diff
+\newline
+
+
+latexdiff tends to leave empty itemize/enumerate lists around
+instead of deleting lists.
+\newline
+
+For example:
+\newline
+
+\textbackslash begin\{itemize\}\%DIFAUXCMD
+\%DIFDELCMD <   \textbackslash item rx_usecs: Maximum number of usecs to delay a RX notification.
+\%DIFDELCMD <
+\%DIFDELCMD <   \textbackslash item rx_max_packets: Maximum number of packets to receive before a RX notification.
+\textbackslash end\{itemize\}\%DIFAUXCMD
+\newline
+
+this makes latex stop with an error:
+    Something's wrong--perhaps a missing \textbackslash item
+to fix, suppress the error.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+
+ } \\
+\hline
+f9abfd55cb66 & 07 Nov 2025 & Sergio Lopez & { virtio-gpu: support blob alignment information
+\newline
+
+
+There's an increasing number of machines supporting multiple page sizes
+and, on these machines, the host and a guest can be running with
+different pages sizes. In addition to this, there might be physical
+devices that require to operate their memory at a specific granularity.
+\newline
+
+In these cases, if they are to use Shared Memory Regions, the device
+and the driver must operate with the same granularity, as otherwise
+the former might not be able to fulfill the requests sent by the
+latter.
+\newline
+
+For the GPU device, this has an impact on blob creation and mapping. To
+address the problem, allow the device to require certain alignment
+constrains for blob resources by extending the device configuration
+with the field "blob_alignment" and introducing the
+VIRTIO_GPU_F_BLOB_ALIGNMENT feature.
+\newline
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>\newline
+
+ } \\
+\hline
+b2741ed3bfa9 & 07 Nov 2025 & Parav Pandit & { virtio-gpu: Fix missing driver conformance file
+\newline
+
+
+Cited patch in the fixes tag missed to include the driver-conformance
+file. Add it.
+\newline
+
+Fixes: f52fb20cbe38 ("virtio-gpu: support blob alignment information")\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+Reviewed-by: Matias Ezequiel Vara Larsen <mvaralar@redhat.com>\newline
+Link: \url{https://lore.kernel.org/r/20250614181302.277794-1-parav@nvidia.com}\newline
+
+ } \\
+\hline
+8494bb93333f & 07 Nov 2025 & Parav Pandit & { virtio-crypto: editorial: fix broken label link
+\newline
+
+
+Fix broken link to resource objects.
+\newline
+
+Fixes: c7553a71b7eb ("virtio-crypto: Add IPsec service operation and Capabilities")\newline
+Reported-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+e8557d8d3360 & 07 Nov 2025 & Parav Pandit & { changelog: Add changelog for 1.2 and 1.3
+\newline
+
+
+Add the changelog from version 1.2 to v1.3 for bookkeeping purpose.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+521d5cccc608 & 07 Nov 2025 & Parav Pandit & { gitlog: Add executable permision to script
+\newline
+
+
+gitlog.pl is the script to generate the changelog.
+Make it executable.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+4e2a6b93be64 & 07 Nov 2025 & Parav Pandit & { acknowledgements: update for 1.4
+\newline
+
+
+Move some names to the section for previous versions, add names of new
+contributors, etc.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+0bad6c8dc8b7 & 07 Nov 2025 & Parav Pandit & { changelog: Update changelog for additonal 1.4 patches
+\newline
+
+
+Update the change log further for missing ipsec, gpu blob
+and other editorial patches.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+14b4403e30c5 & 10 Nov 2025 & Parav Pandit & { virtio-net: editorial: fix broken label link
+\newline
+
+
+Fix broken link to crypto outbound SA resource objects.
+\newline
+
+Fixes: fd15f89a870f ("virtio-net: extend virtio_net_hdr for IPsec support")\newline
+Reported-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+9e065a90dd47 & 11 Nov 2025 & Parav Pandit & { editorial: Add a new chair and a new editor
+\newline
+
+
+Add Matias as the chair an Parav as the enditor.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+0d71ab85e916 & 11 Nov 2025 & Parav Pandit & { editorial: Update the new oasis open link
+\newline
+
+
+OASIS updated the link to the virtio tc community lately.
+Update the link to it.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+9191b1e7e27b & 13 Nov 2025 & Parav Pandit & { changelog: Update changelog for additonal 1.4 patches
+\newline
+
+
+Update the change log further for acknowledgement and other
+editorial patches.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+7672c71eeb65 & 13 Nov 2025 & Parav Pandit & { REVISION: update to 1.4
+\newline
+
+
+Update the revision to 1.4 working draft and date.
+Since 1.3 was never released, keep the last version of 1.2 for diff generation.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+f6c548ff7182 & 16 Nov 2025 & Parav Pandit & { editorial: Remove hyperlink with hash tag
+\newline
+
+
+The new hyperlink contains the hash letter.
+The new replaced link breaks the diff generation.
+\newline
+
+This is because diff operation generates DIFadd, DIFdel
+commands inside the href.
+\newline
+
+This causes deep recursive macro expansion resulting into
+below error.
+Avoid this small change in the diff generation.
+\newline
+
+Remove the other patches which already exists now in the
+master branch.
+\newline
+
+! TeX capacity exceeded, sorry [input stack size=10000].
+\newline
+
+\textbackslash @setfontsize \#1\#2\#3->\textbackslash @nomath \#1 \textbackslash ifx \textbackslash protect
+\newline
+
+\textbackslash @typeset@protect \textbackslash let \textbackslash @curr... l.577 ...delines/tc-process\#wpComponentsCompLang\}.
+\newline
+
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+92a4614ac9f7 & 16 Nov 2025 & Parav Pandit & { editorial: Avoid logtable keyword as diff
+\newline
+
+
+Commit X started using longtable.
+Diff generation is sneaking logtable between DIFaddbegin
+and DIFaddend. This makes LaTeX unhappy breaking the
+diff generation.
+\newline
+
+Using SAFEENV or PICTUREENV or appending texcmd or appending
+text cmd is not helpful either to resolve to generate the
+desired result. It deletes the whole table and adds as
+new table showing big delta, which is undesired.
+\newline
+
+Until diff infrastructure improved, workaround to remove those
+weird diffs with simpler perl script.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+267ced17df4a & 16 Nov 2025 & Parav Pandit & { editorial: Update diff version to 1.2
+\newline
+
+
+Update the previous version to 1.2 so that 1.4 spec
+diff can be with previously release version 1.2.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+5cc223827632 & 16 Nov 2025 & Parav Pandit & { changelog: Update changelog for additonal 1.4 patches
+\newline
+
+
+Update the change log further for editorial patches related
+to diff generation with previously released version 1.2.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+fc3c135083f4 & 16 Nov 2025 & Parav Pandit & { editorial: Advance the date with fixes for diff generation
+\newline
+
+
+Advance the date for editorial fixes addition for
+diff generation.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+7cdd4521c657 & 18 Nov 2025 & Parav Pandit & { editorial: Update revision to csd01
+\newline
+
+
+Update the revision to v1.4-csd01 and its new date.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+75e806852781 & 18 Nov 2025 & Parav Pandit & { editorial: Prepare public review draft
+\newline
+
+
+Prepare public review draft version 1.4-csprd01.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+26c96dd4b684 & 19 Nov 2025 & Parav Pandit & { editorial: Restore back the previous stage links
+\newline
+
+
+Restore back the link to the previous version 1.2.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+defdc1bf3679 & 19 Nov 2025 & Parav Pandit & { Revert "editorial: Prepare public review draft"
+\newline
+
+
+This reverts commit 75e806852781ae98035df6f97c7af748eff1e9c1.
+Few issues were found in the draft.
+Hence, revert to restart the process.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+5833db4fbcf1 & 19 Nov 2025 & Parav Pandit & { Revert "editorial: Update revision to csd01"
+\newline
+
+
+This reverts commit 7cdd4521c657e893489b7722fb693d936743cb36.
+Few issues were found in the draft.
+Hence, revert to restart the process.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+2132a93d51b7 & 03 Dec 2025 & Michael S. Tsirkin & { net: pad virtio_net_ff_cap_data
+\newline
+
+
+struct virtio_net_ff_cap_data has 4 byte fields but the size is not a
+multiple of 4.  drivers can easily get it wrong since compilers tend to
+add padding to align such structures.
+\newline
+
+Since we are always allowed to pad or truncate admin commands, let's do
+just that here.
+\newline
+
+Fixes: 899bb0ca24d8 ("virtio-net: Add flow filter capability")\newline
+Fixes: \url{https://github.com/oasis-tcs/virtio-spec/issues/236}\newline
+Cc: Parav Pandit <parav@nvidia.com>\newline
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Reviewed-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+53f06a6c432a & 03 Dec 2025 & Parav Pandit & { changelog: Update changelog for additonal 1.4 patches
+\newline
+
+
+Update the change log capability structure padding and
+other editorial changes.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+b7f4aed22b11 & 03 Dec 2025 & Parav Pandit & { editorial: Advance revision date
+\newline
+
+
+Advance the revision date to cover for the capability pad fix.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+760fc4b7f19a & 03 Dec 2025 & Parav Pandit & { editorial: Update revision to csd01
+\newline
+
+
+Update the revision to v1.4-csd01.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+373609d6cbe2 & 03 Dec 2025 & Parav Pandit & { editorial: Prepare public review draft
+\newline
+
+
+Prepare public review draft version 1.4-csprd01.
+\newline
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline
+89d81932dc92 & 09 Dec 2025 & Michael S. Tsirkin & { edit: Add script to add newline to changelog
+\newline
+
+
+Add a helper script file which adds newline tag to the
+changelog file to make them more readable in the revision
+history.
+\newline
+
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>\newline
+Signed-off-by: Parav Pandit <parav@nvidia.com>\newline
+
+ } \\
+\hline

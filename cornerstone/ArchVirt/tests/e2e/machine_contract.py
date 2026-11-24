@@ -4,7 +4,7 @@ import subprocess
 import sys
 import tempfile
 
-binary, source, build = sys.argv[1:]
+binary, isa_only, build = sys.argv[1:]
 def run(*args):
     return subprocess.run([binary, "--headless", *args], input="exit\n", text=True,
                           capture_output=True, timeout=20)
@@ -22,7 +22,8 @@ for memory in ("0", "39", "1025", "-1", "bogus"):
 assert run("--machine", "aarch64", "--backend", "kvm").returncode != 0
 assert run("--machine", "riscv64", "--backend", "kvm").returncode != 0
 assert run("--machine", "riscv64", "--os", str(pathlib.Path(build) / "domix/x86_64/domix.img")).returncode != 0
-assert run("--archml", str(pathlib.Path(source) / "third_party/libstone/sandstone/archml/stdspec/amd64.aml")).returncode != 0
+assert pathlib.Path(isa_only).is_file(), isa_only
+assert run("--archml", isa_only).returncode != 0
 assert run("--machine", "aarch64", "--os", str(pathlib.Path(build) / "domix/x86_64/domix.img")).returncode != 0
 with tempfile.TemporaryDirectory() as directory:
     path = pathlib.Path(directory) / "bad.img"

@@ -7,11 +7,11 @@ file(MAKE_DIRECTORY "${DOMVIRT_GEN_DIR}/bindlet_bridge")
 add_custom_command(OUTPUT "${DOMVIRT_GEN_DIR}/machine_sources.hpp"
     BYPRODUCTS "${DOMVIRT_GEN_DIR}/machines/x86_64.aml" "${DOMVIRT_GEN_DIR}/machines/aarch64.aml" "${DOMVIRT_GEN_DIR}/machines/riscv64.aml"
     COMMAND ${Python_EXECUTABLE} "${PROJECT_SOURCE_DIR}/tools/archml_bundle.py"
-        "${PROJECT_SOURCE_DIR}" "${DOMVIRT_GEN_DIR}/machine_sources.hpp"
+        "${PROJECT_SOURCE_DIR}" "${ARCHML_STDSPEC_DIR}" "${DOMVIRT_GEN_DIR}/machine_sources.hpp"
     DEPENDS "${PROJECT_SOURCE_DIR}/tools/archml_bundle.py"
         "${PROJECT_SOURCE_DIR}/machines/x86_64.aml" "${PROJECT_SOURCE_DIR}/machines/aarch64.aml"
-        "${PROJECT_SOURCE_DIR}/machines/riscv64.aml" "${ARCHML_DIR}/stdspec/riscv64.aml"
-        "${ARCHML_DIR}/stdspec/amd64.aml" "${ARCHML_DIR}/stdspec/arm64.aml"
+        "${PROJECT_SOURCE_DIR}/machines/riscv64.aml" "${ARCHML_STDSPEC_DIR}/riscv64.aml"
+        "${ARCHML_STDSPEC_DIR}/amd64.aml" "${ARCHML_STDSPEC_DIR}/arm64.aml"
     VERBATIM)
 
 set(BINDLET_STUB_FILES)
@@ -172,7 +172,7 @@ target_include_directories(domvirt_core
     PRIVATE
         ${DOMVIRT_SRC_DIR}
         ${PROJECT_SOURCE_DIR}/domios/src
-        ${LIBSTONE_DIR}/third_party/metatk/third_party/stb
+        "${LIBSTONE_METATK_SOURCE_DIR}/third_party/stb"
 )
 
 target_link_libraries(domvirt_core
@@ -232,7 +232,6 @@ target_link_libraries(domvirt_cli PRIVATE domvirt_core DOMWeave::domios)
 target_link_libraries(domvirt_cli PRIVATE archvirt_imgui)
 target_include_directories(domvirt_cli PRIVATE
     ${DOMVIRT_SRC_DIR}
-    ${DOMVIRT_THIRD_PARTY_DIR}/stb
     ${PROJECT_SOURCE_DIR}/domios/src
 )
 target_compile_definitions(domvirt_cli PRIVATE

@@ -1,7 +1,7 @@
 """virtio — VirtIO device domainlets.
 
 Each module in this package models a single VirtIO device type as
-defined by the VirtIO specification (third_party/virtio-spec/).
+defined by the VirtIO specification (repository-root third_party/virtio-spec/).
 
 Every device domainlet exposes a ``DEVICE`` descriptor of type
 :class:`VirtioDeviceDescriptor` and a ``KERNEL`` descriptor of type

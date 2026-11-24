@@ -1,0 +1,2374 @@
+\section{Crypto Device}\label{sec:Device Types / Crypto Device}
+
+The virtio crypto device is a virtual cryptography device as well as a
+virtual cryptographic accelerator. The virtio crypto device provides the
+following crypto services: CIPHER, MAC, HASH, AEAD, AKCIPHER and IPSEC.
+Virtio crypto devices have a single control queue and at least one data
+queue. Crypto operation requests are placed into a data queue, and serviced
+by the device. Some crypto operation requests are only valid in the context
+of a session. The role of the control queue is facilitating control operation
+requests. Sessions management is realized with control operation
+requests.
+The crypto device may have administration command interface through which
+IPsec service capabilities and resources are configured.
+
+\subsection{Device ID}\label{sec:Device Types / Crypto Device / Device ID}
+
+20
+
+\subsection{Virtqueues}\label{sec:Device Types / Crypto Device / Virtqueues}
+
+\begin{description}
+\item[0] dataq1
+\item[\ldots]
+\item[N-1] dataqN
+\item[N] controlq
+\end{description}
+
+N is set by \field{max_dataqueues}.
+
+\subsection{Feature bits}\label{sec:Device Types / Crypto Device / Feature bits}
+
+\begin{description}
+\item VIRTIO_CRYPTO_F_REVISION_1 (0) revision 1. Revision 1 has a specific
+    request format and other enhancements (which result in some additional
+    requirements).
+\item VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE (1) stateless mode requests are
+    supported by the CIPHER service.
+\item VIRTIO_CRYPTO_F_HASH_STATELESS_MODE (2) stateless mode requests are
+    supported by the HASH service.
+\item VIRTIO_CRYPTO_F_MAC_STATELESS_MODE (3) stateless mode requests are
+    supported by the MAC service.
+\item VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE (4) stateless mode requests are
+    supported by the AEAD service.
+\item VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE (5) stateless mode requests are
+    supported by the AKCIPHER service.
+\end{description}
+
+
+\subsubsection{Feature bit requirements}\label{sec:Device Types / Crypto Device / Feature bit requirements}
+
+Some crypto feature bits require other crypto feature bits
+(see \ref{drivernormative:Basic Facilities of a Virtio Device / Feature Bits}):
+
+\begin{description}
+\item[VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE] Requires VIRTIO_CRYPTO_F_REVISION_1.
+\item[VIRTIO_CRYPTO_F_HASH_STATELESS_MODE] Requires VIRTIO_CRYPTO_F_REVISION_1.
+\item[VIRTIO_CRYPTO_F_MAC_STATELESS_MODE] Requires VIRTIO_CRYPTO_F_REVISION_1.
+\item[VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE] Requires VIRTIO_CRYPTO_F_REVISION_1.
+\item[VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE] Requires VIRTIO_CRYPTO_F_REVISION_1.
+\end{description}
+
+\subsection{Supported crypto services}\label{sec:Device Types / Crypto Device / Supported crypto services}
+
+The following crypto services are defined:
+
+\begin{lstlisting}
+/* CIPHER (Symmetric Key Cipher) service */
+#define VIRTIO_CRYPTO_SERVICE_CIPHER 0
+/* HASH service */
+#define VIRTIO_CRYPTO_SERVICE_HASH   1
+/* MAC (Message Authentication Codes) service */
+#define VIRTIO_CRYPTO_SERVICE_MAC    2
+/* AEAD (Authenticated Encryption with Associated Data) service */
+#define VIRTIO_CRYPTO_SERVICE_AEAD   3
+/* AKCIPHER (Asymmetric Key Cipher) service */
+#define VIRTIO_CRYPTO_SERVICE_AKCIPHER 4
+/* IPSEC service */
+#define VIRTIO_CRYPTO_SERVICE_IPSEC  5
+\end{lstlisting}
+
+The above constants designate bits used to indicate the which of crypto services are
+offered by the device as described in, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+
+\subsubsection{CIPHER services}\label{sec:Device Types / Crypto Device / Supported crypto services / CIPHER services}
+
+The following CIPHER algorithms are defined:
+
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_NO_CIPHER                 0
+#define VIRTIO_CRYPTO_CIPHER_ARC4               1
+#define VIRTIO_CRYPTO_CIPHER_AES_ECB            2
+#define VIRTIO_CRYPTO_CIPHER_AES_CBC            3
+#define VIRTIO_CRYPTO_CIPHER_AES_CTR            4
+#define VIRTIO_CRYPTO_CIPHER_DES_ECB            5
+#define VIRTIO_CRYPTO_CIPHER_DES_CBC            6
+#define VIRTIO_CRYPTO_CIPHER_3DES_ECB           7
+#define VIRTIO_CRYPTO_CIPHER_3DES_CBC           8
+#define VIRTIO_CRYPTO_CIPHER_3DES_CTR           9
+#define VIRTIO_CRYPTO_CIPHER_KASUMI_F8          10
+#define VIRTIO_CRYPTO_CIPHER_SNOW3G_UEA2        11
+#define VIRTIO_CRYPTO_CIPHER_AES_F8             12
+#define VIRTIO_CRYPTO_CIPHER_AES_XTS            13
+#define VIRTIO_CRYPTO_CIPHER_ZUC_EEA3           14
+\end{lstlisting}
+
+The above constants have two usages:
+\begin{enumerate}
+\item As bit numbers, used to tell the driver which CIPHER algorithms
+are supported by the device, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+\item As values, used to designate the algorithm in (CIPHER type) crypto
+operation requests, see \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation}.
+\end{enumerate}
+
+\subsubsection{HASH services}\label{sec:Device Types / Crypto Device / Supported crypto services / HASH services}
+
+The following HASH algorithms are defined:
+
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_NO_HASH            0
+#define VIRTIO_CRYPTO_HASH_MD5           1
+#define VIRTIO_CRYPTO_HASH_SHA1          2
+#define VIRTIO_CRYPTO_HASH_SHA_224       3
+#define VIRTIO_CRYPTO_HASH_SHA_256       4
+#define VIRTIO_CRYPTO_HASH_SHA_384       5
+#define VIRTIO_CRYPTO_HASH_SHA_512       6
+#define VIRTIO_CRYPTO_HASH_SHA3_224      7
+#define VIRTIO_CRYPTO_HASH_SHA3_256      8
+#define VIRTIO_CRYPTO_HASH_SHA3_384      9
+#define VIRTIO_CRYPTO_HASH_SHA3_512      10
+#define VIRTIO_CRYPTO_HASH_SHA3_SHAKE128      11
+#define VIRTIO_CRYPTO_HASH_SHA3_SHAKE256      12
+\end{lstlisting}
+
+The above constants have two usages:
+\begin{enumerate}
+\item As bit numbers, used to tell the driver which HASH algorithms
+are supported by the device, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+\item As values, used to designate the algorithm in (HASH type) crypto
+operation requires, see \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation}.
+\end{enumerate}
+
+\subsubsection{MAC services}\label{sec:Device Types / Crypto Device / Supported crypto services / MAC services}
+
+The following MAC algorithms are defined:
+
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_NO_MAC                       0
+#define VIRTIO_CRYPTO_MAC_HMAC_MD5                 1
+#define VIRTIO_CRYPTO_MAC_HMAC_SHA1                2
+#define VIRTIO_CRYPTO_MAC_HMAC_SHA_224             3
+#define VIRTIO_CRYPTO_MAC_HMAC_SHA_256             4
+#define VIRTIO_CRYPTO_MAC_HMAC_SHA_384             5
+#define VIRTIO_CRYPTO_MAC_HMAC_SHA_512             6
+#define VIRTIO_CRYPTO_MAC_CMAC_3DES                25
+#define VIRTIO_CRYPTO_MAC_CMAC_AES                 26
+#define VIRTIO_CRYPTO_MAC_KASUMI_F9                27
+#define VIRTIO_CRYPTO_MAC_SNOW3G_UIA2              28
+#define VIRTIO_CRYPTO_MAC_GMAC_AES                 41
+#define VIRTIO_CRYPTO_MAC_GMAC_TWOFISH             42
+#define VIRTIO_CRYPTO_MAC_CBCMAC_AES               49
+#define VIRTIO_CRYPTO_MAC_CBCMAC_KASUMI_F9         50
+#define VIRTIO_CRYPTO_MAC_XCBC_AES                 53
+#define VIRTIO_CRYPTO_MAC_ZUC_EIA3                 54
+\end{lstlisting}
+
+The above constants have two usages:
+\begin{enumerate}
+\item As bit numbers, used to tell the driver which MAC algorithms
+are supported by the device, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+\item As values, used to designate the algorithm in (MAC type) crypto
+operation requests, see \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation}.
+\end{enumerate}
+
+\subsubsection{AEAD services}\label{sec:Device Types / Crypto Device / Supported crypto services / AEAD services}
+
+The following AEAD algorithms are defined:
+
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_NO_AEAD     0
+#define VIRTIO_CRYPTO_AEAD_GCM    1
+#define VIRTIO_CRYPTO_AEAD_CCM    2
+#define VIRTIO_CRYPTO_AEAD_CHACHA20_POLY1305  3
+\end{lstlisting}
+
+The above constants have two usages:
+\begin{enumerate}
+\item As bit numbers, used to tell the driver which AEAD algorithms
+are supported by the device, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+\item As values, used to designate the algorithm in (DEAD type) crypto
+operation requests, see \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation}.
+\end{enumerate}
+
+\subsubsection{AKCIPHER services}\label{sec: Device Types / Crypto Device / Supported crypto services / AKCIPHER services}
+
+The following AKCIPHER algorithms are defined:
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_NO_AKCIPHER 0
+#define VIRTIO_CRYPTO_AKCIPHER_RSA   1
+#define VIRTIO_CRYPTO_AKCIPHER_ECDSA 2
+\end{lstlisting}
+
+The above constants have two usages:
+\begin{enumerate}
+\item As bit numbers, used to tell the driver which AKCIPHER algorithms
+are supported by the device, see \ref{sec:Device Types / Crypto Device / Device configuration layout}.
+\item As values, used to designate the algorithm in asymmetric crypto operation requests,
+see \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation}.
+\end{enumerate}
+
+
+\subsection{Device configuration layout}\label{sec:Device Types / Crypto Device / Device configuration layout}
+
+Crypto device configuration uses the following layout structure:
+
+\begin{lstlisting}
+struct virtio_crypto_config {
+    le32 status;
+    le32 max_dataqueues;
+    le32 crypto_services;
+    /* Detailed algorithms mask */
+    le32 cipher_algo_l;
+    le32 cipher_algo_h;
+    le32 hash_algo;
+    le32 mac_algo_l;
+    le32 mac_algo_h;
+    le32 aead_algo;
+    /* Maximum length of cipher key in bytes */
+    le32 max_cipher_key_len;
+    /* Maximum length of authenticated key in bytes */
+    le32 max_auth_key_len;
+    le32 akcipher_algo;
+    /* Maximum size of each crypto request's content in bytes */
+    le64 max_size;
+};
+\end{lstlisting}
+
+\begin{description}
+\item Currently, only one \field{status} bit is defined: VIRTIO_CRYPTO_S_HW_READY
+    set indicates that the device is ready to process requests, this bit is read-only
+    for the driver
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_S_HW_READY  (1 << 0)
+\end{lstlisting}
+
+\item [\field{max_dataqueues}] is the maximum number of data virtqueues that can
+    be configured by the device. The driver MAY use only one data queue, or it
+    can use more to achieve better performance.
+
+\item [\field{crypto_services}] crypto service offered, see \ref{sec:Device Types / Crypto Device / Supported crypto services}.
+
+\item [\field{cipher_algo_l}] CIPHER algorithms bits 0-31, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / CIPHER services}.
+
+\item [\field{cipher_algo_h}] CIPHER algorithms bits 32-63, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / CIPHER services}.
+
+\item [\field{hash_algo}] HASH algorithms bits, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / HASH services}.
+
+\item [\field{mac_algo_l}] MAC algorithms bits 0-31, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / MAC services}.
+
+\item [\field{mac_algo_h}] MAC algorithms bits 32-63, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / MAC services}.
+
+\item [\field{aead_algo}] AEAD algorithms bits, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / AEAD services}.
+
+\item [\field{max_cipher_key_len}] is the maximum length of cipher key supported by the device.
+
+\item [\field{max_auth_key_len}] is the maximum length of authenticated key supported by the device.
+
+\item [\field{akcipher_algo}] AKCIPHER algorithms bit 0-31, see \ref{sec: Device Types / Crypto Device / Supported crypto services / AKCIPHER services}.
+
+\item [\field{max_size}] is the maximum size of the variable-length parameters of
+    data operation of each crypto request's content supported by the device.
+\end{description}
+
+\begin{note}
+Unless explicitly stated otherwise all lengths and sizes are in bytes.
+\end{note}
+
+\devicenormative{\subsubsection}{Device configuration layout}{Device Types / Crypto Device / Device configuration layout}
+
+\begin{itemize*}
+\item The device MUST set \field{max_dataqueues} to between 1 and 65535 inclusive.
+\item The device MUST set the \field{status} with valid flags, undefined flags MUST NOT be set.
+\item The device MUST accept and handle requests after \field{status} is set to VIRTIO_CRYPTO_S_HW_READY.
+\item The device MUST set \field{crypto_services} based on the crypto services the device offers.
+\item The device MUST set detailed algorithms masks for each service advertised by \field{crypto_services}.
+    The device MUST NOT set the not defined algorithms bits.
+\item The device MUST set \field{max_size} to show the maximum size of crypto request the device supports.
+\item The device MUST set \field{max_cipher_key_len} to show the maximum length of cipher key if the
+    device supports CIPHER service.
+\item The device MUST set \field{max_auth_key_len} to show the maximum length of authenticated key if
+    the device supports MAC service.
+\end{itemize*}
+
+\drivernormative{\subsubsection}{Device configuration layout}{Device Types / Crypto Device / Device configuration layout}
+
+\begin{itemize*}
+\item The driver MUST read the \field{status} from the bottom bit of status to check whether the
+    VIRTIO_CRYPTO_S_HW_READY is set, and the driver MUST reread it after device reset.
+\item The driver MUST NOT transmit any requests to the device if the VIRTIO_CRYPTO_S_HW_READY is not set.
+\item The driver MUST read \field{max_dataqueues} field to discover the number of data queues the device supports.
+\item The driver MUST read \field{crypto_services} field to discover which services the device is able to offer.
+\item The driver SHOULD ignore the not defined algorithms bits.
+\item The driver MUST read the detailed algorithms fields based on \field{crypto_services} field.
+\item The driver SHOULD read \field{max_size} to discover the maximum size of the variable-length
+    parameters of data operation of the crypto request's content the device supports and MUST
+    guarantee that the size of each crypto request's content is within the \field{max_size}, otherwise
+    the request will fail and the driver MUST reset the device.
+\item The driver SHOULD read \field{max_cipher_key_len} to discover the maximum length of cipher key
+    the device supports and MUST guarantee that the \field{key_len} (CIPHER service or AEAD service) is within
+    the \field{max_cipher_key_len} of the device configuration, otherwise the request will fail.
+\item The driver SHOULD read \field{max_auth_key_len} to discover the maximum length of authenticated
+    key the device supports and MUST guarantee that the \field{auth_key_len} (MAC service) is within the
+    \field{max_auth_key_len} of the device configuration, otherwise the request will fail.
+\end{itemize*}
+
+\subsection{Device Initialization}\label{sec:Device Types / Crypto Device / Device Initialization}
+
+\drivernormative{\subsubsection}{Device Initialization}{Device Types / Crypto Device / Device Initialization}
+
+\begin{itemize*}
+\item The driver MUST configure and initialize all virtqueues.
+\item The driver MUST read the supported crypto services from bits of \field{crypto_services}.
+\item The driver MUST read the supported algorithms based on \field{crypto_services} field.
+\end{itemize*}
+
+\subsection{Device and driver capabilities}\label{sec:Device Types / Crypto Device / Device and driver capabilities}
+
+The crypto device has the following capabilities.
+
+\begin{tabularx}{\textwidth}{ |l||l|X| }
+\hline
+Identifier & Name & Description \\
+\hline \hline
+0x0800 & \hyperref[par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-RESOURCE-CAP]{VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP} & IPsec resource capability \\
+\hline
+0x0801 & \hyperref[par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP]{VIRTIO_CRYPTO_IPSEC_SA_CAP} & IPsec Security Association(SA) capability \\
+\hline
+\end{tabularx}
+
+\subsection{Device resource objects}\label{sec:Device Types / Crypto Device / Device resource objects}
+
+The crypto device has the following resource objects.
+
+\begin{tabularx}{\textwidth}{ |l||l|X| }
+\hline
+type & Name & Description \\
+\hline \hline
+0x0200 & \hyperref[par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects / VIRTIO-CRYPTO-RESOURCE-OBJ-IPSEC-OUTBOUND-SA]{VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA} & IPsec outbound SA resource object \\
+\hline
+0x0201 & \hyperref[par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects / VIRTIO-CRYPTO-RESOURCE-OBJ-IPSEC-INBOUND-SA]{VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA} & IPsec inbound SA resource object \\
+\hline
+\end{tabularx}
+
+\subsection{Device Operation}\label{sec:Device Types / Crypto Device / Device Operation}
+
+The operation of a virtio crypto device is driven by requests placed on the virtqueues.
+Requests consist of a queue-type specific header (specifying among others the operation)
+and an operation specific payload.
+
+If VIRTIO_CRYPTO_F_REVISION_1 is negotiated the device may support both session mode
+(See \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue / Session operation})
+and stateless mode operation requests.
+In stateless mode all operation parameters are supplied as a part of each request,
+while in session mode, some or all operation parameters are managed within the
+session. Stateless mode is guarded by feature bits 0-4 on a service level. If
+stateless mode is negotiated for a service, the service accepts both session
+mode and stateless requests; otherwise stateless mode requests are rejected
+(via operation status).
+
+\subsubsection{Operation Status}\label{sec:Device Types / Crypto Device / Device Operation / Operation status}
+The device MUST return a status code as part of the operation (both session
+operation and service operation) result. The valid operation status as follows:
+
+\begin{lstlisting}
+enum VIRTIO_CRYPTO_STATUS {
+    VIRTIO_CRYPTO_OK = 0,
+    VIRTIO_CRYPTO_ERR = 1,
+    VIRTIO_CRYPTO_BADMSG = 2,
+    VIRTIO_CRYPTO_NOTSUPP = 3,
+    VIRTIO_CRYPTO_INVSESS = 4,
+    VIRTIO_CRYPTO_NOSPC = 5,
+    VIRTIO_CRYPTO_KEY_REJECTED = 6,
+    VIRTIO_CRYPTO_IPSEC_SA_SOFT_EXPIRY = 7,
+    VIRTIO_CRYPTO_MAX
+};
+\end{lstlisting}
+
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK: success.
+\item VIRTIO_CRYPTO_BADMSG: authentication failed (only when AEAD decryption).
+\item VIRTIO_CRYPTO_NOTSUPP: operation or algorithm is unsupported.
+\item VIRTIO_CRYPTO_INVSESS: invalid session ID when executing crypto operations.
+\item VIRTIO_CRYPTO_NOSPC: no free session ID (only when the VIRTIO_CRYPTO_F_REVISION_1
+    feature bit is negotiated).
+\item VIRTIO_CRYPTO_KEY_REJECTED: signature verification failed (only when AKCIPHER verification).
+\item VIRTIO_CRYPTO_IPSEC_SA_SOFT_EXPIRY: IPsec SA lifetime soft limits are reached.
+    When VIRTIO_CRYPTO_IPSEC_SA_SOFT_EXPIRY occurs, the request is completed successfully,
+    but one or all of the soft limits are reached. This is applicable only for IPsec service operations.
+\item VIRTIO_CRYPTO_ERR: any failure not mentioned above occurs.
+\end{itemize*}
+
+\subsubsection{Control Virtqueue}\label{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue}
+
+The driver uses the control virtqueue to send control commands to the
+device, such as session operations (See \ref{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation}).
+
+The header for controlq is of the following form:
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_OPCODE(service, op)   (((service) << 8) | (op))
+
+struct virtio_crypto_ctrl_header {
+#define VIRTIO_CRYPTO_CIPHER_CREATE_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_CIPHER, 0x02)
+#define VIRTIO_CRYPTO_CIPHER_DESTROY_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_CIPHER, 0x03)
+#define VIRTIO_CRYPTO_HASH_CREATE_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_HASH, 0x02)
+#define VIRTIO_CRYPTO_HASH_DESTROY_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_HASH, 0x03)
+#define VIRTIO_CRYPTO_MAC_CREATE_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_MAC, 0x02)
+#define VIRTIO_CRYPTO_MAC_DESTROY_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_MAC, 0x03)
+#define VIRTIO_CRYPTO_AEAD_CREATE_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AEAD, 0x02)
+#define VIRTIO_CRYPTO_AEAD_DESTROY_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AEAD, 0x03)
+#define VIRTIO_CRYPTO_AKCIPHER_CREATE_SESSION \
+       VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x04)
+#define VIRTIO_CRYPTO_AKCIPHER_DESTROY_SESSION \
+       VIRTIO_CRYPTO_OPCDE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x05)
+    le32 opcode;
+    /* algo should be service-specific algorithms */
+    le32 algo;
+    le32 flag;
+    le32 reserved;
+};
+\end{lstlisting}
+
+The controlq request is composed of four parts:
+\begin{lstlisting}
+struct virtio_crypto_op_ctrl_req {
+    /* Device read only portion */
+
+    struct virtio_crypto_ctrl_header header;
+
+#define VIRTIO_CRYPTO_CTRLQ_OP_SPEC_HDR_LEGACY 56
+    /* fixed length fields, opcode specific */
+    u8 op_flf[flf_len];
+
+    /* variable length fields, opcode specific */
+    u8 op_vlf[vlf_len];
+
+    /* Device write only portion */
+
+    /* op result or completion status */
+    u8 op_outcome[outcome_len];
+};
+\end{lstlisting}
+
+\field{header} is a general header (see above).
+
+\field{op_flf} is the opcode (in \field{header}) specific fixed-length parameters.
+
+\field{flf_len} depends on the VIRTIO_CRYPTO_F_REVISION_1 feature bit (see below).
+
+\field{op_vlf} is the opcode (in \field{header}) specific variable-length parameters.
+
+\field{vlf_len} is the size of the specific structure used.
+\begin{note}
+The \field{vlf_len} of session-destroy operation and the hash-session-create
+operation is ZERO.
+\end{note}
+
+\begin{itemize*}
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_CIPHER_CREATE_SESSION
+    then \field{op_flf} is struct virtio_crypto_sym_create_session_flf if
+    VIRTIO_CRYPTO_F_REVISION_1 is negotiated and struct virtio_crypto_sym_create_session_flf is
+    padded to 56 bytes if NOT negotiated, and \field{op_vlf} is struct
+    virtio_crypto_sym_create_session_vlf.
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_HASH_CREATE_SESSION
+    then \field{op_flf} is struct virtio_crypto_hash_create_session_flf if
+    VIRTIO_CRYPTO_F_REVISION_1 is negotiated and struct virtio_crypto_hash_create_session_flf is
+    padded to 56 bytes if NOT negotiated.
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_MAC_CREATE_SESSION
+    then \field{op_flf} is struct virtio_crypto_mac_create_session_flf if
+    VIRTIO_CRYPTO_F_REVISION_1 is negotiated and struct virtio_crypto_mac_create_session_flf is
+    padded to 56 bytes if NOT negotiated, and \field{op_vlf} is struct
+    virtio_crypto_mac_create_session_vlf.
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_AEAD_CREATE_SESSION
+    then \field{op_flf} is struct virtio_crypto_aead_create_session_flf if
+    VIRTIO_CRYPTO_F_REVISION_1 is negotiated and struct virtio_crypto_aead_create_session_flf is
+    padded to 56 bytes if NOT negotiated, and \field{op_vlf} is struct
+    virtio_crypto_aead_create_session_vlf.
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_AKCIPHER_CREATE_SESSION
+    then \field{op_flf} is struct virtio_crypto_akcipher_create_session_flf if
+    VIRTIO_CRYPTO_F_REVISION_1 is negotiated and struct virtio_crypto_akcipher_create_session_flf is
+    padded to 56 bytes if NOT negotiated, and \field{op_vlf} is struct
+    virtio_crypto_akcipher_create_session_vlf.
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_CIPHER_DESTROY_SESSION
+    or VIRTIO_CRYPTO_HASH_DESTROY_SESSION or VIRTIO_CRYPTO_MAC_DESTROY_SESSION or
+    VIRTIO_CRYPTO_AEAD_DESTROY_SESSION then \field{op_flf} is struct
+    virtio_crypto_destroy_session_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated and
+    struct virtio_crypto_destroy_session_flf is padded to 56 bytes if NOT negotiated.
+\end{itemize*}
+
+\field{op_outcome} stores the result of operation and must be struct
+virtio_crypto_destroy_session_input for destroy session or
+struct virtio_crypto_create_session_input for create session.
+
+\field{outcome_len} is the size of the structure used.
+
+
+\paragraph{Session operation}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation}
+
+The session is a handle which describes the cryptographic parameters to be
+applied to a number of buffers.
+
+The following structure stores the result of session creation set by the device:
+
+\begin{lstlisting}
+struct virtio_crypto_create_session_input {
+    le64 session_id;
+    le32 status;
+    le32 padding;
+};
+\end{lstlisting}
+
+A request to destroy a session includes the following information:
+
+\begin{lstlisting}
+struct virtio_crypto_destroy_session_flf {
+    /* Device read only portion */
+    le64  session_id;
+};
+
+struct virtio_crypto_destroy_session_input {
+    /* Device write only portion */
+    u8  status;
+};
+\end{lstlisting}
+
+
+\subparagraph{Session operation: HASH session}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: HASH session}
+
+The fixed-length parameters of HASH session requests is as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_hash_create_session_flf {
+    /* Device read only portion */
+
+    /* See VIRTIO_CRYPTO_HASH_* above */
+    le32 algo;
+    /* hash result length */
+    le32 hash_result_len;
+};
+\end{lstlisting}
+
+
+\subparagraph{Session operation: MAC session}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: MAC session}
+
+The fixed-length and the variable-length parameters of MAC session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_mac_create_session_flf {
+    /* Device read only portion */
+
+    /* See VIRTIO_CRYPTO_MAC_* above */
+    le32 algo;
+    /* hash result length */
+    le32 hash_result_len;
+    /* length of authenticated key */
+    le32 auth_key_len;
+    le32 padding;
+};
+
+struct virtio_crypto_mac_create_session_vlf {
+    /* Device read only portion */
+
+    /* The authenticated key */
+    u8 auth_key[auth_key_len];
+};
+\end{lstlisting}
+
+The length of \field{auth_key} is specified in \field{auth_key_len} in the struct
+virtio_crypto_mac_create_session_flf.
+
+
+\subparagraph{Session operation: Symmetric algorithms session}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: Symmetric algorithms session}
+
+The request of symmetric session could be the CIPHER algorithms request
+or the chain algorithms (chaining CIPHER and HASH/MAC) request.
+
+The fixed-length and the variable-length parameters of CIPHER session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_cipher_session_flf {
+    /* Device read only portion */
+
+    /* See VIRTIO_CRYPTO_CIPHER* above */
+    le32 algo;
+    /* length of key */
+    le32 key_len;
+#define VIRTIO_CRYPTO_OP_ENCRYPT  1
+#define VIRTIO_CRYPTO_OP_DECRYPT  2
+    /* encryption or decryption */
+    le32 op;
+    le32 padding;
+};
+
+struct virtio_crypto_cipher_session_vlf {
+    /* Device read only portion */
+
+    /* The cipher key */
+    u8 cipher_key[key_len];
+};
+\end{lstlisting}
+
+The length of \field{cipher_key} is specified in \field{key_len} in the struct
+virtio_crypto_cipher_session_flf.
+
+The fixed-length and the variable-length parameters of Chain session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_alg_chain_session_flf {
+    /* Device read only portion */
+
+#define VIRTIO_CRYPTO_SYM_ALG_CHAIN_ORDER_HASH_THEN_CIPHER  1
+#define VIRTIO_CRYPTO_SYM_ALG_CHAIN_ORDER_CIPHER_THEN_HASH  2
+    le32 alg_chain_order;
+/* Plain hash */
+#define VIRTIO_CRYPTO_SYM_HASH_MODE_PLAIN    1
+/* Authenticated hash (mac) */
+#define VIRTIO_CRYPTO_SYM_HASH_MODE_AUTH     2
+/* Nested hash */
+#define VIRTIO_CRYPTO_SYM_HASH_MODE_NESTED   3
+    le32 hash_mode;
+    struct virtio_crypto_cipher_session_flf cipher_hdr;
+
+#define VIRTIO_CRYPTO_ALG_CHAIN_SESS_OP_SPEC_HDR_SIZE  16
+    /* fixed length fields, algo specific */
+    u8 algo_flf[VIRTIO_CRYPTO_ALG_CHAIN_SESS_OP_SPEC_HDR_SIZE];
+
+    /* length of the additional authenticated data (AAD) in bytes */
+    le32 aad_len;
+    le32 padding;
+};
+
+struct virtio_crypto_alg_chain_session_vlf {
+    /* Device read only portion */
+
+    /* The cipher key */
+    u8 cipher_key[key_len];
+    /* The authenticated key */
+    u8 auth_key[auth_key_len];
+};
+\end{lstlisting}
+
+\field{hash_mode} decides the type used by \field{algo_flf}.
+
+\field{algo_flf} is fixed to 16 bytes and MUST contains or be one of
+the following types:
+\begin{itemize*}
+\item struct virtio_crypto_hash_create_session_flf
+\item struct virtio_crypto_mac_create_session_flf
+\end{itemize*}
+The data of unused part (if has) in \field{algo_flf} will be ignored.
+
+The length of \field{cipher_key} is specified in \field{key_len} in \field{cipher_hdr}.
+
+The length of \field{auth_key} is specified in \field{auth_key_len} in struct
+virtio_crypto_mac_create_session_flf.
+
+The fixed-length parameters of Symmetric session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_sym_create_session_flf {
+    /* Device read only portion */
+
+#define VIRTIO_CRYPTO_SYM_SESS_OP_SPEC_HDR_SIZE  48
+    /* fixed length fields, opcode specific */
+    u8 op_flf[VIRTIO_CRYPTO_SYM_SESS_OP_SPEC_HDR_SIZE];
+
+/* No operation */
+#define VIRTIO_CRYPTO_SYM_OP_NONE  0
+/* Cipher only operation on the data */
+#define VIRTIO_CRYPTO_SYM_OP_CIPHER  1
+/* Chain any cipher with any hash or mac operation. The order
+   depends on the value of alg_chain_order param */
+#define VIRTIO_CRYPTO_SYM_OP_ALGORITHM_CHAINING  2
+    le32 op_type;
+    le32 padding;
+};
+\end{lstlisting}
+
+\field{op_flf} is fixed to 48 bytes, MUST contains or be one of
+the following types:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_session_flf
+\item struct virtio_crypto_alg_chain_session_flf
+\end{itemize*}
+The data of unused part (if has) in \field{op_flf} will be ignored.
+
+\field{op_type} decides the type used by \field{op_flf}.
+
+The variable-length parameters of Symmetric session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_sym_create_session_vlf {
+    /* Device read only portion */
+    /* variable length fields, opcode specific */
+    u8 op_vlf[vlf_len];
+};
+\end{lstlisting}
+
+\field{op_vlf} MUST contains or be one of the following types:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_session_vlf
+\item struct virtio_crypto_alg_chain_session_vlf
+\end{itemize*}
+
+\field{op_type} in struct virtio_crypto_sym_create_session_flf decides the
+type used by \field{op_vlf}.
+
+\field{vlf_len} is the size of the specific structure used.
+
+
+\subparagraph{Session operation: AEAD session}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: AEAD session}
+
+The fixed-length and the variable-length parameters of AEAD session requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_aead_create_session_flf {
+    /* Device read only portion */
+
+    /* See VIRTIO_CRYPTO_AEAD_* above */
+    le32 algo;
+    /* length of key */
+    le32 key_len;
+    /* Authentication tag length */
+    le32 tag_len;
+    /* The length of the additional authenticated data (AAD) in bytes */
+    le32 aad_len;
+    /* encryption or decryption, See above VIRTIO_CRYPTO_OP_* */
+    le32 op;
+    le32 padding;
+};
+
+struct virtio_crypto_aead_create_session_vlf {
+    /* Device read only portion */
+    u8 key[key_len];
+};
+\end{lstlisting}
+
+The length of \field{key} is specified in \field{key_len} in struct
+virtio_crypto_aead_create_session_flf.
+
+\subparagraph{Session operation: AKCIPHER session}\label{sec:Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: AKCIPHER session}
+
+Due to the complexity of asymmetric key algorithms, different algorithms
+require different parameters. The following data structures are used as
+supplementary parameters to describe the asymmetric algorithm sessions.
+
+For the RSA algorithm, the extra parameters are as follows:
+\begin{lstlisting}
+struct virtio_crypto_rsa_session_para {
+#define VIRTIO_CRYPTO_RSA_RAW_PADDING   0
+#define VIRTIO_CRYPTO_RSA_PKCS1_PADDING 1
+    le32 padding_algo;
+
+#define VIRTIO_CRYPTO_RSA_NO_HASH   0
+#define VIRTIO_CRYPTO_RSA_MD2       1
+#define VIRTIO_CRYPTO_RSA_MD3       2
+#define VIRTIO_CRYPTO_RSA_MD4       3
+#define VIRTIO_CRYPTO_RSA_MD5       4
+#define VIRTIO_CRYPTO_RSA_SHA1      5
+#define VIRTIO_CRYPTO_RSA_SHA256    6
+#define VIRTIO_CRYPTO_RSA_SHA384    7
+#define VIRTIO_CRYPTO_RSA_SHA512    8
+#define VIRTIO_CRYPTO_RSA_SHA224    9
+    le32 hash_algo;
+};
+\end{lstlisting}
+
+\field{padding_algo} specifies the padding method used by RSA sessions.
+\begin{itemize*}
+\item If VIRTIO_CRYPTO_RSA_RAW_PADDING is specified, 1) \field{hash_algo}
+is ignored, 2) ciphertext and plaintext MUST be padded with leading zeros,
+3) and RSA sessions with VIRTIO_CRYPTO_RSA_RAW_PADDING MUST not be used
+for verification and signing operations.
+\item If VIRTIO_CRYPTO_RSA_PKCS1_PADDING is specified, EMSA-PKCS1-v1_5 padding method
+is used (see \hyperref[intro:rfc3447]{PKCS\#1}), \field{hash_algo} specifies how the
+digest of the data passed to RSA sessions is calculated when verifying and signing.
+It only affects the padding algorithm and is ignored during encryption and decryption.
+\end{itemize*}
+
+The ECC algorithms such as the ECDSA algorithm, cannot use custom curves, only the
+following known curves can be used (see \hyperref[intro:NIST]{NIST-recommended curves}).
+
+\begin{lstlisting}
+#define VIRTIO_CRYPTO_CURVE_UNKNOWN   0
+#define VIRTIO_CRYPTO_CURVE_NIST_P192 1
+#define VIRTIO_CRYPTO_CURVE_NIST_P224 2
+#define VIRTIO_CRYPTO_CURVE_NIST_P256 3
+#define VIRTIO_CRYPTO_CURVE_NIST_P384 4
+#define VIRTIO_CRYPTO_CURVE_NIST_P521 5
+\end{lstlisting}
+
+For the ECDSA algorithm, the extra parameters are as follows:
+\begin{lstlisting}
+struct virtio_crypto_ecdsa_session_para {
+    /* See VIRTIO_CRYPTO_CURVE_* above */
+    le32 curve_id;
+};
+\end{lstlisting}
+
+The fixed-length and the variable-length parameters of AKCIPHER session requests are as follows:
+\begin{lstlisting}
+struct virtio_crypto_akcipher_create_session_flf {
+    /* Device read only portion */
+
+    /* See VIRTIO_CRYPTO_AKCIPHER_* above */
+    le32 algo;
+#define VIRTIO_CRYPTO_AKCIPHER_KEY_TYPE_PUBLIC 1
+#define VIRTIO_CRYPTO_AKCIPHER_KEY_TYPE_PRIVATE 2
+    le32 key_type;
+    /* length of key */
+    le32 key_len;
+
+#define VIRTIO_CRYPTO_AKCIPHER_SESS_ALGO_SPEC_HDR_SIZE 44
+    u8 algo_flf[VIRTIO_CRYPTO_AKCIPHER_SESS_ALGO_SPEC_HDR_SIZE];
+};
+
+struct virtio_crypto_akcipher_create_session_vlf {
+    /* Device read only portion */
+    u8 key[key_len];
+};
+\end{lstlisting}
+
+\field{algo} decides the type used by \field{algo_flf}.
+\field{algo_flf} is fixed to 44 bytes and MUST contains of be one the
+following structures:
+\begin{itemize*}
+\item struct virtio_crypto_rsa_session_para
+\item struct virtio_crypto_ecdsa_session_para
+\end{itemize*}
+
+The length of \field{key} is specified in \field{key_len} in the struct
+virtio_crypto_akcipher_create_session_flf.
+
+For the RSA algorithm, the key needs to be encoded according to
+\hyperref[intro:rfc3447]{PKCS\#1}. The private key is described with the
+RSAPrivateKey structure, and the public key is described with the RSAPublicKey
+structure. These ASN.1 structures are encoded in DER encoding rules (see
+\hyperref[intro:rfc6025]{rfc6025}).
+
+\begin{lstlisting}
+RSAPrivateKey ::= SEQUENCE {
+    version          INTEGER,
+    modulus          INTEGER,
+    publicExponent   INTEGER,
+    privateExponent  INTEGER,
+    prime1           INTEGER,
+    prime2           INTEGER,
+    exponent1        INTEGER,
+    exponent1        INTEGER,
+    coefficient      INTEGER,
+    otherPrimeInfos  OtherPrimeInfos OPTIONAL
+}
+
+OtherPrimeInfos ::= SEQUENCE SIZE(1...MAX) OF OtherPrimeInfo
+
+OtherPrimeINfo ::= SEQUENCE {
+    prime           INTEGER,
+    exponent        INTEGER,
+    coefficient     INTEGER
+}
+
+RSAPublicKey ::= SEQUENCE {
+    modulus         INTEGER,
+    publicExponent  INTEGER
+}
+\end{lstlisting}
+
+For the ECDSA algorithm, the private key is encoded according to
+\hyperref[intro:rfc5915]{RFC5915}, the private key of the ECDSA algorithm
+is described by the ASN.1 structure ECPrivateKey and encoded with DER
+encoding rules (see \hyperref[intro:rfc6025]{rfc6025}).
+
+\begin{lstlisting}
+ECPrivateKey ::= SEQUNCE {
+    version         INTEGER,
+    privateKey      OCTET STRING,
+    parameters [0]  ECParameters {{ NamedCurve }} OPTIONAL,
+    publicKey  [1]  BIT STRING OPTIONAL
+}
+\end{lstlisting}
+
+The public key of the ECDSA algorithm is encoded according to \hyperref[intro:SEC1]{SEC1},
+and the public key of ECDSA is described by the ASN.1 structure ECPoint.
+When initializing a session with ECDSA public key, the ECPoint is DER encoded and the
+\field{key} only contains the value part of ECPoint, that is, the header part of the
+OCTET STRING will be omitted (see \hyperref[intro:rfc6025]{rfc6025}).
+
+\begin{lstlisting}
+ECPoint ::= OCTET STRING
+\end{lstlisting}
+
+The length of \field{key} is specified in \field{key_len} in
+struct virtio_crypto_akcipher_create_session_flf.
+
+\drivernormative{\subparagraph}{Session operation: create session}{Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: create session}
+
+\begin{itemize*}
+\item The driver MUST set the \field{opcode} field based on service type: CIPHER, HASH, MAC, AEAD or AKCIPHER.
+\item The driver MUST set the control general header, the opcode specific header,
+    the opcode specific extra parameters and the opcode specific outcome buffer in turn.
+    See \ref{sec:Device Types / Crypto Device / Device Operation / Control Virtqueue}.
+\item The driver MUST set the \field{reversed} field to zero.
+\end{itemize*}
+
+\devicenormative{\subparagraph}{Session operation: create session}{Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: create session}
+
+\begin{itemize*}
+\item The device MUST use the corresponding opcode specific structure according to the
+    \field{opcode} in the control general header.
+\item The device MUST extract extra parameters according to the structures used.
+\item The device MUST set the \field{status} field to one of the following values of enum
+    VIRTIO_CRYPTO_STATUS after finish a session creation:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if a session is created successfully.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_NOSPC if no free session ID (only when the VIRTIO_CRYPTO_F_REVISION_1
+    feature bit is negotiated).
+\item VIRTIO_CRYPTO_ERR if failure not mentioned above occurs.
+\end{itemize*}
+\item The device MUST set the \field{session_id} field to a unique session identifier only
+    if the status is set to VIRTIO_CRYPTO_OK.
+\end{itemize*}
+
+\drivernormative{\subparagraph}{Session operation: destroy session}{Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: destroy session}
+
+\begin{itemize*}
+\item The driver MUST set the \field{opcode} field based on service type: CIPHER, HASH, MAC, AEAD or AKCIPHER.
+\item The driver MUST set the \field{session_id} to a valid value assigned by the device
+    when the session was created.
+\end{itemize*}
+
+\devicenormative{\subparagraph}{Session operation: destroy session}{Device Types / Crypto Device / Device
+Operation / Control Virtqueue / Session operation / Session operation: destroy session}
+
+\begin{itemize*}
+\item The device MUST set the \field{status} field to one of the following values of enum VIRTIO_CRYPTO_STATUS.
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if a session is created successfully.
+\item VIRTIO_CRYPTO_ERR if any failure occurs.
+\end{itemize*}
+\end{itemize*}
+
+
+\subsubsection{Data Virtqueue}\label{sec:Device Types / Crypto Device / Device Operation / Data Virtqueue}
+
+The driver uses the data virtqueues to transmit crypto operation requests to the device,
+and completes the crypto operations.
+
+The header for dataq is as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_op_header {
+#define VIRTIO_CRYPTO_CIPHER_ENCRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_CIPHER, 0x00)
+#define VIRTIO_CRYPTO_CIPHER_DECRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_CIPHER, 0x01)
+#define VIRTIO_CRYPTO_HASH \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_HASH, 0x00)
+#define VIRTIO_CRYPTO_MAC \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_MAC, 0x00)
+#define VIRTIO_CRYPTO_AEAD_ENCRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AEAD, 0x00)
+#define VIRTIO_CRYPTO_AEAD_DECRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AEAD, 0x01)
+#define VIRTIO_CRYPTO_AKCIPHER_ENCRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x00)
+#define VIRTIO_CRYPTO_AKCIPHER_DECRYPT \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x01)
+#define VIRTIO_CRYPTO_AKCIPHER_SIGN \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x02)
+#define VIRTIO_CRYPTO_AKCIPHER_VERIFY \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_AKCIPHER, 0x03)
+#define VIRTIO_CRYPTO_IPSEC_OUTBOUND \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_IPSEC, 0x00)
+#define VIRTIO_CRYPTO_IPSEC_INBOUND \
+    VIRTIO_CRYPTO_OPCODE(VIRTIO_CRYPTO_SERVICE_IPSEC, 0x01)
+    le32 opcode;
+    /* algo should be service-specific algorithms */
+    le32 algo;
+    le64 session_id;
+#define VIRTIO_CRYPTO_FLAG_SESSION_MODE 1
+    /* control flag to control the request */
+    le32 flag;
+    le32 padding;
+};
+\end{lstlisting}
+
+\begin{note}
+If VIRTIO_CRYPTO_F_REVISION_1 is not negotiated the \field{flag} is ignored.
+
+If VIRTIO_CRYPTO_F_REVISION_1 is negotiated but VIRTIO_CRYPTO_F_<SERVICE>_STATELESS_MODE
+is not negotiated, then the device SHOULD reject <SERVICE> requests if
+VIRTIO_CRYPTO_FLAG_SESSION_MODE is not set (in \field{flag}).
+
+For VIRTIO_CRYPTO_IPSEC_OUTBOUND and VIRTIO_CRYPTO_IPSEC_INBOUND opcodes,
+\field{algo} is ignored.
+
+For VIRTIO_CRYPTO_IPSEC_OUTBOUND opcode, \field{session_id} MUST be set to
+one of the resource objects \field{id} created using
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA resource type.
+
+For VIRTIO_CRYPTO_IPSEC_INBOUND opcode, \field{session_id} MUST be set to
+one of the resource objects \field{id} created using
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA resource type.
+\end{note}
+
+The dataq request is composed of four parts:
+\begin{lstlisting}
+struct virtio_crypto_op_data_req {
+    /* Device read only portion */
+
+    struct virtio_crypto_op_header header;
+
+#define VIRTIO_CRYPTO_DATAQ_OP_SPEC_HDR_LEGACY 48
+    /* fixed length fields, opcode specific */
+    u8 op_flf[flf_len];
+
+    /* Device read && write portion */
+    /* variable length fields, opcode specific */
+    u8 op_vlf[vlf_len];
+
+    /* Device write only portion */
+    struct virtio_crypto_inhdr inhdr;
+};
+\end{lstlisting}
+
+\field{header} is a general header (see above).
+
+\field{op_flf} is the opcode (in \field{header}) specific header.
+
+\field{flf_len} depends on the VIRTIO_CRYPTO_F_REVISION_1 feature bit
+(see below).
+
+\field{op_vlf} is the opcode (in \field{header}) specific parameters.
+
+\field{vlf_len} is the size of the specific structure used.
+
+\begin{itemize*}
+\item If the the opcode (in \field{header}) is VIRTIO_CRYPTO_CIPHER_ENCRYPT
+    or VIRTIO_CRYPTO_CIPHER_DECRYPT then:
+    \begin{itemize*}
+    \item If VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE is negotiated, \field{op_flf} is
+        struct virtio_crypto_sym_data_flf_stateless, and \field{op_vlf} is struct
+        virtio_crypto_sym_data_vlf_stateless.
+    \item If VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE is NOT negotiated, \field{op_flf}
+        is struct virtio_crypto_sym_data_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated
+        and struct virtio_crypto_sym_data_flf is padded to 48 bytes if NOT negotiated,
+        and \field{op_vlf} is struct virtio_crypto_sym_data_vlf.
+    \end{itemize*}
+\item If the the opcode (in \field{header}) is VIRTIO_CRYPTO_HASH:
+    \begin{itemize*}
+    \item If VIRTIO_CRYPTO_F_HASH_STATELESS_MODE is negotiated, \field{op_flf} is
+        struct virtio_crypto_hash_data_flf_stateless, and \field{op_vlf} is struct
+        virtio_crypto_hash_data_vlf_stateless.
+    \item If VIRTIO_CRYPTO_F_HASH_STATELESS_MODE is NOT negotiated, \field{op_flf}
+        is struct virtio_crypto_hash_data_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated
+        and struct virtio_crypto_hash_data_flf is padded to 48 bytes if NOT negotiated,
+        and \field{op_vlf} is struct virtio_crypto_hash_data_vlf.
+    \end{itemize*}
+\item If the the opcode (in \field{header}) is VIRTIO_CRYPTO_MAC:
+    \begin{itemize*}
+    \item If VIRTIO_CRYPTO_F_MAC_STATELESS_MODE is negotiated, \field{op_flf} is
+        struct virtio_crypto_mac_data_flf_stateless, and \field{op_vlf} is struct
+        virtio_crypto_mac_data_vlf_stateless.
+    \item If VIRTIO_CRYPTO_F_MAC_STATELESS_MODE is NOT negotiated, \field{op_flf}
+        is struct virtio_crypto_mac_data_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated
+        and struct virtio_crypto_mac_data_flf is padded to 48 bytes if NOT negotiated,
+        and \field{op_vlf} is struct virtio_crypto_mac_data_vlf.
+    \end{itemize*}
+\item If the the opcode (in \field{header}) is VIRTIO_CRYPTO_AEAD_ENCRYPT
+    or VIRTIO_CRYPTO_AEAD_DECRYPT then:
+    \begin{itemize*}
+    \item If VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE is negotiated, \field{op_flf} is
+        struct virtio_crypto_aead_data_flf_stateless, and \field{op_vlf} is struct
+        virtio_crypto_aead_data_vlf_stateless.
+    \item If VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE is NOT negotiated, \field{op_flf}
+        is struct virtio_crypto_aead_data_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated
+        and struct virtio_crypto_aead_data_flf is padded to 48 bytes if NOT negotiated,
+        and \field{op_vlf} is struct virtio_crypto_aead_data_vlf.
+    \end{itemize*}
+\item If the opcode (in \field{header}) is VIRTIO_CRYPTO_AKCIPHER_ENCRYPT, VIRTIO_CRYPTO_AKCIPHER_DECRYPT,
+    VIRTIO_CRYPTO_AKCIPHER_SIGN or VIRTIO_CRYPTO_AKCIPHER_VERIFY then:
+    \begin{itemize*}
+    \item If VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE is negotiated, \field{op_flf} is
+        struct virtio_crypto_akcipher_data_flf_statless, and \field{op_vlf} is struct
+        virtio_crypto_akcipher_data_vlf_stateless.
+    \item If VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE is NOT negotiated, \field{op_flf}
+        is struct virtio_crypto_akcipher_data_flf if VIRTIO_CRYPTO_F_REVISION_1 is negotiated
+        and struct virtio_crypto_akcipher_data_flf is padded to 48 bytes if NOT negotiated,
+        and \field{op_vlf} is struct virtio_crypto_akcipher_data_vlf.
+    \end{itemize*}
+\item If the the opcode (in \field{header}) is VIRTIO_CRYPTO_IPSEC_OUTBOUND
+    or VIRTIO_CRYPTO_IPSEC_INBOUND then:
+    \begin{itemize*}
+    \item \field{op_flf} is struct virtio_crypto_ipsec_data_flf and
+        \field{op_vlf} is struct virtio_crypto_ipsec_data_vlf.
+	Works only for session mode.
+    \end{itemize*}
+\end{itemize*}
+
+\field{inhdr} is a unified input header that used to return the status of
+the operations, is defined as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_inhdr {
+    u8 status;
+};
+\end{lstlisting}
+
+\subsubsection{HASH Service Operation}\label{sec:Device Types / Crypto Device / Device Operation / HASH Service Operation}
+
+Session mode HASH service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_hash_data_flf {
+    /* length of source data */
+    le32 src_data_len;
+    /* hash result length */
+    le32 hash_result_len;
+};
+
+struct virtio_crypto_hash_data_vlf {
+    /* Device read only portion */
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+Each data request uses the virtio_crypto_hash_data_flf structure and the
+virtio_crypto_hash_data_vlf structure to store information used to run the
+HASH operations.
+
+\field{src_data} is the source data that will be processed.
+\field{src_data_len} is the length of source data.
+\field{hash_result} is the result data and \field{hash_result_len} is the length
+of it.
+
+Stateless mode HASH service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_hash_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CRYPTO_HASH_* above */
+        le32 algo;
+    } sess_para;
+
+    /* length of source data */
+    le32 src_data_len;
+    /* hash result length */
+    le32 hash_result_len;
+    le32 reserved;
+};
+struct virtio_crypto_hash_data_vlf_stateless {
+    /* Device read only portion */
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+\drivernormative{\paragraph}{HASH Service Operation}{Device Types / Crypto Device / Device Operation / HASH Service Operation}
+
+\begin{itemize*}
+\item If the driver uses the session mode, then the driver MUST set \field{session_id}
+    in struct virtio_crypto_op_header to a valid value assigned by the device when the
+    session was created.
+\item If the VIRTIO_CRYPTO_F_HASH_STATELESS_MODE feature bit is negotiated, 1) if the
+    driver uses the stateless mode, then the driver MUST set the \field{flag} field in
+    struct virtio_crypto_op_header to ZERO and MUST set the fields in struct
+    virtio_crypto_hash_data_flf_stateless.sess_para, 2) if the driver uses the session
+    mode, then the driver MUST set the \field{flag} field in struct virtio_crypto_op_header
+    to VIRTIO_CRYPTO_FLAG_SESSION_MODE.
+\item The driver MUST set \field{opcode} in struct virtio_crypto_op_header to VIRTIO_CRYPTO_HASH.
+\end{itemize*}
+
+\devicenormative{\paragraph}{HASH Service Operation}{Device Types / Crypto Device / Device Operation / HASH Service Operation}
+
+\begin{itemize*}
+\item The device MUST use the corresponding structure according to the \field{opcode}
+    in the data general header.
+\item If the VIRTIO_CRYPTO_F_HASH_STATELESS_MODE feature bit is negotiated, the device
+    MUST parse \field{flag} field in struct virtio_crypto_op_header in order to decide
+    which mode the driver uses.
+\item The device MUST copy the results of HASH operations in the hash_result[] if HASH
+    operations success.
+\item The device MUST set \field{status} in struct virtio_crypto_inhdr to one of the
+    following values of enum VIRTIO_CRYPTO_STATUS:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_INVSESS if the session ID invalid when in session mode.
+\item VIRTIO_CRYPTO_ERR if any failure not mentioned above occurs.
+\end{itemize*}
+\end{itemize*}
+
+
+\subsubsection{MAC Service Operation}\label{sec:Device Types / Crypto Device / Device Operation / MAC Service Operation}
+
+Session mode MAC service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_mac_data_flf {
+    struct virtio_crypto_hash_data_flf hdr;
+};
+
+struct virtio_crypto_mac_data_vlf {
+    /* Device read only portion */
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+Each request uses the virtio_crypto_mac_data_flf structure and the
+virtio_crypto_mac_data_vlf structure to store information used to run the
+MAC operations.
+
+\field{src_data} is the source data that will be processed.
+\field{src_data_len} is the length of source data.
+\field{hash_result} is the result data and \field{hash_result_len} is the length
+of it.
+
+Stateless mode MAC service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_mac_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CRYPTO_MAC_* above */
+        le32 algo;
+        /* length of authenticated key */
+        le32 auth_key_len;
+    } sess_para;
+
+    /* length of source data */
+    le32 src_data_len;
+    /* hash result length */
+    le32 hash_result_len;
+};
+
+struct virtio_crypto_mac_data_vlf_stateless {
+    /* Device read only portion */
+    /* The authenticated key */
+    u8 auth_key[auth_key_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+\field{auth_key} is the authenticated key that will be used during the process.
+\field{auth_key_len} is the length of the key.
+
+\drivernormative{\paragraph}{MAC Service Operation}{Device Types / Crypto Device / Device Operation / MAC Service Operation}
+
+\begin{itemize*}
+\item If the driver uses the session mode, then the driver MUST set \field{session_id}
+    in struct virtio_crypto_op_header to a valid value assigned by the device when the
+    session was created.
+\item If the VIRTIO_CRYPTO_F_MAC_STATELESS_MODE feature bit is negotiated, 1) if the
+    driver uses the stateless mode, then the driver MUST set the \field{flag} field
+    in struct virtio_crypto_op_header to ZERO and MUST set the fields in struct
+    virtio_crypto_mac_data_flf_stateless.sess_para, 2) if the driver uses the session
+    mode, then the driver MUST set the \field{flag} field in struct virtio_crypto_op_header
+    to VIRTIO_CRYPTO_FLAG_SESSION_MODE.
+\item The driver MUST set \field{opcode} in struct virtio_crypto_op_header to VIRTIO_CRYPTO_MAC.
+\end{itemize*}
+
+\devicenormative{\paragraph}{MAC Service Operation}{Device Types / Crypto Device / Device Operation / MAC Service Operation}
+
+\begin{itemize*}
+\item If the VIRTIO_CRYPTO_F_MAC_STATELESS_MODE feature bit is negotiated, the device
+    MUST parse \field{flag} field in struct virtio_crypto_op_header in order to decide
+	which mode the driver uses.
+\item The device MUST copy the results of MAC operations in the hash_result[] if HASH
+    operations success.
+\item The device MUST set \field{status} in struct virtio_crypto_inhdr to one of the
+    following values of enum VIRTIO_CRYPTO_STATUS:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_INVSESS if the session ID invalid when in session mode.
+\item VIRTIO_CRYPTO_ERR if any failure not mentioned above occurs.
+\end{itemize*}
+\end{itemize*}
+
+\subsubsection{Symmetric algorithms Operation}\label{sec:Device Types / Crypto Device / Device Operation / Symmetric algorithms Operation}
+
+Session mode CIPHER service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_cipher_data_flf {
+    /*
+     * Byte Length of valid IV/Counter data pointed to by the below iv data.
+     *
+     * For block ciphers in CBC or F8 mode, or for Kasumi in F8 mode, or for
+     *   SNOW3G in UEA2 mode, this is the length of the IV (which
+     *   must be the same as the block length of the cipher).
+     * For block ciphers in CTR mode, this is the length of the counter
+     *   (which must be the same as the block length of the cipher).
+     */
+    le32 iv_len;
+    /* length of source data */
+    le32 src_data_len;
+    /* length of destination data */
+    le32 dst_data_len;
+    le32 padding;
+};
+
+struct virtio_crypto_cipher_data_vlf {
+    /* Device read only portion */
+
+    /*
+     * Initialization Vector or Counter data.
+     *
+     * For block ciphers in CBC or F8 mode, or for Kasumi in F8 mode, or for
+     *   SNOW3G in UEA2 mode, this is the Initialization Vector (IV)
+     *   value.
+     * For block ciphers in CTR mode, this is the counter.
+     * For AES-XTS, this is the 128bit tweak, i, from IEEE Std 1619-2007.
+     *
+     * The IV/Counter will be updated after every partial cryptographic
+     * operation.
+     */
+    u8 iv[iv_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Destination data */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+Session mode requests of algorithm chaining are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_alg_chain_data_flf {
+    le32 iv_len;
+    /* Length of source data */
+    le32 src_data_len;
+    /* Length of destination data */
+    le32 dst_data_len;
+    /* Starting point for cipher processing in source data */
+    le32 cipher_start_src_offset;
+    /* Length of the source data that the cipher will be computed on */
+    le32 len_to_cipher;
+    /* Starting point for hash processing in source data */
+    le32 hash_start_src_offset;
+    /* Length of the source data that the hash will be computed on */
+    le32 len_to_hash;
+    /* Length of the additional auth data */
+    le32 aad_len;
+    /* Length of the hash result */
+    le32 hash_result_len;
+    le32 reserved;
+};
+
+struct virtio_crypto_alg_chain_data_vlf {
+    /* Device read only portion */
+
+    /* Initialization Vector or Counter data */
+    u8 iv[iv_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+    /* Additional authenticated data if exists */
+    u8 aad[aad_len];
+
+    /* Device write only portion */
+
+    /* Destination data */
+    u8 dst_data[dst_data_len];
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+Session mode requests of symmetric algorithm are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_sym_data_flf {
+    /* Device read only portion */
+
+#define VIRTIO_CRYPTO_SYM_DATA_REQ_HDR_SIZE    40
+    u8 op_type_flf[VIRTIO_CRYPTO_SYM_DATA_REQ_HDR_SIZE];
+
+    /* See above VIRTIO_CRYPTO_SYM_OP_* */
+    le32 op_type;
+    le32 padding;
+};
+
+struct virtio_crypto_sym_data_vlf {
+    u8 op_type_vlf[sym_para_len];
+};
+\end{lstlisting}
+
+Each request uses the virtio_crypto_sym_data_flf structure and the
+virtio_crypto_sym_data_flf structure to store information used to run the
+CIPHER operations.
+
+\field{op_type_flf} is the \field{op_type} specific header, it MUST starts
+with or be one of the following structures:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_data_flf
+\item struct virtio_crypto_alg_chain_data_flf
+\end{itemize*}
+
+The length of \field{op_type_flf} is fixed to 40 bytes, the data of unused
+part (if has) will be ignored.
+
+\field{op_type_vlf} is the \field{op_type} specific parameters, it MUST starts
+with or be one of the following structures:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_data_vlf
+\item struct virtio_crypto_alg_chain_data_vlf
+\end{itemize*}
+
+\field{sym_para_len} is the size of the specific structure used.
+
+Stateless mode CIPHER service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_cipher_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CRYPTO_CIPHER* above */
+        le32 algo;
+        /* length of key */
+        le32 key_len;
+
+        /* See VIRTIO_CRYPTO_OP_* above */
+        le32 op;
+    } sess_para;
+
+    /*
+     * Byte Length of valid IV/Counter data pointed to by the below iv data.
+     */
+    le32 iv_len;
+    /* length of source data */
+    le32 src_data_len;
+    /* length of destination data */
+    le32 dst_data_len;
+};
+
+struct virtio_crypto_cipher_data_vlf_stateless {
+    /* Device read only portion */
+
+    /* The cipher key */
+    u8 cipher_key[key_len];
+
+    /* Initialization Vector or Counter data. */
+    u8 iv[iv_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Destination data */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+Stateless mode requests of algorithm chaining are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_alg_chain_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CRYPTO_SYM_ALG_CHAIN_ORDER_* above */
+        le32 alg_chain_order;
+        /* length of the additional authenticated data in bytes */
+        le32 aad_len;
+
+        struct {
+            /* See VIRTIO_CRYPTO_CIPHER* above */
+            le32 algo;
+            /* length of key */
+            le32 key_len;
+            /* See VIRTIO_CRYPTO_OP_* above */
+            le32 op;
+        } cipher;
+
+        struct {
+            /* See VIRTIO_CRYPTO_HASH_* or VIRTIO_CRYPTO_MAC_* above */
+            le32 algo;
+            /* length of authenticated key */
+            le32 auth_key_len;
+            /* See VIRTIO_CRYPTO_SYM_HASH_MODE_* above */
+            le32 hash_mode;
+        } hash;
+    } sess_para;
+
+    le32 iv_len;
+    /* Length of source data */
+    le32 src_data_len;
+    /* Length of destination data */
+    le32 dst_data_len;
+    /* Starting point for cipher processing in source data */
+    le32 cipher_start_src_offset;
+    /* Length of the source data that the cipher will be computed on */
+    le32 len_to_cipher;
+    /* Starting point for hash processing in source data */
+    le32 hash_start_src_offset;
+    /* Length of the source data that the hash will be computed on */
+    le32 len_to_hash;
+    /* Length of the additional auth data */
+    le32 aad_len;
+    /* Length of the hash result */
+    le32 hash_result_len;
+    le32 reserved;
+};
+
+struct virtio_crypto_alg_chain_data_vlf_stateless {
+    /* Device read only portion */
+
+    /* The cipher key */
+    u8 cipher_key[key_len];
+    /* The auth key */
+    u8 auth_key[auth_key_len];
+    /* Initialization Vector or Counter data */
+    u8 iv[iv_len];
+    /* Additional authenticated data if exists */
+    u8 aad[aad_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+
+    /* Destination data */
+    u8 dst_data[dst_data_len];
+    /* Hash result data */
+    u8 hash_result[hash_result_len];
+};
+\end{lstlisting}
+
+Stateless mode requests of symmetric algorithm are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_sym_data_flf_stateless {
+    /* Device read only portion */
+#define VIRTIO_CRYPTO_SYM_DATE_REQ_HDR_STATELESS_SIZE    72
+    u8 op_type_flf[VIRTIO_CRYPTO_SYM_DATE_REQ_HDR_STATELESS_SIZE];
+
+    /* Device write only portion */
+    /* See above VIRTIO_CRYPTO_SYM_OP_* */
+    le32 op_type;
+};
+
+struct virtio_crypto_sym_data_vlf_stateless {
+    u8 op_type_vlf[sym_para_len];
+};
+\end{lstlisting}
+
+\field{op_type_flf} is the \field{op_type} specific header, it MUST starts
+with or be one of the following structures:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_data_flf_stateless
+\item struct virtio_crypto_alg_chain_data_flf_stateless
+\end{itemize*}
+
+The length of \field{op_type_flf} is fixed to 72 bytes, the data of unused
+part (if has) will be ignored.
+
+\field{op_type_vlf} is the \field{op_type} specific parameters, it MUST starts
+with or be one of the following structures:
+\begin{itemize*}
+\item struct virtio_crypto_cipher_data_vlf_stateless
+\item struct virtio_crypto_alg_chain_data_vlf_stateless
+\end{itemize*}
+
+\field{sym_para_len} is the size of the specific structure used.
+
+\drivernormative{\paragraph}{Symmetric algorithms Operation}{Device Types / Crypto Device / Device Operation / Symmetric algorithms Operation}
+
+\begin{itemize*}
+\item If the driver uses the session mode, then the driver MUST set \field{session_id}
+    in struct virtio_crypto_op_header to a valid value assigned by the device when the
+    session was created.
+\item If the VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE feature bit is negotiated, 1) if the
+    driver uses the stateless mode, then the driver MUST set the \field{flag} field in
+    struct virtio_crypto_op_header to ZERO and MUST set the fields in struct
+    virtio_crypto_cipher_data_flf_stateless.sess_para or struct
+    virtio_crypto_alg_chain_data_flf_stateless.sess_para, 2) if the driver uses the
+    session mode, then the driver MUST set the \field{flag} field in struct
+    virtio_crypto_op_header to VIRTIO_CRYPTO_FLAG_SESSION_MODE.
+\item The driver MUST set the \field{opcode} field in struct virtio_crypto_op_header
+    to VIRTIO_CRYPTO_CIPHER_ENCRYPT or VIRTIO_CRYPTO_CIPHER_DECRYPT.
+\item The driver MUST specify the fields of struct virtio_crypto_cipher_data_flf in
+    struct virtio_crypto_sym_data_flf and struct virtio_crypto_cipher_data_vlf in
+    struct virtio_crypto_sym_data_vlf if the request is based on VIRTIO_CRYPTO_SYM_OP_CIPHER.
+\item The driver MUST specify the fields of struct virtio_crypto_alg_chain_data_flf
+    in struct virtio_crypto_sym_data_flf and struct virtio_crypto_alg_chain_data_vlf
+    in struct virtio_crypto_sym_data_vlf if the request is of the VIRTIO_CRYPTO_SYM_OP_ALGORITHM_CHAINING
+    type.
+\end{itemize*}
+
+\devicenormative{\paragraph}{Symmetric algorithms Operation}{Device Types / Crypto Device / Device Operation / Symmetric algorithms Operation}
+
+\begin{itemize*}
+\item If the VIRTIO_CRYPTO_F_CIPHER_STATELESS_MODE feature bit is negotiated, the device
+    MUST parse \field{flag} field in struct virtio_crypto_op_header in order to decide
+	which mode the driver uses.
+\item The device MUST parse the virtio_crypto_sym_data_req based on the \field{opcode}
+    field in general header.
+\item The device MUST parse the fields of struct virtio_crypto_cipher_data_flf in
+    struct virtio_crypto_sym_data_flf and struct virtio_crypto_cipher_data_vlf in
+    struct virtio_crypto_sym_data_vlf if the request is based on VIRTIO_CRYPTO_SYM_OP_CIPHER.
+\item The device MUST parse the fields of struct virtio_crypto_alg_chain_data_flf
+    in struct virtio_crypto_sym_data_flf and struct virtio_crypto_alg_chain_data_vlf
+    in struct virtio_crypto_sym_data_vlf if the request is of the VIRTIO_CRYPTO_SYM_OP_ALGORITHM_CHAINING
+    type.
+\item The device MUST copy the result of cryptographic operation in the dst_data[] in
+    both plain CIPHER mode and algorithms chain mode.
+\item The device MUST check the \field{para}.\field{add_len} is bigger than 0 before
+    parse the additional authenticated data in plain algorithms chain mode.
+\item The device MUST copy the result of HASH/MAC operation in the hash_result[] is
+    of the VIRTIO_CRYPTO_SYM_OP_ALGORITHM_CHAINING type.
+\item The device MUST set the \field{status} field in struct virtio_crypto_inhdr to
+    one of the following values of enum VIRTIO_CRYPTO_STATUS:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_INVSESS if the session ID is invalid in session mode.
+\item VIRTIO_CRYPTO_ERR if failure not mentioned above occurs.
+\end{itemize*}
+\end{itemize*}
+
+\subsubsection{AEAD Service Operation}\label{sec:Device Types / Crypto Device / Device Operation / AEAD Service Operation}
+
+Session mode requests of symmetric algorithm are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_aead_data_flf {
+    /*
+     * Byte Length of valid IV data.
+     *
+     * For GCM mode, this is either 12 (for 96-bit IVs) or 16, in which
+     *   case iv points to J0.
+     * For CCM mode, this is the length of the nonce, which can be in the
+     *   range 7 to 13 inclusive.
+     */
+    le32 iv_len;
+    /* length of additional auth data */
+    le32 aad_len;
+    /* length of source data */
+    le32 src_data_len;
+    /* length of dst data, this should be at least src_data_len + tag_len */
+    le32 dst_data_len;
+    /* Authentication tag length */
+    le32 tag_len;
+    le32 reserved;
+};
+
+struct virtio_crypto_aead_data_vlf {
+    /* Device read only portion */
+
+    /*
+     * Initialization Vector data.
+     *
+     * For GCM mode, this is either the IV (if the length is 96 bits) or J0
+     *   (for other sizes), where J0 is as defined by NIST SP800-38D.
+     *   Regardless of the IV length, a full 16 bytes needs to be allocated.
+     * For CCM mode, the first byte is reserved, and the nonce should be
+     *   written starting at &iv[1] (to allow space for the implementation
+     *   to write in the flags in the first byte).  Note that a full 16 bytes
+     *   should be allocated, even though the iv_len field will have
+     *   a value less than this.
+     *
+     * The IV will be updated after every partial cryptographic operation.
+     */
+    u8 iv[iv_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+    /* Additional authenticated data if exists */
+    u8 aad[aad_len];
+
+    /* Device write only portion */
+    /* Pointer to output data */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+Each request uses the virtio_crypto_aead_data_flf structure and the
+virtio_crypto_aead_data_flf structure to store information used to run the
+AEAD operations.
+
+Stateless mode AEAD service requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_aead_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CRYPTO_AEAD_* above */
+        le32 algo;
+        /* length of key */
+        le32 key_len;
+        /* encrypt or decrypt, See above VIRTIO_CRYPTO_OP_* */
+        le32 op;
+    } sess_para;
+
+    /* Byte Length of valid IV data. */
+    le32 iv_len;
+    /* Authentication tag length */
+    le32 tag_len;
+    /* length of additional auth data */
+    le32 aad_len;
+    /* length of source data */
+    le32 src_data_len;
+    /* length of dst data, this should be at least src_data_len + tag_len */
+    le32 dst_data_len;
+};
+
+struct virtio_crypto_aead_data_vlf_stateless {
+    /* Device read only portion */
+
+    /* The cipher key */
+    u8 key[key_len];
+    /* Initialization Vector data. */
+    u8 iv[iv_len];
+    /* Source data */
+    u8 src_data[src_data_len];
+    /* Additional authenticated data if exists */
+    u8 aad[aad_len];
+
+    /* Device write only portion */
+    /* Pointer to output data */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+\drivernormative{\paragraph}{AEAD Service Operation}{Device Types / Crypto Device / Device Operation / AEAD Service Operation}
+
+\begin{itemize*}
+\item If the driver uses the session mode, then the driver MUST set
+    \field{session_id} in struct virtio_crypto_op_header to a valid value assigned
+    by the device when the session was created.
+\item If the VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE feature bit is negotiated, 1) if
+    the driver uses the stateless mode, then the driver MUST set the \field{flag}
+    field in struct virtio_crypto_op_header to ZERO and MUST set the fields in
+    struct virtio_crypto_aead_data_flf_stateless.sess_para, 2) if the driver uses
+    the session mode, then the driver MUST set the \field{flag} field in struct
+    virtio_crypto_op_header to VIRTIO_CRYPTO_FLAG_SESSION_MODE.
+\item The driver MUST set the \field{opcode} field in struct virtio_crypto_op_header
+    to VIRTIO_CRYPTO_AEAD_ENCRYPT or VIRTIO_CRYPTO_AEAD_DECRYPT.
+\end{itemize*}
+
+\devicenormative{\paragraph}{AEAD Service Operation}{Device Types / Crypto Device / Device Operation / AEAD Service Operation}
+
+\begin{itemize*}
+\item If the VIRTIO_CRYPTO_F_AEAD_STATELESS_MODE feature bit is negotiated, the
+    device MUST parse the virtio_crypto_aead_data_vlf_stateless based on the \field{opcode}
+	field in general header.
+\item The device MUST copy the result of cryptographic operation in the dst_data[].
+\item The device MUST copy the authentication tag in the dst_data[] offset the cipher result.
+\item The device MUST set the \field{status} field in struct virtio_crypto_inhdr to
+    one of the following values of enum VIRTIO_CRYPTO_STATUS:
+\item When the \field{opcode} field is VIRTIO_CRYPTO_AEAD_DECRYPT, the device MUST
+    verify and return the verification result to the driver.
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_BADMSG if the verification result is incorrect.
+\item VIRTIO_CRYPTO_INVSESS if the session ID invalid when in session mode.
+\item VIRTIO_CRYPTO_ERR if any failure not mentioned above occurs.
+\end{itemize*}
+\end{itemize*}
+
+\subsubsection{AKCIPHER Service Operation}\label{sec:Device Types / Crypto Device / Device Operation / AKCIPHER Service Operation}
+
+Session mode AKCIPHER requests are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_akcipher_data_flf {
+    /* length of source data */
+    le32 src_data_len;
+    /* length of dst data */
+    le32 dst_data_len;
+};
+
+struct virtio_crypto_akcipher_data_vlf {
+    /* Device read only portion */
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    /* Pointer to output data */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+Each data request uses the virtio_crypto_akcipher_flf structure and the virtio_crypto_akcipher_data_vlf
+structure to store information used to run the AKCIPHER operations.
+
+For encryption, decryption, and signing:
+\field{src_data} is the source data that will be processed, note that for signing operations,
+src_data stores the data to be signed, which usually is the digest of some data rather than the
+data itself.
+\field{src_data_len} is the length of source data.
+\field{dst_result} is the result data and \field{dst_data_len} is the length of it. Note that the
+length of the result is not always exactly equal to dst_data_len, the driver needs to check how
+many bytes the device has written and calculate the actual length of the result.
+
+For verification:
+\field{src_data_len} refers to the length of the signature, and \field{dst_data_len} refers to
+the length of signed data, where the signed data is usually the digest of some data.
+\field{src_data} is spliced by the signature and the signed data, the src_data with the lower
+address stores the signature, and the higher address stores the signed data.
+\field{dst_data} is always empty for verification.
+
+Different algorithms have different signature formats.
+For the RSA algorithm, the result is determined by the padding algorithm specified by
+\field{padding_algo} in structure virtio_crypto_rsa_session_para.
+
+For the ECDSA algorithm, the signature is composed of the following
+ASN.1 structure (see \hyperref[intro:rfc3279]{RFC3279})
+and MUST be DER encoded (see \hyperref[intro:rfc6025]{rfc6025}).
+
+\begin{lstlisting}
+Ecdsa-Sig-Value ::= SEQUENCE {
+    r INTEGER,
+    s INTEGER
+}
+\end{lstlisting}
+
+Stateless mode AKCIPHER service requests are as follows:
+\begin{lstlisting}
+struct virtio_crypto_akcipher_data_flf_stateless {
+    struct {
+        /* See VIRTIO_CYRPTO_AKCIPHER* above */
+        le32 algo;
+        /* See VIRTIO_CRYPTO_AKCIPHER_KEY_TYPE_* above */
+        le32 key_type;
+        /* length of key */
+        le32 key_len;
+
+        /* algothrim specific parameters described above */
+        union {
+            struct virtio_crypto_rsa_session_para rsa;
+            struct virtio_crypto_ecdsa_session_para ecdsa;
+        } u;
+    } sess_para;
+
+    /* length of source data */
+    le32 src_data_len;
+    /* length of destination data */
+    le32 dst_data_len;
+};
+
+struct virtio_crypto_akcipher_data_vlf_stateless {
+    /* Device read only portion */
+    u8 akcipher_key[key_len];
+
+    /* Source data */
+    u8 src_data[src_data_len];
+
+    /* Device write only portion */
+    u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+In stateless mode, the format of key and signature, the meaning of src_data and dst_data, are all the same
+with session mode.
+
+\drivernormative{\paragraph}{AKCIPHER Service Operation}{Device Types / Crypto Device / Device Operation / AKCIPHER Service Operation}
+
+\begin{itemize*}
+\item If the driver uses the session mode, then the driver MUST set
+    \field{session_id} in struct virtio_crypto_op_header to a valid
+    value assigned by the device when the session was created.
+\item If the VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE feature bit is negotiated, 1) if the
+    driver uses the stateless mode, then the driver MUST set the \field{flag} field in
+    struct virtio_crypto_op_header to ZERO and MUST set the fields in struct
+    virtio_crypto_akcipher_flf_stateless.sess_para, 2) if the driver uses the session
+    mode, then the driver MUST set the \field{flag} field in struct virtio_crypto_op_header
+    to VIRTIO_CRYPTO_FLAG_SESSION_MODE.
+\item The driver MUST set the \field{opcode} field in struct virtio_crypto_op_header
+    to one of VIRTIO_CRYPTO_AKCIPHER_ENCRYPT, VIRTIO_CRYPTO_AKCIPHER_DESTROY_SESSION,
+    VIRTIO_CRYPTO_AKCIPHER_SIGN, and VIRTIO_CRYPTO_AKCIPHER_VERIFY.
+\end{itemize*}
+
+\devicenormative{\paragraph}{AKCIPHER Service Operation}{Device Types / Crypto Device / Device Operation / AKCIPHER Service Operation}
+
+\begin{itemize*}
+\item If the VIRTIO_CRYPTO_F_AKCIPHER_STATELESS_MODE feature bit is negotiated, the
+    device MUST parse the virtio_crypto_akcipher_data_vlf_stateless based on the \field{opcode}
+    field in general header.
+\item The device MUST copy the result of cryptographic operation in the dst_data[].
+\item The device MUST set the \field{status} field in struct virtio_crypto_inhdr to
+    one of the following values of enum VIRTIO_CRYPTO_STATUS:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_BADMSG if the verification result is incorrect.
+\item VIRTIO_CRYPTO_INVSESS if the session ID invalid when in session mode.
+\item VIRTIO_CRYPTO_KEY_REJECTED if the signature verification failed.
+\item VIRTIO_CRYPTO_ERR if any failure not mentioned above occurs.
+\end{itemize*}
+\end{itemize*}
+
+\subsubsection{IPSEC Service Operation}\label{sec:Device Types / Crypto Device / Device Operation / IPSEC Service Operation}
+
+A crypto device can support the processing of IPsec protocol operations.
+In addition to standard crypto processing, the IPsec protocol operations
+are also handled by the crypto device as a lookaside operation.
+
+IPsec Inbound processing: The device performs decryption, authentication,
+integrity checking and remove additional headers, including tunnel header if
+in tunnel mode, as well as the ESP/AH header on the given packet(See \hyperref[intro:IPSEC]{IPSEC} RFC).
+The resulting packet contains only the plain data.
+
+The driver can request IPsec Inbound processing by
+\begin{itemize*}
+\item Creating inbound SAs using the VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA command.
+\item Setting the \field{opcode} in struct virtio_crypto_op_data_req to
+VIRTIO_CRYPTO_IPSEC_INBOUND.
+\end{itemize*}
+
+IPsec Outbound processing: The device performs encryption, attach ICV,
+update/add IP header and add ESP/AH header/trailer. The resulting packet
+contains encrypted data along with the IPsec header and trailer.
+
+The driver can request IPsec outbound processing by
+\begin{itemize*}
+\item Creating outbound SAs using the VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA command.
+\item Setting the \field{opcode} in struct virtio_crypto_op_data_req to
+VIRTIO_CRYPTO_IPSEC_OUTBOUND.
+\end{itemize*}
+
+A crypto device can support number of IPsec SAs, allowing it to manage multiple secure
+connections simultaneously.
+See \ref{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects}
+for IPsec SA information.
+
+The device and the driver indicate IPsec SA resource limits using the
+VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP capability specifying the limits on the number of
+IPsec outbound and inbound SA resource objects.
+The VIRTIO_CRYPTO_IPSEC_SA_CAP capability  specifies the IPsec protocol capabilities
+supported by the device. The driver indicates the IPsec parameters by setting
+VIRTIO_CRYPTO_IPSEC_SA_CAP capability prior to adding any resource object.
+
+The driver controls the IPsec SA resource object using administration commands described in
+\ref{sec:Basic Facilities of a Virtio Device / Device groups / Group administration commands / Device resource objects}.
+
+\paragraph{Device and driver capabilities}
+\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities}
+
+\subparagraph{VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP}
+\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-RESOURCE-CAP}
+
+The VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP capability indicates the IPsec SA resource limits.
+\field{cap_specific_data} is in the format
+\field{struct virtio_crypto_ipsec_resource_cap}.
+
+\begin{lstlisting}
+struct virtio_crypto_ipsec_resource_cap {
+        le32 inb_sa_limit;
+        le32 outb_sa_limit;
+};
+\end{lstlisting}
+
+\field{inb_sa_limit}, and \field{outb_sa_limit} denote the maximum number of IPsec
+security Associations (SAs) that can be utilized for IPsec inbound and outbound processing,
+respectively, which the device is capable of creating.
+
+\subparagraph{VIRTIO_CRYPTO_IPSEC_SA_CAP}
+\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP}
+
+The VIRTIO_CRYPTO_IPSEC_SA_CAP capability lists the supported IPsec modes along with
+the supported cryptographic, authentication algorithms and anti-replay window size for
+each IPsec mode.
+\field{cap_specific_data} is in the format \field{struct virtio_crypto_ipsec_sa_cap_data}.
+
+\begin{lstlisting}[label={lst:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / virtio-crypto-ipsec-mode-cap}]
+struct virtio_crypto_ipsec_mode_cap {
+        u8 mode;
+        u8 reserved[3];
+        le32 max_replay_win_sz;
+        le32 options;
+        le32 reserved1;
+        le64 cipher_algo;
+        le64 hmac_algo;
+        le32 aead_algo;
+        le32 max_cipher_key_len;
+        le32 max_auth_key_len;
+};
+
+struct virtio_crypto_ipsec_sa_cap_data {
+        u8 count;
+        u8 reserved[7];
+        struct virtio_crypto_ipsec_mode_cap cap_mode[];
+};
+\end{lstlisting}
+
+\field{count} indicates number of valid entries in the \field{mode} array.
+\field{cap_mode[]} is an array of supported IPsec modes. Within each array entry:
+
+\field{mode} specifies the IPsec mode, as defined in table
+\ref{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Modes}.
+\field{max_replay_win_sz} specifies the maximum anti-replay window size the device supports.
+This field is applicable only for inbound operation.
+
+\field{options} Each bit indicates the IPsec protocol options supported by the device, as defined in table
+\ref{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Options}.
+
+\field{cipher_algo} CIPHER algorithms mask, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / CIPHER services}.
+
+\field{hmac_algo} HMAC algorithms mask, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / MAC services}.
+
+\field{aead_algo} AEAD algorithms mask, see \ref{sec:Device Types / Crypto Device / Supported crypto services  / AEAD services}.
+
+\field{max_cipher_key_len} is the maximum length of cipher key supported by the device.
+
+\field{max_auth_key_len} is the maximum length of authentication key supported by the device.
+
+\begin{table}[H]
+\caption{IPsec Modes}
+\label{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Modes}
+\begin{tabularx}{\textwidth}{ |l|X|X| }
+\hline
+Type & Name & Description \\
+\hline \hline
+0x0 & - & Reserved \\
+\hline
+0x1 & VIRTIO_CRYPTO_IPSEC_MODE_ESP_TUNNEL & IPsec ESP protocol in tunnel mode \\
+\hline
+0x2 & VIRTIO_CRYPTO_IPSEC_MODE_ESP_TRANSPORT & IPsec ESP protocol in transport mode \\
+\hline
+0x3 & VIRTIO_CRYPTO_IPSEC_MODE_AH_TUNNEL & IPsec AH protocol in tunnel mode \\
+\hline
+0x4 & VIRTIO_CRYPTO_IPSEC_MODE_AH_TRANSPORT & IPsec AH protocol in transport mode \\
+\hline
+\end{tabularx}
+\end{table}
+
+See \hyperref[intro:IPSEC]{IPSEC} for more information on tunnel and transport modes in ESP/AH IPsec processing.
+
+\begin{table}[H]
+\caption{IPsec Options}
+\label{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Options}
+\begin{tabularx}{\textwidth}{ |l|X|X| }
+\hline
+Bit Number & Name & Description \\
+\hline \hline
+0 & VIRTIO_CRYPTO_IPSEC_ESN & Specifies whether extended sequence number is supported, as described in \hyperref[intro:ESN]{ESN}\\
+\hline
+1 & VIRTIO_CRYPTO_IPSEC_UDP_ENCAP & Specifies whether udp encapsulation is supported, as described in
+                                    \hyperref[intro:UDP-Encapsulation]{UDP Encapsulation}, applicable only for ESP IPsec processing \\
+\hline
+2 & VIRTIO_CRYPTO_IPSEC_COPY_DSCP & Specifies whether copy dscp is supported, as described in \hyperref[intro:IPSEC]{IPSEC} \\
+\hline
+3 & VIRTIO_CRYPTO_IPSEC_DEC_TTL & Specifies whether decrementing the time to live is supported, as described in \hyperref[intro:IPSEC]{IPSEC} \\
+\hline
+4 & VIRTIO_CRYPTO_IPSEC_COPY_DF & Specifies whether copy Don't Fragment bit is supported, as described in \hyperref[intro:IPSEC]{IPSEC} \\
+\hline
+5 & VIRTIO_CRYPTO_IPSEC_ECN & Specifies whether copy Explicit Congestion Notification is supported, as described in \hyperref[intro:IPSEC]{IPSEC} \\
+\hline
+6 & VIRTIO_CRYPTO_IPSEC_SA_LIFETIME & Specifies whether SA lifetime feature is supported, as described in \hyperref[intro:IPSEC]{IPSEC} \\
+\hline
+\end{tabularx}
+\end{table}
+
+\paragraph{Resource objects}
+\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects}
+
+\subparagraph{VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA}\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects / VIRTIO-CRYPTO-RESOURCE-OBJ-IPSEC-OUTBOUND-SA}
+
+A driver can have outbound SAs between 0 and \field{outb_sa_limit}, as specified by the
+capability VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP. For the IPsec outbound SA resource object
+\field{resource_obj_specific_data} is in the format
+\field{struct virtio_crypto_resource_obj_ipsec_sa_256b_key}.
+
+\begin{lstlisting}
+struct in_addr {
+        le32 s_addr;
+};
+
+struct in6_addr {
+        u8 s6_u8[16];
+};
+
+struct virtio_crypto_ipsec_tunnel_param {
+        /* Tunnel type: IPv4 or IPv6 */
+        u8 type;
+        u8 reserved[3];
+        union {
+                /* IPv4 tunnel header parameters */
+                struct {
+                        /* IPv4 source address */
+                        struct in_addr src_ip;
+                        /* IPv4 destination address */
+                        struct in_addr dst_ip;
+                        /* IPv4 Differentiated Services Code Point */
+                        u8 dscp;
+                        /* IPv4 Don't Fragment bit */
+                        u8 df;
+                        /* IPv4 Time To Live */
+                        u8 ttl;
+                        u8 reserved1;
+                } ipv4;
+                /* IPv6 tunnel header parameters */
+                struct {
+                        /* IPv6 source address */
+                        struct in6_addr src_addr;
+                        /* IPv6 destination address */
+                        struct in6_addr dst_addr;
+                        /* IPv6 flow label */
+                        le32 flabel;
+                        /* IPv6 hop limit */
+                        u8 hlimit;
+                        /* IPv6 Differentiated Services Code Point */
+                        u8 dscp;
+                        u8 reserved2[2];
+                } ipv6;
+        };
+};
+
+struct virtio_crypto_ipsec_lifetime {
+        le64 packets_soft_limit;
+        le64 bytes_soft_limit;
+        le64 packets_hard_limit;
+        le64 bytes_hard_limit;
+};
+
+struct virtio_crypto_resource_obj_ipsec_sa_256b_key {
+        u8 mode;
+        u8 direction;
+        u8 reserved[2];
+        le32 obj_id;
+        le32 spi;
+        le32 salt;
+        le64 options;
+        struct virtio_crypto_ipsec_tunnel_param param;
+        le16 udp_sport;
+        le16 udp_dport;
+        le32 replay_win_sz;
+        le64 cipher_algo;
+        struct {
+            le16 length;
+            le16 reserved1;
+            u8 data[32];
+        } cipher_key;
+        le64 auth_algo;
+        struct {
+            le16 length;
+            le16 reserved2;
+            u8 data[32];
+        } auth_key;
+        struct virtio_crypto_ipsec_lifetime life;
+}
+\end{lstlisting}
+
+\field{mode} specifies the mode of the IPsec SA, see
+\ref{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Modes}.
+
+\field{direction} specifies IPsec SA direction.
+\field{obj_id} specifies the object id of the SA that can be used to retrieve
+driver-defined data associated with the IPsec SA.
+\field{spi} is the Security Parameter Index(SPI) used to uniquely identify the IPsec SA.
+\field{salt} is the 32 bit salt value used in the cryptographic operations. 
+
+\field{options} specifies the Options for configuring the IPsec SA, see
+\ref{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-IPSEC-SA-CAP / IPsec Options}.
+
+\field{param} specifies the parameters for IPsec tunnel mode.
+\field{udp_sport} is the source port for UDP encapsulation.
+\field{udp_dport} is the destination port for UDP encapsulation.
+\field{replay_win_sz} is the anti-replay window size to enable sequence replay attack
+handling, replay checking is disabled if the window size is 0.
+
+\field{cipher_algo} is the cipher algorithm identifier
+see \ref{sec:Device Types / Crypto Device / Supported crypto services  / CIPHER services}
+\field{cipher_key} specifies the cipher key and its length.
+\field{auth_algo} is the Authentication algorithm identifier
+\field{auth_key} specifies the authentication key data and its length.
+\field{life} configures soft and hard lifetime of an IPsec SA. The Lifetime of
+an IPsec SA specifies the maximum number of packets or bytes that can be processed.
+IPsec operations starts failing once any hard limit is reached. Soft limits generate
+a warning status when the SA is approaching its hard lifetime limits.
+
+\begin{table}[H]
+\caption{IPsec Direction}
+\label{table:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Device and driver capabilities / VIRTIO-CRYPTO-RESOURCE-OBJ-IPSEC-OUTBOUND-SA / IPsec Direction}
+\begin{tabularx}{\textwidth}{ |l|X|X| }
+\hline
+Type & Name & Description \\
+\hline \hline
+0x0 & - & Reserved \\
+\hline
+0x1 & VIRTIO_CRYPTO_IPSEC_DIR_OUTBOUND & IPsec direction outbound \\
+\hline
+0x2 & VIRTIO_CRYPTO_IPSEC_DIR_INBOUND & IPsec direction inbound \\
+\hline
+\end{tabularx}
+\end{table}
+
+\subparagraph{VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA}\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Resource objects / VIRTIO-CRYPTO-RESOURCE-OBJ-IPSEC-INBOUND-SA}
+
+A driver can have inbound SAs between 0 and \field{inb_sa_limit}, as specified by the
+capability VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP. For the IPsec inbound SA resource object
+\field{resource_obj_specific_data} is in the format
+\field{struct virtio_crypto_resource_obj_ipsec_sa}.
+
+\paragraph{Data processing}
+\label{par:Device Types / Crypto Device / Device Operation / IPsec Service Operation / Data processing}
+
+Data requests for IPsec processing are as follows:
+
+\begin{lstlisting}
+struct virtio_crypto_ipsec_data_flf {
+        /* length of source data, full IP/IPsec packet */
+        le32 src_data_len;
+        /* length of dst data */
+        le32 dst_data_len;
+};
+
+struct virtio_crypto_ipsec_data_vlf {
+        /* Device read only portion */
+        /* Source data */
+        u8 src_data[src_data_len];
+
+        /* Device write only portion */
+        /* Pointer to output data */
+        u8 dst_data[dst_data_len];
+};
+\end{lstlisting}
+
+Each data request uses the virtio_crypto_ipsec_data_flf structure and
+the virtio_crypto_ipsec_data_vlf structure to store information used to
+run the IPSEC operations.
+
+For IPsec encryption:
+\field{src_data} is the full IP packet that will be processed.
+\field{src_data_len} is the length of source data.
+\field{dst_result} is the result ESP encrypted packet and
+\field{dst_data_len} is the length of it. Please note,
+dst_data_len MUST include additional header and trailer
+lengths.
+
+For IPsec decryption:
+\field{src_data} is the IPsec packet that will be processed.
+\field{src_data_len} is the length of source data.
+\field{dst_result} is the result plain IP packet and
+\field{dst_data_len} is the length of it.
+
+\devicenormative{\paragraph}{IPsec Service Operation}{Device Types / Crypto Device / Device Operation / IPsec Service Operation}
+
+When the device supports IPsec operations,
+\begin{itemize}
+\item the device MUST set VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP, VIRTIO_CRYPTO_IPSEC_SA_CAP
+capability in the \field{supported_caps} in the command VIRTIO_ADMIN_CMD_CAP_SUPPORT_QUERY.
+\item the device MUST support the administration commands
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE,
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_MODIFY, VIRTIO_ADMIN_CMD_RESOURCE_OBJ_QUERY,
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_DESTROY for the resource types
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA and VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA.
+\end{itemize}
+
+When any of the VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP or VIRTIO_CRYPTO_IPSEC_SA_CAP
+capability is disabled, the device MUST set \field{status} to
+VIRTIO_ADMIN_STATUS_Q_INVALID_OPCODE for the commands
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE,
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_MODIFY, VIRTIO_ADMIN_CMD_RESOURCE_OBJ_QUERY,
+and VIRTIO_ADMIN_CMD_RESOURCE_OBJ_DESTROY for the resource types
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA and VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA.
+
+The device MUST set \field{status} to VIRTIO_ADMIN_STATUS_EEXIST for the
+command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE when the resource \field{type}
+is VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA or VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA,
+if the object already exists with the supplied \field{id}.
+
+The device MUST fail the command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE with
+the \field{status} set to VIRTIO_ADMIN_STATUS_EINVAL, for the
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA object if,
+\begin{itemize}
+\item \field{id} is greater than or equal to \field{outb_sa_limit}.
+\item the supplied SA parameters, such as mode, options, cipher and authentication
+      algorithms are not supported in the capabitlity VIRTIO_CRYPTO_IPSEC_SA_CAP.
+\end{itemize}
+
+The device MUST fail the command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE with
+the \field{status} set to VIRTIO_ADMIN_STATUS_EINVAL, for the
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA object if,
+\begin{itemize}
+\item \field{id} is greater than or equal to \field{inb_sa_limit}.
+\item the supplied SA parameters, such as mode, options, cipher and authentication
+      algorithms are not supported in the capabitlity VIRTIO_CRYPTO_IPSEC_SA_CAP.
+\end{itemize}
+
+The device SHOULD maintain a table for subsequent lookups for inbound/outbound data
+processing with the corresponding SA based on the supplied \field{id}.
+
+The device MUST allow recreating the resource objects using the command
+VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE which was previously destroyed using
+the command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_DESTROY respectively without
+undergoing a device reset.
+
+The device MAY fail the command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE with
+the \field{status} set to VIRTIO_ADMIN_STATUS_EINVAL for the
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA or VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA
+commands if the resource object with the same \field{spi} already exists.
+
+On device reset, the device MUST destroy all the resource objects which have been created.
+
+The device MUST copy the result of IPsec operation in the \field{dst_data[]}.
+The device MUST set the \field{status} field in struct virtio_crypto_inhdr to
+one of the following values of enum VIRTIO_CRYPTO_STATUS:
+\begin{itemize*}
+\item VIRTIO_CRYPTO_OK if the operation success.
+\item VIRTIO_CRYPTO_NOTSUPP if the requested algorithm or operation is unsupported.
+\item VIRTIO_CRYPTO_BADMSG if the integrity check is failed for IPsec decryption.
+\item VIRTIO_CRYPTO_INVSESS if the session ID invalid.
+\item VIRTIO_CRYPTO_ERR if any failure not mentioned above occurs.
+\item VIRTIO_CRYPTO_IPSEC_SA_SOFT_EXPIRY if an IPsec SA reaches the SA soft expiry limit
+configured in \field{struct virtio_crypto_ipsec_lifetime}.
+\end{itemize*}
+
+\drivernormative{\paragraph}{IPsec Service Operation}{Device Types / Crypto Device / Device Operation / IPsec Service Operation}
+
+The driver MUST query the capabilities using VIRTIO_ADMIN_CMD_CAP_ID_LIST_QUERY
+to discover the capability types the device offers.
+
+The driver MUST get VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP and VIRTIO_CRYPTO_IPSEC_SA_CAP
+if listed in VIRTIO_ADMIN_CMD_CAP_ID_LIST_QUERY command result, using
+VIRTION_ADMIN_CMD_DEVICE_CAP_GET to discover the capabilities the device is
+able to offer.
+The driver MUST set VIRTIO_CRYPTO_IPSEC_RESOURCE_CAP and VIRTIO_CRYPTO_IPSEC_SA_CAP
+using VIRTIO_ADMIN_CMD_DEVICE_CAP_SET to indicate the device which capability
+the driver uses.
+
+For the command VIRTIO_ADMIN_CMD_RESOURCE_OBJ_CREATE, when creating a resource
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA, the driver MUST set all the parameters
+in \field{struct virtio_crypto_resource_obj_ipsec_sa} with relevant values.
+And when create a resource object VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA,
+the driver MUST set all the parameters except \field{struct virtio_crypto_ipsec_tunnel_param}.
+
+The driver MUST set \field{session_id} in struct virtio_crypto_op_header to a
+valid VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_OUTBOUND_SA or
+VIRTIO_CRYPTO_RESOURCE_OBJ_IPSEC_INBOUND_SA \field{id}.
+The driver MUST set the \field{opcode} field in struct virtio_crypto_op_header
+to one of VIRTIO_CRYPTO_IPSEC_OUTBOUND and VIRTIO_CRYPTO_IPSEC_INBOUND.

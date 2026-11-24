@@ -23,7 +23,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
 endif()
 add_test(NAME machine_contract COMMAND ${Python_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/e2e/machine_contract.py" $<TARGET_FILE:domvirt_cli>
-    "${PROJECT_SOURCE_DIR}" "${PROJECT_BINARY_DIR}")
+    "${ARCHML_STDSPEC_DIR}/amd64.aml" "${PROJECT_BINARY_DIR}")
 set_tests_properties(machine_contract PROPERTIES TIMEOUT 60)
 add_test(NAME library_boot COMMAND ${Python_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/e2e/library_boot.py" $<TARGET_FILE:domvirt>)

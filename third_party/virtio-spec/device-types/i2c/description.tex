@@ -1,0 +1,198 @@
+\section{I2C Adapter Device}\label{sec:Device Types / I2C Adapter Device}
+
+virtio-i2c is a virtual I2C adapter device. It provides a way to flexibly
+organize and use the host I2C controlled devices from the guest. By attaching
+the host ACPI I2C controlled nodes to the virtual I2C adapter device, the guest can
+communicate with them without changing or adding extra drivers for these
+controlled I2C devices.
+
+\subsection{Device ID}\label{sec:Device Types / I2C Adapter Device / Device ID}
+34
+
+\subsection{Virtqueues}\label{sec:Device Types / I2C Adapter Device / Virtqueues}
+
+\begin{description}
+\item[0] requestq
+\end{description}
+
+\subsection{Feature bits}\label{sec:Device Types / I2C Adapter Device / Feature bits}
+
+\begin{description}
+\item[VIRTIO_I2C_F_ZERO_LENGTH_REQUEST (0)] The device supports zero-length I2C
+request and \field{VIRTIO_I2C_FLAGS_M_RD} flag. It is mandatory to implement
+this feature.
+\end{description}
+
+\begin{note}
+The \field{VIRTIO_I2C_FLAGS_M_RD} flag was not present in the initial
+implementation of the specification and the direction of the transfer (read or
+write) was inferred from the permissions (read-only or write-only) of the
+buffer itself. There is no need of having backwards compatibility for the older
+specification and so the \field{VIRTIO_I2C_FLAGS_FAIL_NEXT} feature is made
+mandatory. The driver should abort negotiation with the device, if the device
+doesn't offer this feature.
+\end{note}
+
+\subsection{Device configuration layout}\label{sec:Device Types / I2C Adapter Device / Device configuration layout}
+
+None currently defined.
+
+\subsection{Device Initialization}\label{sec:Device Types / I2C Adapter Device / Device Initialization}
+
+\begin{enumerate}
+\item The virtqueue is initialized.
+\end{enumerate}
+
+\subsection{Device Operation}\label{sec:Device Types / I2C Adapter Device / Device Operation}
+
+\subsubsection{Device Operation: Request Queue}\label{sec:Device Types / I2C Adapter Device / Device Operation: Request Queue}
+
+The driver enqueues requests to the virtqueue, and they are used by the
+device. The request is the representation of segments of an I2C
+transaction. Each request is of the form:
+
+\begin{lstlisting}
+struct virtio_i2c_out_hdr {
+        le16 addr;
+        le16 padding;
+        le32 flags;
+};
+\end{lstlisting}
+
+\begin{lstlisting}
+struct virtio_i2c_in_hdr {
+        u8 status;
+};
+\end{lstlisting}
+
+\begin{lstlisting}
+struct virtio_i2c_req {
+        struct virtio_i2c_out_hdr out_hdr;
+        u8 buf[];
+        struct virtio_i2c_in_hdr in_hdr;
+};
+\end{lstlisting}
+
+The \field{addr} of the request is the address of the I2C controlled device.
+For 7-bit address mode (A0 ... A6) and 10-bit address mode (A0 ... A9),
+the format of \field{addr} is defined as follows:
+
+\begin{tabular}{ |l||l|l|l|l|l|l|l|l|l|l|l|l|l|l|l|l| }
+\hline
+Bits           & 15 & 14 & 13 & 12 & 11 & 10 & 9  & 8  & 7  & 6  & 5  & 4  & 3  & 2  & 1  & 0 \\
+\hline
+7-bit address  & 0  & 0  & 0  & 0  & 0  & 0  & 0  & 0  & A6 & A5 & A4 & A3 & A2 & A1 & A0 & 0 \\
+\hline
+10-bit address & A7 & A6 & A5 & A4 & A3 & A2 & A1 & A0 & 1  & 1  & 1  & 1  & 0  & A9 & A8 & 0 \\
+\hline
+\end{tabular}
+
+The \field{padding} is used to pad to full dword.
+
+The \field{flags} of the request is defined as follows:
+
+\begin{description}
+\item[VIRTIO_I2C_FLAGS_FAIL_NEXT(0)] is used to group the requests.
+    For a group requests, a driver clears this bit on the final request
+    and sets it on the other requests. If this bit is set and a device fails
+    to process the current request, it needs to fail the next request instead
+    of attempting to execute it.
+
+\item[VIRTIO_I2C_FLAGS_M_RD(1)] is used to mark the request as READ or WRITE.
+    If \field{VIRTIO_I2C_FLAGS_M_RD} bit is set in the \field{flags}, then the
+    request is called a read request. If \field{VIRTIO_I2C_FLAGS_M_RD} bit is
+    unset in the \field{flags}, then the request is called a write request.
+\end{description}
+
+Other bits of \field{flags} are currently reserved as zero for future feature
+extensibility.
+
+The \field{buf} is optional and will not be present for a zero-length request,
+like the SMBus "Quick" command. The \field{buf} contains one segment of an I2C
+transaction being read from or written to the device, based on the value of the
+\field{VIRTIO_I2C_FLAGS_M_RD} bit in the \field{flags} field.
+
+The final \field{status} byte of the request is written by the device: either
+VIRTIO_I2C_MSG_OK for success or VIRTIO_I2C_MSG_ERR for error.
+
+\begin{lstlisting}
+#define VIRTIO_I2C_MSG_OK     0
+#define VIRTIO_I2C_MSG_ERR    1
+\end{lstlisting}
+
+The virtio I2C protocol supports write-read requests, i.e. an I2C write segment
+followed by a read segment (usually, the write segment provides the number of an
+I2C controlled device register to be read), by grouping a list of requests
+together using the \field{VIRTIO_I2C_FLAGS_FAIL_NEXT} flag.
+
+\subsubsection{Device Operation: Operation Status}\label{sec:Device Types / I2C Adapter Device / Device Operation: Operation Status}
+
+\field{addr}, \field{flags}, and ``length of \field{buf}'' are determined by the
+driver, while \field{status} is determined by the processing of the device.  A
+driver, for a write request, puts the data to be written to the device into the
+\field{buf}, while a device, for a read request, puts the data read from device
+into the \field{buf} according to the request from the driver.
+
+A driver may send one request or multiple requests to the device at a time.
+The requests in the virtqueue are both queued and processed in order.
+
+If a driver sends multiple requests at a time and a device fails to process
+some of them, then a device needs to set the \field{status} of the first failed request
+to be VIRTIO_I2C_MSG_ERR. For the remaining requests in the same group with
+the first failed one, a driver needs to treat them as VIRTIO_I2C_MSG_ERR, no matter
+what \field{status} of them, a device needs to fail them instead of attempting to
+execute them according to the VIRTIO_I2C_FLAGS_FAIL_NEXT bit.
+
+\drivernormative{\subsubsection}{Device Operation}{Device Types / I2C Adapter Device / Device Operation}
+
+A driver MUST accept the \field{VIRTIO_I2C_F_ZERO_LENGTH_REQUEST} feature and
+MUST abort negotiation with the device, if the device doesn't offer this
+feature.
+
+A driver MUST set \field{addr} and \field{flags} before sending the request.
+
+A driver MUST set the reserved bits of \field{flags} to be zero.
+
+A driver MUST NOT send the \field{buf}, for a zero-length request.
+
+A driver MUST NOT use \field{buf}, for a read request, if the final
+\field{status} returned from the device is VIRTIO_I2C_MSG_ERR.
+
+A driver MUST set the \field{VIRTIO_I2C_FLAGS_M_RD} flag for a read operation,
+where the buffer is write-only for the device.
+
+A driver MUST NOT set the \field{VIRTIO_I2C_FLAGS_M_RD} flag for a write
+operation, where the buffer is read-only for the device.
+
+A driver MUST queue the requests in order if multiple requests are going to
+be sent at a time.
+
+If multiple requests are sent at a time and some of them returned from the
+device have the \field{status} being VIRTIO_I2C_MSG_ERR, a driver MUST treat
+the first failed request and the remaining requests in the same group with
+the first failed one as VIRTIO_I2C_MSG_ERR.
+
+\devicenormative{\subsubsection}{Device Operation}{Device Types / I2C Adapter Device / Device Operation}
+
+A device MUST offer the \field{VIRTIO_I2C_F_ZERO_LENGTH_REQUEST} feature and
+MUST reject any driver that doesn't negotiate this feature.
+
+A device SHOULD keep consistent behaviors with the hardware as described in
+\hyperref[intro:I2C]{I2C}.
+
+A device MUST NOT change the value of \field{addr}, and reserved bits of
+\field{flags}.
+
+A device MUST not change the value of the \field{buf} for a write request.
+
+A device MUST place one I2C segment of the ``length of \field{buf}'', for the
+read request, into the \field{buf} according the driver's request.
+
+A device MUST guarantee the requests in the virtqueue being processed in order
+if multiple requests are received at a time.
+
+If multiple requests are received at a time and processing of some of the
+requests fails, a device MUST set the \field{status} of the first failed
+request to be VIRTIO_I2C_MSG_ERR and MAY set the \field{status} of the
+remaining requests in the same group with the first failed one
+to be VIRTIO_I2C_MSG_ERR.
