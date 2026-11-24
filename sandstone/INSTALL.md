@@ -4,13 +4,14 @@
 
 | Requirement | Minimum | Notes |
 | --- | --- | --- |
-| CMake | 3.16 | Build configuration |
+| CMake | 3.20 | Build configuration |
 | C++ compiler | C++20 (GCC 10+, Clang 12+) | Core library, compiler, assembler |
 | C compiler | C11 | C ABI + assembler |
 | zlib | any | **Required**: default SymAS payload codec |
 | Boost.JSON | 1.75+ | Required when building the spec compiler; also used by `Symspec.hpp` |
-| Python | 3.8+ | `scripts/spec-compiler.py`, ISA loader, tests |
-| stock Lua | 5.3+ | Running `.dsymspec` specs (any `lua` on `PATH`) |
+| Python | 3.9+ | Generating the default SandAS backend; also used by scripts and tests |
+| Perl | 5 | Generating the DSymspec and ArchML frontends |
+| stock Lua | 5.3+ | Running legacy `compiler/stdspec` sources (any `lua` on `PATH`) |
 | DSL runtime | `compiler/stdspec/dsl.lua` | Shipped deterministic collector; C++ validates semantics |
 | libzstd | any | Optional: zstd banks (auto-detected) |
 | SWIG | 4.0+ | Optional: language bindings |
@@ -20,7 +21,7 @@
 Debian/Ubuntu:
 
 ```sh
-sudo apt install cmake g++ zlib1g-dev libboost-json-dev python3 lua5.4 libzstd-dev swig doxygen
+sudo apt install cmake g++ zlib1g-dev libboost-json-dev perl python3 lua5.4 libzstd-dev swig doxygen
 ```
 
 ## Build
@@ -36,6 +37,8 @@ Useful flags:
 ```sh
 -DSANDSTONE_BUILD_COMPILER=ON   # spec compiler (default ON)
 -DSANDSTONE_BUILD_ASSEMBLER=ON  # assembler + sandstone-as (default ON)
+-DSANDSTONE_ASSEMBLER_DSYMAS=ON # embed DSymspec profiles in SandAS (default ON)
+-DSANDSTONE_BUILD_DSYMSPEC=ON  # also install the standalone generated headers (default OFF)
 -DSANDSTONE_BUILD_ARCHML=ON     # .insn profile support (default ON; requires Perl)
 -DSANDSTONE_BUILD_TESTS=ON      # smoke + pipeline + ISA tests (default ON)
 -DSANDSTONE_BUILD_DOCS=ON       # Doxygen reference (default OFF)
@@ -46,6 +49,11 @@ Useful flags:
 
 Without libzstd the build still succeeds; requesting or opening zstd
 banks then fails with `DOMSYMAS_ERR_BAD_COMPRESSION`.
+
+SandAS can use built-in profiles or open existing `.symas` banks with
+`SANDSTONE_BUILD_COMPILER=OFF`. Building in legacy-only mode with
+`SANDSTONE_ASSEMBLER_DSYMAS=OFF` requires an explicit `--bank` or
+`--archml`.
 
 JSON documents and generated `stdspec/backend/*.lua` data modules load
 without Lua or the DSL runtime. Original `.dsymspec` sources need both.

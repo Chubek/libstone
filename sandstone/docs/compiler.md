@@ -24,7 +24,7 @@ The DSL is restricted to the Lua 5.4 subset (no patterns, coroutines, or
 
 Form references in the optimization records resolve by mnemonic name with
 optional `#N` (Nth form, 1-based) or `/encoder` suffixes, or lists
-thereof. The C++ mapping (`compiler/src/spec_document.cpp`) expands them
+thereof. The shared C++ mapping (`decoder/spec_records.cpp`) expands them
 to one record per matching form and resolves every name to the numeric id
 the builder assigns.
 
@@ -48,7 +48,7 @@ bank; `--compression none|zlib|zstd` and `--validate` are passed through.
 ## `sandstone-spec-compiler`
 
 The dependency-free CLI (`compiler/src/spec_compiler.cpp`, library code
-in `compiler/src/spec_document.cpp` over the minimal `json.hpp` model):
+in `decoder/spec_records.cpp` over the minimal `spec_value.hpp` model):
 
 ```sh
 sandstone-spec-compiler --compression zlib --validate \

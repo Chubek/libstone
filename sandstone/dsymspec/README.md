@@ -1,9 +1,10 @@
 # Standalone DSymspec includes
 
 This build path compiles `stdspec/*.dsymspec` into architecture-profile `.i`
-files for use by C11 and C++ assemblers. It is separate from Sandstone's
-legacy `compiler/stdspec` → `.symas` pipeline and does not change which specs
-that pipeline uses.
+files. SandAS embeds these profiles for its default backend, and C11 or
+C++ consumers can use the same headers directly. The legacy
+`compiler/stdspec` → `.symas` pipeline is unchanged; SandAS selects it
+when passed a `.symas` bank.
 
 ## Build
 

@@ -1,26 +1,20 @@
-/* sandstone-as: SymAS-driven assembler command line.
- *
- * Usage: sandstone-as --bank ARCH.symas [-s SYNTAX] [-f bin|obj|elf|coff|macho]
- *          [-F FEATURE]... [--lua HOOK.lua] [--asm-opt FILE.lua] [-o OUT] FILE...
- */
+/* sandstone-as: SandAS command line. */
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "assembler.h"
+#include "intern.h"
 #include "sdk.h"
-#include "sandstone.h"
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s --bank BANK.symas [options] FILE...\n"
+            "usage: %s [options] FILE...\n"
             "\n"
-            "Assemble SymAS-driven assembly sources.\n"
-            "\n"
-            "  -b, --bank BANK     .symas databank (required)\n"
-            "  --archml PROFILE   ArchML .insn encoder (may replace --bank)\n"
-            "  -s, --syntax NAME   syntax record (default: first in bank)\n"
+            "  --target PROFILE    built-in DSymspec target (default: build target)\n"
+            "  -b, --bank BANK     use a legacy .symas databank instead\n"
+            "  --archml PROFILE   ArchML .insn encoder (also usable standalone)\n"
+            "  -s, --syntax NAME   syntax record (default: first in target)\n"
             "  -f, --format FMT    bin (flat image, default), obj (JSON), elf (ET_REL),\n"
             "                      coff (Windows .obj), macho (Darwin MH_OBJECT)\n"
             "  -F, --feature NAME  enable feature (repeatable); prefix with\n"
@@ -28,13 +22,14 @@ static void usage(const char *argv0) {
             "  --lua HOOK.lua      source preprocessing hook\n"
             "  --asm-opt FILE.lua  run asm_optimize after source expansion\n"
             "  -o, --output OUT    output path (default: out.bin / out.obj / out.o)\n"
-            "  --list-syntaxes     list syntax records in the bank and exit\n"
+            "  --list-syntaxes     list syntax records in the target and exit\n"
             "  -h, --help          print this text\n",
             argv0);
 }
 
 int main(int argc, char **argv) {
     const char *bank = NULL;
+    const char *profile = NULL;
     const char *archml = NULL;
     const char *syntax = NULL;
     const char *format = "bin";
@@ -47,6 +42,7 @@ int main(int argc, char **argv) {
 
     static const struct option longs[] = {
         {"bank", required_argument, NULL, 'b'},
+        {"target", required_argument, NULL, 't'},
         {"archml", required_argument, NULL, 'A'},
         {"syntax", required_argument, NULL, 's'},
         {"format", required_argument, NULL, 'f'},
@@ -62,6 +58,7 @@ int main(int argc, char **argv) {
     while ((c = getopt_long(argc, argv, "b:s:f:F:o:h", longs, NULL)) != -1) {
         switch (c) {
         case 'b': bank = optarg; break;
+        case 't': profile = optarg; break;
         case 'A': archml = optarg; break;
         case 's': syntax = optarg; break;
         case 'f': format = optarg; break;
@@ -81,9 +78,8 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!bank && !archml) {
-        fprintf(stderr, "sandstone-as: --bank or --archml is required\n");
-        usage(argv[0]);
+    if (bank && profile) {
+        fprintf(stderr, "sandstone-as: --bank and --target are mutually exclusive\n");
         return 2;
     }
     if (strcmp(format, "bin") && strcmp(format, "obj") && strcmp(format, "elf") &&
@@ -94,34 +90,30 @@ int main(int argc, char **argv) {
 
     sandstone_asm_t *ctx = NULL;
     char err[1024] = {0};
-    if ((bank ? sandstone_asm_new(&ctx, bank, err, sizeof err) :
-                sandstone_asm_new_archml(&ctx, archml, err, sizeof err)) != 0) {
-        fprintf(stderr, "sandstone-as: %s\n", err[0] ? err : "cannot open bank");
+    int load = bank ? sandstone_asm_new(&ctx, bank, err, sizeof err) :
+        archml && !profile ? sandstone_asm_new_archml(&ctx, archml, err, sizeof err) :
+        profile ? sand_asm_new_profile(&ctx, profile, err, sizeof err) :
+                  sandstone_asm_new(&ctx, NULL, err, sizeof err);
+    if (load != 0) {
+        fprintf(stderr, "sandstone-as: %s\n", err[0] ? err : "cannot initialize assembler");
         return 1;
     }
-    if (bank && archml && sandstone_asm_load_archml(ctx, archml) != 0) {
+    if (ctx->bank && archml && sandstone_asm_load_archml(ctx, archml) != 0) {
         fprintf(stderr, "sandstone-as: %s\n", sandstone_asm_error(ctx));
         sandstone_asm_free(ctx);
         return 1;
     }
     if (list_syntaxes) {
-        if (!bank) {
-            fprintf(stderr, "sandstone-as: --list-syntaxes requires --bank\n");
+        if (!ctx->bank) {
+            fprintf(stderr, "sandstone-as: --list-syntaxes requires a built-in target or bank\n");
             sandstone_asm_free(ctx);
             return 1;
         }
-        DomSymAs_Bank *bank_handle = NULL;
-        if (domsymas_open_file(bank, &bank_handle) != DOMSYMAS_OK) {
-            fprintf(stderr, "sandstone-as: cannot open bank '%s'\n", bank);
-            sandstone_asm_free(ctx);
-            return 1;
-        }
-        for (uint32_t i = 0; i < domsymas_syntax_count(bank_handle); i++) {
+        for (uint32_t i = 0; i < domsymas_syntax_count(ctx->bank); i++) {
             const DomSymAs_Syntax *s =
-                domsymas_syntax_at(bank_handle, i);
+                domsymas_syntax_at(ctx->bank, i);
             printf("%s\n", s && s->name ? s->name : "(unnamed)");
         }
-        domsymas_close(bank_handle);
         sandstone_asm_free(ctx);
         return 0;
     }

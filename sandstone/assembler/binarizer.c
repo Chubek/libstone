@@ -67,10 +67,16 @@ static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
                           uint32_t *n_out) {
     if (line->a64_form_plus_one)
         return sand_a64_bindings(line, vals_out, n_out);
+    if (line->n_operands > (SIZE_MAX - 4 * sizeof(DomSymAs_OpVal)) /
+                           (18 * sizeof(DomSymAs_OpVal) + 32))
+        return 0;
     size_t cap = line->n_operands * 18 + 4;
-    DomSymAs_OpVal *vals = calloc(cap, sizeof *vals);
+    size_t extra_names = line->n_operands > 4 ? line->n_operands - 4 : 0;
+    /* Own any generated positional names in the same allocation as vals. */
+    DomSymAs_OpVal *vals = calloc(1, cap * sizeof *vals + extra_names * 32);
     if (!vals)
         return 0;
+    char (*pos_names)[32] = (void *)(vals + cap);
     uint32_t n = 0;
     for (size_t i = 0; i < line->n_operands; i++) {
         const sand_operand_t *op = &line->operands[i];
@@ -120,15 +126,15 @@ static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
         } else if (op->kind == SAND_OP_MEM) {
             is_sym = 1;
         }
-        char rname[32];
         const char *pnames[6];
         size_t np = 0;
         if (i < 4) {
             for (int k = 0; k < 4; k++)
-                pnames[np++] = kPosNames[i][k];
+                if (kPosNames[i][k])
+                    pnames[np++] = kPosNames[i][k];
         } else {
-            snprintf(rname, sizeof rname, "r%zu", i);
-            pnames[np++] = rname;
+            snprintf(pos_names[i - 4], sizeof pos_names[i - 4], "r%zu", i);
+            pnames[np++] = pos_names[i - 4];
         }
         if (op->kind == SAND_OP_IMM ||
             (op->kind == SAND_OP_SYM && !is_sym)) {
@@ -136,6 +142,8 @@ static int build_bindings(sandstone_asm_t *ctx, const sand_line_t *line,
         } else if (op->kind == SAND_OP_SYM) {
             pnames[np++] = "sym";
             pnames[np++] = "target";
+            if (ctx->dsymas_forms)
+                vals[n++] = (DomSymAs_OpVal){ "addend", 0, op->disp, NULL };
         } else if (op->kind == SAND_OP_MEM) {
             pnames[np++] = "mem";
         }
@@ -186,6 +194,9 @@ static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
             return 0;
     }
     uint32_t n = 0;
+    const DomSymAs_Target *target = domsymas_target_at(ctx->bank, 0);
+    int typed_x86 = ctx->dsymas_forms && target &&
+        (!strcmp(target->arch, "amd64") || !strcmp(target->arch, "x86"));
     for (uint32_t i = 0; i < n_found && n < cap; i++) {
         uint32_t form = found[i];
         const DomSymAs_Form *record = domsymas_find_form(ctx->bank, form);
@@ -203,6 +214,9 @@ static int candidate_forms(sandstone_asm_t *ctx, const sand_line_t *line,
                 domsymas_operand_at(ctx->bank, form, (uint32_t)k);
             const sand_operand_t *op = &line->operands[k];
             if (!d || !kind_matches(op, d->kind) ||
+                (typed_x86 && op->kind == SAND_OP_REG &&
+                 (d->regclass != op->regclass ||
+                  (d->width && d->width != (unsigned)op->width))) ||
                 (op->att && (op->kind == SAND_OP_REG && d->width != (unsigned)op->width)) ||
                 (op->att && op->kind == SAND_OP_SYM && d->kind != 6 && d->kind != 5)) {
                 ok = 0;
@@ -236,8 +250,8 @@ static int trial_encode(sandstone_asm_t *ctx, const sand_line_t *line,
         DomSymAs_Bytes bytes = {NULL, 0};
         DomSymAs_RelocOut *relocs = NULL;
         uint32_t nrelocs = 0;
-        DomSymAs_Error e = domsymas_encode(ctx->bank, forms[i], vals, nvals,
-                                           &bytes, &relocs, &nrelocs);
+        DomSymAs_Error e = sand_encode_form(ctx, forms[i], vals, nvals,
+                                            &bytes, &relocs, &nrelocs);
         free(vals);
         if (e == DOMSYMAS_OK) {
             if (form_out)
@@ -275,6 +289,7 @@ int sand_encode_literal(const sandstone_asm_t *ctx, const char *source,
         return 0;
     sandstone_asm_t probe = {
         .bank = ctx->bank,
+        .dsymas_forms = ctx->dsymas_forms,
         .syntax_name = ctx->syntax_name,
         .syntax_id = ctx->syntax_id,
         .comment = ctx->comment,
@@ -928,7 +943,7 @@ int sand_assemble_lines(sandstone_asm_t *ctx) {
         DomSymAs_RelocOut *relocs = NULL;
         uint32_t nrelocs = 0;
         DomSymAs_Error e =
-            domsymas_encode(ctx->bank, ln->form_id, vals, nvals, &bytes,
+            sand_encode_form(ctx, ln->form_id, vals, nvals, &bytes,
                             &relocs, &nrelocs);
         free(vals);
         if (e != DOMSYMAS_OK) {

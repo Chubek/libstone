@@ -29,6 +29,7 @@ typedef struct {
     /* Normalized AMD64 AT&T addressing. The bank selects the opcode and
      * checks widths; these fields describe only the concrete operand. */
     int att, width, indirect, modrm, sib, rex_b, rex_x, disp_size, fixup;
+    uint32_t regclass;
     int64_t disp;
 } sand_operand_t;
 
@@ -96,6 +97,7 @@ typedef struct {
 
 struct sandstone_asm {
     DomSymAs_Bank *bank;
+    const struct dsymspec_encoder **dsymas_forms; /* owned table; recipes are static */
     char *syntax_name; /* owned */
     uint32_t syntax_id;
     /* cached syntax parameters */
@@ -140,6 +142,15 @@ struct sandstone_asm {
 int sand_emit_elf64(sandstone_asm_t *, const char *path);
 int sand_emit_native_object(sandstone_asm_t *, const char *path, const char *format);
 void sand_set_error(sandstone_asm_t *ctx, const char *fmt, ...);
+int sand_asm_new_profile(sandstone_asm_t **out, const char *profile,
+                         char *err, size_t err_n);
+int sand_dsymas_load(sandstone_asm_t *ctx, const char *profile);
+DomSymAs_Error sand_dsymas_encode(const sandstone_asm_t *ctx, uint32_t form,
+    const DomSymAs_OpVal *ops, uint32_t nops, DomSymAs_Bytes *bytes,
+    DomSymAs_RelocOut **relocs, uint32_t *nrelocs);
+DomSymAs_Error sand_encode_form(const sandstone_asm_t *ctx, uint32_t form,
+    const DomSymAs_OpVal *ops, uint32_t nops, DomSymAs_Bytes *bytes,
+    DomSymAs_RelocOut **relocs, uint32_t *nrelocs);
 
 /* parser.c */
 char *sand_rv_gas(sandstone_asm_t *ctx, const char *src, const char *name);

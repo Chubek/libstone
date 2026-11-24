@@ -28,6 +28,7 @@ option(SANDSTONE_BUILD_TOOLS "Build Sandstone command-line tools" "${LIBSTONE_BU
 option(SANDSTONE_BUILD_COMPILER "Build the spec compiler" ON)
 option(SANDSTONE_BUILD_DSYMSPEC "Generate standalone DSymspec assembler includes" OFF)
 option(SANDSTONE_BUILD_ASSEMBLER "Build the assembler framework and CLI" ON)
+option(SANDSTONE_ASSEMBLER_DSYMAS "Embed the DSymspec backend in SandAS" ON)
 option(SANDSTONE_BUILD_TESTS "Build and register tests" "${LIBSTONE_BUILD_TESTS}")
 option(SANDSTONE_BUILD_DOCS "Build documentation (needs Doxygen)" OFF)
 option(SANDSTONE_BUILD_SANDSLAB "Build the machine-near C++ code generator and Forth example" ON)
@@ -96,7 +97,7 @@ if(SANDSTONE_BUILD_COMPILER)
   add_subdirectory(compiler)
 endif()
 
-if(SANDSTONE_BUILD_DSYMSPEC)
+if(SANDSTONE_BUILD_DSYMSPEC OR (SANDSTONE_BUILD_ASSEMBLER AND SANDSTONE_ASSEMBLER_DSYMAS))
   add_subdirectory(dsymspec)
 endif()
 

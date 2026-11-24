@@ -20,6 +20,8 @@ add_custom_command(
 file(GLOB dsymspec_inputs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/stdspec/*.dsymspec")
 set(dsymspec_test_catalog "")
 set(dsymspec_test_profiles "")
+set(dsymas_profiles "")
+set(dsymas_sources "")
 foreach(spec IN LISTS dsymspec_inputs)
   get_filename_component(profile "${spec}" NAME_WE)
   set(output "${dsymspec_generated_dir}/${profile}.i")
@@ -39,6 +41,13 @@ foreach(spec IN LISTS dsymspec_inputs)
   list(APPEND dsymspec_includes "${output}")
   string(APPEND dsymspec_test_catalog "#include \"${profile}.i\"\n")
   string(APPEND dsymspec_test_profiles "    &dsymspec_${profile},\n")
+  if(SANDSTONE_BUILD_ASSEMBLER AND SANDSTONE_ASSEMBLER_DSYMAS)
+    set(wrapper "${dsymspec_generated_dir}/profile_${profile}.c")
+    file(GENERATE OUTPUT "${wrapper}" CONTENT
+      "#include \"${profile}.i\"\nconst dsymspec_target *sand_profile_${profile}(void) { return &dsymspec_${profile}; }\n")
+    list(APPEND dsymas_sources "${wrapper}")
+    string(APPEND dsymas_profiles "SAND_PROFILE(${profile})\n")
+  endif()
 endforeach()
 add_custom_target(sandstone-dsymspec ALL DEPENDS ${dsymspec_includes})
 
@@ -52,14 +61,23 @@ target_include_directories(sandstone_dsymspec INTERFACE
   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/sandstone/dsymspec>"
 )
 target_compile_features(sandstone_dsymspec INTERFACE c_std_11 cxx_std_11)
-install(TARGETS sandstone_dsymspec EXPORT SandstoneTargets)
-install(FILES DSymspec.h ${dsymspec_includes}
-  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/sandstone/dsymspec"
-)
+if(SANDSTONE_BUILD_DSYMSPEC)
+  install(TARGETS sandstone_dsymspec EXPORT SandstoneTargets)
+  install(FILES DSymspec.h ${dsymspec_includes}
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/sandstone/dsymspec"
+  )
+endif()
 
-if(SANDSTONE_BUILD_TESTS)
-  set(dsymspec_test_catalog_path "${CMAKE_CURRENT_BINARY_DIR}/dsymspec_test_catalog.inc")
-  file(GENERATE OUTPUT "${dsymspec_test_catalog_path}" CONTENT "${dsymspec_test_catalog}")
+if(SANDSTONE_BUILD_ASSEMBLER AND SANDSTONE_ASSEMBLER_DSYMAS)
+  file(GENERATE OUTPUT "${dsymspec_generated_dir}/dsymas_profiles.inc"
+    CONTENT "${dsymas_profiles}")
+  add_library(sandstone_dsymas_profiles OBJECT ${dsymas_sources})
+  target_link_libraries(sandstone_dsymas_profiles PRIVATE sandstone_dsymspec)
+endif()
+
+if(SANDSTONE_BUILD_TESTS AND SANDSTONE_BUILD_DSYMSPEC)
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dsymspec_test_catalog.inc"
+    CONTENT "${dsymspec_test_catalog}")
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dsymspec_test_profiles.inc"
     CONTENT "${dsymspec_test_profiles}")
   add_executable(sandstone_dsymspec_c tests/catalog.c)

@@ -1,15 +1,25 @@
 # Assembler framework
 
 The assembler (`assembler/`, library `sandstone_assembler`, CLI
-`sandstone-as`) assembles any dialect a `.symas` bank describes. Nothing
-about an instruction set is hard-coded: form resolution, operand checking,
-and byte emission all go through the bank.
+`sandstone-as`) defaults to built-in DSymspec profiles. The default
+profile matches the build's target architecture when available; use
+`--target` to select one explicitly. The built-in backend needs neither a
+`.symas` file nor `sandstone-spec-compiler` at runtime.
 
 ```sh
-sandstone-as --bank x86.symas --syntax intel -o out.bin prog.s
-sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
-sandstone-as --bank rv64im.symas -f elf -o prog.o prog.s
+sandstone-as --target amd64 --syntax intel -o out.bin prog.s
+sandstone-as --target riscv64 -f obj -o prog.obj.json prog.s
+sandstone-as --target rv64im -f elf -o prog.o prog.s
+sandstone-as --bank custom.symas -o out.bin prog.s
 ```
+
+`--bank` is an explicit choice of the legacy backend, not an automatic
+retry on assembly errors. Existing C/C++ calls that pass a `.symas` path
+or image continue to use that bank as supplied. The C constructor
+`sandstone_asm_new` can take a null path to select the default profile.
+Both backends share source processing, the SDK, and output writers.
+Built-in instruction coverage depends on the profile and on SandAS's
+operand syntax support; not every generated recipe is usable from source.
 
 ## Native Windows and Darwin objects
 

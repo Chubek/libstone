@@ -2,9 +2,11 @@
 // Borrowed record views are cached beside the Databank and valid until close.
 #include "sandstone.h"
 #include "sandstone.hpp"
+#include "spec_records.hpp"
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -246,6 +248,13 @@ static void rebuild_cache(DomSymAs_Bank *b) {
         c.pattern = v.pattern.c_str();
         b->fusions.push_back(c);
     }
+}
+
+DomSymAs_Bank *domsymas::detail::make_metadata_bank(const Builder &builder) {
+    auto bank = std::make_unique<DomSymAs_Bank>();
+    bank->bank.mutable_data() = builder.data();
+    rebuild_cache(bank.get());
+    return bank.release();
 }
 
 extern "C" {

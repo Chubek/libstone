@@ -158,6 +158,40 @@ static sandstone_asm_t *asm_alloc(void) {
     return ctx;
 }
 
+int sand_asm_new_profile(sandstone_asm_t **out, const char *profile,
+                         char *err, size_t err_n) {
+    if (!out) return -1;
+    *out = NULL;
+#ifdef SANDSTONE_ASM_DSYMAS
+    sandstone_asm_t *ctx = asm_alloc();
+    if (!ctx) return -1;
+    if (!sand_dsymas_load(ctx, profile ? profile : SANDSTONE_ASM_DEFAULT_PROFILE)) {
+        if (load_defaults(ctx)) {
+            *out = ctx;
+            return 0;
+        }
+        sand_set_error(ctx, "cannot initialize assembler defaults");
+    }
+    if (err && err_n) snprintf(err, err_n, "%s", ctx->error);
+    sandstone_asm_free(ctx);
+#else
+    (void)profile;
+    if (err && err_n)
+        snprintf(err, err_n, "built-in targets are unavailable; use --bank or --archml");
+#endif
+    return -1;
+}
+
+DomSymAs_Error sand_encode_form(const sandstone_asm_t *ctx, uint32_t form,
+    const DomSymAs_OpVal *ops, uint32_t nops, DomSymAs_Bytes *bytes,
+    DomSymAs_RelocOut **relocs, uint32_t *nrelocs) {
+#ifdef SANDSTONE_ASM_DSYMAS
+    if (ctx->dsymas_forms)
+        return sand_dsymas_encode(ctx, form, ops, nops, bytes, relocs, nrelocs);
+#endif
+    return domsymas_encode(ctx->bank, form, ops, nops, bytes, relocs, nrelocs);
+}
+
 int sandstone_asm_new_archml(sandstone_asm_t **out, const char *path,
                             char *err, size_t err_n) {
     if (!out || !path) return -1;
@@ -175,6 +209,8 @@ int sandstone_asm_new_archml(sandstone_asm_t **out, const char *path,
 
 int sandstone_asm_new(sandstone_asm_t **out, const char *bank_path,
                       char *err, size_t err_n) {
+    if (!bank_path)
+        return sand_asm_new_profile(out, NULL, err, err_n);
     sandstone_asm_t *ctx = asm_alloc();
     if (!ctx)
         return -1;
@@ -264,6 +300,7 @@ void sandstone_asm_free(sandstone_asm_t *ctx) {
     free_results(ctx);
     if (ctx->bank)
         domsymas_close(ctx->bank);
+    free(ctx->dsymas_forms);
     free(ctx->syntax_name);
     free(ctx->comment);
     free(ctx->reg_prefix);
@@ -357,7 +394,8 @@ int sandstone_asm_assemble_string(sandstone_asm_t *ctx, const char *src,
         expanded = optimized;
     }
     const DomSymAs_Target *target = domsymas_target_at(ctx->bank, 0);
-    if (target && target->arch && !strcmp(target->arch, "riscv64")) {
+    if (target && target->arch && (!strcmp(target->arch, "riscv64") ||
+        (ctx->dsymas_forms && !strcmp(target->arch, "riscv32")))) {
         char *normalized = sand_rv_gas(ctx, expanded, name);
         free(expanded);
         if (!normalized) return -1;

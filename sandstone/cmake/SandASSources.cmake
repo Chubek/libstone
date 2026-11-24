@@ -14,6 +14,7 @@ set(sandstone_reader_sources
   decoder/linking.cpp
   decoder/relocation.cpp
   decoder/semantics.cpp
+  decoder/spec_records.cpp
   decoder/syntax.cpp
   decoder/tuning.cpp
   decoder/validation.cpp

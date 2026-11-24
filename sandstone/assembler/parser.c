@@ -115,7 +115,7 @@ static int has_prefix(const char *s, const char *prefix) {
 }
 
 /* Try to resolve a register name (with optional syntax prefix). */
-static int try_register(sandstone_asm_t *ctx, const char *text, int64_t *num) {
+static int try_register(sandstone_asm_t *ctx, const char *text, sand_operand_t *op) {
     const char *t = text;
     if (has_prefix(t, ctx->reg_prefix))
         t += strlen(ctx->reg_prefix);
@@ -123,13 +123,21 @@ static int try_register(sandstone_asm_t *ctx, const char *text, int64_t *num) {
     const DomSymAs_Register *r = domsymas_find_register(ctx->bank, t);
     if (!r) {
         char *lower = sand_strdup(t);
+        if (!lower)
+            return 0;
         for (char *p = lower; *p; p++)
             *p = (char)tolower((unsigned char)*p);
         r = domsymas_find_register(ctx->bank, lower);
         free(lower);
     }
     if (r) {
-        *num = (int64_t)r->enc_num;
+        op->ival = r->enc_num;
+        const DomSymAs_Target *target = ctx->dsymas_forms ? domsymas_target_at(ctx->bank, 0) : NULL;
+        if (target && !strcmp(target->arch, "amd64") && r->regclass == 0 &&
+            r->width == 8 && r->sub_lo == 8)
+            op->ival += 12; /* DSymspec distinguishes AH..BH from SPL..DIL. */
+        op->width = (int)r->width;
+        op->regclass = r->regclass;
         return 1;
     }
     return 0;
@@ -169,9 +177,8 @@ static void classify_operand(sandstone_asm_t *ctx, const char *text,
         return;
     }
     /* Register (with or without the syntax prefix). */
-    if (try_register(ctx, text, &v)) {
+    if (try_register(ctx, text, op)) {
         op->kind = SAND_OP_REG;
-        op->ival = v;
         return;
     }
     /* Otherwise a symbol reference. */
@@ -396,7 +403,8 @@ int sand_parse_source(sandstone_asm_t *ctx, const char *src,
                                                src_name, lineno, ln.raw);
                                 failed = 1;
                             }
-                        } else if (target && !strcmp(target->arch, "riscv64") &&
+                        } else if (target && (!strcmp(target->arch, "riscv64") ||
+                                   (ctx->dsymas_forms && !strcmp(target->arch, "riscv32"))) &&
                                    !strcmp(ln.mnemonic,"call") && n_ops == 1 && sand_is_name(ops[i])) {
                             // A call operand is a symbol even if named after a CSR (e.g. time).
                             ln.operands[i].kind = SAND_OP_SYM;

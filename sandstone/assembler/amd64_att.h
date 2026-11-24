@@ -23,9 +23,11 @@ static int amd64_att_operand(sandstone_asm_t *ctx, char *text, sand_operand_t *o
         else if (!strncmp(name, "st(", 3) && strlen(name) == 5 && name[4] == ')' &&
                  name[3] >= '0' && name[3] <= '7') { st[2] = name[3]; name = st; }
         const DomSymAs_Register *r = domsymas_find_register(ctx->bank, name);
-        if (!r || r->enc_num >= 16 || r->sub_lo ||
+        int high = ctx->dsymas_forms && r && r->regclass == 0 && r->width == 8 && r->sub_lo == 8;
+        if (!r || r->enc_num >= 16 || (r->sub_lo && !high) ||
             !(att_gpr(ctx,text) || !strncmp(name,"xmm",3) || name == st)) return 0;
-        op->kind = SAND_OP_REG; op->width = r->width; op->ival = r->enc_num;
+        op->kind = SAND_OP_REG; op->width = r->width; op->ival = r->enc_num + (high ? 12 : 0);
+        op->regclass = r->regclass;
         op->modrm = 192 + (r->enc_num & 7); op->rex_b = r->enc_num >> 3;
         return 1;
     }

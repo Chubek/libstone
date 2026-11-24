@@ -36,7 +36,7 @@ target:
 ```
 
 Syntax (comment character, separators, register/immediate prefixes,
-operand order) comes from the bank's syntax record; select it with
+operand order) comes from the target's syntax record; select it with
 `--syntax` (`intel` and `att` for x86). Labels end with `:`. Available
 directives: `.text` `.data` `.rodata` `.bss` `.section`, `.globl`
 `.extern` `.equ`/`.set`, `.byte` `.short` `.word` `.long` `.quad`,
@@ -51,11 +51,15 @@ can be assembled directly using `--archml archml/stdspec/amd64.aml`.
 ## 3. Assemble
 
 ```sh
-sandstone-as --bank x86.symas --syntax intel -o out.bin prog.s
-sandstone-as --bank riscv64.symas -f obj -o prog.obj.json prog.s
-sandstone-as --bank x86.symas --list-syntaxes
-sandstone-as --bank x86.symas -F avx -F -sse2 -o out.bin prog.s
+sandstone-as --target amd64 --syntax intel -o out.bin prog.s
+sandstone-as --target riscv64 -f obj -o prog.obj.json prog.s
+sandstone-as --target amd64 --list-syntaxes
+sandstone-as --target amd64 -F avx -F -sse2 -o out.bin prog.s
 ```
+
+Without `--target`, SandAS uses a built-in profile matching the build's
+target architecture where available. Use `--bank custom.symas` instead
+to assemble against an existing bank.
 
 To run a Lua assembly optimizer explicitly, add `--asm-opt optimizer.lua`.
 It rewrites the complete expanded assembly before layout, unlike `--lua`,

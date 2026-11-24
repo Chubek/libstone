@@ -1,8 +1,7 @@
 /* Sandstone assembler framework (C API).
  *
- * A SymAS-driven assembler: instruction selection, operand checking and
- * machine-code emission all come from a `.symas` databank (magic 0xCEEB09),
- * so the same framework assembles every architecture the bank describes.
+ * Instruction forms and encoding recipes come from built-in DSymspec
+ * profiles or from an explicitly supplied `.symas` databank.
  *
  * Assembly model (two passes, single section cursor):
  *  - pass 1 parses each line, encodes instructions with symbol operands
@@ -63,7 +62,8 @@ typedef struct sandstone_sym {
     int defined;
 } sandstone_sym_t;
 
-/* Lifecycle. err/err_n receive a diagnostic on failure (may be NULL). */
+/* Lifecycle. err/err_n receive a diagnostic on failure (may be NULL).
+ * A NULL bank_path selects the build's default DSymspec profile. */
 int sandstone_asm_new(sandstone_asm_t **out, const char *bank_path,
                       char *err, size_t err_n);
 int sandstone_asm_new_from_memory(sandstone_asm_t **out, const uint8_t *data,

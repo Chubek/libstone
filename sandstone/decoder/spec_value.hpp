@@ -1,8 +1,7 @@
-// DomSymAsCC — minimal, dependency-free JSON model + parser.
+// Minimal, dependency-free spec value model and JSON parser.
 //
-// Used to carry the structured databank description emitted by the embedded
-// DomMune (Lua) DSL across the process boundary into the C++ compiler. The
-// schema is documented in `stdspec/README` and consumed by `spec_document`.
+// Used by the shared metadata loader for generated DSymspec profiles and
+// for legacy spec documents. The schema is documented in compiler/stdspec.
 //
 // The parser is intentionally small and strict: it rejects trailing garbage,
 // malformed escapes, and out-of-range numbers rather than silently coercing.
@@ -18,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace domsymas::cc::json {
+namespace domsymas::detail::json {
 
 enum class Type { Null, Bool, Number, String, Array, Object };
 
@@ -283,4 +282,4 @@ inline void dump(const Value &v, std::string &out) {
     }
 }
 
-} // namespace domsymas::cc::json
+} // namespace domsymas::detail::json
