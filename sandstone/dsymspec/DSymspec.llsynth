@@ -1,0 +1,178 @@
+.language "DSymspec"
+.summary "Declarative Sandstone target definitions (restricted Lua syntax)"
+.start Start
+
+.skip /[ \t\r\n\f]+/
+.skip /--[^\r\n]*/
+.token Name: String = /[A-Za-z_][A-Za-z_0-9]*/
+.token Number: String = /0[xX][A-Fa-f0-9]+|[0-9]+/
+.token StringLiteral: String = /"([^"\\\r\n]|\\.)*"|'([^'\\\r\n]|\\.)*'/
+
+.rule Start
+'syntax: Block EOF
+'semantics: return nil;
+.end
+
+.rule Block
+'syntax: Statements ReturnPart
+.end
+
+.rule Statements
+'syntax: Statements Statement |
+.end
+
+.rule ReturnPart
+'syntax: "return" Expressions OptionalSemi |
+.end
+
+.rule OptionalSemi
+'syntax: ";" |
+.end
+
+.rule Statement
+'syntax: "local" "function" Name Parameters Block "end"
+       | "local" Names LocalInitializer
+       | "for" Name "=" Expr "," Expr ForStep "do" Block "end"
+       | "for" Names "in" Expressions "do" Block "end"
+       | "if" Expr "then" Block ElsePart "end"
+       | "do" Block "end"
+       | NamedPostfix StatementTail
+       | ";"
+.end
+
+.rule LocalInitializer
+'syntax: "=" Expressions |
+.end
+
+.rule ForStep
+'syntax: "," Expr |
+.end
+
+.rule ElsePart
+'syntax: "elseif" Expr "then" Block ElsePart | "else" Block |
+.end
+
+.rule StatementTail
+'syntax: Lvalues "=" Expressions |
+.end
+
+.rule Lvalues
+'syntax: Lvalues "," Postfix |
+.end
+
+.rule Names
+'syntax: Names "," Name | Name
+.end
+
+.rule Parameters
+'syntax: "(" OptionalNames ")"
+.end
+
+.rule OptionalNames
+'syntax: Names |
+.end
+
+.rule Expressions
+'syntax: Expressions "," Expr | Expr
+.end
+
+.rule OptionalExpressions
+'syntax: Expressions |
+.end
+
+.rule Expr
+'syntax: Expr "or" AndExpr | AndExpr
+.end
+
+.rule AndExpr
+'syntax: AndExpr "and" Compare | Compare
+.end
+
+.rule Compare
+'syntax: Compare RelOp Shift | Shift
+.end
+
+.rule RelOp
+'syntax: "==" | "~=" | "<" | ">" | "<=" | ">="
+.end
+
+.rule Shift
+'syntax: Shift ShiftOp Concat | Concat
+.end
+
+.rule ShiftOp
+'syntax: "<<" | ">>"
+.end
+
+.rule Concat
+'syntax: Sum ".." Concat | Sum
+.end
+
+.rule Sum
+'syntax: Sum AddOp Product | Product
+.end
+
+.rule AddOp
+'syntax: "+" | "-"
+.end
+
+.rule Product
+'syntax: Product MulOp Unary | Unary
+.end
+
+.rule MulOp
+'syntax: "*" | "/" | "%" | "//"
+.end
+
+.rule Unary
+'syntax: UnaryOp Unary | Power
+.end
+
+.rule UnaryOp
+'syntax: "-" | "not" | "#"
+.end
+
+.rule Power
+'syntax: Atom "^" Unary | Atom
+.end
+
+.rule Atom
+'syntax: Postfix | Number | StringLiteral | "true" | "false" | "nil" | "..."
+       | Table | "function" Parameters Block "end"
+.end
+
+.rule Postfix
+'syntax: NamedPostfix | ParenPostfix
+.end
+
+.rule NamedPostfix
+'syntax: Name | NamedPostfix Suffix
+.end
+
+.rule ParenPostfix
+'syntax: "(" Expr ")" | ParenPostfix Suffix
+.end
+
+.rule Suffix
+'syntax: "." Name | "[" Expr "]" | ":" Name CallArgs | CallArgs
+.end
+
+.rule CallArgs
+'syntax: "(" OptionalExpressions ")" | Table | StringLiteral
+.end
+
+.rule Table
+'syntax: "{" Fields "}"
+.end
+
+.rule Fields
+'syntax: Field FieldTail |
+.end
+
+.rule FieldTail
+'syntax: "," Fields | ";" Fields |
+.end
+
+.rule Field
+'syntax: "[" Expr "]" "=" Expr | Name "=" Expr | Expr
+.end

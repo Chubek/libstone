@@ -1,0 +1,41 @@
+-- DirectX DXIL shader IR (SM 6.x), signature ABI. Metadata only.
+-- A DXIL program contains LLVM bitcode records inside a DXIL/DXContainer part.
+-- SSA values, resource handles and function/block references are not hardware
+-- registers or ELF relocations. DXBC tokenized shader code is a separate format.
+-- Do not substitute generic LLVM bitcode or a per-opcode byte encoder for DXIL.
+local symas = require("backend").new("directx")
+
+symas.target{
+    arch = "directx", subarch = "dxil",
+    addr_size = 64, op_size = 32, addr_def = 64, align = 4,
+    byte_order = "little", obj_format = "dxil", abi = "DXIL",
+    calling_conv = "dxil-signature",
+    features = { "base", "sm6.0", "wave-ops" },
+}
+
+symas.feature{ name = "base", desc = "DXIL base arithmetic + memory" }
+symas.feature{ name = "sm6.0", desc = "Shader Model 6.0" }
+symas.feature{ name = "sm6.8", desc = "Shader Model 6.8" }
+symas.feature{ name = "wave-ops", desc = "wave intrinsics" }
+symas.feature{ name = "raytracing", desc = "ray-tracing stages (SM 6.3+)" }
+symas.feature{ name = "mesh", desc = "mesh and amplification stages (SM 6.5+)" }
+symas.feature{ name = "16-bit", desc = "native 16-bit shader types (SM 6.2+)" }
+symas.feature{ name = "work-graphs", desc = "work graphs (SM 6.8+)" }
+symas.feature{ name = "dot", desc = "dot-product/DP2/DP4" }
+symas.feature{ name = "sample", desc = "texture sample/gather" }
+symas.feature{ name = "barrier", desc = "sync/barrier" }
+-- Core LLVM IR operators, plus selected DXIL operation families. Stage,
+-- overload and validator constraints are not implied by a mnemonic entry.
+for _, m in ipairs({ "add", "sub", "mul", "fadd", "fmul", "load", "store",
+    "br", "ret", "call", "bitcast", "phi", "select", "dx.op.dot4",
+    "dx.op.cbufferLoadLegacy", "dx.op.sample", "dx.op.textureGather",
+    "dx.op.waveActiveOp", "dx.op.waveGetLaneIndex", "dx.op.traceRay",
+    "dx.op.setMeshOutputCounts", "dx.op.emitIndices", "dx.op.barrier" }) do
+    symas.mnemonic{ name = m }
+end
+symas.syntax{ name = "dxil", comment = ";", separator = ", " }
+symas.linkage{ name = "entry_export", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_local", binding = "local", visibility = "default", symtype = "func" }
+symas.debug{ msg = "DXIL requires a shader module emitter/validator; no byte forms", kind = "target", ref = "" }
+
+print(symas.emit())

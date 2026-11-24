@@ -1,0 +1,161 @@
+-- Native AMDGPU gfx900 (GFX9, wave64, HSA). Checked with
+-- llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx900 -show-encoding.
+-- The listed RDNA/CDNA features describe other profiles, not alternative
+-- encodings in this bank. Modifiers, literal expressions and tuples need
+-- target-aware parsing. SGPR and VGPR descriptors deliberately differ.
+local symas = require("backend").new("amdgpu")
+
+symas.target{
+    arch = "amdgpu", subarch = "gfx900",
+    addr_size = 64, op_size = 32, addr_def = 64, align = 4,
+    byte_order = "little", obj_format = "ELF64", abi = "amdgpu-HSA",
+    calling_conv = "amdgpu-hsa-kernel",
+    features = { "base", "gcn", "gfx900", "wave64", "flat" },
+}
+
+symas.feature{ name = "base", desc = "scalar SOP base" }
+symas.feature{ name = "gcn", desc = "Graphics Core Next" }
+symas.feature{ name = "gfx900", desc = "GFX900 opcode and register map" }
+symas.feature{ name = "rdna", desc = "RDNA" }
+symas.feature{ name = "cdna", desc = "CDNA (matrix cores)" }
+symas.feature{ name = "wave32", desc = "32-lane wavefront" }
+symas.feature{ name = "wave64", desc = "64-lane wavefront" }
+symas.feature{ name = "flat", desc = "flat addressing (FLAT/GLOBAL)" }
+symas.feature{ name = "xnack", desc = "memory fault retry (XNACK)" }
+symas.feature{ name = "image", desc = "image/memory ops (MUBUF/MTBUF/MIMG)" }
+symas.feature{ name = "mfma", desc = "matrix-fused multiply-add (CDNA)" }
+
+local function reg(cls,width,access) return { kind = "reg", class = cls, width = width, access = access } end
+local function imm(width,lo,hi,constraint)
+    return { kind = "imm", width = width, signed = lo < 0, imm_min = lo, imm_max = hi, constraint = constraint }
+end
+local sg, sd = reg("gpr",32), reg("gpr",32,"write")
+local vg, vd = reg("vec",32), reg("vec",32,"write")
+local sgpair, vgpair = reg("gpr",64), reg("vec",64)
+local rw = { "readable","writable" }
+for i = 0, 101 do symas.register{ name = "s" .. i, class = "gpr", width = 32, enc = i, flags = rw } end
+for i = 0, 255 do symas.register{ name = "v" .. i, class = "vec", width = 32, enc = i, flags = rw } end
+for i = 0, 100, 2 do
+    symas.register{ name = ("s[%d:%d]"):format(i,i+1), class = "gpr", width = 64, enc = i, flags = rw }
+end
+for i = 0, 254 do
+    symas.register{ name = ("v[%d:%d]"):format(i,i+1), class = "vec", width = 64, enc = i, flags = rw }
+end
+for _, x in ipairs({ {"flat_scratch",102}, {"xnack_mask",104}, {"vcc",106}, {"exec",126} }) do
+    symas.register{ name = x[1], class = "gpr", width = 64, enc = x[2], flags = rw }
+    for i, s in ipairs({ "_lo", "_hi" }) do
+        symas.register{ name = x[1] .. s, class = "gpr", width = 32, enc = x[2]+i-1, flags = rw,
+            parent = x[1], sub_lo = (i-1)*32, sub_hi = i*32 }
+    end
+end
+symas.register{ name = "m0", class = "gpr", width = 32, enc = 124, flags = rw }
+symas.register{ name = "src_scc", class = "gpr", width = 32, enc = 253, flags = { "readable" } }
+symas.register{ name = "scc", class = "gpr", width = 32, enc = 253, flags = { "readable" },
+    parent = "src_scc", sub_lo = 0, sub_hi = 32 }
+local declared = {}
+local function form(name,tag,ops,src,bytes,flags,extra,aliases)
+    if not declared[name] then symas.mnemonic{ name = name, aliases = aliases }; declared[name] = true end
+    local enc = name .. "_" .. tag
+    local required = { "gfx900" }
+    if extra then required[2] = extra end
+    symas.encoder{ name = enc, source = src, max_bytes = bytes or 4, max_relocs = 0 }
+    symas.form{ mnemonic = name, encoder = enc, operands = ops, flags = flags, required = required }
+end
+local function fit(n,lo,hi) return ("require(%s >= %s && %s <= %s); "):format(n,lo,n,hi) end
+local function sdst(n)
+    return ("require((%s >= 0 && %s <= 107) || %s == 124 || %s == 126 || %s == 127); "):format(n,n,n,n,n)
+end
+local function ssrc(n) return ("require((%s >= 0 && %s <= 107) || %s == 124 || %s == 126 || %s == 127 || %s == 253); "):
+    format(n,n,n,n,n,n) end
+local function emit(op,fields) return ("emit32le(0x%08x%s); "):format(op,fields or "") end
+local function inline(n)
+    return ("select(%s >= 0, 128 + %s, 192 - %s)"):format(n,n,n)
+end
+local iconst = imm(32,-16,64,"GFX9 inline integer; no extra literal word")
+for _, op in ipairs({ {"s_add_u32",0x80000000},{"s_sub_u32",0x80800000},
+    {"s_add_i32",0x81000000},{"s_sub_i32",0x81800000},{"s_and_b32",0x86000000},
+    {"s_or_b32",0x87000000},{"s_xor_b32",0x88000000} }) do
+    form(op[1],"rrr",{ sd,sg,sg },sdst("a") .. ssrc("b") .. ssrc("c") ..
+        emit(op[2]," + a*65536 + b + c*256"),nil,{"implicit_ops"})
+    form(op[1],"rri",{ sd,sg,iconst },sdst("a") .. ssrc("b") .. fit("c",-16,64) ..
+        emit(op[2]," + a*65536 + b + " .. inline("c") .. "*256"),nil,{"implicit_ops"})
+end
+form("s_mov_b32","rr",{ sd,sg },sdst("a") .. ssrc("b") .. emit(0xbe800000," + a*65536 + b"))
+form("s_mov_b32","inline",{ sd,iconst },sdst("a") .. fit("b",-16,64) ..
+    emit(0xbe800000," + a*65536 + " .. inline("b")))
+form("s_mov_b32","literal",{ sd,imm(32,-2147483648,4294967295,"literal bit pattern") },
+    sdst("a") .. fit("b",-2147483648,4294967295) .. "require(b < -16 || b > 64); " ..
+    emit(0xbe8000ff," + a*65536") .. "emit32le(b); ",8)
+local u16 = imm(16,0,65535)
+form("s_nop","delay",{u16},fit("a",0,65535) .. emit(0xbf800000," + a"))
+form("s_endpgm","plain",nil,emit(0xbf810000),nil,{"terminator"})
+form("s_endpgm","message",{u16},fit("a",0,65535) .. emit(0xbf810000," + a"),nil,{"terminator"})
+form("s_barrier","plain",nil,emit(0xbf8a0000))
+form("s_waitcnt","packed",{u16},fit("a",0,65535) .. emit(0xbf8c0000," + a"))
+local disp = imm(16,-32768,32767,"dword displacement relative to next instruction")
+form("s_branch","disp",{disp},fit("a",-32768,32767) .. emit(0xbf820000," + (a + 65536) % 65536"),
+    nil,{"branch","terminator"})
+for i, cond in ipairs({ "scc0","scc1","vccz","vccnz","execz","execnz" }) do
+    form("s_cbranch_" .. cond,"disp",{disp},fit("a",-32768,32767) ..
+        emit(0xbf830000 + i*65536," + (a + 65536) % 65536"),nil,{"cond_branch","implicit_ops"})
+end
+form("s_getreg_b32","packed",{sd,u16},sdst("a") .. fit("b",0,65535) ..
+    emit(0xb8800000," + a*65536 + b"))
+local vcheck = function(n) return fit(n,0,255) end
+for _, op in ipairs({ {"v_add_f32",0x02000000},{"v_sub_f32",0x04000000},
+    {"v_mul_f32",0x0a000000},{"v_add_u32",0x68000000} }) do
+    form(op[1] .. "_e32","vvv",{ vd,vg,vg },vcheck("a") .. vcheck("b") .. vcheck("c") ..
+        emit(op[2]," + a*131072 + c*512 + 256 + b"),nil,{"implicit_ops"},nil,{op[1]})
+end
+form("v_mov_b32_e32","vv",{vd,vg},vcheck("a") .. vcheck("b") ..
+    emit(0x7e000300," + a*131072 + b"),nil,{"implicit_ops"},nil,{"v_mov_b32"})
+local vcc = reg("gpr",64); vcc.constraint = "explicit vcc spelling; fixed operand in e32"
+local vcc_def = reg("gpr",64,"write"); vcc_def.constraint = vcc.constraint
+form("v_cmp_eq_f32_e32","vcc",{vcc_def,vg,vg},"require(a == 106); " .. vcheck("b") .. vcheck("c") ..
+    emit(0x7c840100," + b + c*512"),nil,{"implicit_ops"},nil,{"v_cmp_eq_f32"})
+form("v_cndmask_b32_e32","vcc",{vd,vg,vg,vcc},"require(d == 106); " .. vcheck("a") .. vcheck("b") .. vcheck("c") ..
+    emit(0x00000100," + a*131072 + b + c*512"),nil,{"implicit_ops"},nil,{"v_cndmask_b32"})
+form("flat_load_dword","vpair",{vd,vgpair},vcheck("a") .. fit("b",0,254) ..
+    emit(0xdc500000) .. emit(0," + b + a*16777216"),8,{"reads_mem","implicit_ops"},"flat")
+form("flat_store_dword","vpair",{vgpair,vg},fit("a",0,254) .. vcheck("b") ..
+    emit(0xdc700000) .. emit(0," + a + b*256"),8,{"writes_mem","implicit_ops"},"flat")
+local byteoff = imm(16,0,65535,"DS byte offset")
+for _, op in ipairs({ {"ds_read_b32",0xd86c0000,{vd,vg}," + b + a*16777216",{"reads_mem","implicit_ops"}},
+    {"ds_write_b32",0xd81a0000,{vg,vg}," + a + b*256",{"writes_mem","implicit_ops"}} }) do
+    local check = vcheck("a") .. vcheck("b")
+    form(op[1],"zero",op[3],check .. emit(op[2]) .. emit(0,op[4]),8,op[5])
+    form(op[1],"off",{op[3][1],op[3][2],byteoff},check .. fit("c",0,65535) ..
+        emit(op[2]," + c") .. emit(0,op[4]),8,op[5])
+end
+local smemoff = imm(20,0,1048575,"unsigned scalar memory byte offset")
+for _, op in ipairs({ {"s_load_dword",0xc0020000,sd,{"reads_mem"}},
+    {"s_store_dword",0xc0420000,sg,{"writes_mem"}} }) do
+    form(op[1],"imm",{op[3],sgpair,smemoff},sdst("a") .. fit("b",0,100) ..
+        "require(b % 2 == 0); " .. fit("c",0,1048575) ..
+        emit(op[2]," + a*64 + b/2") .. emit(0," + c"),8,op[4])
+end
+-- Preserve mnemonic inventory for families not expressible in these forms.
+for _, x in ipairs({ "buffer_load_dword", "buffer_store_dword", "image_load", "v_mfma_f32_16x16x4f32" }) do
+    symas.mnemonic{ name = x }
+end
+symas.syntax{ name = "default", comment = ";", separator = ", " }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 4, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 4, content = "data" }
+symas.section{ name = ".AMDGPU.config", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+symas.section{ name = ".AMDGPU.disasm", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+symas.section{ name = ".note", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+
+symas.linkage{ name = "kernel_entry", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_local", binding = "local", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+
+symas.reloc{ name = "R_AMDGPU_ABS32", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AMDGPU_ABS64", width = 64, expr = "S + A" }
+symas.reloc{ name = "R_AMDGPU_ABS32_LO", width = 32, expr = "(S + A) & 0xffffffff" }
+symas.reloc{ name = "R_AMDGPU_REL32", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AMDGPU_GOTPCREL32_LO", width = 32, pcrel = true, expr = "(GOT(S) + A - P) & 0xffffffff" }
+symas.debug{ msg = "gfx900 only; SOPP branches take resolved dword displacements", kind = "target", ref = "" }
+
+print(symas.emit())

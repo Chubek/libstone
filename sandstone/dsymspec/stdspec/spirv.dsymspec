@@ -1,0 +1,152 @@
+-- SPIR-V 1.6 logical profile. Instruction word 0 = word count:16 | opcode:16.
+-- Encoders accept flat numeric operands in binary order (type ID before result
+-- ID), not the canonical `%result = Op... %type ...` source grammar. SSA ID
+-- allocation, literal strings, module header/order and validation are separate.
+-- Reference: Khronos SPIR-V unified1/spirv.core.grammar.json and SPIRV-Tools.
+local symas = require("backend").new("spirv")
+
+symas.target{
+    arch = "spirv", subarch = "spirv1.6",
+    addr_size = 32, op_size = 32, addr_def = 32, align = 4,
+    byte_order = "little", obj_format = "spirv", abi = "spirv-logical",
+    calling_conv = "spirv-logical",
+    features = { "core", "shader" },
+}
+
+symas.feature{ name = "core", desc = "SPIR-V 1.6 core" }
+symas.feature{ name = "shader", desc = "shader capability" }
+symas.feature{ name = "kernel", desc = "kernel capability" }
+symas.feature{ name = "addresses", desc = "Addresses capability" }
+symas.feature{ name = "vulkan-memory-model", desc = "VulkanMemoryModel capability" }
+symas.feature{ name = "int8", desc = "Int8 capability" }
+symas.feature{ name = "int16", desc = "Int16 capability" }
+symas.feature{ name = "int64", desc = "Int64 capability" }
+symas.feature{ name = "float16", desc = "Float16 capability" }
+symas.feature{ name = "float64", desc = "Float64 capability" }
+symas.feature{ name = "vector16", desc = "Vector16 capability" }
+symas.feature{ name = "atomic", desc = "atomic storage (OpAtomicIAdd)" }
+symas.feature{ name = "group", desc = "group operations" }
+local function operand(lo,hi,constraint)
+    return { kind = "imm", width = 32, imm_min = lo, imm_max = hi, constraint = constraint }
+end
+local id = operand(1,4194302,"nonzero ID, below the module's ID bound")
+local result = operand(1,4194302,"nonzero result ID, assigned once per module")
+local ty = operand(1,4194302,"result type ID")
+local word = operand(0,4294967295,"literal 32-bit word")
+local storage = operand(0,4294967295,"StorageClass enumerant")
+local scope = operand(1,4194302,"Scope ID")
+local semantics = operand(1,4194302,"Memory Semantics ID")
+local declared = {}
+local function declare(name)
+    if not declared[name] then symas.mnemonic{ name = name }; declared[name] = true end
+end
+local function form(name, code, ops, flags, required, tag)
+    declare(name)
+    ops = ops or {}
+    local enc = name .. (tag or ("_" .. #ops))
+    local src = { ("emit32le(0x%08x); "):format((#ops+1)*65536 + code) }
+    for i, o in ipairs(ops) do
+        local v = "r" .. (i-1)
+        src[#src+1] = ("require(%s >= %d && %s <= %d); emit32le(%s); "):
+            format(v,o.imm_min,v,o.imm_max,v)
+    end
+    symas.encoder{ name = enc, max_bytes = (#ops+1)*4, max_relocs = 0, source = table.concat(src) }
+    symas.form{ mnemonic = name, encoder = enc, operands = ops, flags = flags, required = required }
+end
+form("OpNop",0)
+form("OpUndef",1,{ty,result})
+-- Enum-dependent forms list only the variants whose trailing operands match.
+form("OpMemoryModel",14,{operand(0,0,"Logical"),operand(1,1,"GLSL450")},nil,{"shader"},"_glsl")
+form("OpMemoryModel",14,{operand(0,0,"Logical"),operand(3,3,"Vulkan")},nil,
+    {"shader","vulkan-memory-model"},"_vulkan")
+form("OpExecutionMode",16,{id,operand(7,7,"OriginUpperLeft")},nil,{"shader"},"_origin")
+form("OpExecutionMode",16,{id,operand(17,17,"LocalSize"),word,word,word},nil,nil,"_local_size")
+form("OpCapability",17,{operand(0,4294967295,"Capability enumerant")})
+form("OpTypeVoid",19,{result})
+form("OpTypeBool",20,{result})
+for _, t in ipairs({ {32,nil}, {8,"int8"}, {16,"int16"}, {64,"int64"} }) do
+    form("OpTypeInt",21,{result,operand(t[1],t[1],"integer bit width"),operand(0,1,"signedness")},
+        nil,t[2] and {t[2]} or nil,"_" .. t[1])
+end
+for _, t in ipairs({ {32,nil}, {16,"float16"}, {64,"float64"} }) do
+    form("OpTypeFloat",22,{result,operand(t[1],t[1],"IEEE floating-point bit width")},
+        nil,t[2] and {t[2]} or nil,"_" .. t[1])
+end
+form("OpTypeVector",23,{result,id,operand(2,4,"number of components")},nil,nil,"_short")
+form("OpTypeVector",23,{result,id,operand(8,8,"eight components")},nil,{"vector16"},"_v8")
+form("OpTypeVector",23,{result,id,operand(16,16,"16 components")},nil,{"vector16"},"_v16")
+form("OpTypePointer",32,{result,storage,id})
+form("OpConstantTrue",41,{ty,result})
+form("OpConstantFalse",42,{ty,result})
+-- Raw context-dependent words: the type determines how many words are legal.
+form("OpConstant",43,{ty,result,word})
+form("OpConstant",43,{ty,result,word,word})
+form("OpFunction",54,{ty,result,operand(0,15,"core function control mask"),id})
+form("OpFunctionParameter",55,{ty,result})
+form("OpFunctionEnd",56)
+for n = 0, 3 do
+    local ft, call, chain = {result,id}, {ty,result,id}, {ty,result,id}
+    for _ = 1, n do
+        ft[#ft+1] = id
+        call[#call+1] = id
+        chain[#chain+1] = id
+    end
+    form("OpTypeFunction",33,ft)
+    form("OpFunctionCall",57,call)
+    form("OpAccessChain",65,chain)
+end
+form("OpVariable",59,{ty,result,storage})
+form("OpVariable",59,{ty,result,storage,id})
+form("OpLoad",61,{ty,result,id},{"reads_mem"})
+form("OpStore",62,{id,id},{"writes_mem"})
+-- MemoryAccess Aligned consumes exactly one additional literal.
+local aligned = operand(2,2,"MemoryAccess Aligned")
+form("OpLoad",61,{ty,result,id,aligned,word},{"reads_mem"})
+form("OpStore",62,{id,id,aligned,word},{"writes_mem"})
+form("OpDecorate",71,{id,operand(0,0,"RelaxedPrecision")},nil,{"shader"},"_precision")
+form("OpDecorate",71,{id,operand(30,30,"Location"),word},nil,{"shader"},"_location")
+for _, op in ipairs({ {"OpIAdd",128}, {"OpFAdd",129}, {"OpISub",130},
+    {"OpFSub",131}, {"OpIMul",132}, {"OpFMul",133}, {"OpLogicalAnd",167}, {"OpIEqual",170} }) do
+    form(op[1],op[2],{ty,result,id,id})
+end
+form("OpSelect",169,{ty,result,id,id,id})
+form("OpControlBarrier",224,{scope,scope,semantics})
+form("OpMemoryBarrier",225,{scope,semantics})
+form("OpAtomicIAdd",234,{ty,result,id,scope,semantics,id},{"reads_mem","writes_mem"})
+for n = 1, 2 do
+    local phi = {ty,result}
+    for _ = 1, n do phi[#phi+1] = id; phi[#phi+1] = id end
+    form("OpPhi",245,phi)
+end
+form("OpLoopMerge",246,{id,id,operand(0,0,"Loop Control None")})
+form("OpSelectionMerge",247,{id,operand(0,2,"Selection Control None, Flatten or DontFlatten")})
+form("OpLabel",248,{result})
+form("OpBranch",249,{id},{"branch","terminator"})
+form("OpBranchConditional",250,{id,id,id},{"cond_branch","terminator"})
+form("OpBranchConditional",250,{id,id,id,word,word},{"cond_branch","terminator"})
+form("OpKill",252,nil,{"terminator"},{"shader"})
+form("OpReturn",253,nil,{"return","terminator"})
+form("OpReturnValue",254,{id},{"return","terminator"})
+form("OpUnreachable",255,nil,{"terminator"})
+for n = 0, 2 do
+    local args = {ty,result,id,word}
+    for _ = 1, n do args[#args+1] = id end
+    form("OpExtInst",12,args)
+end
+for _, m in ipairs({ "OpName", "OpMemberName", "OpEntryPoint", "OpExtInstImport", "OpExtension", "OpString" }) do
+    declare(m) -- LiteralString forms need UTF-8, NUL and word padding.
+end
+
+symas.syntax{ name = "default", comment = ";", separator = " " }
+
+symas.section{ name = "spirv.module", flags = { "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = "spirv.debug", flags = { "debug", "meta" }, align = 4, content = "meta" }
+symas.section{ name = "spirv.annotations", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+
+symas.linkage{ name = "entry_export", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_local", binding = "local", visibility = "default", symtype = "func" }
+
+-- LinkageAttributes decorations and ID remapping are not ELF-style relocations.
+symas.debug{ msg = "numeric instruction forms only; no module writer or ID allocator", kind = "target", ref = "" }
+
+print(symas.emit())

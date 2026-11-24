@@ -1,0 +1,162 @@
+-- WebAssembly stack-machine instruction bytes, for wasm32 and memory/table
+-- zero. Not a WAT parser, module writer, binary validator, or wasm64 profile.
+-- Stack values and module indices are not a numbered register file.
+local symas = require("backend").new("wasm")
+
+symas.target{
+    arch = "wasm", subarch = "wasm32",
+    addr_size = 32, op_size = 32, addr_def = 32, align = 1,
+    byte_order = "little", obj_format = "wasm", abi = "wasm-stack",
+    calling_conv = "wasm-c-abi",
+    features = { "mvp", "sign-ext", "bulk-memory" },
+}
+
+symas.feature{ name = "mvp", desc = "WebAssembly 1.0 MVP" }
+symas.feature{ name = "simd", desc = "128-bit fixed-width SIMD" }
+symas.feature{ name = "bulk-memory", desc = "bulk memory operations" }
+symas.feature{ name = "multi-value", desc = "multi-value returns" }
+symas.feature{ name = "reference-types", desc = "reference types (funcref/externref)" }
+symas.feature{ name = "tail-calls", desc = "tail calls" }
+symas.feature{ name = "threads", desc = "threads/atomics" }
+symas.feature{ name = "sign-ext", desc = "sign-extension operators" }
+symas.feature{ name = "nontrapping-fptoint", desc = "non-trapping float-to-int" }
+symas.feature{ name = "gc", desc = "garbage collection (struct/array)" }
+local function imm(width, lo, hi, constraint)
+    return { kind = "imm", width = width, signed = lo < 0, imm_min = lo, imm_max = hi, constraint = constraint }
+end
+local idx = imm(32, 0, 4294967295, "unsigned module index or relative label depth")
+local types = imm(33, 0, 4294967295, "block function type index (s33)")
+local valtype = imm(8, -5, -1, "signed value-type code (i32=-1, i64=-2, f32=-3, f64=-4, v128=-5)")
+local s32 = imm(32,-2147483648,2147483647)
+local s64 = imm(64,math.mininteger,math.maxinteger)
+local sym = { kind = "sym", width = 32 }
+local function fit(n,lo,hi)
+    return ("require(%s >= %s && %s <= %s); "):format(n,lo,n,hi)
+end
+local function op(n) return ("emit8(0x%02x); "):format(n) end
+-- Generate bounded LEB encoders using the existing interpreter vocabulary.
+-- The interpreter divides toward zero; signed chunks need floor division.
+local function leb(n, bytes, signed, i)
+    i = i or 0
+    local q = n
+    if i == 9 then
+        q = ("select(%s < 0, -1, 0)"):format(n)
+    elseif i > 0 then
+        local k = 1 << (7*i)
+        q = ("(%s / %d)"):format(n,k)
+        if signed then q = ("(%s - select(%s < 0 && %s %% %d != 0, 1, 0))"):format(q,n,n,k) end
+    end
+    local low = signed and ("((%s %% 128 + 128) %% 128)"):format(q) or q .. " % 128"
+    if i == bytes-1 then return "emit8(" .. low .. "); " end
+    local done = signed and (q .. " >= -64 && " .. q .. " <= 63") or q .. " < 128"
+    return "if (" .. done .. ") { emit8(" .. low .. "); } else { emit8(" .. low ..
+        " + 128); " .. leb(n, bytes, signed, i+1) .. "} "
+end
+local declared = {}
+local function form(name, tag, ops, nbytes, code, required, flags, nreloc)
+    if not declared[name] then symas.mnemonic{ name = name }; declared[name] = true end
+    local enc = name .. "_" .. tag
+    symas.encoder{ name = enc, source = code, max_bytes = nbytes, max_relocs = nreloc or 0 }
+    symas.form{ mnemonic = name, encoder = enc, operands = ops, required = required, flags = flags }
+end
+for _, n in ipairs({
+    {"unreachable",0x00,{"may_trap","terminator"}}, {"nop",0x01}, {"else",0x05}, {"end",0x0b},
+    {"return",0x0f,{"return","terminator"}}, {"drop",0x1a}, {"select",0x1b}, {"i32.eqz",0x45},
+    {"i32.add",0x6a}, {"i32.sub",0x6b}, {"i32.mul",0x6c}, {"i32.div_s",0x6d,{"may_trap"}},
+    {"i32.div_u",0x6e,{"may_trap"}}, {"i32.and",0x71}, {"i32.or",0x72}, {"i32.xor",0x73},
+    {"i64.add",0x7c}, {"f32.add",0x92}, {"f64.add",0xa0}, {"i32.wrap_i64",0xa7},
+    {"i32.extend8_s",0xc0,nil,{"sign-ext"}}, {"i32.extend16_s",0xc1,nil,{"sign-ext"}},
+    {"i64.extend8_s",0xc2,nil,{"sign-ext"}}, {"i64.extend16_s",0xc3,nil,{"sign-ext"}},
+    {"i64.extend32_s",0xc4,nil,{"sign-ext"}},
+}) do
+    form(n[1],"plain",nil,1,op(n[2]),n[4],n[3])
+end
+for _, n in ipairs({ {"block",0x02}, {"loop",0x03}, {"if",0x04,{"cond_branch"}} }) do
+    form(n[1],"empty",nil,2,op(n[2]) .. op(0x40),nil,n[3])
+    -- Baseline numeric single-result form excludes v128; give v128 its own
+    -- feature-gated form instead of accepting a non-SIMD vector result.
+    local scalar = imm(8,-4,-1,valtype.constraint)
+    form(n[1],"value",{ scalar },2,op(n[2]) .. fit("a",-4,-1) .. "emit8(a + 128); ",nil,n[3])
+    form(n[1],"v128",{ imm(8,-5,-5,"v128") },2,op(n[2]) .. "require(a == -5); " .. op(0x7b),{"simd"},n[3])
+    form(n[1],"typeidx",{ types },6,op(n[2]) .. fit("a",0,4294967295) .. leb("a",5,true),
+        {"multi-value"},n[3])
+end
+for _, n in ipairs({ {"br",0x0c,{"branch","terminator"}}, {"br_if",0x0d,{"cond_branch"}},
+    {"call",0x10,{"branch"}}, {"return_call",0x12,{"branch","terminator"},{"tail-calls"}},
+    {"local.get",0x20}, {"local.set",0x21}, {"local.tee",0x22}, {"global.get",0x23}, {"global.set",0x24} }) do
+    form(n[1],"index",{ idx },6,op(n[2]) .. fit("a",0,4294967295) .. leb("a",5,false),n[4],n[3])
+    if n[1] == "call" or n[1] == "return_call" then
+        local flags = { "branch", "reloc" }
+        if n[1] == "return_call" then flags[#flags+1] = "terminator" end
+        -- Relocatable object: offset refers to the start of the five-byte index.
+        form(n[1],"symbol",{ sym },6,op(n[2]) .. "emit_relocation(sym, R_WASM_FUNCTION_INDEX_LEB); " ..
+            op(0x80):rep(4) .. op(0),n[4],flags,1)
+    end
+end
+for _, n in ipairs({ {"call_indirect",0x11,nil,{"branch"}},
+    {"return_call_indirect",0x13,{"tail-calls"},{"branch","terminator"}} }) do
+    local prefix = op(n[2]) .. fit("a",0,4294967295) .. leb("a",5,false)
+    form(n[1],"table0",{ idx },7,prefix .. op(0),n[3],n[4])
+    local required = n[3] and { "reference-types", n[3][1] } or { "reference-types" }
+    form(n[1],"table",{ idx, idx },11,prefix .. fit("b",0,4294967295) .. leb("b",5,false),required,n[4])
+end
+for _, n in ipairs({ {"i32.const",0x41,s32,5}, {"i64.const",0x42,s64,10} }) do
+    local check = n[4] == 5 and fit("a",-2147483648,2147483647) or ""
+    form(n[1],"imm",{ n[3] },n[4]+1,op(n[2]) .. check .. leb("a",n[4],true))
+end
+-- Offsets are u32 here; align is an exponent, not a byte count.
+for _, n in ipairs({
+    {"i32.load",0x28,2},{"i64.load",0x29,3},{"f32.load",0x2a,2},{"f64.load",0x2b,3},
+    {"i32.load8_s",0x2c,0},{"i32.load8_u",0x2d,0},{"i32.load16_s",0x2e,1},{"i32.load16_u",0x2f,1},
+    {"i64.load8_s",0x30,0},{"i64.load8_u",0x31,0},{"i64.load16_s",0x32,1},{"i64.load16_u",0x33,1},
+    {"i64.load32_s",0x34,2},{"i64.load32_u",0x35,2},
+    {"i32.store",0x36,2},{"i64.store",0x37,3},{"f32.store",0x38,2},{"f64.store",0x39,3},
+    {"i32.store8",0x3a,0},{"i32.store16",0x3b,1},{"i64.store8",0x3c,0},{"i64.store16",0x3d,1},{"i64.store32",0x3e,2},
+    {"v128.load",0xfd,4,0x00,"simd"},{"v128.store",0xfd,4,0x0b,"simd"},
+    {"i32.atomic.rmw.add",0xfe,2,0x1e,"threads"},{"i64.atomic.rmw.add",0xfe,3,0x1f,"threads"},
+}) do
+    local atomic = n[5] == "threads"
+    local min = atomic and n[3] or 0
+    local p = op(n[2]) .. (n[4] and op(n[4]) or "")
+    local flags = atomic and { "reads_mem", "writes_mem", "may_trap" } or
+        { n[1]:find("store") and "writes_mem" or "reads_mem", "may_trap" }
+    form(n[1],"memarg",{ imm(32,min,n[3],"alignment exponent"), imm(32,0,4294967295,"byte offset") },
+        n[4] and 8 or 7,p .. fit("a",min,n[3]) .. "emit8(a); " .. fit("b",0,4294967295) ..
+        leb("b",5,false),n[5] and { n[5] } or nil,flags)
+end
+form("memory.size","memory0",nil,2,op(0x3f) .. op(0),nil,{"reads_mem"})
+form("memory.grow","memory0",nil,2,op(0x40) .. op(0),nil,{"writes_mem"})
+form("memory.copy","memory0",nil,4,op(0xfc) .. op(0x0a) .. op(0) .. op(0),
+    {"bulk-memory"},{"reads_mem","writes_mem","may_trap"})
+form("memory.fill","memory0",nil,3,op(0xfc) .. op(0x0b) .. op(0),
+    {"bulk-memory"},{"writes_mem","may_trap"})
+form("i32x4.add","simd",nil,3,op(0xfd) .. op(0xae) .. op(0x01),{"simd"})
+
+symas.syntax{ name = "default", comment = ";;", separator = " " }
+
+symas.section{ name = "wasm.type", flags = { "alloc", "readonly", "meta" }, align = 1, content = "meta" }
+symas.section{ name = "wasm.import", flags = { "alloc", "readonly", "meta" }, align = 1, content = "meta" }
+symas.section{ name = "wasm.function", flags = { "alloc", "code" }, align = 1, content = "code" }
+symas.section{ name = "wasm.table", flags = { "alloc", "readonly", "meta" }, align = 1, content = "meta" }
+symas.section{ name = "wasm.memory", flags = { "write", "alloc", "data" }, align = 1, content = "data" }
+symas.section{ name = "wasm.global", flags = { "write", "alloc", "data" }, align = 1, content = "data" }
+symas.section{ name = "wasm.export", flags = { "alloc", "readonly", "meta" }, align = 1, content = "meta" }
+symas.section{ name = "wasm.code", flags = { "exec", "alloc", "code" }, align = 1, content = "code" }
+symas.section{ name = "wasm.data", flags = { "write", "alloc", "data" }, align = 1, content = "data" }
+
+symas.linkage{ name = "func_export", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "memory_export", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_func", binding = "local", visibility = "default", symtype = "func" }
+
+symas.reloc{ name = "R_WASM_FUNCTION_INDEX_LEB", width = 32, expr = "S", addend = "implied" }
+symas.reloc{ name = "R_WASM_TABLE_INDEX_SLEB", width = 32, signed = true, expr = "S", addend = "implied" }
+symas.reloc{ name = "R_WASM_MEMORY_ADDR_LEB", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_WASM_TYPE_INDEX_LEB", width = 32, expr = "S", addend = "implied" }
+symas.reloc{ name = "R_WASM_GLOBAL_INDEX_LEB", width = 32, expr = "S", addend = "implied" }
+symas.reloc{ name = "R_WASM_FUNCTION_OFFSET_I32", width = 32, expr = "S + A" }
+
+symas.debug{ msg = "wasm stack machine: mvp+simd+bulk+threads+tail stratification", kind = "target", ref = "" }
+symas.debug{ msg = "simd forms require simd", kind = "form", ref = "v128.load" }
+symas.debug{ msg = "atomic forms require threads", kind = "form", ref = "i32.atomic.add" }
+
+print(symas.emit())

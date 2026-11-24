@@ -1,0 +1,1865 @@
+-- amd64.dsymspec — AMD64 / x86-64, SysV AMD64 ABI.
+-- Two syntaxes share one encoding: "intel" (default) and "att" (reversed).
+-- Long-mode opcode families follow AMD APM volumes 3–5 and Intel SDM
+-- volume 2. ELF records follow the x86-64 psABI. See tests/amd64/ for the
+-- normalized operand contract, differential tests and remaining gaps.
+local symas = require("backend").new("amd64")
+
+symas.target{
+    arch = "amd64", subarch = "x86-64",
+    addr_size = 64, op_size = 32, addr_def = 64, align = 1,
+    byte_order = "little", obj_format = "ELF64", abi = "SysV",
+    calling_conv = "sysv-amd64",
+    features = { "base", "sse", "sse2", "x87", "mmx" },
+}
+
+symas.feature{ name = "base", desc = "x86-64 base integer" }
+symas.feature{ name = "sse", desc = "Streaming SIMD Extensions" }
+symas.feature{ name = "sse2", desc = "SSE2" }
+symas.feature{ name = "sse3", desc = "SSE3" }
+symas.feature{ name = "ssse3", desc = "SSSE3" }
+symas.feature{ name = "sse4.1", desc = "SSE4.1" }
+symas.feature{ name = "sse4.2", desc = "SSE4.2" }
+symas.feature{ name = "avx", desc = "Advanced Vector Extensions" }
+symas.feature{ name = "avx2", desc = "AVX2" }
+symas.feature{ name = "avx512", desc = "AVX-512 Foundation (AVX512F)" }
+symas.feature{ name = "avx512vl", desc = "AVX512VL narrow EVEX forms" }
+symas.feature{ name = "avx512bw", desc = "AVX512BW byte/word vector and mask forms" }
+symas.feature{ name = "avx512dq", desc = "AVX512DQ doubleword/quadword forms" }
+symas.feature{ name = "fma", desc = "FMA3" }
+symas.feature{ name = "bmi1", desc = "Bit Manipulation Instruction Set 1" }
+symas.feature{ name = "bmi2", desc = "Bit Manipulation Instruction Set 2" }
+symas.feature{ name = "aes", desc = "AES-NI" }
+symas.feature{ name = "vaes", desc = "vector AES" }
+symas.feature{ name = "pclmulqdq", desc = "carry-less multiply" }
+symas.feature{ name = "vpclmulqdq", desc = "vector carry-less multiplication beyond the 128-bit VEX form" }
+symas.feature{ name = "popcnt", desc = "POPCNT" }
+symas.feature{ name = "lzcnt", desc = "LZCNT" }
+symas.feature{ name = "movbe", desc = "MOVBE" }
+symas.feature{ name = "rdrnd", desc = "RDRAND" }
+symas.feature{ name = "rdseed", desc = "RDSEED" }
+symas.feature{ name = "sha", desc = "SHA extensions" }
+symas.feature{ name = "gfni", desc = "Galois Field New Instructions" }
+symas.feature{ name = "fsgsbase", desc = "FSGSBASE" }
+symas.feature{ name = "adx", desc = "ADX multi-precision add" }
+symas.feature{ name = "rdpid", desc = "RDPID" }
+symas.feature{ name = "clflushopt", desc = "CLFLUSHOPT" }
+symas.feature{ name = "clwb", desc = "CLWB" }
+symas.feature{ name = "x87", desc = "x87 floating point stack" }
+symas.feature{ name = "mmx", desc = "MMX" }
+symas.feature{ name = "cet", desc = "Control-flow Enforcement (SHSTK+IBT)" }
+symas.feature{ name = "rtm", desc = "Restricted Transactional Memory" }
+symas.feature{ name = "sgx", desc = "Software Guard Extensions" }
+symas.feature{ name = "serialize", desc = "SERIALIZE" }
+symas.feature{ name = "uintr", desc = "user interrupts" }
+symas.feature{ name = "cldemote", desc = "cache line demote" }
+symas.feature{ name = "movdiri", desc = "MOVDIRI direct store" }
+symas.feature{ name = "waitpkg", desc = "UMONITOR/UMWAIT/TPAUSE" }
+symas.feature{ name = "clzero", desc = "CLZERO" }
+symas.feature{ name = "priv", desc = "privileged system instructions" }
+symas.feature{ name = "cx16", desc = "CMPXCHG16B" }
+symas.feature{ name = "lahfsahf", desc = "LAHF and SAHF in long mode" }
+symas.feature{ name = "vmx", desc = "Intel VMX" }
+symas.feature{ name = "svm", desc = "AMD Secure Virtual Machine" }
+symas.feature{ name = "rdtscp", desc = "RDTSCP" }
+symas.feature{ name = "monitor", desc = "MONITOR/MWAIT" }
+
+-- Legacy and REX-addressable GPRs. APX R16..R31 are not modeled.
+local gpr64 = { "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi" }
+local gpr32 = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" }
+local gpr16 = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" }
+local gpr8  = { "al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil" }
+for i = 0, 7 do
+    local r = gpr64[i + 1]
+    symas.register{ name = r, class = "gpr", width = 64, enc = i, flags = { "readable", "writable" } }
+    symas.register{ name = gpr32[i + 1], class = "gpr", width = 32, enc = i, parent = r,
+                    sub_lo = 0, sub_hi = 32, flags = { "readable", "writable" } }
+    symas.register{ name = gpr16[i + 1], class = "gpr", width = 16, enc = i, parent = gpr32[i + 1],
+                    sub_lo = 0, sub_hi = 16, flags = { "readable", "writable" } }
+    symas.register{ name = gpr8[i + 1], class = "gpr", width = 8, enc = i, parent = gpr32[i + 1],
+                    sub_lo = 0, sub_hi = 8, flags = { "readable", "writable" } }
+end
+for i = 8, 15 do
+    symas.register{ name = "r" .. i, class = "gpr", width = 64, enc = i, flags = { "readable", "writable" } }
+    symas.register{ name = "r" .. i .. "d", class = "gpr", width = 32, enc = i,
+                    parent = "r" .. i, sub_lo = 0, sub_hi = 32, flags = { "readable", "writable" } }
+    symas.register{ name = "r" .. i .. "w", class = "gpr", width = 16, enc = i,
+                    parent = "r" .. i .. "d", sub_lo = 0, sub_hi = 16, flags = { "readable", "writable" } }
+    symas.register{ name = "r" .. i .. "b", class = "gpr", width = 8, enc = i,
+                    parent = "r" .. i .. "d", sub_lo = 0, sub_hi = 8, flags = { "readable", "writable" } }
+end
+symas.register{ name = "ah", class = "gpr", width = 8, enc = 4, parent = "eax", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "bh", class = "gpr", width = 8, enc = 7, parent = "ebx", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "ch", class = "gpr", width = 8, enc = 5, parent = "ecx", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "dh", class = "gpr", width = 8, enc = 6, parent = "edx", sub_lo = 8, sub_hi = 16 }
+-- Vector: XMM (128) / YMM (256) / ZMM (512), subregister-chained.
+for i = 0, 31 do
+    symas.register{ name = "zmm" .. i, class = "vec", width = 512, enc = i, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "ymm" .. i, class = "vec", width = 256, enc = i, parent = "zmm" .. i,
+                    sub_lo = 0, sub_hi = 256, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "xmm" .. i, class = "vec", width = 128, enc = i, parent = "ymm" .. i,
+                    sub_lo = 0, sub_hi = 128, flags = { "readable", "writable" } }
+end
+-- Opmask k0..k7.
+for i = 0, 7 do
+    symas.register{ name = "k" .. i, class = "mask", width = 64, enc = i, flags = { "readable", "writable" } }
+end
+-- x87 stack + MMX.
+for i = 0, 7 do
+    symas.register{ name = "st" .. i, class = "fp", width = 80, enc = i, flags = { "readable", "writable" } }
+end
+for i = 0, 7 do
+    symas.register{ name = "mm" .. i, class = "vec", width = 64, enc = i, flags = { "readable", "writable" } }
+end
+symas.register{ name = "rip", class = "special", width = 64, enc = 0 }
+symas.register{ name = "eip", class = "special", width = 32, enc = 0, parent = "rip", sub_lo = 0, sub_hi = 32 }
+symas.register{ name = "rflags", class = "status", width = 64, enc = 0 }
+symas.register{ name = "eflags", class = "status", width = 32, enc = 0, parent = "rflags", sub_lo = 0, sub_hi = 32 }
+for i, s in ipairs({ "es", "cs", "ss", "ds", "fs", "gs" }) do
+    symas.register{ name = s, class = "seg", width = 16, enc = i-1 }
+end
+for _, c in ipairs({ "cr0", "cr2", "cr3", "cr4", "cr8" }) do
+    symas.register{ name = c, class = "ctrl", width = 64, enc = tonumber(c:sub(3)), flags = { "modedep" } }
+end
+for i = 0, 7 do
+    symas.register{ name = "dr" .. i, class = "debug", width = 64, enc = i, flags = { "modedep" } }
+end
+
+-- Register-direct Intel-side forms. The AT&T r/m provider below also binds
+-- memory addressing fields. REX.R extends ModR/M.reg, REX.B extends r/m.
+local function direct(name, opcode, w, reg, rm, prefix, check)
+    local rex = ("%d + (%s/8)*4 + %s/8"):format(w and 72 or 64,reg,rm)
+    local code=(check and "require("..check.."); " or "")..
+        ("require(%s >= 0 && %s < 16 && %s >= 0 && %s < 16); "):format(reg,reg,rm,rm)..
+        (prefix and "emit8("..prefix.."); " or "")..
+        ("if (%s != 64) {emit8(%s);} "):format(rex,rex)
+    for byte in opcode:gmatch("%x%x") do code=code.."emit8(0x"..byte.."); " end
+    symas.encoder{name=name,source=code..("emit8(192 + (%s%%8)*8 + %s%%8);"):format(reg,rm),max_bytes=6}
+end
+for _,op in ipairs({{"mov","89"},{"xchg","87"},{"add","01"},{"sub","29"},{"and","21"},
+    {"or","09"},{"xor","31"},{"adc","11"},{"sbb","19"},{"cmp","39"},{"test","85"}}) do
+    direct(op[1],op[2],true,"r1","r0")
+end
+for _,op in ipairs({{"movzx","0fb7"},{"movsx","0fbf"},{"movsxd","63"},{"imul","0faf"},
+    {"popcnt","0fb8","0xf3"},{"tzcnt","0fbc","0xf3"},{"lzcnt","0fbd","0xf3"}}) do
+    direct(op[1],op[2],true,"r0","r1",op[3])
+end
+for _,op in ipairs({{"inc","ff",0},{"dec","ff",1},{"neg","f7",3},{"not","f7",2},
+    {"div","f7",6},{"idiv","f7",7},{"shl","d3",4},{"shr","d3",5},{"sar","d3",7},
+    {"rdrand","0fc7",6}}) do
+    direct(op[1],op[2],true,tostring(op[3]),"r0",nil,op[2]=="d3" and "r1 == 1" or nil)
+end
+for _,op in ipairs({{"movaps","0f28"},{"addps","0f58"},{"aesenc","0f38dc","0x66"}}) do
+    direct(op[1],op[2],false,"r0","r1",op[3])
+end
+local function vex3(name, map, opcode, wpp)
+    local code=("require(r0 >= 0 && r0 < 16 && r1 >= 0 && r1 < 16 && r2 >= 0 && r2 < 16); "..
+        "emit8(0xc4); emit8(%d - r0/8*128 - r2/8*32); emit8(%d - r1*8); emit8(%d); "..
+        "emit8(192 + (r0%%8)*8 + r2%%8);"):format(224+map,wpp,opcode)
+    symas.encoder{name=name,source=code,max_bytes=5}
+end
+vex3("andn",2,0xf2,0xf8)
+vex3("vfmadd132ps",2,0x98,0x79)
+symas.encoder{name="vaddps",max_bytes=5,
+    source="require(r0 >= 0 && r0 < 16 && r1 >= 0 && r1 < 16 && r2 >= 0 && r2 < 16); "..
+           "if (r2 < 8) {emit8(0xc5); emit8(0xf8 - r0/8*128 - r1*8);} "..
+           "else {emit8(0xc4); emit8(0xc1 - r0/8*128); emit8(0x78 - r1*8);} "..
+           "emit8(0x58); emit8(192 + (r0%8)*8 + r2%8);"}
+symas.encoder{ name = "nop",   source = "emit8(0x90);", max_bytes = 1 }
+symas.encoder{ name = "ret",   source = "emit8(0xC3);", max_bytes = 1 }
+symas.encoder{ name = "movimm", source = "require(r0 >= 0 && r0 < 16); emit8(72 + r0/8); emit8(184 + r0%8); emit64le(r1);", max_bytes = 10 }
+symas.encoder{ name = "push",  source = "require(r0 >= 0 && r0 < 16); if (r0 > 7) {emit8(0x41);} emit8(0x50 + r0%8);", max_bytes = 2 }
+symas.encoder{ name = "pop",   source = "require(r0 >= 0 && r0 < 16); if (r0 > 7) {emit8(0x41);} emit8(0x58 + r0%8);", max_bytes = 2 }
+symas.encoder{ name = "pushf", source = "emit8(0x9C);", max_bytes = 1 }
+symas.encoder{ name = "popf",  source = "emit8(0x9D);", max_bytes = 1 }
+-- Record the relocation at the start of rel32. SandAS uses an end-relative
+-- addend here (0 for a bare symbol); its ELF writer subtracts 4 to convert it
+-- to the ABI's field-start-relative addend. Do not apply that bias twice.
+-- ELF64 uses explicit RELA addends. P is at the start of disp32, while
+-- the CPU adds the displacement to the address following the instruction.
+symas.encoder{ name = "call",  source = "emit8(0xE8); emit_relocation(sym, R_X86_64_PLT32, -4); emit32le(0);", max_bytes = 5, max_relocs = 1 }
+symas.encoder{ name = "jmp",   source = "emit8(0xE9); emit_relocation(sym, R_X86_64_PLT32, -4); emit32le(0);", max_bytes = 5, max_relocs = 1 }
+symas.encoder{ name = "jcc",   source = "require(cond >= 0 && cond < 16); emit8(0x0F); emit8(0x80 + cond); emit_relocation(sym, R_X86_64_PLT32, -4); emit32le(0);", max_bytes = 6, max_relocs = 1 }
+symas.encoder{ name = "leave", source = "emit8(0xC9);", max_bytes = 1 }
+symas.encoder{ name = "syscall", source = "emit8(0x0F); emit8(0x05);", max_bytes = 2 }
+symas.encoder{ name = "int",   source = "emit8(0xCD); emit8(imm);", max_bytes = 2 }
+symas.encoder{ name = "cpuid", source = "emit8(0x0F); emit8(0xA2);", max_bytes = 2 }
+symas.encoder{ name = "fld",   source = "require(r0 >= 0 && r0 < 8); emit8(0xD9); emit8(0xC0 + r0);", max_bytes = 2 }
+symas.encoder{ name = "fadd",  source = "require(r0 == 0 && r1 >= 0 && r1 < 8); emit8(0xD8); emit8(0xC0 + r1);", max_bytes = 2 }
+symas.encoder{ name = "cli",   source = "emit8(0xFA);", max_bytes = 1 }
+symas.encoder{ name = "sti",   source = "emit8(0xFB);", max_bytes = 1 }
+symas.encoder{ name = "hlt",   source = "emit8(0xF4);", max_bytes = 1 }
+symas.encoder{ name = "pause", source = "emit8(0xF3); emit8(0x90);", max_bytes = 2 }
+
+local function r64() return { kind = "reg", class = "gpr", width = 64 } end
+local function w64() return { kind = "reg", class = "gpr", width = 64, access = "write" } end
+local function rw64() return { kind = "reg", class = "gpr", width = 64, access = "readwrite" } end
+local function xv() return { kind = "reg", class = "vec", width = 128 } end
+local function wxv() return { kind = "reg", class = "vec", width = 128, access = "write" } end
+
+local initial_mnemonics = { "nop", "ret", "mov", "movabs", "movzx", "movsx", "movsxd", "xchg",
+    "lea", "add", "sub", "and", "or", "xor", "adc", "sbb", "cmp", "test",
+    "inc", "dec", "neg", "not", "imul", "div", "idiv", "shl", "shr", "sar",
+    "andn", "popcnt", "tzcnt", "lzcnt", "push", "pop", "pushf", "popf", "call", "jmp",
+    "jcc", "leave", "syscall", "int", "cpuid", "movaps", "addps", "vaddps",
+    "vfmadd132ps", "aesenc", "fld", "fadd", "rdrand", "cli", "sti", "hlt", "pause" }
+for _, m in ipairs(initial_mnemonics) do
+    local aliases = ({rdrand={"rdrnd"},vfmadd132ps={"vfmadd"},pushf={"pushfq"},popf={"popfq"},shl={"sal"}})[m]
+    symas.mnemonic{ name = m, aliases=aliases }
+end
+symas.form{ mnemonic = "nop", encoder = "nop" }
+symas.form{ mnemonic = "ret", encoder = "ret", flags = { "return", "terminator" } }
+symas.form{ mnemonic = "mov", encoder = "mov", syntaxes = {"intel"}, operands = { w64(), r64() } }
+symas.form{ mnemonic = "movabs", encoder = "movimm", syntaxes = {"intel"}, operands = { w64(),
+    { kind = "imm", width = 64, signed = true, imm_min = math.mininteger, imm_max = math.maxinteger } } }
+symas.form{ mnemonic = "movzx", encoder = "movzx", operands = { w64(), { kind = "reg", class = "gpr", width = 16 } } }
+symas.form{ mnemonic = "movsx", encoder = "movsx", operands = { w64(), { kind = "reg", class = "gpr", width = 16 } } }
+symas.form{ mnemonic = "movsxd", encoder = "movsxd", operands = { w64(), { kind = "reg", class = "gpr", width = 32 } } }
+symas.form{ mnemonic = "xchg", encoder = "xchg", operands = { rw64(), rw64() } }
+symas.form{ mnemonic = "add", encoder = "add", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "sub", encoder = "sub", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "and", encoder = "and", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "or",  encoder = "or",  operands = { rw64(), r64() } }
+symas.form{ mnemonic = "xor", encoder = "xor", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "adc", encoder = "adc", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "sbb", encoder = "sbb", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "cmp", encoder = "cmp", operands = { r64(), r64() } }
+symas.form{ mnemonic = "test", encoder = "test", operands = { r64(), r64() } }
+symas.form{ mnemonic = "inc", encoder = "inc", operands = { rw64() } }
+symas.form{ mnemonic = "dec", encoder = "dec", operands = { rw64() } }
+symas.form{ mnemonic = "neg", encoder = "neg", operands = { rw64() } }
+symas.form{ mnemonic = "not", encoder = "not", operands = { rw64() } }
+symas.form{ mnemonic = "imul", encoder = "imul", operands = { rw64(), r64() } }
+symas.form{ mnemonic = "div", encoder = "div", flags = { "may_trap" }, operands = { r64() } }
+symas.form{ mnemonic = "idiv", encoder = "idiv", flags = { "may_trap" }, operands = { r64() } }
+for _,m in ipairs({"shl","shr","sar"}) do
+    symas.form{mnemonic=m,encoder=m,operands={rw64(),{kind="reg",class="gpr",width=8,constraint="cl"}}}
+end
+symas.form{ mnemonic = "andn", encoder = "andn", required = { "bmi1" }, operands = { w64(), r64(), r64() } }
+symas.form{ mnemonic = "popcnt", encoder = "popcnt", required = { "popcnt" }, operands = { w64(), r64() } }
+symas.form{ mnemonic = "tzcnt", encoder = "tzcnt", required = { "bmi1" }, operands = { w64(), r64() } }
+symas.form{ mnemonic = "lzcnt", encoder = "lzcnt", required = { "lzcnt" }, operands = { w64(), r64() } }
+symas.form{ mnemonic = "push", encoder = "push", operands = { r64() } }
+symas.form{ mnemonic = "pop",  encoder = "pop",  operands = { w64() } }
+symas.form{ mnemonic = "pushf", encoder = "pushf" }
+symas.form{ mnemonic = "popf", encoder = "popf" }
+symas.form{ mnemonic = "call", encoder = "call", syntaxes = {"intel"}, flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 64 } } }
+symas.form{ mnemonic = "jmp", encoder = "jmp", syntaxes = {"intel"}, flags = { "branch", "terminator", "reloc" }, operands = { { kind = "sym", width = 64 } } }
+symas.form{ mnemonic = "jcc", encoder = "jcc", flags = { "cond_branch", "reloc" },
+    operands = { { kind = "cond", width = 8 }, { kind = "sym", width = 64 } } }
+symas.form{ mnemonic = "leave", encoder = "leave" }
+symas.form{ mnemonic = "syscall", encoder = "syscall", flags = { "may_trap" } }
+symas.form{ mnemonic = "int", encoder = "int", flags = { "may_trap" }, operands = {
+    { kind = "imm", width = 8, signed = false, imm_min = 0, imm_max = 255 } } }
+symas.form{ mnemonic = "cpuid", encoder = "cpuid" }
+symas.form{ mnemonic = "movaps", encoder = "movaps", syntaxes = {"intel"}, required = { "sse" }, operands = { wxv(), xv() } }
+local xrw = {kind="reg",class="vec",width=128,access="readwrite"}
+symas.form{ mnemonic = "addps", encoder = "addps", required = { "sse" }, operands = { xrw, xv() } }
+symas.form{ mnemonic = "vaddps", encoder = "vaddps", required = { "avx" },
+    operands = { wxv(), xv(), xv() } }
+symas.form{ mnemonic = "vfmadd132ps", encoder = "vfmadd132ps", required = { "avx", "fma" },
+    operands = { xrw, xv(), xv() } }
+symas.form{ mnemonic = "aesenc", encoder = "aesenc", required = { "aes", "sse2" }, operands = { xrw, xv() } }
+local st = {kind="reg",class="fp",width=80}
+symas.form{ mnemonic = "fld", encoder = "fld", required = { "x87" }, operands = {st} }
+symas.form{ mnemonic = "fadd", encoder = "fadd", required = { "x87" }, operands = {
+    {kind="reg",class="fp",width=80,access="readwrite",constraint="st0"},st} }
+symas.form{ mnemonic = "rdrand", encoder = "rdrand", required = { "rdrnd" }, operands = { w64() } }
+symas.form{ mnemonic = "cli", encoder = "cli", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "sti", encoder = "sti", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "hlt", encoder = "hlt", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "pause", encoder = "pause" }
+local jcc = {{"jo"},{"jno"},{"jb","jc","jnae"},{"jae","jnb","jnc"},
+    {"je","jz"},{"jne","jnz"},{"jbe","jna"},{"ja","jnbe"},{"js"},{"jns"},
+    {"jp","jpe"},{"jnp","jpo"},{"jl","jnge"},{"jge","jnl"},{"jle","jng"},{"jg","jnle"}}
+for i,names in ipairs(jcc) do
+    local m,opcode=names[1],0x80+i-1
+    symas.mnemonic{name=m,aliases={table.unpack(names,2)}}
+    symas.encoder{name=m,source=("emit8(0x0f); emit8(%d); emit_relocation(sym, R_X86_64_PLT32, -4); emit32le(0);"):
+        format(opcode),max_bytes=6,max_relocs=1}
+    symas.form{mnemonic=m,encoder=m,operands={{kind="sym",width=64}},flags={"cond_branch","reloc"},syntaxes={"intel"}}
+end
+
+symas.syntax{ name = "intel", comment = ";", separator = ", " }
+symas.syntax{ name = "att", order = 1, reg_prefix = "%", imm_prefix = "$", comment = "#", separator = ", " }
+
+local seen = {}
+for _,name in ipairs(initial_mnemonics) do seen[name]=true end
+for _,names in ipairs(jcc) do seen[names[1]]=true end
+local function mnemonic(name, aliases)
+    if not seen[name] then symas.mnemonic{name=name,aliases=aliases}; seen[name]=true end
+end
+-- SysV AMD64 scalar GAS provider. Records are in encoding (destination
+-- first) order. The only runtime inputs beyond ordinary operand values
+-- are the address components normalized by the AT&T parser.
+do
+local kinds = {r="reg", m="mem", i="imm", s="sym"}
+local function form(name, ops, program, feature, indirect)
+    mnemonic(name)
+    local enc = "att_" .. name .. "_" .. table.concat(ops,"_")
+    local descriptors, checks = {}, ""
+    for i,op in ipairs(ops) do
+        local kind, width = op:sub(1,1), tonumber(op:sub(2))
+        descriptors[i]={kind=kinds[kind],width=width}
+        if kind=="r" then descriptors[i].class = width==128 and "vec" or width==80 and "fp" or "gpr" end
+        checks=checks..("require(ind%d == %d);"):format(i-1,indirect and 1 or 0)
+    end
+    symas.encoder{name=enc, source=checks..program, max_bytes=15, max_relocs=1}
+    symas.form{mnemonic=name,encoder=enc,syntaxes={"att"},operands=descriptors,
+               required=feature and {feature} or {}}
+end
+local function bytes(hex)
+    return (hex:gsub("%x%x",function(byte) return "emit8(0x"..byte..");" end))
+end
+-- Generate both r/m variants from one opcode recipe. rg is an operand
+-- index or (/digit + 2) for a ModR/M opcode extension.
+local function rm(name, ops, rmidx, rg, prefix, opcode, w, immbytes, extra, feature, indirect)
+    local reg = rg<2 and ("r"..rg) or tostring(rg-2)
+    local r = rg<2 and ("b"..rg) or "0"
+    local rex = ("%d + 4*%s + 2*x%d + b%d"):format(w and 72 or 64,r,rmidx,rmidx)
+    local force = ""
+    for i,op in ipairs(ops) do
+        if op=="r8" then force=force..(" || r%d >= 4"):format(i-1) end
+    end
+    local code=(extra or "")..bytes(prefix)..("if ((%s) != 64%s) {emit8(%s);}"):format(rex,force,rex)
+        ..bytes(opcode)..("emit8(modrm%d + (%s %% 8)*8);"):format(rmidx,reg)
+        ..("if (sib%d >= 0) {emit8(sib%d);}"):format(rmidx,rmidx)
+    if ops[rmidx+1]:sub(1,1)=="m" then
+        -- Record P at the start of disp32. Any immediate after it also
+        -- contributes to the PC bias relative to the end of the instruction.
+        local i=rmidx
+        code=code..("if (fix%d != 0) {if (fix%d == 2) {emit_relocation(ref%d,R_X86_64_GOTPCREL,disp%d-%d);}"..
+            "else {emit_relocation(ref%d,R_X86_64_PC32,disp%d-%d);} emit32le(0);}"..
+            "else {if (ds%d == 1) {emit8(disp%d);} if (ds%d == 4) {emit32le(disp%d);}}"):
+             format(i,i,i,i,4+(immbytes or 0),i,i,4+(immbytes or 0),i,i,i,i)
+    end
+    if immbytes then code=code..("emit_imm(%d,imm);"):format(immbytes) end
+    form(name,ops,code,feature,indirect)
+end
+local function immcheck(n,signed)
+    return ("require(imm >= %d && imm <= %d);"):format(-(1<<(n-1)),(1<<(signed and n-1 or n))-1)
+end
+local function ophex(n) return ("%02x"):format(n) end
+-- Integer data transfer, including explicit sign/zero extensions.
+for _,width in ipairs{8,16,32,64} do
+    local suffix=({[8]="b",[16]="w",[32]="l",[64]="q"})[width]
+    local mov="mov"..suffix
+    local reg="r"..width
+    local p=width==16 and "66" or ""
+    for _,k in ipairs{"r","m"} do
+        local dest=k..width
+        rm(mov,{dest,reg},0,1,p,width==8 and "88" or "89",width==64)
+        if k=="m" then rm(mov,{reg,dest},1,0,p,width==8 and "8a" or "8b",width==64) end
+        local n=math.min(width,32)
+        rm(mov,{dest,"i"..n},0,2,p,width==8 and "c6" or "c7",width==64,n//8,immcheck(n,width==64))
+    end
+end
+-- Unsuffixed register-destination GAS mov derives width from that register.
+for _,w in ipairs{8,16,32,64} do
+    local r,p="r"..w,w==16 and "66" or ""
+    rm("mov",{r,r},0,1,p,w==8 and "88" or "89",w==64)
+    local n=math.min(w,32)
+    rm("mov",{r,"i"..n},0,2,p,w==8 and "c6" or "c7",w==64,n//8,immcheck(n,w==64))
+end
+for _,name in ipairs{"movabs","movabsq"} do
+    form(name,{"r64","i64"},"emit8(72+b0);emit8(184+r0%8);emit64le(imm);")
+end
+rm("leaq",{"r64","m64"},1,0,"","8d",true)
+rm("lea",{"r64","m64"},1,0,"","8d",true)
+for _,spec in ipairs{
+    {"movzbq",8,64,"0fb6"},{"movzbl",8,32,"0fb6"},{"movsbq",8,64,"0fbe"},
+    {"movzwq",16,64,"0fb7"},{"movzwl",16,32,"0fb7"},{"movswq",16,64,"0fbf"},
+    {"movslq",32,64,"63"},
+} do
+    for _,k in ipairs{"r","m"} do rm(spec[1],{"r"..spec[3],k..spec[2]},1,0,"",spec[4],spec[3]==64) end
+end
+for _,spec in ipairs{
+    {"addq",64,0x01,0},{"subq",64,0x29,5},{"andq",64,0x21,4},{"andl",32,0x21,4},
+    {"andb",8,0x20,4},{"orq",64,0x09,1},{"orw",16,0x09,1},{"xorq",64,0x31,6},
+    {"xorl",32,0x31,6},{"cmpq",64,0x39,7},
+} do
+    local name,w,opcode,ext=table.unpack(spec)
+    local r,p="r"..w,w==16 and "66" or ""
+    rm(name,{r,r},0,1,p,ophex(opcode),w==64)
+    local n=math.min(w,32)
+    rm(name,{r,"i"..n},0,ext+2,p,w==8 and "80" or "81",w==64,n//8,immcheck(n,w==64))
+end
+rm("imulq",{"r64","r64"},1,0,"","0faf",true)
+for _,spec in ipairs{{"testq",64,"85"},{"testb",8,"84"}} do
+    local r="r"..spec[2]; rm(spec[1],{r,r},0,1,"",spec[3],spec[2]==64)
+end
+for _,spec in ipairs{{"shlq",4},{"shrq",5},{"sarq",7}} do
+    rm(spec[1],{"r64","i8"},0,2+spec[2],"","c1",true,1,immcheck(8,false))
+    rm(spec[1],{"r64","r8"},0,2+spec[2],"","d3",true,nil,"require(r1 == 1);")
+end
+for _,spec in ipairs{{"btsq",5},{"btcq",7}} do
+    rm(spec[1],{"r64","i8"},0,spec[2]+2,"","0fba",true,1,immcheck(8,false))
+end
+for _,spec in ipairs{{"divq",6},{"idivq",7}} do rm(spec[1],{"r64"},0,spec[2]+2,"","f7",true) end
+form("cqto",{},bytes("4899"))
+form("int3",{},bytes("cc"))
+for _,spec in ipairs{{"sete",4},{"setl",12},{"setb",2},{"setbe",6},{"setnp",11}} do
+    rm(spec[1],{"r8"},0,2,"","0f"..ophex(0x90+spec[2]),false)
+end
+local branches={{"jmp","e9"},{"call","e8"}}
+for i,names in ipairs(jcc) do branches[#branches+1]={names[1],"0f"..ophex(0x80+i-1)} end
+for _,spec in ipairs(branches) do
+    local branch = spec[1]=="jmp" or spec[1]=="call"
+    form(spec[1],{"s64"},bytes(spec[2])..
+        "emit_relocation(ref0,R_X86_64_PLT32,disp0-4);emit32le(0);")
+    if branch then
+        for _,op in ipairs{"r64","m64"} do
+            rm(spec[1],{op},0,spec[1]=="jmp" and 6 or 4,"","ff",false,nil,nil,nil,true)
+        end
+    end
+end
+-- Scalar SSE/SSE2, in particular the SSE/GPR MOVQ overload.
+for _,s in ipairs{{"movd",32},{"movq",64}} do
+    rm(s[1],{"r128","r"..s[2]},1,0,"66","0f6e",s[2]==64,nil,nil,"sse2")
+    rm(s[1],{"r"..s[2],"r128"},0,1,"66","0f7e",s[2]==64,nil,nil,"sse2")
+end
+rm("movaps",{"m128","r128"},0,1,"","0f29",false,nil,nil,"sse")
+rm("movaps",{"r128","r128"},1,0,"","0f28",false,nil,nil,"sse")
+for _,s in ipairs{{"ss","f3","","sse",32},{"sd","f2","66","sse2",64}} do
+    local suffix,p,compare,feature,w=table.unpack(s)
+    rm("mov"..suffix,{"r128","m"..w},1,0,p,"0f10",false,nil,nil,feature)
+    for _,op in ipairs{{"add","58"},{"sub","5c"},{"mul","59"},{"div","5e"}} do
+        rm(op[1]..suffix,{"r128","r128"},1,0,p,"0f"..op[2],false,nil,nil,feature)
+    end
+    for _,op in ipairs{{"ucomi","2e"},{"comi","2f"}} do
+        rm(op[1]..suffix,{"r128","r128"},1,0,compare,"0f"..op[2],false,nil,nil,feature)
+    end
+    rm("cvtsi2"..suffix.."q",{"r128","r64"},1,0,p,"0f2a",true,nil,nil,feature)
+    rm("cvtt"..suffix.."2siq",{"r64","r128"},1,0,p,"0f2c",true,nil,nil,feature)
+    rm("cvt"..suffix.."2"..(w==32 and "sd" or "ss"),{"r128","r128"},1,0,p,"0f5a",false,nil,nil,"sse2")
+end
+-- x87 operand precision is encoded by the opcode, not by REX.W.
+for _,s in ipairs{
+    {"fldt","db",5,80},{"fstpt","db",7,80},{"flds","d9",0,32},{"fldl","dd",0,64},
+    {"fstps","d9",3,32},{"fstpl","dd",3,64},{"fildq","df",5,64},{"faddl","dc",0,64},
+    {"fnstcw","d9",7,16},{"fldcw","d9",5,16},{"fistpq","df",7,64},
+} do rm(s[1],{"m"..s[4]},0,s[3]+2,"",s[2],false,nil,nil,"x87") end
+for _,s in ipairs{{"faddp",0xc0},{"fmulp",0xc8},{"fsubrp",0xe8},{"fsubp",0xe0},{"fdivrp",0xf8}} do
+    form(s[1],{"r80","r80"},"require(r1 == 0);emit8(0xde);emit8("..s[2].."+r0);","x87")
+end
+for _,s in ipairs{{"fucomip","df",0xe8},{"fcomip","df",0xf0},{"fucomi","db",0xe8}} do
+    form(s[1],{"r80","r80"},"require(r0 == 0);"..bytes(s[2]).."emit8("..s[3].."+r1);","x87")
+end
+form("fxch",{"r80"},"emit8(0xd9);emit8(200+r0);","x87")
+form("fstp",{"r80"},"emit8(0xdd);emit8(216+r0);","x87")
+end
+
+-- Long-mode encoder families. The earlier Intel/AT&T records preserve
+-- existing binding/encoding choices. These forms use a common normalized
+-- contract, independent of which assembly syntax supplied the operands.
+do
+local kinds = {r="reg",v="reg",q="reg",t="reg",k="reg",s="reg",c="reg",d="reg",m="mem",i="imm",a="sym"}
+local classes = {r="gpr",v="vec",q="vec",t="fp",k="mask",s="seg",c="ctrl",d="debug"}
+local suffix = {[8]="b",[16]="w",[32]="l",[64]="q"}
+local byte_programs,reg_checks,operand_records,rex_checks={},{},{},{}
+local function bytes(hex)
+    if not byte_programs[hex] then
+        byte_programs[hex]=(hex:gsub("%x%x",function(byte) return "emit8(0x"..byte..");" end))
+    end
+    return byte_programs[hex]
+end
+local function hex(n) return ("%02x"):format(n) end
+local function range(name,lo,hi)
+    return ("require(%s >= %d && %s <= %d);"):format(name,lo,name,hi)
+end
+local function optional(n,code)
+    return "if ("..n..") {"..code.."}"
+end
+local function operand(n) return "r"..n end
+local function tag(n) return "modrm"..n end
+local function is_mem(ops,n) return ops[n+1]:sub(1,1)=="m" end
+local function field(ops,n)
+    local r=operand(n)
+    if ops[n+1]=="r8" then return "select("..r.." >= 16,"..r.."-12,"..r.."%8)" end
+    return r.."%8"
+end
+local function extension(ops,n)
+    local r=operand(n)
+    if is_mem(ops,n) then return "b"..n end
+    if ops[n+1]=="r8" then return "select("..r.." >= 16,0,"..r.."/8)" end
+    return r.."/8%2"
+end
+local function immediate(nbits,policy,name)
+    if nbits==64 then return "" end
+    local lo=policy=="unsigned" and 0 or -(1<<(nbits-1))
+    local hi=(1<<(policy=="signed" and nbits-1 or nbits))-1
+    return range(name or "imm",lo,hi)
+end
+local function registers(ops,limit)
+    local key=table.concat(ops,"_")..(limit or 15)
+    if reg_checks[key] then return reg_checks[key] end
+    local code=""
+    for i,op in ipairs(ops) do
+        local kind=op:sub(1,1)
+        if classes[kind] then
+            local max=({r=op=="r8" and 19 or 15,v=limit or 15,q=7,t=7,k=7,s=5,c=8,d=7})[kind]
+            local r=operand(i-1)
+            code=code..range(r,0,max)
+            if kind=="c" then
+                code=code.."require("..r.." == 0 || "..r.." == 2 || "..r.." == 3 || "..r.." == 4 || "..r.." == 8);"
+            end
+        end
+    end
+    reg_checks[key]=code
+    return code
+end
+local function descriptors(ops,opt,sig)
+    local key=sig..":"..(opt.access or "")..":"..(opt.imm_policy or "")..":"..(opt.first_policy or "")
+    if not opt.constraints and operand_records[key] then return operand_records[key] end
+    local out={}
+    for i,op in ipairs(ops) do
+        local k, w=op:sub(1,1),tonumber(op:sub(2))
+        local d={kind=kinds[k],width=w,class=classes[k]}
+        if i==1 then d.access=opt.access end
+        if opt.constraints then d.constraint=opt.constraints[i] end
+        local policy=i==#ops and opt.imm_policy or opt.first_policy
+        if k=="i" and w<64 then
+            d.signed=policy=="signed"
+            d.imm_min=policy=="unsigned" and 0 or -(1<<(w-1))
+            d.imm_max=(1<<(policy=="signed" and w-1 or w))-1
+        end
+        out[i]=d
+    end
+    if not opt.constraints then operand_records[key]=out end
+    return out
+end
+local function form(name,ops,code,opt)
+    opt=opt or {}
+    mnemonic(name,opt.aliases)
+    local sig=#ops==0 and "fixed" or table.concat(ops,"_")
+    local id="x64_"..name.."_"..sig..(opt.id or "")
+    symas.encoder{name=id,source=code,max_bytes=15,max_relocs=1}
+    local args=descriptors(ops,opt,sig)
+    symas.form{mnemonic=name,encoder=id,operands=args,syntaxes=opt.syntaxes or {"intel","att"},
+        required=opt.features or {},flags=opt.flags or {},prefix=opt.prefix,long_mode=true,
+        indirect=opt.indirect,address_size=opt.address_size,masking=opt.masking,broadcast=opt.broadcast}
+    if opt.att and opt.att~=name then
+        mnemonic(opt.att)
+        symas.form{mnemonic=opt.att,encoder=id,operands=args,syntaxes={"att"},
+            required=opt.features or {},flags=opt.flags or {},prefix=opt.prefix,long_mode=true,
+            indirect=opt.indirect,address_size=opt.address_size,masking=opt.masking,broadcast=opt.broadcast}
+    end
+end
+local function fixed(name,opcode,features,flags,syntaxes)
+    form(name,{},bytes(opcode),{features=features,flags=flags,syntaxes=syntaxes})
+end
+-- Memory ModR/M stores mod+rm only. Add 256 for addr32, 512 for FS,
+-- or 1024 for GS, in any valid combination. xN and bN are extension bits.
+-- Check the normalized address, including SIB/disp consistency; symbolic
+-- fixup kinds are 1=PC32, 2=GOTPCREL, 3=absolute, 4=TPOFF32, 5=GOTTPOFF,
+-- 6=TLSGD, 7=TLSLD, 8=GOTPC32_TLSDESC.
+local addresses,addr_prefixes,displacements={},{},{}
+local function address(n,lea,tls)
+    local key=n..(lea and "_lea" or "")..(tls or "")
+    if addresses[key] then return addresses[key] end
+    local m,s,b,x,d,f=tag(n),"sib"..n,"b"..n,"x"..n,"ds"..n,"fix"..n
+    local rm=m.."%8"
+    local mod=m.."/64%4"
+    local rip="("..mod.." == 0 && "..rm.." == 5)"
+    local nobase="("..mod.." == 0 && "..rm.." == 4 && "..s.."%8 == 5)"
+    addresses[key]=range(m,0,1415)..
+        "require("..m.."/64%4 != 3 && "..m.."%64 < 8);"..
+        range(b,0,1)..range(x,0,1)..
+        "if ("..rm.." == 4) {"..range(s,0,255).."} else {require("..s.." == -1 && "..x.." == 0);}"..
+        "if ("..rip.." || "..nobase..") {require("..d.." == 4 && "..b.." == 0);}"..
+        "else {require("..d.." == select("..mod.." == 2,4,"..mod.."));}"..
+        range(f,0,tls=="lea" and 8 or tls=="got" and 5 or 4)..
+        (tls=="lea" and "require("..f.." != 5);" or "")..
+        "if ("..f.." != 0) {require("..d.." == 4);"..
+        "if ("..f.." == 3 || "..f.." == 4) {require(!"..rip..");}"..
+        "else {require("..rip..");}}"..
+        (lea and "require("..m.."/512 == 0);" or "")
+    return addresses[key]
+end
+local function addr_prefix(n)
+    if addr_prefixes[n] then return addr_prefixes[n] end
+    local m=tag(n)
+    addr_prefixes[n]=optional(m.."/512 == 1",bytes("64"))..optional(m.."/512 == 2",bytes("65"))..
+        optional(m.."/256%2 != 0",bytes("67"))
+    return addr_prefixes[n]
+end
+local function disp(n,tail,scale,tls)
+    local key=n.."_"..tail.."_"..(scale or 0)..(tls or "")
+    if displacements[key] then return displacements[key] end
+    local d,f,v,ref="ds"..n,"fix"..n,"disp"..n,"ref"..n
+    local pc=v.."-"..(4+tail)
+    local code="if ("..f.." == 0) {"..
+        optional(d.." == 1",range(v,-128*(scale or 1),127*(scale or 1))..
+            (scale and "require("..v.."%"..scale.." == 0);" or "")..
+            "emit8("..v..(scale and "/"..scale or "")..");")..
+        optional(d.." == 4",range(v,-2147483648,2147483647).."emit32le("..v..");").."} else {"..
+        range(v,-2147483648,2147483647)
+    local rels={{1,"PC32",pc},{2,"GOTPCREL",pc},{3,"32S",v},{4,"TPOFF32",v}}
+    if tls=="got" then rels[5]={5,"GOTTPOFF",pc} end
+    if tls=="lea" then
+        rels[5]={6,"TLSGD",pc}; rels[6]={7,"TLSLD",pc}; rels[7]={8,"GOTPC32_TLSDESC",pc}
+    end
+    local typ="\"R_X86_64_"..rels[#rels][2].."\""
+    for i=#rels-1,1,-1 do
+        local rel=rels[i]
+        local name="\"R_X86_64_"..rel[2].."\""
+        if rel[1]==3 then name="select("..tag(n).."/256%2 != 0,\"R_X86_64_32\","..name..")" end
+        typ="select("..f.." == "..rel[1]..","..name..","..typ..")"
+    end
+    displacements[key]=code.."emit_relocation("..ref..","..typ..",select("..f.." == 3 || "..f.." == 4,"..
+        v..","..pc.."));emit32le(0);}"
+    return displacements[key]
+end
+local function modrm(ops,rm,reg,tail,scale,tls)
+    local mem=is_mem(ops,rm)
+    local m=mem and tag(rm).."%256" or "192+"..field(ops,rm)
+    local code="emit8("..m.."+8*("..reg.."));"
+    if mem then
+        local s="sib"..rm
+        code=code..optional(s.." >= 0","emit8("..s..");")..disp(rm,tail,scale,tls)
+    end
+    return code
+end
+local function rex_guard(ops)
+    local key=table.concat(ops,"_")
+    if rex_checks[key] then return table.unpack(rex_checks[key]) end
+    local force,check="",""
+    for i,op in ipairs(ops) do
+        if op=="r8" then
+            local r=operand(i-1)
+            force=force.." || ("..r.." >= 4 && "..r.." < 16)"
+            check=check.."require("..r.." < 16);"
+        end
+    end
+    rex_checks[key]={force,check}
+    return force,check
+end
+-- Opcode extensions /0..7 use a negative selector (-1 is /0);
+-- nonnegative selectors name the operand in ModR/M.reg.
+local function legacy(name,ops,rm,reg,opcode,prefix,w,opt)
+    opt=opt or {}
+    local mem=is_mem(ops,rm)
+    local R=reg<0 and "0" or extension(ops,reg)
+    local B=extension(ops,rm)
+    local X=mem and "x"..rm or "0"
+    local rex=("%d+4*(%s)+2*(%s)+(%s)"):format(w and 72 or 64,R,X,B)
+    local force,check=rex_guard(ops)
+    local code=registers(ops)
+    local tls=name=="lea" and w and "lea" or w and rm==1 and (name=="mov" or name=="add") and "got" or nil
+    if mem then code=code..address(rm,opt.lea,tls) end
+    code=code..(opt.check or "")
+    if opt.imm then code=code..immediate(opt.imm*8,opt.imm_policy) end
+    code=code..bytes(opt.group1=="9b" and "9b" or "")..(mem and addr_prefix(rm) or "")..bytes(prefix)..
+        bytes(opt.group1=="f0" and "f0" or "")
+    code=code..optional(rex.." != 64"..force,check.."emit8("..rex..");")..
+        bytes(opcode)..modrm(ops,rm,reg<0 and tostring(-reg-1) or field(ops,reg),opt.imm or 0,nil,tls)
+    if opt.imm then code=code.."emit_imm("..opt.imm..",imm);" end
+    form(name,ops,code,opt)
+end
+local function sized(name,w)
+    return name..suffix[w]
+end
+local function op66(w)
+    return w==16 and "66" or ""
+end
+local function binary(name,w,opcode,access,features)
+    local r,m="r"..w,"m"..w
+    local att=sized(name,w)
+    for _,dst in ipairs{r,m} do
+        legacy(name,{dst,r},0,1,hex(opcode),op66(w),w==64,{access=access,att=att,features=features})
+    end
+    legacy(name,{r,m},1,0,hex(opcode+2),op66(w),w==64,{access=access,att=att,features=features})
+end
+
+-- ALU encodings 00–3D, group 1 (80/81/83), group 3 (F6/F7).
+for _,a in ipairs{{"add",0},{"or",1},{"adc",2},{"sbb",3},{"and",4},{"sub",5},{"xor",6},{"cmp",7}} do
+    local name,digit=a[1],a[2]
+    local access=name=="cmp" and "read" or "readwrite"
+    for _,w in ipairs{8,16,32,64} do
+        local r,m,n="r"..w,"m"..w,math.min(w,32)
+        local base=8*digit+(w==8 and 0 or 1)
+        binary(name,w,base,access)
+        for _,dst in ipairs{r,m} do
+            legacy(name,{dst,"i"..n},0,-digit-1,w==8 and "80" or "81",op66(w),w==64,
+                {imm=n//8,imm_policy=w==64 and "signed" or nil,access=access,att=sized(name,w)})
+            if w~=8 then
+                legacy(name,{dst,"i8"},0,-digit-1,"83",op66(w),w==64,
+                    {imm=1,imm_policy="signed",access=access,att=sized(name,w)})
+            end
+            if dst==m and name~="cmp" then
+                legacy(name,{m,r},0,1,hex(base),op66(w),w==64,
+                    {id="_lock",group1="f0",prefix="lock",access=access,att=sized(name,w)})
+                legacy(name,{m,"i"..n},0,-digit-1,w==8 and "80" or "81",op66(w),w==64,
+                    {id="_lock",group1="f0",prefix="lock",imm=n//8,imm_policy=w==64 and "signed" or nil,
+                     access=access,att=sized(name,w)})
+                if w~=8 then
+                    legacy(name,{m,"i8"},0,-digit-1,"83",op66(w),w==64,
+                        {id="_lock",group1="f0",prefix="lock",imm=1,imm_policy="signed",access=access,att=sized(name,w)})
+                end
+            end
+        end
+        form(name,{r,"i"..n},"require(r0 == 0);"..immediate(n,w==64 and "signed" or nil)..
+            bytes(op66(w)..(w==64 and "48" or "")..hex(base+4)).."emit_imm("..(n//8)..",imm);",
+            {id="_acc",access=access,constraints={[1]=({[8]="al",[16]="ax",[32]="eax",[64]="rax"})[w]},
+             imm_policy=w==64 and "signed" or nil,att=sized(name,w)})
+    end
+end
+for _,w in ipairs{8,16,32,64} do
+    local r,m,n="r"..w,"m"..w,math.min(w,32)
+    local wide=w==64
+    local p=op66(w)
+    binary("mov",w,w==8 and 0x88 or 0x89,"write")
+    for _,dst in ipairs{r,m} do
+        legacy("mov",{dst,"i"..n},0,-1,w==8 and "c6" or "c7",p,wide,
+            {imm=n//8,imm_policy=wide and "signed" or nil,access="write",att=sized("mov",w)})
+        legacy("test",{dst,r},0,1,w==8 and "84" or "85",p,wide,{access="read",att=sized("test",w)})
+        legacy("test",{dst,"i"..n},0,-1,w==8 and "f6" or "f7",p,wide,
+            {imm=n//8,imm_policy=wide and "signed" or nil,access="read",att=sized("test",w)})
+        legacy("xchg",{dst,r},0,1,w==8 and "86" or "87",p,wide,{access="readwrite",att=sized("xchg",w)})
+        if dst==m then
+            legacy("xchg",{r,dst},1,0,w==8 and "86" or "87",p,wide,{access="readwrite",att=sized("xchg",w)})
+        end
+        for _,a in ipairs{{"inc",0},{"dec",1},{"not",2},{"neg",3},{"mul",4},{"imul",5},{"div",6},{"idiv",7}} do
+            local name,digit=a[1],a[2]
+            local opc=digit<2 and (w==8 and "fe" or "ff") or (w==8 and "f6" or "f7")
+            local flags=digit>=6 and {"may_trap"} or {}
+            local access=digit<4 and "readwrite" or "read"
+            legacy(name,{dst},0,-digit-1,opc,p,wide,{access=access,att=sized(name,w),flags=flags})
+            if dst==m and digit<4 then
+                legacy(name,{dst},0,-digit-1,opc,p,wide,{id="_lock",group1="f0",prefix="lock",
+                    access=access,att=sized(name,w)})
+            end
+        end
+        for _,a in ipairs{{"rol",0},{"ror",1},{"rcl",2},{"rcr",3},{"shl",4},{"shr",5},{"sar",7}} do
+            local name,ext=a[1],-a[2]-1
+            local att=sized(name,w)
+            legacy(name,{dst},0,ext,w==8 and "d0" or "d1",p,wide,{access="readwrite",att=att})
+            legacy(name,{dst,"r8"},0,ext,w==8 and "d2" or "d3",p,wide,
+                {check="require(r1 == 1);",constraints={[2]="cl"},access="readwrite",att=att})
+            legacy(name,{dst,"i8"},0,ext,w==8 and "c0" or "c1",p,wide,
+                {imm=1,imm_policy="unsigned",access="readwrite",att=att})
+        end
+        for _,a in ipairs{{"cmpxchg",0xb0},{"xadd",0xc0}} do
+            local opc="0f"..hex(a[2]+(w==8 and 0 or 1))
+            legacy(a[1],{dst,r},0,1,opc,p,wide,{access="readwrite",att=sized(a[1],w)})
+            if dst==m then legacy(a[1],{dst,r},0,1,opc,p,wide,
+                {id="_lock",group1="f0",prefix="lock",access="readwrite",att=sized(a[1],w)}) end
+        end
+    end
+    local o=w==8 and 176 or 184
+    local opwidth=w//8
+    local rex=wide and "72" or "64"
+    local movops={r,"i"..w}
+    local ext=extension(movops,0)
+    local force=w==8 and " || (r0 >= 4 && r0 < 16)" or ""
+    form(wide and "movabs" or "mov",movops,registers(movops)..immediate(w)..bytes(p)..
+        optional(rex.."+"..ext.." != 64"..force,"emit8("..rex.."+"..ext..");")..
+        "emit8("..o.."+"..field(movops,0)..");emit_imm("..opwidth..",imm);",
+        {id="_opcode",access="write",att=wide and "movabsq" or sized("mov",w)})
+    form("test",{r,"i"..n},"require(r0 == 0);"..immediate(n,wide and "signed" or nil)..
+        bytes(p..(wide and "48" or "")..(w==8 and "a8" or "a9")).."emit_imm("..(n//8)..",imm);",
+        {id="_acc",access="read",constraints={[1]=({[8]="al",[16]="ax",[32]="eax",[64]="rax"})[w]},
+         imm_policy=wide and "signed" or nil,att=sized("test",w)})
+end
+
+for _,w in ipairs{16,32,64} do
+    local r,m,n="r"..w,"m"..w,math.min(w,32)
+    local p,wide=op66(w),w==64
+    for _,acc in ipairs{0,1} do
+        local other=operand(1-acc)
+        local an=({[16]="ax",[32]="eax",[64]="rax"})[w]
+        local rex=wide and "72" or "64"
+        form("xchg",{r,r},"require(r"..acc.." == 0);"..range(other,w==32 and 1 or 0,15)..bytes(p)..
+            optional(rex.."+"..other.."/8 != 64","emit8("..rex.."+"..other.."/8);")..
+            "emit8(144+"..other.."%8);",{id="_acc"..acc,constraints={[acc+1]=an},
+            access="readwrite",att=sized("xchg",w)})
+    end
+    legacy("lea",{r,m},1,0,"8d",p,wide,{access="write",att=sized("lea",w),lea=true})
+    for _,src in ipairs{r,m} do
+        legacy("imul",{r,src},1,0,"0faf",p,wide,{access="readwrite",att=sized("imul",w)})
+        for _,i in ipairs{8,n} do
+            legacy("imul",{r,src,"i"..i},1,0,i==8 and "6b" or "69",p,wide,
+                {imm=i//8,imm_policy=(i==8 or wide) and "signed" or nil,access="write",att=sized("imul",w)})
+        end
+        for _,a in ipairs{{"bsf","0fbc",""},{"bsr","0fbd",""},{"popcnt","0fb8","f3",{"popcnt"}},
+            {"tzcnt","0fbc","f3",{"bmi1"}},{"lzcnt","0fbd","f3",{"lzcnt"}}} do
+            legacy(a[1],{r,src},1,0,a[2],p..a[3],wide,
+                {features=a[4],access="write",att=sized(a[1],w)})
+        end
+        for _,a in ipairs{{"bt","0fa3",4},{"bts","0fab",5},{"btr","0fb3",6},{"btc","0fbb",7}} do
+            local access=a[3]==4 and "read" or "readwrite"
+            legacy(a[1],{src,r},0,1,a[2],p,wide,{access=access,att=sized(a[1],w)})
+            legacy(a[1],{src,"i8"},0,-a[3]-1,"0fba",p,wide,
+                {access=access,imm=1,imm_policy="unsigned",att=sized(a[1],w)})
+            if src==m and a[3]~=4 then
+                legacy(a[1],{src,r},0,1,a[2],p,wide,{id="_lock",group1="f0",prefix="lock",
+                    access=access,att=sized(a[1],w)})
+                legacy(a[1],{src,"i8"},0,-a[3]-1,"0fba",p,wide,
+                    {id="_lock",group1="f0",prefix="lock",access=access,imm=1,imm_policy="unsigned",att=sized(a[1],w)})
+            end
+        end
+        for _,a in ipairs{{"shld",0xa4},{"shrd",0xac}} do
+            legacy(a[1],{src,r,"r8"},0,1,"0f"..hex(a[2]+1),p,wide,
+                {check="require(r2 == 1);",constraints={[3]="cl"},access="readwrite",att=sized(a[1],w)})
+            legacy(a[1],{src,r,"i8"},0,1,"0f"..hex(a[2]),p,wide,
+                {access="readwrite",imm=1,imm_policy="unsigned",att=sized(a[1],w)})
+        end
+    end
+    for _,a in ipairs{{"movsx","movs",0xbe},{"movzx","movz",0xb6}} do
+        for _,from in ipairs{8,16} do if from<w then
+            for _,k in ipairs{"m","r"} do
+                legacy(a[1],{r,k..from},1,0,"0f"..hex(a[3]+(from==16 and 1 or 0)),p,wide,
+                    {access="write",att=a[2]..suffix[from]..suffix[w]})
+            end
+        end end
+    end
+    if wide then
+        for _,src in ipairs{"r32","m32"} do
+            legacy("movsxd",{r,src},1,0,"63","",true,{access="write",att="movslq"})
+        end
+    end
+end
+for _,w in ipairs{32,64} do
+    form("bswap",{"r"..w},range("r0",0,15)..optional((w==64 and "1" or "r0 >= 8"),
+        "emit8("..(w==64 and 72 or 64).."+r0/8);")..bytes("0f").."emit8(200+r0%8);",
+        {access="readwrite",att=sized("bswap",w)})
+end
+for i,names in ipairs(jcc) do
+    local cond=names[1]:sub(2)
+    local aliasc,aliass={},{}
+    for j=2,#names do
+        aliasc[#aliasc+1]="cmov"..names[j]:sub(2)
+        aliass[#aliass+1]="set"..names[j]:sub(2)
+    end
+    local cmov,set="cmov"..cond,"set"..cond
+    mnemonic(cmov,aliasc)
+    mnemonic(set,aliass)
+    for _,w in ipairs{16,32,64} do
+        for _,k in ipairs{"r","m"} do
+            legacy(cmov,{"r"..w,k..w},1,0,"0f"..hex(0x40+i-1),op66(w),w==64,
+                {access="readwrite",att=sized(cmov,w)})
+        end
+    end
+    for _,dst in ipairs{"r8","m8"} do
+        legacy(set,{dst},0,-1,"0f"..hex(0x90+i-1),"",false,{access="write"})
+    end
+end
+
+-- Stack, control transfer and segment-register moves. In long mode
+-- near indirect transfers and 64-bit push/pop do not require REX.W.
+for _,w in ipairs{16,64} do
+    local r,m="r"..w,"m"..w
+    local p=op66(w)
+    for _,a in ipairs{{"push",0x50,"ff",-7,"read"},{"pop",0x58,"8f",-1,"write"}} do
+        local name,opcode,group,ext,access=table.unpack(a)
+        form(name,{r},range("r0",0,15)..bytes(p)..optional("r0 >= 8",bytes("41"))..
+            "emit8("..opcode.."+r0%8);",{access=access,att=sized(name,w)})
+        legacy(name,{m},0,ext,group,p,false,{access=access,att=sized(name,w)})
+        form(name,{"s16"},"require(r0 == 4 || r0 == 5);"..bytes(p.."0f")..
+            "emit8("..(name=="push" and 160 or 161).."+8*(r0-4));",
+            {id="_"..w,access=access,att=sized(name,w)})
+    end
+    for _,n in ipairs{8,w==64 and 32 or 16} do
+        form("push",{"i"..n},immediate(n,"signed")..bytes(p..(n==8 and "6a" or "68"))..
+            "emit_imm("..(n//8)..",imm);",{id="_"..w,imm_policy="signed",att=sized("push",w)})
+    end
+end
+for _,w in ipairs{16,32,64} do
+    local r,p="r"..w,op66(w)
+    legacy("mov",{r,"s16"},0,1,"8c",p,w==64,{att=sized("mov",w),access="write"})
+    if w~=64 then
+        legacy("mov",{"s16",r},1,0,"8e",p,false,
+            {att=sized("mov",w),access="write",check="require(r0 != 1);"})
+    end
+    local sw=w==16 and "66" or w==64 and "48" or ""
+    for _,a in ipairs{{"retf","lret","cb","ca"},{"iret","iret","cf"}} do
+        local att=a[2]..suffix[w]
+        form(a[1],{},bytes(sw..a[3]),{id="_"..w,att=att,flags={"return","terminator"}})
+        if a[4] then
+            form(a[1],{"i16"},immediate(16,"unsigned")..bytes(sw..a[4]).."emit16le(imm);",
+                {id="_"..w,att=att,imm_policy="unsigned",flags={"return","terminator"}})
+        end
+    end
+    for _,a in ipairs{{"callf","lcall",-4},{"jmpf","ljmp",-6}} do
+        legacy(a[1],{"m"..(w+16)},0,a[3],"ff",p,w==64,
+            {att=a[2]..suffix[w],indirect=true,flags={"branch"}})
+    end
+end
+legacy("mov",{"m16","s16"},0,1,"8c","",false,{att="movw",access="write"})
+legacy("mov",{"s16","m16"},1,0,"8e","",false,
+    {att="movw",access="write",check="require(r0 != 1);"})
+for _,a in ipairs{{"lss","0fb2"},{"lfs","0fb4"},{"lgs","0fb5"}} do
+    for _,w in ipairs{16,32,64} do
+        legacy(a[1],{"r"..w,"m"..(w+16)},1,0,a[2],op66(w),w==64,{access="write",att=sized(a[1],w)})
+    end
+end
+form("ret",{"i16"},immediate(16,"unsigned")..bytes("c2").."emit16le(imm);",
+    {imm_policy="unsigned",flags={"return","terminator"},att="retq"})
+form("ret",{"i16"},immediate(16,"unsigned")..bytes("66c2").."emit16le(imm);",
+    {id="_16",imm_policy="unsigned",flags={"return","terminator"},att="retw"})
+fixed("retw","66c3")
+form("enter",{"i16","i8"},immediate(16,"unsigned","imm")..immediate(8,"unsigned","imm2")..
+    bytes("c8").."emit16le(imm);emit8(imm2);",
+    {att="enterq",imm_policy="unsigned",first_policy="unsigned"})
+form("enter",{"i16","i8"},immediate(16,"unsigned","imm")..immediate(8,"unsigned","imm2")..
+    bytes("66c8").."emit16le(imm);emit8(imm2);",
+    {id="_16",att="enterw",imm_policy="unsigned",first_policy="unsigned"})
+fixed("leavew","66c9")
+fixed("pushfw","669c")
+fixed("popfw","669d")
+for _,a in ipairs{{"call","e8",false,-3},{"jmp","e9","eb",-5}} do
+    for _,dst in ipairs{"r64","m64"} do
+        legacy(a[1],{dst},0,a[4],"ff","",false,{indirect=true,att=a[1].."q",flags={"branch"}})
+    end
+end
+local function relative(name,near,short,flags,plt)
+    local o={id="_rel",imm_policy="signed",flags=flags}
+    if near then
+        form(name,{"i32"},immediate(32,"signed")..bytes(near).."emit32le(imm);",o)
+        local rel="emit_relocation(sym,R_X86_64_PC32,addend-4);"
+        if plt then rel="if (addend == 0) {emit_relocation(sym,R_X86_64_PLT32,-4);} else {"..rel.."}" end
+        form(name,{"a64"},range("addend",-2147483648,2147483647)..bytes(near)..
+            rel.."emit32le(0);",
+            {id="_rel32",flags={"branch","reloc"}})
+        if plt then
+            form(name,{"a64"},range("addend",-2147483648,2147483647)..bytes(near)..
+                "emit_relocation(sym,R_X86_64_PLT32,addend-4);emit32le(0);",
+                {id="_rel32_plt",flags={"branch","reloc"},constraints={[1]="plt"}})
+        end
+    end
+    if short then
+        form(name,{"i8"},immediate(8,"signed")..bytes(short).."emit8(imm);",o)
+        form(name,{"a64"},range("addend",-2147483648,2147483647)..bytes(short)..
+            "emit_relocation(sym,R_X86_64_PC8,addend-1);emit8(0);",
+            {id="_rel8",flags={"branch","reloc"}})
+    end
+end
+relative("call","e8",nil,{"branch"},true)
+relative("jmp","e9","eb",{"branch","terminator"},true)
+for i,names in ipairs(jcc) do
+    relative(names[1],"0f"..hex(0x80+i-1),hex(0x70+i-1),{"cond_branch"},true)
+end
+for _,a in ipairs{{"jrcxz","e3"},{"jecxz","67e3"},{"loop","e2"},{"loope","e1",{"loopz"}},
+    {"loopne","e0",{"loopnz"}},{"addr32_loop","67e2"},{"addr32_loope","67e1"},{"addr32_loopne","67e0"}} do
+    mnemonic(a[1],a[3])
+    relative(a[1],nil,a[2],{"cond_branch"})
+end
+form("movabs",{"r64","a64"},range("r0",0,15).."emit8(72+r0/8);emit8(184+r0%8);"..
+    "emit_relocation(sym,R_X86_64_64,addend);emit64le(0);",{att="movabsq",flags={"reloc"},access="write"})
+form("mov",{"r64","a64"},range("r0",0,15)..range("addend",-2147483648,2147483647)..
+    "emit8(72+r0/8);emit8(0xc7);emit8(192+r0%8);emit_relocation(sym,R_X86_64_32S,addend);emit32le(0);",
+    {att="movq",flags={"reloc"},access="write"})
+for _,w in ipairs{8,16,32,64} do
+    local acc=({[8]="al",[16]="ax",[32]="eax",[64]="rax"})[w]
+    local r,m="r"..w,"m"..w
+    for _,addr in ipairs{32,64} do
+        for _,dir in ipairs{0,1} do
+            local opcode=0xa0+(w==8 and 0 or 1)+2*dir
+            local pre=(addr==32 and "67" or "")..op66(w)..(w==64 and "48" or "")
+            local ops=dir==0 and {r,m} or {m,r}
+            local check="require(r"..dir.." == 0);"
+            local opt={id="_moffs"..addr,att=addr==64 and sized("movabs",w) or nil,address_size=addr,
+                constraints={[dir+1]=acc,[2-dir]="moffs"},access="write"}
+            form(addr==64 and "movabs" or "mov",ops,check..immediate(addr,nil,"offset")..
+                bytes(pre..hex(opcode)).."emit_imm("..(addr//8)..",offset);",opt)
+        end
+    end
+end
+
+-- Implicit string/port operands are selected by the mnemonic and size
+-- attributes; no ModR/M. REP variants are separate forms (not a raw
+-- prefix byte blindly prependable to every instruction).
+for _,a in ipairs{{"movs",0xa4,"rep"},{"cmps",0xa6,"cc"},{"stos",0xaa,"rep"},
+    {"lods",0xac,"rep"},{"scas",0xae,"cc"},{"ins",0x6c,"rep"},{"outs",0x6e,"rep"}} do
+    for _,w in ipairs{8,16,32,64} do if w~=64 or a[2]>=0xa4 then
+        local intel=a[1]..(w==32 and "d" or suffix[w])
+        local att=sized(a[1],w)
+        local reps=a[3]=="cc" and {{"",""},{"f3","repe"},{"f2","repne"}} or {{"",""},{"f3","rep"}}
+        for _,addr in ipairs{64,32} do
+            for _,rep in ipairs(reps) do
+                form(intel,{},bytes(rep[1]..(addr==32 and "67" or "")..op66(w)..
+                    (w==64 and "48" or "")..hex(a[2]+(w==8 and 0 or 1))),
+                    {id="_a"..addr..rep[2],prefix=rep[2]~="" and rep[2] or nil,address_size=addr,att=att})
+            end
+        end
+    end end
+end
+for _,w in ipairs{8,16,32} do
+    local acc=({[8]="al",[16]="ax",[32]="eax"})[w]
+    local r,p="r"..w,op66(w)
+    for _,a in ipairs{{"in",{"i8",r},{"r16",r},0xe4,0xec},{"out",{"i8",r},{"r16",r},0xe6,0xee}} do
+        local name,is_out=a[1],a[1]=="out"
+        local ir,rr=is_out and {"i8",r} or {r,"i8"},is_out and {"r16",r} or {r,"r16"}
+        local accidx=is_out and 1 or 0
+        local check="require(r"..accidx.." == 0);"
+        local off=w==8 and 0 or 1
+        form(name,ir,check..immediate(8,"unsigned")..bytes(p..hex(a[4]+off)).."emit8(imm);",
+            {imm_policy="unsigned",first_policy="unsigned",att=sized(name,w),
+             constraints={[accidx+1]=acc},flags={"may_trap"}})
+        form(name,rr,check.."require(r"..(1-accidx).." == 2);"..bytes(p..hex(a[5]+off)),
+            {att=sized(name,w),constraints={[accidx+1]=acc,[2-accidx]="dx"},flags={"may_trap"}})
+    end
+end
+for _,a in ipairs{
+    {"cbw","6698","cbtw"},{"cwde","98","cwtl"},{"cdqe","4898","cltq"},
+    {"cwd","6699","cwtd"},{"cdq","99","cltd"},{"cqo","4899","cqto"},
+    {"clc","f8"},{"stc","f9"},{"cmc","f5"},{"cld","fc"},{"std","fd"},
+    {"xlat","d7","xlatb"},{"int3","cc"},{"int1","f1"},{"ud2","0f0b"},
+    {"rdtsc","0f31"},{"rdpmc","0f33"},{"lfence","0faee8"},{"sfence","0faef8"},{"mfence","0faef0"},
+} do form(a[1],{},bytes(a[2]),{att=a[3]}) end
+for _,a in ipairs{{"cmpxchg8b",64,{}},{"cmpxchg16b",128,{"cx16"}}} do
+    local o={access="readwrite",features=a[3]}
+    legacy(a[1],{"m"..a[2]},0,-2,"0fc7","",a[2]==128,o)
+    o.id="_lock"; o.group1="f0"; o.prefix="lock"
+    legacy(a[1],{"m"..a[2]},0,-2,"0fc7","",a[2]==128,o)
+end
+for _,a in ipairs{
+    {"prefetchnta",0,"0f18",8},{"prefetcht0",1,"0f18",8},{"prefetcht1",2,"0f18",8},{"prefetcht2",3,"0f18",8},
+    {"clflush",7,"0fae",8},{"fxsave",0,"0fae",4096},{"fxrstor",1,"0fae",4096},
+    {"fxsave64",0,"0fae",4096,"",true},{"fxrstor64",1,"0fae",4096,"",true},
+    {"ldmxcsr",2,"0fae",32,"",false,{"sse"}},{"stmxcsr",3,"0fae",32,"",false,{"sse"}},
+    {"clflushopt",7,"0fae",8,"66",false,{"clflushopt"}},{"clwb",6,"0fae",8,"66",false,{"clwb"}},
+    {"cldemote",0,"0f1c",8,"",false,{"cldemote"}},
+} do legacy(a[1],{"m"..a[4]},0,-a[2]-1,a[3],a[5] or "",a[6],{features=a[7]}) end
+for _,w in ipairs{16,32,64} do
+    for _,k in ipairs{"r","m"} do
+        legacy("nop",{k..w},0,-1,"0f1f",op66(w),w==64,{att=sized("nop",w)})
+    end
+end
+fixed("lahf","9f",{"lahfsahf"})
+fixed("sahf","9e",{"lahfsahf"})
+form("xlat",{},bytes("67d7"),{id="_a32",address_size=32,att="xlatb"})
+fixed("monitor","0f01c8",{"monitor"})
+fixed("mwait","0f01c9",{"monitor"})
+
+-- VEX (including non-SIMD BMI): all operand roles are explicit, including
+-- the /digit destinations in BMI1 and the reversed r/m/vvvv roles in BMI2.
+-- Emit C5 only when the implied map, W, X and B bits permit its use.
+local function vex(name,ops,rm,reg,v,map,pp,w,l,opcode,opt)
+    opt=opt or {}
+    local mem=is_mem(ops,rm)
+    local R=reg<0 and "0" or extension(ops,reg)
+    local X=mem and "x"..rm or "0"
+    local B=extension(ops,rm)
+    local V=v<0 and "0" or operand(v)
+    local code=registers(ops)
+    if mem then code=code..address(rm)..addr_prefix(rm) end
+    code=code..(opt.check or "")
+    if opt.imm then code=code..immediate(opt.imm*8,opt.imm_policy) end
+    local p1=("%d-8*(%s)"):format(120+4*l+pp,V)
+    local vex3="emit8(0xc4);emit8("..(224+map).."-128*("..R..")-64*("..X..")-32*("..B.."));emit8("..
+        (w and "128+" or "")..p1..");"
+    if map==1 and not w then
+        code=code.."if ("..X.." == 0 && "..B.." == 0) {emit8(0xc5);emit8(128-128*("..R..")+"..
+            p1..");} else {"..vex3.."}"
+    else code=code..vex3 end
+    code=code..bytes(opcode)..modrm(ops,rm,reg<0 and tostring(-reg-1) or field(ops,reg),opt.imm or 0)
+    if opt.imm then code=code.."emit_imm("..opt.imm..",imm);" end
+    form(name,ops,code,opt)
+end
+for _,w in ipairs{32,64} do
+    local r,m,wide="r"..w,"m"..w,w==64
+    for _,src in ipairs{r,m} do
+        local b1={features={"bmi1"},access="write"}
+        local b2={features={"bmi2"},access="write"}
+        vex("andn",{r,r,src},2,0,1,2,0,wide,0,"f2",b1)
+        vex("bextr",{r,src,r},1,0,2,2,0,wide,0,"f7",b1)
+        for _,a in ipairs{{"blsr",1},{"blsmsk",2},{"blsi",3}} do
+            vex(a[1],{r,src},1,-a[2]-1,0,2,0,wide,0,"f3",b1)
+        end
+        for _,a in ipairs{{"bzhi","f5",0},{"shlx","f7",1},{"sarx","f7",2},{"shrx","f7",3}} do
+            vex(a[1],{r,src,r},1,0,2,2,a[3],wide,0,a[2],b2)
+        end
+        for _,a in ipairs{{"pext",2},{"pdep",3},{"mulx",3}} do
+            vex(a[1],{r,r,src},2,0,1,2,a[2],wide,0,a[1]=="mulx" and "f6" or "f5",b2)
+        end
+        vex("rorx",{r,src,"i8"},1,0,-1,3,3,wide,0,"f0",
+            {features={"bmi2"},access="write",imm=1,imm_policy="unsigned"})
+        legacy("adcx",{r,src},1,0,"0f38f6","66",wide,{features={"adx"},access="readwrite"})
+        legacy("adox",{r,src},1,0,"0f38f6","f3",wide,{features={"adx"},access="readwrite"})
+    end
+    for _,a in ipairs{{"rdfsbase",0},{"rdgsbase",1},{"wrfsbase",2},{"wrgsbase",3}} do
+        legacy(a[1],{r},0,-a[2]-1,"0fae","f3",wide,{features={"fsgsbase"},att=sized(a[1],w)})
+    end
+    legacy("movdiri",{m,r},0,1,"0f38f9","",wide,{features={"movdiri"},access="write"})
+end
+for _,w in ipairs{16,32,64} do
+    local r,m,wide="r"..w,"m"..w,w==64
+    legacy("movbe",{r,m},1,0,"0f38f0",op66(w),wide,{features={"movbe"},access="write",att=sized("movbe",w)})
+    legacy("movbe",{m,r},0,1,"0f38f1",op66(w),wide,{features={"movbe"},access="write",att=sized("movbe",w)})
+    legacy("rdrand",{r},0,-7,"0fc7",op66(w),wide,{features={"rdrnd"},access="write",att=sized("rdrand",w)})
+    legacy("rdseed",{r},0,-8,"0fc7",op66(w),wide,{features={"rdseed"},access="write",att=sized("rdseed",w)})
+end
+legacy("rdpid",{"r64"},0,-8,"0fc7","f3",false,{features={"rdpid"},access="write"})
+for _,a in ipairs{{"umonitor",6,"f3"},{"umwait",6,"f2"},{"tpause",6,"66"}} do
+    local t=a[1]=="umonitor" and "r64" or "r32"
+    legacy(a[1],{t},0,-a[2]-1,"0fae",a[3],false,{features={"waitpkg"}})
+end
+legacy("umonitor",{"r32"},0,-7,"0fae","67f3",false,{features={"waitpkg"},address_size=32})
+for _,a in ipairs{
+    {"endbr64","f30f1efa","cet"},{"endbr32","f30f1efb","cet"},{"setssbsy","f30f01e8","cet",true},
+    {"saveprevssp","f30f01ea","cet"},{"xend","0f01d5","rtm"},{"xtest","0f01d6","rtm"},
+    {"encls","0f01cf","sgx",true},{"enclu","0f01d7","sgx"},{"enclv","0f01c0","sgx",true},
+    {"serialize","0f01e8","serialize"},{"uiret","f30f01ec","uintr"},{"testui","f30f01ed","uintr"},
+    {"clui","f30f01ee","uintr"},{"stui","f30f01ef","uintr"},{"clzero","0f01fc","clzero"},
+    {"rdtscp","0f01f9","rdtscp"},
+} do
+    fixed(a[1],a[2],a[4] and {a[3],"priv"} or {a[3]},a[4] and {"privileged"} or {})
+end
+for _,a in ipairs{{"rdsspd",1,32},{"rdsspq",1,64},{"incsspd",5,32},{"incsspq",5,64}} do
+    legacy(a[1],{"r"..a[3]},0,-a[2]-1,a[2]==1 and "0f1e" or "0fae","f3",a[3]==64,{features={"cet"}})
+end
+for _,a in ipairs{{"wrssd",32,"f6",""},{"wrssq",64,"f6",""},{"wrussd",32,"f5","66"},{"wrussq",64,"f5","66"}} do
+    local ispriv=a[3]=="f5"
+    legacy(a[1],{"m"..a[2],"r"..a[2]},0,1,"0f38"..a[3],a[4],a[2]==64,
+        {features=ispriv and {"cet","priv"} or {"cet"},flags=ispriv and {"privileged"} or {},access="write"})
+end
+legacy("rstorssp",{"m64"},0,-6,"0f01","f3",false,{features={"cet"}})
+legacy("clrssbsy",{"m64"},0,-7,"0fae","f3",false,{features={"cet","priv"},flags={"privileged"}})
+legacy("senduipi",{"r64"},0,-7,"0fc7","f3",false,{features={"uintr"}})
+form("xabort",{"i8"},immediate(8,"unsigned")..bytes("c6f8").."emit8(imm);",
+    {imm_policy="unsigned",features={"rtm"}})
+for _,w in ipairs{16,32} do
+    local p=op66(w).."c7f8"
+    form("xbegin",{"i"..w},immediate(w,"signed")..bytes(p).."emit_imm("..(w//8)..",imm);",
+        {features={"rtm"},imm_policy="signed",flags={"cond_branch"}})
+    form("xbegin",{"a64"},range("addend",-2147483648,2147483647)..bytes(p)..
+        "emit_relocation(sym,R_X86_64_PC"..w..",addend-"..(w//8)..");emit_imm("..(w//8)..",0);",
+        {id="_rel"..w,features={"rtm"},flags={"cond_branch","reloc"}})
+end
+
+-- Descriptor and machine-state forms. The priv feature is a catalog
+-- selection policy, not an attempt to model runtime CPL or CR4 checks.
+for _,a in ipairs{{"mov","0f20","0f22","c64"},{"mov","0f21","0f23","d64"}} do
+    local o={features={"priv"},flags={"privileged"},access="write"}
+    legacy(a[1],{"r64",a[4]},0,1,a[2],"",false,o)
+    legacy(a[1],{a[4],"r64"},1,0,a[3],"",false,o)
+end
+for _,a in ipairs{
+    {"sgdt",0,"0f01","m80",false},{"sidt",1,"0f01","m80",false},
+    {"lgdt",2,"0f01","m80",true},{"lidt",3,"0f01","m80",true},
+    {"invlpg",7,"0f01","m8",true},
+    {"invlpga",nil,"0f01df",nil,true,"svm"},
+    {"sldt",0,"0f00","m16",false},{"str",1,"0f00","m16",false},
+    {"lldt",2,"0f00","m16",true},{"ltr",3,"0f00","m16",true},
+    {"verr",4,"0f00","m16",false},{"verw",5,"0f00","m16",false},
+    {"smsw",4,"0f01","m16",false},{"lmsw",6,"0f01","m16",true},
+} do
+    local fs=a[6] and {a[6],"priv"} or a[5] and {"priv"} or {}
+    local flags=a[5] and {"privileged"} or {}
+    if a[2] then
+        legacy(a[1],{a[4]},0,-a[2]-1,a[3],"",false,{features=fs,flags=flags})
+        if a[4]=="m16" then
+            local p=(a[1]=="smsw" or a[1]=="sldt" or a[1]=="str") and "66" or ""
+            legacy(a[1],{"r16"},0,-a[2]-1,a[3],p,false,{features=fs,flags=flags})
+            if a[1]=="smsw" or a[1]=="sldt" or a[1]=="str" then
+                for _,w in ipairs{32,64} do
+                    legacy(a[1],{"r"..w},0,-a[2]-1,a[3],"",w==64,{features=fs,flags=flags})
+                end
+            end
+        end
+    else fixed(a[1],a[3],fs,flags) end
+end
+for _,a in ipairs{{"lar","0f02"},{"lsl","0f03"}} do
+    for _,w in ipairs{16,32,64} do
+        for _,k in ipairs{"m16","r16"} do
+            legacy(a[1],{"r"..w,k},1,0,a[2],op66(w),w==64,{access="write",att=sized(a[1],w)})
+        end
+    end
+end
+for _,a in ipairs{
+    {"sysret","0f07"},{"sysretq","480f07"},{"sysenter","0f34",nil,false},{"sysexit","0f35"},{"sysexitq","480f35"},
+    {"swapgs","0f01f8"},{"rdmsr","0f32"},{"wrmsr","0f30"},{"invd","0f08"},{"wbinvd","0f09"},{"clts","0f06"},
+    {"vmcall","0f01c1","vmx"},{"vmlaunch","0f01c2","vmx"},{"vmresume","0f01c3","vmx"},{"vmxoff","0f01c4","vmx"},
+    {"vmrun","0f01d8","svm"},{"vmmcall","0f01d9","svm"},{"vmload","0f01da","svm"},
+    {"vmsave","0f01db","svm"},{"stgi","0f01dc","svm"},{"clgi","0f01dd","svm"},{"skinit","0f01de","svm"},
+} do
+    fixed(a[1],a[2],a[3] and {a[3],"priv"} or a[4]~=false and {"priv"} or {},
+        a[4]~=false and {"privileged"} or {"may_trap"})
+end
+for _,a in ipairs{{"vmptrld",-7,""},{"vmclear",-7,"66"},{"vmxon",-7,"f3"},{"vmptrst",-8,""}} do
+    legacy(a[1],{"m64"},0,a[2],"0fc7",a[3],false,{features={"vmx","priv"},flags={"privileged"}})
+end
+for _,k in ipairs{"r64","m64"} do
+    legacy("vmread",{k,"r64"},0,1,"0f78","",false,{features={"vmx","priv"},flags={"privileged"}})
+    legacy("vmwrite",{"r64",k},1,0,"0f79","",false,{features={"vmx","priv"},flags={"privileged"}})
+end
+for _,a in ipairs{{"invept","80"},{"invvpid","81"}} do
+    legacy(a[1],{"r64","m128"},1,0,"0f38"..a[2],"66",false,{features={"vmx","priv"},flags={"privileged"}})
+end
+
+-- Floating-point SSE/SSE2 and their AVX equivalents. The scalar memory
+-- width is not the width of the containing XMM register.
+local ps={"ps","",0,"sse",128}
+local pd={"pd","66",1,"sse2",128}
+local ss={"ss","f3",2,"sse",32}
+local sd={"sd","f2",3,"sse2",64}
+local function vec2(name,opcode,prefix,feature,memw,imm,access)
+    local fs=type(feature)=="table" and feature or {feature}
+    for _,k in ipairs{"v128","m"..memw} do
+        local args={"v128",k}
+        if imm then args[3]="i8" end
+        legacy(name,args,1,0,opcode,prefix,false,
+            {features=fs,imm=imm and 1 or nil,imm_policy="unsigned",access=access or "readwrite"})
+    end
+end
+for _,a in ipairs{
+    {"add","58"},{"mul","59"},{"sub","5c"},{"min","5d"},{"div","5e"},{"max","5f"},
+    {"sqrt","51",true},{"cmp","c2",false,true},
+    {"rsqrt","52",true,false,"single"},{"rcp","53",true,false,"single"},
+    {"and","54",false,false,"packed"},{"andn","55",false,false,"packed"},
+    {"or","56",false,false,"packed"},{"xor","57",false,false,"packed"},
+    {"unpckl","14",false,false,"packed"},{"unpckh","15",false,false,"packed"},
+    {"shuf","c6",false,true,"packed"},
+} do
+    local flavors=a[5]=="packed" and {ps,pd} or a[5]=="single" and {ps,ss} or {ps,pd,ss,sd}
+    for _,f in ipairs(flavors) do
+        local name=a[1]..f[1]
+        local scalar=f[5]<128
+        vec2(name,"0f"..a[2],f[2],f[4],f[5],a[4],a[3] and not scalar and "write" or "readwrite")
+        for _,w in ipairs(scalar and {128} or {128,256}) do
+            local r="v"..w
+            for _,src in ipairs{r,"m"..(scalar and f[5] or w)} do
+                local unary=a[3] and not scalar
+                local args=unary and {r,src} or {r,r,src}
+                if a[4] then args[#args+1]="i8" end
+                vex("v"..name,args,unary and 1 or 2,0,unary and -1 or 1,1,f[3],false,w==256 and 1 or 0,
+                    a[2],{features={"avx"},imm=a[4] and 1 or nil,imm_policy="unsigned",access="write"})
+            end
+        end
+    end
+end
+for _,a in ipairs{{"movaps","28","29",ps},{"movapd","28","29",pd},{"movups","10","11",ps},
+    {"movupd","10","11",pd},{"movdqa","6f","7f",pd},{"movdqu","6f","7f",ss},
+    {"movss","10","11",ss},{"movsd","10","11",sd}} do
+    local name,load,store,f=table.unpack(a)
+    local scalar=f[5]<128 and name~="movdqu"
+    local m="m"..(scalar and f[5] or 128)
+    local feature=name=="movdqu" and "sse2" or f[4]
+    legacy(name,{"v128","v128"},1,0,"0f"..load,f[2],false,{features={feature},access=scalar and "readwrite" or "write"})
+    legacy(name,{"v128",m},1,0,"0f"..load,f[2],false,{features={feature},access="write"})
+    legacy(name,{m,"v128"},0,1,"0f"..store,f[2],false,{features={feature},access="write"})
+    for _,w in ipairs(scalar and {128} or {128,256}) do
+        local r,mem,l="v"..w,"m"..(scalar and f[5] or w),w==256 and 1 or 0
+        if scalar then
+            vex("v"..name,{r,r,r},2,0,1,1,f[3],false,l,load,{features={"avx"},access="write"})
+        else
+            vex("v"..name,{r,r},1,0,-1,1,f[3],false,l,load,{features={"avx"},access="write"})
+        end
+        vex("v"..name,{r,mem},1,0,-1,1,f[3],false,l,load,{features={"avx"},access="write"})
+        vex("v"..name,{mem,r},0,1,-1,1,f[3],false,l,store,{features={"avx"},access="write"})
+    end
+end
+for _,a in ipairs{{"comis","2f"},{"ucomis","2e"}} do
+    for _,w in ipairs{32,64} do
+        local d=w==64
+        local name=a[1]..(d and "d" or "s")
+        vec2(name,"0f"..a[2],d and "66" or "",d and "sse2" or "sse",w,false,"read")
+        for _,k in ipairs{"v128","m"..w} do
+            vex("v"..name,{"v128",k},1,0,-1,1,d and 1 or 0,false,0,a[2],{features={"avx"},access="read"})
+        end
+    end
+end
+for _,f in ipairs{ss,sd} do
+    local to=f[1]
+    local from=to=="ss" and "sd" or "ss"
+    vec2("cvt"..from.."2"..to,"0f5a",from=="ss" and "f3" or "f2","sse2",from=="ss" and 32 or 64)
+    for _,w in ipairs{32,64} do
+        local r,wide="r"..w,w==64
+        local name="cvtsi2"..to
+        for _,k in ipairs{r,"m"..w} do
+            legacy(name,{"v128",k},1,0,"0f2a",f[2],wide,{features={f[4]},att=wide and name.."q" or name.."l"})
+            vex("v"..name,{"v128","v128",k},2,0,1,1,f[3],wide,0,"2a",{features={"avx"},access="write"})
+        end
+        for _,a in ipairs{{"cvt","2d"},{"cvtt","2c"}} do
+            local result=a[1]..to.."2si"
+            for _,k in ipairs{"v128","m"..f[5]} do
+                legacy(result,{r,k},1,0,"0f"..a[2],f[2],wide,
+                    {features={f[4]},access="write",att=wide and result.."q" or result.."l"})
+                vex("v"..result,{r,k},1,0,-1,1,f[3],wide,0,a[2],{features={"avx"},access="write"})
+            end
+        end
+    end
+end
+for _,a in ipairs{
+    {"cvtps2pd","5a","",64},{"cvtpd2ps","5a","66",128},{"cvtdq2ps","5b","",128},
+    {"cvtps2dq","5b","66",128},{"cvttps2dq","5b","f3",128},{"cvtdq2pd","e6","f3",64},
+    {"cvtpd2dq","e6","f2",128},{"cvttpd2dq","e6","66",128},
+    {"pshufd","70","66",128,true},{"pshuflw","70","f2",128,true},{"pshufhw","70","f3",128,true},
+} do vec2(a[1],"0f"..a[2],a[3],"sse2",a[4],a[5],"write") end
+for _,a in ipairs{{"movmskps","50","", "sse"},{"movmskpd","50","66","sse2"},{"pmovmskb","d7","66","sse2"}} do
+    legacy(a[1],{"r32","v128"},1,0,"0f"..a[2],a[3],false,{features={a[4]},access="write"})
+end
+legacy("pmovmskb",{"r32","q64"},1,0,"0fd7","",false,{features={"sse","mmx"},access="write"})
+for _,a in ipairs{{"movntps","2b","","sse"},{"movntpd","2b","66","sse2"},{"movntdq","e7","66","sse2"},
+    {"movntq","e7","","sse"}} do
+    local mm=a[1]=="movntq"
+    legacy(a[1],{mm and "m64" or "m128",mm and "q64" or "v128"},0,1,"0f"..a[2],a[3],false,
+        {features=mm and {a[4],"mmx"} or {a[4]},access="write"})
+end
+for _,a in ipairs{{"movlps","12","13",0},{"movhps","16","17",0},{"movlpd","12","13",1},{"movhpd","16","17",1}} do
+    local p,fs=a[4]==1 and "66" or "",a[4]==1 and {"sse2"} or {"sse"}
+    legacy(a[1],{"v128","m64"},1,0,"0f"..a[2],p,false,{features=fs,access="readwrite"})
+    legacy(a[1],{"m64","v128"},0,1,"0f"..a[3],p,false,{features=fs,access="write"})
+    vex("v"..a[1],{"v128","v128","m64"},2,0,1,1,a[4],false,0,a[2],{features={"avx"},access="write"})
+    vex("v"..a[1],{"m64","v128"},0,1,-1,1,a[4],false,0,a[3],{features={"avx"},access="write"})
+end
+for _,a in ipairs{{"movhlps","12"},{"movlhps","16"}} do
+    legacy(a[1],{"v128","v128"},1,0,"0f"..a[2],"",false,{features={"sse"},access="readwrite"})
+    vex("v"..a[1],{"v128","v128","v128"},2,0,1,1,0,false,0,a[2],{features={"avx"},access="write"})
+end
+for _,a in ipairs{{"movd",32},{"movq",64}} do
+    for _,vr in ipairs{"q64","v128"} do
+        local mm=vr=="q64"
+        local feat=mm and {"mmx"} or {"sse2"}
+        local prefix=mm and "" or "66"
+        local gpr,w="r"..a[2],a[2]==64
+        for _,src in ipairs{gpr,"m"..a[2]} do
+            legacy(a[1],{vr,src},1,0,"0f6e",prefix,w,{features=feat,access="write"})
+            legacy(a[1],{src,vr},0,1,"0f7e",prefix,w,{features=feat,access="write"})
+        end
+        if a[2]==64 then
+            local regload,regpre=mm and "0f6f" or "0f7e",mm and "" or "f3"
+            local store,storepre=mm and "0f7f" or "0fd6",mm and "" or "66"
+            legacy("movq",{vr,vr},1,0,regload,regpre,false,{features=feat,access="write"})
+            legacy("movq",{vr,"m64"},1,0,regload,regpre,false,{features=feat,access="write",id="_packed"})
+            legacy("movq",{"m64",vr},0,1,store,storepre,false,{features=feat,access="write",id="_packed"})
+        end
+    end
+end
+legacy("movdq2q",{"q64","v128"},1,0,"0fd6","f2",false,{features={"sse2","mmx"},access="write"})
+legacy("movq2dq",{"v128","q64"},1,0,"0fd6","f3",false,{features={"sse2","mmx"},access="write"})
+fixed("emms","0f77",{"mmx"})
+
+-- Packed integer MMX/SSE2 and AVX; absent MMX feature marks XMM-only ops.
+for _,a in ipairs{
+    {"packsswb","63","mmx"},{"packssdw","6b","mmx"},{"packuswb","67","mmx"},
+    {"punpcklbw","60","mmx"},{"punpcklwd","61","mmx"},{"punpckldq","62","mmx"},{"punpcklqdq","6c"},
+    {"punpckhbw","68","mmx"},{"punpckhwd","69","mmx"},{"punpckhdq","6a","mmx"},{"punpckhqdq","6d"},
+    {"paddb","fc","mmx"},{"paddw","fd","mmx"},{"paddd","fe","mmx"},{"paddq","d4","sse2"},
+    {"paddsb","ec","mmx"},{"paddsw","ed","mmx"},{"paddusb","dc","mmx"},{"paddusw","dd","mmx"},
+    {"psubb","f8","mmx"},{"psubw","f9","mmx"},{"psubd","fa","mmx"},{"psubq","fb","sse2"},
+    {"psubsb","e8","mmx"},{"psubsw","e9","mmx"},{"psubusb","d8","mmx"},{"psubusw","d9","mmx"},
+    {"pmullw","d5","mmx"},{"pmulhw","e5","mmx"},{"pmulhuw","e4","sse"},{"pmuludq","f4","sse2"},{"pmaddwd","f5","mmx"},
+    {"pand","db","mmx"},{"pandn","df","mmx"},{"por","eb","mmx"},{"pxor","ef","mmx"},
+    {"pavgb","e0","sse"},{"pavgw","e3","sse"},{"psadbw","f6","sse"},
+    {"pcmpeqb","74","mmx"},{"pcmpeqw","75","mmx"},{"pcmpeqd","76","mmx"},
+    {"pcmpgtb","64","mmx"},{"pcmpgtw","65","mmx"},{"pcmpgtd","66","mmx"},
+    {"pminub","da","sse"},{"pminsw","ea","sse"},{"pmaxub","de","sse"},{"pmaxsw","ee","sse"},
+    {"psllw","f1","mmx",true},{"pslld","f2","mmx",true},{"psllq","f3","mmx",true},
+    {"psrlw","d1","mmx",true},{"psrld","d2","mmx",true},{"psrlq","d3","mmx",true},
+    {"psraw","e1","mmx",true},{"psrad","e2","mmx",true},
+} do
+    vec2(a[1],"0f"..a[2],"66","sse2",128)
+    if a[3] then
+        local mf=a[3]=="mmx" and {"mmx"} or {"mmx",a[3]}
+        local mem=a[1]:sub(1,7)=="punpckl" and "m32" or "m64"
+        for _,k in ipairs{"q64",mem} do
+            legacy(a[1],{"q64",k},1,0,"0f"..a[2],"",false,{features=mf,access="readwrite"})
+        end
+    end
+    for _,w in ipairs{128,256} do
+        local r="v"..w
+        for _,k in ipairs{a[4] and "v128" or r,"m"..(a[4] and 128 or w)} do
+            vex("v"..a[1],{r,r,k},2,0,1,1,1,false,w==256 and 1 or 0,a[2],
+                {features=w==256 and {"avx","avx2"} or {"avx"},access="write"})
+        end
+    end
+end
+for _,a in ipairs{{"psrlw","71",2},{"psraw","71",4},{"psllw","71",6},
+    {"psrld","72",2},{"psrad","72",4},{"pslld","72",6},
+    {"psrlq","73",2},{"psrldq","73",3},{"psllq","73",6},{"pslldq","73",7}} do
+    for _,r in ipairs{ "v128","q64" } do if r~="q64" or a[3]%2==0 then
+        legacy(a[1],{r,"i8"},0,-a[3]-1,"0f"..a[2],r=="v128" and "66" or "",false,
+            {imm=1,imm_policy="unsigned",access="readwrite",features={r=="v128" and "sse2" or "mmx"}})
+    end end
+    for _,w in ipairs{128,256} do
+        local r="v"..w
+        vex("v"..a[1],{r,r,"i8"},1,-a[3]-1,0,1,1,false,w==256 and 1 or 0,a[2],
+            {imm=1,imm_policy="unsigned",features=w==256 and {"avx","avx2"} or {"avx"},access="write"})
+    end
+end
+legacy("maskmovq",{"q64","q64"},1,0,"0ff7","",false,{features={"sse","mmx"},access="read"})
+legacy("maskmovdqu",{"v128","v128"},1,0,"0ff7","66",false,{features={"sse2"},access="read"})
+for _,k in ipairs{"q64","m64"} do
+    legacy("pshufw",{"q64",k,"i8"},1,0,"0f70","",false,{features={"sse","mmx"},imm=1,imm_policy="unsigned",access="write"})
+end
+for _,a in ipairs{{"pinsrw","c4"},{"pextrw","c5"}} do
+    for _,r in ipairs{"q64","v128"} do
+        local mm=r=="q64"
+        local o={features=mm and {"sse","mmx"} or {"sse2"},imm=1,imm_policy="unsigned",access=a[1]=="pinsrw" and "readwrite" or "write"}
+        if a[1]=="pinsrw" then
+            for _,k in ipairs{"r32","m16"} do legacy(a[1],{r,k,"i8"},1,0,"0f"..a[2],mm and "" or "66",false,o) end
+        else legacy(a[1],{"r32",r,"i8"},1,0,"0f"..a[2],mm and "" or "66",false,o) end
+    end
+end
+
+-- SSE3, SSSE3 and SSE4: distinguish MMX/XMM and conversion source widths.
+for _,a in ipairs{{"addsubps","d0","f2",3},{"addsubpd","d0","66",1},{"haddps","7c","f2",3},
+    {"haddpd","7c","66",1},{"hsubps","7d","f2",3},{"hsubpd","7d","66",1}} do
+    vec2(a[1],"0f"..a[2],a[3],"sse3",128)
+    for _,w in ipairs{128,256} do
+        for _,k in ipairs{"v"..w,"m"..w} do
+            vex("v"..a[1],{"v"..w,"v"..w,k},2,0,1,1,a[4],false,w==256 and 1 or 0,a[2],{features={"avx"},access="write"})
+        end
+    end
+end
+for _,a in ipairs{{"movsldup","12","f3",128},{"movshdup","16","f3",128},{"movddup","12","f2",64}} do
+    vec2(a[1],"0f"..a[2],a[3],"sse3",a[4],false,"write")
+end
+legacy("lddqu",{"v128","m128"},1,0,"0ff0","f2",false,{features={"sse3"},access="write"})
+for _,a in ipairs{
+    {"pshufb","00"},{"phaddw","01"},{"phaddd","02"},{"phaddsw","03"},{"pmaddubsw","04"},
+    {"phsubw","05"},{"phsubd","06"},{"phsubsw","07"},{"psignb","08"},{"psignw","09"},{"psignd","0a"},
+    {"pmulhrsw","0b"},{"pabsb","1c",true},{"pabsw","1d",true},{"pabsd","1e",true},{"palignr","0f",false,true},
+} do
+    local opcode=(a[4] and "0f3a" or "0f38")..a[2]
+    vec2(a[1],opcode,"66","ssse3",128,a[4],a[3] and "write" or nil)
+    for _,k in ipairs{"q64","m64"} do
+        local args={"q64",k}
+        if a[4] then args[3]="i8" end
+        legacy(a[1],args,1,0,opcode,"",false,
+            {features={"ssse3","mmx"},imm=a[4] and 1 or nil,imm_policy="unsigned",access=a[3] and "write" or "readwrite"})
+    end
+    for _,w in ipairs{128,256} do
+        local r="v"..w
+        for _,k in ipairs{r,"m"..w} do
+            local args=a[3] and {r,k} or {r,r,k}
+            if a[4] then args[#args+1]="i8" end
+            vex("v"..a[1],args,a[3] and 1 or 2,0,a[3] and -1 or 1,a[4] and 3 or 2,1,false,w==256 and 1 or 0,a[2],
+                {features=w==256 and {"avx","avx2"} or {"avx"},imm=a[4] and 1 or nil,imm_policy="unsigned",access="write"})
+        end
+    end
+end
+for _,a in ipairs{
+    {"pblendvb","0f3810"},{"blendvps","0f3814"},{"blendvpd","0f3815"},{"ptest","0f3817"},
+    {"pcmpeqq","0f3829"},{"packusdw","0f382b"},{"pminsb","0f3838"},{"pminsd","0f3839"},
+    {"pminuw","0f383a"},{"pminud","0f383b"},{"pmaxsb","0f383c"},{"pmaxsd","0f383d"},
+    {"pmaxuw","0f383e"},{"pmaxud","0f383f"},{"pmulld","0f3840"},{"phminposuw","0f3841"},
+    {"pmuldq","0f3828"},{"roundps","0f3a08",true},{"roundpd","0f3a09",true},
+    {"roundss","0f3a0a",true,32},{"roundsd","0f3a0b",true,64},{"blendps","0f3a0c",true},
+    {"blendpd","0f3a0d",true},{"pblendw","0f3a0e",true},{"dpps","0f3a40",true},{"dppd","0f3a41",true},
+    {"mpsadbw","0f3a42",true},{"insertps","0f3a21",true,32},
+} do vec2(a[1],a[2],"66","sse4.1",a[4] or 128,a[3]) end
+for i,a in ipairs{{"bw",64},{"bd",32},{"bq",16},{"wd",64},{"wq",32},{"dq",64}} do
+    for _,b in ipairs{{"pmovsx",0x20},{"pmovzx",0x30}} do
+        vec2(b[1]..a[1],"0f38"..hex(b[2]+i-1),"66","sse4.1",a[2],false,"write")
+    end
+end
+legacy("movntdqa",{"v128","m128"},1,0,"0f382a","66",false,{features={"sse4.1"},access="write"})
+for _,a in ipairs{{"b",8,"20","14"},{"d",32,"22","16"},{"q",64,"22","16"}} do
+    for _,k in ipairs{a[2]==64 and "r64" or "r32","m"..a[2]} do
+        legacy("pinsr"..a[1],{"v128",k,"i8"},1,0,"0f3a"..a[3],"66",a[2]==64,
+            {features={"sse4.1"},access="readwrite",imm=1,imm_policy="unsigned"})
+        legacy("pextr"..a[1],{k,"v128","i8"},0,1,"0f3a"..a[4],"66",a[2]==64,
+            {features={"sse4.1"},access="write",imm=1,imm_policy="unsigned"})
+    end
+end
+legacy("pextrw",{"m16","v128","i8"},0,1,"0f3a15","66",false,
+    {features={"sse4.1"},access="write",imm=1,imm_policy="unsigned"})
+for _,k in ipairs{"r32","m32"} do
+    legacy("extractps",{k,"v128","i8"},0,1,"0f3a17","66",false,
+        {features={"sse4.1"},access="write",imm=1,imm_policy="unsigned"})
+end
+vec2("pcmpgtq","0f3837","66","sse4.2",128)
+for _,a in ipairs{{"pcmpestrm","60"},{"pcmpestri","61"},{"pcmpistrm","62"},{"pcmpistri","63"}} do
+    vec2(a[1],"0f3a"..a[2],"66","sse4.2",128,true,"read")
+end
+for _,a in ipairs{{32,8,"f0","f2"},{32,16,"f1","66f2"},{32,32,"f1","f2"},{64,8,"f0","f2"},{64,64,"f1","f2"}} do
+    for _,k in ipairs{"r","m"} do
+        legacy("crc32",{"r"..a[1],k..a[2]},1,0,"0f38"..a[3],a[4],a[1]==64,
+            {features={"sse4.2"},access="readwrite",att=sized("crc32",a[2])})
+    end
+end
+
+-- FMA3 has three operand orders. W selects element precision, the opcode
+-- selects the order/operation, and scalar forms never have a YMM encoding.
+for _,a in ipairs{{"fmaddsub",0x96},{"fmsubadd",0x97},{"fmadd",0x98,0x99},
+    {"fmsub",0x9a,0x9b},{"fnmadd",0x9c,0x9d},{"fnmsub",0x9e,0x9f}} do
+    for i,order in ipairs{132,213,231} do
+        for _,f in ipairs(a[3] and {ps,pd,ss,sd} or {ps,pd}) do
+            local scalar=f[5]<128
+            local d=f[3]%2==1
+            for _,w in ipairs(scalar and {128} or {128,256}) do
+                local r="v"..w
+                for _,k in ipairs{r,"m"..(scalar and f[5] or w)} do
+                    vex("v"..a[1]..order..f[1],{r,r,k},2,0,1,2,1,d,w==256 and 1 or 0,
+                        hex((scalar and a[3] or a[2])+16*(i-1)),{features={"avx","fma"},access="readwrite"})
+                end
+            end
+        end
+    end
+end
+for _,a in ipairs{
+    {"vpbroadcastb","78",8,"v128"},{"vpbroadcastw","79",16,"v128"},
+    {"vpbroadcastd","58",32,"v128"},{"vpbroadcastq","59",64,"v128"},
+    {"vbroadcastss","18",32,"v128"},{"vbroadcastsd","19",64,"v128","wide"},
+    {"vbroadcastf128","1a",128,nil,"wide"},{"vbroadcasti128","5a",128,nil,"wide"},
+} do
+    for _,w in ipairs(a[5] and {256} or {128,256}) do
+        local r="v"..w
+        local integer=a[1]:sub(1,2)=="vp" or a[1]=="vbroadcasti128"
+        vex(a[1],{r,"m"..a[3]},1,0,-1,2,1,false,w==256 and 1 or 0,a[2],
+            {features=integer and {"avx","avx2"} or {"avx"},access="write"})
+        if a[4] then
+            vex(a[1],{r,a[4]},1,0,-1,2,1,false,w==256 and 1 or 0,a[2],{features={"avx","avx2"},access="write"})
+        end
+    end
+end
+for _,a in ipairs{{"vpermilps","0c","04",false},{"vpermilpd","0d","05",false},
+    {"vpsllvd","47",nil,false},{"vpsllvq","47",nil,true},{"vpsrlvd","45",nil,false},
+    {"vpsrlvq","45",nil,true},{"vpsravd","46",nil,false}} do
+    local fs=a[3] and {"avx"} or {"avx","avx2"}
+    for _,w in ipairs{128,256} do
+        local r="v"..w
+        for _,k in ipairs{r,"m"..w} do
+            vex(a[1],{r,r,k},2,0,1,2,1,a[4],w==256 and 1 or 0,a[2],{features=fs,access="write"})
+            if a[3] then vex(a[1],{r,k,"i8"},1,0,-1,3,1,a[4],w==256 and 1 or 0,a[3],
+                {features=fs,imm=1,imm_policy="unsigned",access="write"}) end
+        end
+    end
+end
+for _,a in ipairs{{"vperm2f128","06",false},{"vperm2i128","46",true},{"vpermq","00",true,true},{"vpermpd","01",true,true}} do
+    for _,k in ipairs{"v256","m256"} do
+        local args=a[4] and {"v256",k,"i8"} or {"v256","v256",k,"i8"}
+        vex(a[1],args,a[4] and 1 or 2,0,a[4] and -1 or 1,3,1,a[4],1,a[2],
+            {features=a[3] and {"avx","avx2"} or {"avx"},imm=1,imm_policy="unsigned",access="write"})
+    end
+end
+for _,a in ipairs{{"vextractf128","19",false},{"vextracti128","39",true}} do
+    for _,k in ipairs{"v128","m128"} do
+        vex(a[1],{k,"v256","i8"},0,1,-1,3,1,false,1,a[2],
+            {features=a[3] and {"avx","avx2"} or {"avx"},imm=1,imm_policy="unsigned",access="write"})
+    end
+end
+for _,a in ipairs{{"vinsertf128","18",false},{"vinserti128","38",true},
+    {"vblendps","0c",false},{"vblendpd","0d",false},{"vpblendw","0e",true}} do
+    for _,w in ipairs((a[2]=="18" or a[2]=="38") and {256} or {128,256}) do
+        local r="v"..w
+        local inw=(a[2]=="18" or a[2]=="38") and 128 or w
+        for _,k in ipairs{"v"..inw,"m"..inw} do
+            vex(a[1],{r,r,k,"i8"},2,0,1,3,1,false,w==256 and 1 or 0,a[2],
+                {features=a[3] and w==256 and {"avx","avx2"} or {"avx"},imm=1,imm_policy="unsigned",access="write"})
+        end
+    end
+end
+for _,a in ipairs{{"vpermd","36"},{"vpermps","16"}} do
+    for _,k in ipairs{"v256","m256"} do
+        vex(a[1],{"v256","v256",k},2,0,1,2,1,false,1,a[2],{features={"avx","avx2"},access="write"})
+    end
+end
+fixed("vzeroupper","c5f877",{"avx"})
+fixed("vzeroall","c5fc77",{"avx"})
+
+-- AES/PCLMUL, SHA and GFNI. VEX.128 AES and PCLMUL existed before
+-- the distinct VAES and VPCLMULQDQ CPUID extensions.
+for _,a in ipairs{{"aesenc","dc"},{"aesenclast","dd"},{"aesdec","de"},{"aesdeclast","df"},{"aesimc","db",true}} do
+    vec2(a[1],"0f38"..a[2],"66","aes",128,false,a[3] and "write" or "readwrite")
+    for _,w in ipairs(a[3] and {128} or {128,256}) do
+        local r="v"..w
+        for _,k in ipairs{r,"m"..w} do
+            vex("v"..a[1],a[3] and {r,k} or {r,r,k},a[3] and 1 or 2,0,a[3] and -1 or 1,
+                2,1,false,w==256 and 1 or 0,a[2],{features=w==128 and {"avx","aes"} or {"avx","vaes"},access="write"})
+        end
+    end
+end
+vec2("aeskeygenassist","0f3adf","66","aes",128,true,"write")
+for _,k in ipairs{"v128","m128"} do
+    vex("vaeskeygenassist",{"v128",k,"i8"},1,0,-1,3,1,false,0,"df",
+        {features={"avx","aes"},imm=1,imm_policy="unsigned",access="write"})
+end
+vec2("pclmulqdq","0f3a44","66","pclmulqdq",128,true)
+for _,w in ipairs{128,256} do
+    local r="v"..w
+    for _,k in ipairs{r,"m"..w} do
+        vex("vpclmulqdq",{r,r,k,"i8"},2,0,1,3,1,false,w==256 and 1 or 0,"44",
+            {features=w==128 and {"avx","pclmulqdq"} or {"avx","vpclmulqdq"},imm=1,imm_policy="unsigned",access="write"})
+    end
+end
+for _,a in ipairs{{"sha1nexte","c8"},{"sha1msg1","c9"},{"sha1msg2","ca"},
+    {"sha256rnds2","cb"},{"sha256msg1","cc"},{"sha256msg2","cd"}} do
+    vec2(a[1],"0f38"..a[2],"","sha",128)
+end
+for _,k in ipairs{"v128","m128"} do
+    legacy("sha256rnds2",{"v128",k,"v128"},1,0,"0f38cb","",false,
+        {features={"sha"},constraints={[3]="xmm0"},check="require(r2 == 0);",access="readwrite"})
+end
+vec2("sha1rnds4","0f3acc","","sha",128,true)
+local gf={{"gf2p8mulb",2,"cf",false},{"gf2p8affineqb",3,"ce",true},{"gf2p8affineinvqb",3,"cf",true}}
+for _,a in ipairs(gf) do
+    vec2(a[1],(a[2]==2 and "0f38" or "0f3a")..a[3],"66","gfni",128,a[4])
+    for _,w in ipairs{128,256} do
+        local r="v"..w
+        for _,k in ipairs{r,"m"..w} do
+            local args={r,r,k}
+            if a[4] then args[4]="i8" end
+            vex("v"..a[1],args,2,0,1,a[2],1,a[4],w==256 and 1 or 0,a[3],
+                {features={"avx","gfni"},imm=a[4] and 1 or nil,imm_policy="unsigned",access="write"})
+        end
+    end
+end
+
+-- EVEX full-vector, scalar, and broadcast tuple sizes. In a normalized
+-- memory operand the caller chooses MOD=01 (scaled disp8) or MOD=10
+-- (unscaled disp32); the recipe checks divisibility before compressing.
+local function evex(name,ops,rm,reg,v,map,pp,w,l,opcode,opt)
+    local mem=is_mem(ops,rm)
+    local R=extension(ops,reg)
+    local R2=operand(reg).."/16"
+    local B=extension(ops,rm)
+    local X=mem and "x"..rm or operand(rm).."/16"
+    local V=v<0 and "0" or operand(v)
+    local mask=opt.masking and "mask%8" or "0"
+    local zero=opt.masking=="merge-zero" and "+128*(mask/8)" or ""
+    local code=registers(ops,31)
+    if mem then code=code..address(rm)..addr_prefix(rm) end
+    if opt.masking then
+        code=code..range("mask",0,opt.masking=="merge-zero" and 15 or 7)
+        if opt.masking=="merge-zero" then code=code.."require(mask != 8);" end
+    end
+    if opt.imm then code=code..immediate(8,"unsigned") end
+    code=code..("emit8(0x62);emit8(%d-128*(%s)-64*(%s)-32*(%s)-16*(%s));"..
+        "emit8(%d-8*(%s%%16));emit8(%d-8*(%s/16)+%s%s);"):format(
+        240+map,R,X,B,R2,124+(w and 128 or 0)+pp,V,
+        8+32*l+(opt.broadcast and 16 or 0),V,mask,zero)
+    code=code..bytes(opcode)..modrm(ops,rm,field(ops,reg),opt.imm or 0,opt.scale)
+    if opt.imm then code=code.."emit8(imm);" end
+    form(name,ops,code,opt)
+end
+local function evfamily(name,ops,rm,reg,v,map,pp,w,vl,opcode,scale,features,broadcast,imm,store)
+    if imm then ops[#ops+1]="i8" end
+    evex(name,ops,rm,reg,v,map,pp,w,vl,opcode,{scale=scale,features=features,
+        id="_evex"..(broadcast and "_bcst" or ""),broadcast=broadcast,imm=imm and 1 or nil,imm_policy="unsigned",
+        access=store and "write" or "readwrite",masking=store and "merge" or "merge-zero"})
+end
+for _,a in ipairs{{"add","58"},{"mul","59"},{"sub","5c"},{"min","5d"},{"div","5e"},{"max","5f"},{"sqrt","51",true}} do
+    for _,f in ipairs{ps,pd,ss,sd} do
+        local scalar,d=f[5]<128,f[3]%2==1
+        local elt=d and 64 or 32
+        local unary=a[3] and not scalar
+        for _,width in ipairs(scalar and {128} or {128,256,512}) do
+            local r="v"..width
+            local vl=width==512 and 2 or width==256 and 1 or 0
+            local fs=scalar or vl==2
+            for _,src in ipairs(scalar and {r,"m"..elt} or {r,"m"..width,"m"..elt}) do
+                local bc=not scalar and src=="m"..elt
+                local args=unary and {r,src} or {r,r,src}
+                evfamily("v"..a[1]..f[1],args,unary and 1 or 2,0,unary and -1 or 1,
+                    1,f[3],d,vl,a[2],(bc or scalar) and elt//8 or width//8,
+                    fs and {"avx512"} or {"avx512","avx512vl"},bc and width//elt or nil)
+            end
+        end
+    end
+end
+for _,a in ipairs{{"vmovaps","28","29",0,false},{"vmovapd","28","29",1,true},
+    {"vmovups","10","11",0,false},{"vmovupd","10","11",1,true},
+    {"vmovdqa32","6f","7f",1,false},{"vmovdqa64","6f","7f",1,true},
+    {"vmovdqu32","6f","7f",2,false},{"vmovdqu64","6f","7f",2,true},
+    {"vmovdqu8","6f","7f",3,false,"avx512bw"},{"vmovdqu16","6f","7f",3,true,"avx512bw"}} do
+    for _,width in ipairs{128,256,512} do
+        local r,m="v"..width,"m"..width
+        local vl=width==512 and 2 or width==256 and 1 or 0
+        local fs=vl==2 and {"avx512"} or {"avx512","avx512vl"}
+        if a[6] then fs[#fs+1]=a[6] end
+        for _,k in ipairs{r,m} do
+            evfamily(a[1],{r,k},1,0,-1,1,a[4],a[5],vl,a[2],width//8,fs)
+        end
+        evfamily(a[1],{m,r},0,1,-1,1,a[4],a[5],vl,a[3],width//8,fs,nil,nil,true)
+    end
+end
+for _,a in ipairs{
+    {"vpaddd","fe",1,1,false},{"vpaddq","d4",1,1,true},{"vpsubd","fa",1,1,false},{"vpsubq","fb",1,1,true},
+    {"vpandd","db",1,1,false},{"vpandq","db",1,1,true},{"vpandnd","df",1,1,false},{"vpandnq","df",1,1,true},
+    {"vpord","eb",1,1,false},{"vporq","eb",1,1,true},{"vpxord","ef",1,1,false},{"vpxorq","ef",1,1,true},
+    {"vpmulld","40",2,1,false},{"vpmullq","40",2,1,true,"avx512dq"},
+    {"vaesenc","dc",2,1,false,"vaes",true},{"vaesenclast","dd",2,1,false,"vaes",true},
+    {"vaesdec","de",2,1,false,"vaes",true},{"vaesdeclast","df",2,1,false,"vaes",true},
+    {"vpclmulqdq","44",3,1,false,"vpclmulqdq",true,true},
+    {"vgf2p8mulb","cf",2,1,false,"gfni",false,false,true},
+    {"vgf2p8affineqb","ce",3,1,true,"gfni",false,true,true},
+    {"vgf2p8affineinvqb","cf",3,1,true,"gfni",false,true,true},
+} do
+    for _,width in ipairs{128,256,512} do
+        local r,m="v"..width,"m"..width
+        local elt=a[5] and 64 or 32
+        local vl=width==512 and 2 or width==256 and 1 or 0
+        local fs=vl==2 and {"avx512"} or {"avx512","avx512vl"}
+        if a[6] then fs[#fs+1]=a[6] end
+        if a[9] then fs[#fs+1]="avx512bw" end
+        for _,k in ipairs(a[6] and {r,m} or {r,m,"m"..elt}) do
+            local broadcast=k=="m"..elt and width//elt or nil
+            if a[7] then
+                local ops={r,r,k}
+                if a[8] then ops[4]="i8" end
+                evex(a[1],ops,2,0,1,a[3],a[4],a[5],vl,a[2],
+                    {scale=width//8,features=fs,id="_evex",imm=a[8] and 1 or nil,imm_policy="unsigned",access="write"})
+            else evfamily(a[1],{r,r,k},2,0,1,a[3],a[4],a[5],vl,a[2],broadcast and elt//8 or width//8,fs,broadcast,a[8]) end
+        end
+    end
+end
+
+-- AVX-512 opmask registers use VEX encodings. The physical register class
+-- is 64 bits, but b/w/d/q choose how many mask bits each operation uses.
+for _,a in ipairs{{"b",8,1,false,"avx512dq"},{"w",16,0,false},
+    {"d",32,1,true,"avx512bw"},{"q",64,0,true,"avx512bw"}} do
+    local s,w,pp,wide,k=a[1],a[2],a[3],a[4],"k64"
+    local fs=a[5] and {"avx512",a[5]} or {"avx512"}
+    local mov="kmov"..s
+    for _,src in ipairs{k,"m"..w} do
+        vex(mov,{k,src},1,0,-1,1,pp,wide,0,"90",{features=fs,access="write"})
+    end
+    vex(mov,{"m"..w,k},0,1,-1,1,pp,wide,0,"91",{features=fs,access="write"})
+    local g,gpp=w==64 and "r64" or "r32",w>=32 and 3 or pp
+    vex(mov,{k,g},1,0,-1,1,gpp,w==64,0,"92",{features=fs,access="write"})
+    vex(mov,{g,k},1,0,-1,1,gpp,w==64,0,"93",{features=fs,access="write"})
+    for _,v in ipairs{{"kand","41"},{"kandn","42"},{"kor","45"},{"kxnor","46"},{"kxor","47"},{"kadd","4a"}} do
+        local active=v[1]=="kadd" and w==16 and {"avx512","avx512dq"} or fs
+        vex(v[1]..s,{k,k,k},2,0,1,1,pp,wide,1,v[2],{features=active,access="write"})
+    end
+    for _,v in ipairs{{"knot","44"},{"kortest","98"},{"ktest","99"}} do
+        local active=v[1]=="ktest" and w==16 and {"avx512","avx512dq"} or fs
+        vex(v[1]..s,{k,k},1,0,-1,1,pp,wide,0,v[2],{features=active,access=v[1]=="knot" and "write" or "read"})
+    end
+    for _,v in ipairs{{"kshiftl",0x32},{"kshiftr",0x30}} do
+        vex(v[1]..s,{k,k,"i8"},1,0,-1,3,1,w==16 or w==64,0,hex(v[2]+(wide and 1 or 0)),
+            {features=fs,access="write",imm=1,imm_policy="unsigned"})
+    end
+end
+for _,a in ipairs{{"kunpckbw",1,false},{"kunpckwd",0,false,"avx512bw"},{"kunpckdq",0,true,"avx512bw"}} do
+    vex(a[1],{"k64","k64","k64"},2,0,1,1,a[2],a[3],1,"4b",
+        {features=a[4] and {"avx512",a[4]} or {"avx512"},access="write"})
+end
+
+-- x87 register stack, arithmetic and typed memory forms.
+local x87={"x87"}
+for _,a in ipairs{
+    {"fnop","d9d0"},{"fchs","d9e0"},{"fabs","d9e1"},{"ftst","d9e4"},{"fxam","d9e5"},
+    {"fld1","d9e8"},{"fldl2t","d9e9"},{"fldl2e","d9ea"},{"fldpi","d9eb"},
+    {"fldlg2","d9ec"},{"fldln2","d9ed"},{"fldz","d9ee"},
+    {"f2xm1","d9f0"},{"fyl2x","d9f1"},{"fptan","d9f2"},{"fpatan","d9f3"},{"fxtract","d9f4"},
+    {"fprem1","d9f5"},{"fdecstp","d9f6"},{"fincstp","d9f7"},{"fprem","d9f8"},{"fyl2xp1","d9f9"},
+    {"fsqrt","d9fa"},{"fsincos","d9fb"},{"frndint","d9fc"},{"fscale","d9fd"},{"fsin","d9fe"},{"fcos","d9ff"},
+    {"fcompp","ded9"},{"fucompp","dae9"},{"fnclex","dbe2"},{"fclex","9bdbe2"},{"fninit","dbe3"},
+    {"finit","9bdbe3"},{"fwait","9b"},
+} do fixed(a[1],a[2],x87) end
+for _,a in ipairs{{"fld","d9",0xc0},{"fxch","d9",0xc8},{"ffree","dd",0xc0},{"fst","dd",0xd0},
+    {"fstp","dd",0xd8},{"fucom","dd",0xe0},{"fucomp","dd",0xe8},{"fcom","d8",0xd0},{"fcomp","d8",0xd8}} do
+    form(a[1],{"t80"},range("r0",0,7)..bytes(a[2]).."emit8("..a[3].."+r0);",{features=x87})
+end
+for _,a in ipairs{{"fadd",0xc0,0xc0},{"fmul",0xc8,0xc8},{"fsub",0xe0,0xe8},
+    {"fsubr",0xe8,0xe0},{"fdiv",0xf0,0xf8},{"fdivr",0xf8,0xf0}} do
+    local args={"t80","t80"}
+    form(a[1],args,"require(r0 == 0);"..range("r1",0,7)..bytes("d8").."emit8("..a[2].."+r1);",
+        {features=x87,constraints={[1]="st0"}})
+    form(a[1],args,"require(r1 == 0);"..range("r0",0,7)..bytes("dc").."emit8("..a[3].."+r0);",
+        {id="_reverse",features=x87,constraints={[2]="st0"},syntaxes=(a[2]~=a[3] and {"intel"} or nil)})
+    form(a[1].."p",args,"require(r1 == 0);"..range("r0",0,7)..bytes("de").."emit8("..a[3].."+r0);",
+        {features=x87,constraints={[2]="st0"},syntaxes=(a[2]~=a[3] and {"intel"} or nil)})
+    form(a[1].."p",{},bytes("de"..hex(a[3]+1)),{features=x87,syntaxes=a[2]~=a[3] and {"intel"} or nil})
+end
+for _,a in ipairs{{"fcomi","db",0xf0},{"fucomi","db",0xe8},{"fcomip","df",0xf0},{"fucomip","df",0xe8},
+    {"fcmovb","da",0xc0},{"fcmove","da",0xc8},{"fcmovbe","da",0xd0},{"fcmovu","da",0xd8},
+    {"fcmovnb","db",0xc0},{"fcmovne","db",0xc8},{"fcmovnbe","db",0xd0},{"fcmovnu","db",0xd8}} do
+    form(a[1],{"t80","t80"},"require(r0 == 0);"..range("r1",0,7)..bytes(a[2]).."emit8("..a[3].."+r1);",
+        {features=x87,constraints={[1]="st0"}})
+end
+for i,name in ipairs{"fadd","fmul","fcom","fcomp","fsub","fsubr","fdiv","fdivr"} do
+    for _,a in ipairs{{32,"d8","s"},{64,"dc","l"}} do
+        legacy(name,{"m"..a[1]},0,-i,a[2],"",false,{features=x87,att=name..a[3]})
+    end
+    local int="fi"..name:sub(2)
+    for _,a in ipairs{{16,"de","s"},{32,"da","l"}} do
+        legacy(int,{"m"..a[1]},0,-i,a[2],"",false,{features=x87,att=int..a[3]})
+    end
+end
+for _,a in ipairs{
+    {"fld",32,"d9",0,"flds"},{"fld",64,"dd",0,"fldl"},{"fld",80,"db",5,"fldt"},
+    {"fst",32,"d9",2,"fsts"},{"fst",64,"dd",2,"fstl"},
+    {"fstp",32,"d9",3,"fstps"},{"fstp",64,"dd",3,"fstpl"},{"fstp",80,"db",7,"fstpt"},
+    {"fild",16,"df",0,"filds"},{"fild",32,"db",0,"fildl"},{"fild",64,"df",5,"fildq"},
+    {"fist",16,"df",2,"fists"},{"fist",32,"db",2,"fistl"},
+    {"fistp",16,"df",3,"fistps"},{"fistp",32,"db",3,"fistpl"},{"fistp",64,"df",7,"fistpq"},
+    {"fisttp",16,"df",1,"fisttps","sse3"},{"fisttp",32,"db",1,"fisttpl","sse3"},{"fisttp",64,"dd",1,"fisttpq","sse3"},
+    {"fbld",80,"df",4},{"fbstp",80,"df",6},
+    {"fldcw",16,"d9",5},{"fnstcw",16,"d9",7},{"fstcw",16,"d9",7,nil,nil,"9b"},
+    {"fnstsw",16,"dd",7},{"fstsw",16,"dd",7,nil,nil,"9b"},
+    {"fldenv",224,"d9",4},{"fnstenv",224,"d9",6},{"fstenv",224,"d9",6,nil,nil,"9b"},
+    {"frstor",864,"dd",4},{"fnsave",864,"dd",6},{"fsave",864,"dd",6,nil,nil,"9b"},
+    {"fldenv",112,"d9",4,nil,nil,nil,"66"},{"fnstenv",112,"d9",6,nil,nil,nil,"66"},
+    {"fstenv",112,"d9",6,nil,nil,"9b","66"},{"frstor",752,"dd",4,nil,nil,nil,"66"},
+    {"fnsave",752,"dd",6,nil,nil,nil,"66"},{"fsave",752,"dd",6,nil,nil,"9b","66"},
+} do
+    legacy(a[1],{"m"..a[2]},0,-a[4]-1,a[3],a[8] or "",false,
+        {features=a[6] and {"x87",a[6]} or x87,att=a[5],group1=a[7]})
+end
+for _,a in ipairs{{"fnstsw","dfe0"},{"fstsw","9bdfe0"}} do
+    form(a[1],{"r16"},"require(r0 == 0);"..bytes(a[2]),{features=x87,constraints={[1]="ax"},access="write"})
+end
+end
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".data.rel.ro", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tdata", flags = { "write", "alloc", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tbss", flags = { "write", "alloc", "zerofill", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".init", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".fini", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".plt", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".got", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".eh_frame", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".comment", flags = { "merge", "readonly", "meta" }, align = 1, content = "meta" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_weak", binding = "weak", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "tls_var", binding = "tls", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+symas.linkage{ name = "hidden_func", binding = "global", visibility = "hidden", symtype = "func" }
+
+-- ELF psABI Table 4.9 plus the large-model GOT/PLT relocations 27–31.
+-- G is the symbol's GOT entry offset, GOT the base, L the PLT entry
+-- address, and Z the symbol size. Only instruction recipes emit records;
+-- this catalog also describes dynamic, data and relaxation relocations.
+for _,a in ipairs{
+    {0,"NONE",0,"none"},{1,"64",64,"S + A"},{2,"PC32",32,"S + A - P",true,true},
+    {3,"GOT32",32,"G + A"},{4,"PLT32",32,"L + A - P",true,true},{5,"COPY",0,"none"},
+    {6,"GLOB_DAT",64,"S"},{7,"JUMP_SLOT",64,"S"},{8,"RELATIVE",64,"B + A"},
+    {9,"GOTPCREL",32,"G + GOT + A - P",true,true},{10,"32",32,"S + A"},
+    {11,"32S",32,"S + A",true},{12,"16",16,"S + A"},
+    {13,"PC16",16,"S + A - P",true,true},{14,"8",8,"S + A"},
+    {15,"PC8",8,"S + A - P",true,true},{16,"DTPMOD64",64,"MODULE(S)"},
+    {17,"DTPOFF64",64,"DTPOFF(S) + A"},{18,"TPOFF64",64,"TPOFF(S) + A"},
+    {19,"TLSGD",32,"TLSGD(S) + A - P",true,true},{20,"TLSLD",32,"TLSLD(S) + A - P",true,true},
+    {21,"DTPOFF32",32,"DTPOFF(S) + A",true},{22,"GOTTPOFF",32,"GOTTPOFF(S) + A - P",true,true},
+    {23,"TPOFF32",32,"TPOFF(S) + A",true},{24,"PC64",64,"S + A - P",true,true},
+    {25,"GOTOFF64",64,"S + A - GOT"},{26,"GOTPC32",32,"GOT + A - P",true,true},
+    {27,"GOT64",64,"G + A"},{28,"GOTPCREL64",64,"G + GOT + A - P",true,true},
+    {29,"GOTPC64",64,"GOT + A - P",true,true},{30,"GOTPLT64",64,"G + A"},
+    {31,"PLTOFF64",64,"L + A - GOT"},{32,"SIZE32",32,"Z + A"},{33,"SIZE64",64,"Z + A"},
+    {34,"GOTPC32_TLSDESC",32,"TLSDESC(S) + A - P",true,true},{35,"TLSDESC_CALL",0,"none"},
+    {36,"TLSDESC",128,"TLSDESC(S)"},{37,"IRELATIVE",64,"INDIRECT(B + A)"},
+    {38,"RELATIVE64",64,"B + A"},
+    {41,"GOTPCRELX",32,"G + GOT + A - P",true,true},
+    {42,"REX_GOTPCRELX",32,"G + GOT + A - P",true,true},
+} do
+    symas.reloc{name="R_X86_64_"..a[2],id=a[1],width=a[3],expr=a[4],signed=a[5],pcrel=a[6]}
+end
+for n=4,6 do
+    for i,a in ipairs{{"GOTPCRELX","G + GOT + A - P"},{"GOTTPOFF","GOTTPOFF(S) + A - P"},
+        {"GOTPC32_TLSDESC","TLSDESC(S) + A - P"}} do
+        symas.reloc{name="R_X86_64_CODE_"..n.."_"..a[1],id=43+3*(n-4)+i-1,
+            width=32,expr=a[2],signed=true,pcrel=true}
+    end
+end
+
+symas.debug{ msg = "x86-64 base + bmi + sse/avx/fma + aes + x87 + priv", kind = "target", ref = "" }
+symas.debug{ msg = "vector forms require sse/avx/fma", kind = "form", ref = "vaddps" }
+symas.debug{ msg = "privileged forms require priv", kind = "form", ref = "cli" }
+
+print(symas.emit())

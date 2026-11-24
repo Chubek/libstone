@@ -27,6 +27,7 @@ sandstone-as --bank x86.symas --syntax intel -o out.bin prog.s
 | `include/` | Public C/C++ headers (`sandstone.h`, `sandstone.hpp`; `domsymas.*` shims) |
 | `compiler/` | Spec compiler: JSON documents → `.symas` (`sandstone-spec-compiler`) |
 | `compiler/stdspec/` | Shipped `.dsymspec` architecture specifications (Lua DSL) |
+| `dsymspec/` | [LLSynth compiler and standard profiles for standalone C11 assembler includes](dsymspec/README.md) |
 | `assembler/` | Assembler framework (`libsandstone_assembler`) + `sandstone-as` CLI |
 | `archml/` | Architecture compiler, C/C++ APIs, standalone C++ code generation and 17 profiles |
 | `bindings/` | SWIG 4.0 interface (`sandstone.i`) + `generate-bindings.sh` |

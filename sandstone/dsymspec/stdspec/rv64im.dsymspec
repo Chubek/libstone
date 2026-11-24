@@ -1,0 +1,4 @@
+-- RV64IM / ELF64 / LP64 soft-float profile. Base I and M are enabled by
+-- default; in particular, C is off and the instruction alignment is 4 bytes.
+-- Binary128 ABI values pass in integer register/stack pairs, not Q registers.
+assert(loadfile("riscv64.dsymspec"))("rv64im")

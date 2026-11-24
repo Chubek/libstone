@@ -1,0 +1,3 @@
+-- RV32GC / ELF32 / ILP32D entry point. The shared source selects RV32
+-- register and relocation widths and omits RV64-only forms.
+assert(loadfile("riscv64.dsymspec"))("rv32gc")

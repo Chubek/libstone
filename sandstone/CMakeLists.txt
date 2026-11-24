@@ -4,6 +4,7 @@
 #   decoder/    SymAS databank library (lib `sandstone`, magic 0xCEEB09)
 #   include/    public C/C++ headers (sandstone.h/.hpp + domsymas shims)
 #   compiler/   spec compiler: JSON documents -> .symas banks
+#   dsymspec/   LLSynth spec compiler: .dsymspec -> C11 macro includes
 #   assembler/  assembler framework + `sandstone-as` CLI
 #   bindings/   SWIG interface (built via bindings/generate-bindings.sh)
 #   isa/        small `.isa` sources + loaders (Python/C++)
@@ -25,6 +26,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(SANDSTONE_BUILD_TOOLS "Build Sandstone command-line tools" "${LIBSTONE_BUILD_TOOLS}")
 
 option(SANDSTONE_BUILD_COMPILER "Build the spec compiler" ON)
+option(SANDSTONE_BUILD_DSYMSPEC "Generate standalone DSymspec assembler includes" OFF)
 option(SANDSTONE_BUILD_ASSEMBLER "Build the assembler framework and CLI" ON)
 option(SANDSTONE_BUILD_TESTS "Build and register tests" "${LIBSTONE_BUILD_TESTS}")
 option(SANDSTONE_BUILD_DOCS "Build documentation (needs Doxygen)" OFF)
@@ -92,6 +94,10 @@ install(DIRECTORY isa/
 
 if(SANDSTONE_BUILD_COMPILER)
   add_subdirectory(compiler)
+endif()
+
+if(SANDSTONE_BUILD_DSYMSPEC)
+  add_subdirectory(dsymspec)
 endif()
 
 if(SANDSTONE_BUILD_ASSEMBLER)

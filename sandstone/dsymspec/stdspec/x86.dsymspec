@@ -1,0 +1,320 @@
+-- x86.dsymspec — IA-32 / i386, SysV i386 (cdecl) ABI.
+-- Two syntaxes share one encoding: "intel" (default) and "att" (reversed).
+-- Data: TableGen X86RegisterInfo.td (GR32/GR16/GR8,
+-- FR32/VR128/VR256, EFLAGS/EIP) + X86.td features (SSE2..AVX512, FMA,
+-- BMI2, AES, POPCNT, SHA, RDRAND...), cross-checked via tablegen_inquiry +
+-- arch_oracle + toolchain_orace (ELF i386 relocs) + BFD i386 target
+-- (cdecl calling convention, ModR/M+SIB+disp+imm encoding).
+-- Operand names: dst, src, imm, sym.
+-- Strata: base | bmi/popcnt | sse/avx/fma | aes/sha | rdrnd | x87 | priv.
+local symas = require("backend").new("x86")
+
+symas.target{
+    arch = "x86", subarch = "i386",
+    addr_size = 32, op_size = 32, addr_def = 32, align = 1,
+    byte_order = "little", obj_format = "ELF32", abi = "SysV",
+    calling_conv = "cdecl",
+    features = { "base" },
+}
+
+symas.feature{ name = "base", desc = "i386 base integer" }
+symas.feature{ name = "cpuid", desc = "CPUID (not original i386)" }
+symas.feature{ name = "syscall", desc = "SYSCALL on AMD CPUs supporting the 32-bit form" }
+symas.feature{ name = "sse", desc = "Streaming SIMD Extensions" }
+symas.feature{ name = "sse2", desc = "SSE2" }
+symas.feature{ name = "sse3", desc = "SSE3" }
+symas.feature{ name = "ssse3", desc = "SSSE3" }
+symas.feature{ name = "sse4.1", desc = "SSE4.1" }
+symas.feature{ name = "sse4.2", desc = "SSE4.2" }
+symas.feature{ name = "avx", desc = "Advanced Vector Extensions" }
+symas.feature{ name = "avx2", desc = "AVX2" }
+symas.feature{ name = "avx512", desc = "AVX-512" }
+symas.feature{ name = "fma", desc = "FMA3" }
+symas.feature{ name = "bmi1", desc = "Bit Manipulation Instruction Set 1" }
+symas.feature{ name = "bmi2", desc = "Bit Manipulation Instruction Set 2" }
+symas.feature{ name = "aes", desc = "AES-NI" }
+symas.feature{ name = "vaes", desc = "vector AES" }
+symas.feature{ name = "pclmulqdq", desc = "carry-less multiply" }
+symas.feature{ name = "popcnt", desc = "POPCNT" }
+symas.feature{ name = "lzcnt", desc = "LZCNT" }
+symas.feature{ name = "movbe", desc = "MOVBE" }
+symas.feature{ name = "rdrnd", desc = "RDRAND" }
+symas.feature{ name = "rdseed", desc = "RDSEED" }
+symas.feature{ name = "sha", desc = "SHA extensions" }
+symas.feature{ name = "gfni", desc = "Galois Field New Instructions" }
+symas.feature{ name = "fsgsbase", desc = "FSGSBASE" }
+symas.feature{ name = "adx", desc = "ADX multi-precision add" }
+symas.feature{ name = "rdpid", desc = "RDPID" }
+symas.feature{ name = "clflushopt", desc = "CLFLUSHOPT" }
+symas.feature{ name = "clwb", desc = "CLWB" }
+symas.feature{ name = "x87", desc = "x87 floating point stack" }
+symas.feature{ name = "mmx", desc = "MMX" }
+symas.feature{ name = "cet", desc = "Control-flow Enforcement (SHSTK+IBT)" }
+symas.feature{ name = "rtm", desc = "Restricted Transactional Memory" }
+symas.feature{ name = "sgx", desc = "Software Guard Extensions" }
+symas.feature{ name = "serialize", desc = "SERIALIZE" }
+symas.feature{ name = "uintr", desc = "user interrupts" }
+symas.feature{ name = "cldemote", desc = "cache line demote" }
+symas.feature{ name = "movdiri", desc = "MOVDIRI direct store" }
+symas.feature{ name = "waitpkg", desc = "UMONITOR/UMWAIT/TPAUSE" }
+symas.feature{ name = "clzero", desc = "CLZERO" }
+symas.feature{ name = "priv", desc = "privileged system instructions" }
+
+-- IA-32 has no REX or extended GPRs; 8-bit encodings 4..7 select AH..BH.
+local gpr32 = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" }
+local gpr16 = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" }
+local gpr8  = { "al", "cl", "dl", "bl" }
+for i = 0, 7 do
+    symas.register{ name = gpr32[i + 1], class = "gpr", width = 32, enc = i, flags = { "readable", "writable" } }
+    symas.register{ name = gpr16[i + 1], class = "gpr", width = 16, enc = i, parent = gpr32[i + 1],
+                    sub_lo = 0, sub_hi = 16, flags = { "readable", "writable" } }
+    if i < 4 then
+        symas.register{ name = gpr8[i + 1], class = "gpr", width = 8, enc = i, parent = gpr16[i + 1],
+                        sub_lo = 0, sub_hi = 8, flags = { "readable", "writable" } }
+    end
+end
+symas.register{ name = "ah", class = "gpr", width = 8, enc = 4, parent = "eax", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "bh", class = "gpr", width = 8, enc = 7, parent = "ebx", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "ch", class = "gpr", width = 8, enc = 5, parent = "ecx", sub_lo = 8, sub_hi = 16 }
+symas.register{ name = "dh", class = "gpr", width = 8, enc = 6, parent = "edx", sub_lo = 8, sub_hi = 16 }
+-- Vector: XMM (128) / YMM (256), subregister-chained.
+for i = 0, 7 do
+    symas.register{ name = "ymm" .. i, class = "vec", width = 256, enc = i, flags = { "readable", "writable" } }
+end
+for i = 0, 7 do
+    symas.register{ name = "xmm" .. i, class = "vec", width = 128, enc = i, parent = "ymm" .. i,
+                    sub_lo = 0, sub_hi = 128, flags = { "readable", "writable" } }
+end
+-- x87 stack + MMX.
+for i = 0, 7 do
+    symas.register{ name = "st" .. i, class = "fp", width = 80, enc = i, flags = { "readable", "writable" } }
+end
+for i = 0, 7 do
+    symas.register{ name = "mm" .. i, class = "vec", width = 64, enc = i, flags = { "readable", "writable" } }
+end
+symas.register{ name = "eip", class = "special", width = 32, enc = 0 }
+symas.register{ name = "eflags", class = "status", width = 32, enc = 0 }
+for i, s in ipairs({ "es", "cs", "ss", "ds", "fs", "gs" }) do
+    symas.register{ name = s, class = "seg", width = 16, enc = i-1 }
+end
+for _, c in ipairs({ "cr0", "cr2", "cr3", "cr4" }) do
+    symas.register{ name = c, class = "ctrl", width = 32, enc = tonumber(c:sub(3)), flags = { "modedep" } }
+end
+for i = 0, 7 do
+    symas.register{ name = "dr" .. i, class = "debug", width = 32, enc = i, flags = { "modedep" } }
+end
+
+-- Register-direct legacy encodings. emit_modrm(reg,rm) supplies mod=11.
+symas.encoder{ name = "nop",   source = "emit8(0x90);", max_bytes = 1 }
+symas.encoder{ name = "ret",   source = "emit8(0xC3);", max_bytes = 1 }
+symas.encoder{ name = "mov",   source = "emit8(0x89); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "movimm", source = "require(r1 >= -2147483648 && r1 <= 4294967295); emit8(0xB8 + r0); emit32le(r1);", max_bytes = 5 }
+symas.encoder{ name = "movzx", source = "emit8(0x0F); emit8(0xB7); emit_modrm(r0, r1);", max_bytes = 3 }
+symas.encoder{ name = "movsx", source = "emit8(0x0F); emit8(0xBF); emit_modrm(r0, r1);", max_bytes = 3 }
+symas.encoder{ name = "xchg",  source = "emit8(0x87); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "add",   source = "emit8(0x01); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "sub",   source = "emit8(0x29); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "and",   source = "emit8(0x21); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "or",    source = "emit8(0x09); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "xor",   source = "emit8(0x31); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "adc",   source = "emit8(0x11); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "sbb",   source = "emit8(0x19); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "cmp",   source = "emit8(0x39); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "test",  source = "emit8(0x85); emit_modrm(src, dst);", max_bytes = 3 }
+symas.encoder{ name = "inc",   source = "emit8(0x40 + r0);", max_bytes = 1 }
+symas.encoder{ name = "dec",   source = "emit8(0x48 + r0);", max_bytes = 1 }
+symas.encoder{ name = "neg",   source = "emit8(0xF7); emit_modrm(3, dst);", max_bytes = 3 }
+symas.encoder{ name = "not",   source = "emit8(0xF7); emit_modrm(2, dst);", max_bytes = 3 }
+symas.encoder{ name = "imul",  source = "emit8(0x0F); emit8(0xAF); emit_modrm(r0, r1);", max_bytes = 3 }
+symas.encoder{ name = "div",   source = "emit8(0xF7); emit_modrm(6, r0);", max_bytes = 2 }
+symas.encoder{ name = "idiv",  source = "emit8(0xF7); emit_modrm(7, r0);", max_bytes = 2 }
+symas.encoder{ name = "shl",   source = "require(r1 == 1); emit8(0xD3); emit_modrm(4, r0);", max_bytes = 2 }
+symas.encoder{ name = "shr",   source = "require(r1 == 1); emit8(0xD3); emit_modrm(5, r0);", max_bytes = 2 }
+symas.encoder{ name = "sar",   source = "require(r1 == 1); emit8(0xD3); emit_modrm(7, r0);", max_bytes = 2 }
+symas.encoder{ name = "andn",  source = "emit8(0xC4); emit8(0xE2); emit8(0x78-r1*8); emit8(0xF2); emit_modrm(r0,r2);", max_bytes = 5 }
+symas.encoder{ name = "popcnt", source = "emit8(0xF3); emit8(0x0F); emit8(0xB8); emit_modrm(r0,r1);", max_bytes = 4 }
+symas.encoder{ name = "tzcnt", source = "emit8(0xF3); emit8(0x0F); emit8(0xBC); emit_modrm(r0,r1);", max_bytes = 4 }
+symas.encoder{ name = "lzcnt", source = "emit8(0xF3); emit8(0x0F); emit8(0xBD); emit_modrm(r0,r1);", max_bytes = 4 }
+symas.encoder{ name = "push",  source = "emit8(0x50 + dst);", max_bytes = 1 }
+symas.encoder{ name = "pop",   source = "emit8(0x58 + dst);", max_bytes = 1 }
+symas.encoder{ name = "pushf", source = "emit8(0x9C);", max_bytes = 1 }
+symas.encoder{ name = "popf",  source = "emit8(0x9D);", max_bytes = 1 }
+-- The generic object/flat-output convention uses zero rel32 placeholders
+-- and an end-relative addend. A future ELF32 REL writer must translate
+-- that convention to an in-place addend (-4 for a bare symbol).
+-- ELF32 uses REL: the reported addend is also stored in the disp32 field.
+symas.encoder{ name = "call",  source = "emit8(0xE8); emit_relocation(sym, R_386_PC32, -4); emit32le(-4);", max_bytes = 5, max_relocs = 1 }
+symas.encoder{ name = "jmp",   source = "emit8(0xE9); emit_relocation(sym, R_386_PC32, -4); emit32le(-4);", max_bytes = 5, max_relocs = 1 }
+symas.encoder{ name = "jcc",   source = "require(cond >= 0 && cond < 16); emit8(0x0F); emit8(0x80 + cond); emit_relocation(sym, R_386_PC32, -4); emit32le(-4);", max_bytes = 6, max_relocs = 1 }
+symas.encoder{ name = "leave", source = "emit8(0xC9);", max_bytes = 1 }
+symas.encoder{ name = "syscall", source = "emit8(0x0F); emit8(0x05);", max_bytes = 2 }
+symas.encoder{ name = "int",   source = "emit8(0xCD); emit8(imm);", max_bytes = 2 }
+symas.encoder{ name = "cpuid", source = "emit8(0x0F); emit8(0xA2);", max_bytes = 2 }
+symas.encoder{ name = "movaps", source = "emit8(0x0F); emit8(0x28); emit_modrm(r0,r1);", max_bytes = 3 }
+symas.encoder{ name = "addps", source = "emit8(0x0F); emit8(0x58); emit_modrm(r0,r1);", max_bytes = 3 }
+symas.encoder{ name = "vaddps", source = "emit8(0xC5); emit8(0xF8-r1*8); emit8(0x58); emit_modrm(r0,r2);", max_bytes = 4 }
+symas.encoder{ name = "vfmadd132ps", source = "emit8(0xC4); emit8(0xE2); emit8(0x79-r1*8); emit8(0x98); emit_modrm(r0,r2);", max_bytes = 5 }
+symas.encoder{ name = "aesenc", source = "emit8(0x66); emit8(0x0F); emit8(0x38); emit8(0xDC); emit_modrm(r0,r1);", max_bytes = 5 }
+symas.encoder{ name = "fld",   source = "emit8(0xD9); emit8(0xC0 + r0);", max_bytes = 2 }
+symas.encoder{ name = "fadd",  source = "require(r0 == 0); emit8(0xD8); emit8(0xC0 + r1);", max_bytes = 2 }
+symas.encoder{ name = "rdrand", source = "emit8(0x0F); emit8(0xC7); emit_modrm(6, r0);", max_bytes = 3 }
+symas.encoder{ name = "cli",   source = "emit8(0xFA);", max_bytes = 1 }
+symas.encoder{ name = "sti",   source = "emit8(0xFB);", max_bytes = 1 }
+symas.encoder{ name = "hlt",   source = "emit8(0xF4);", max_bytes = 1 }
+symas.encoder{ name = "pause", source = "emit8(0xF3); emit8(0x90);", max_bytes = 2 }
+
+local function r32() return { kind = "reg", class = "gpr", width = 32 } end
+local function w32() return { kind = "reg", class = "gpr", width = 32, access = "write" } end
+local function rw32() return { kind = "reg", class = "gpr", width = 32, access = "readwrite" } end
+local function xv() return { kind = "reg", class = "vec", width = 128 } end
+local function wxv() return { kind = "reg", class = "vec", width = 128, access = "write" } end
+
+for _, m in ipairs({ "nop", "ret", "mov", "movzx", "movsx", "xchg",
+    "add", "sub", "and", "or", "xor", "adc", "sbb", "cmp", "test",
+    "inc", "dec", "neg", "not", "imul", "div", "idiv", "shl", "shr", "sar",
+    "andn", "popcnt", "tzcnt", "lzcnt", "push", "pop", "pushf", "popf", "call", "jmp",
+    "jcc", "leave", "syscall", "int", "cpuid", "movaps", "addps", "vaddps",
+    "vfmadd132ps", "aesenc", "fld", "fadd", "rdrand", "cli", "sti", "hlt", "pause" }) do
+    local aliases=({rdrand={"rdrnd","rdrandl"},vfmadd132ps={"vfmadd"},
+        ret={"retl"},pushf={"pushfl"},popf={"popfl"},shl={"sal","shll","sall"},
+        shr={"shrl"},sar={"sarl"}})[m]
+    local scalar32={mov=true,add=true,sub=true,["and"]=true,["or"]=true,xor=true,
+        adc=true,sbb=true,cmp=true,test=true,inc=true,dec=true,neg=true,["not"]=true,
+        imul=true,div=true,idiv=true,push=true,pop=true,popcnt=true,tzcnt=true,lzcnt=true}
+    if not aliases and scalar32[m] then aliases={m.."l"} end
+    symas.mnemonic{ name = m, aliases=aliases }
+end
+symas.form{ mnemonic = "nop", encoder = "nop" }
+symas.form{ mnemonic = "ret", encoder = "ret", flags = { "return", "terminator" } }
+local imm32={kind="imm",width=32,signed=true,imm_min=-2147483648,imm_max=4294967295}
+symas.form{ mnemonic = "mov", encoder = "mov", operands = { w32(), r32() } }
+symas.form{ mnemonic = "mov", encoder = "movimm", operands = { w32(), imm32 } }
+symas.form{ mnemonic = "movzx", encoder = "movzx", operands = { w32(), { kind = "reg", class = "gpr", width = 16 } } }
+symas.form{ mnemonic = "movsx", encoder = "movsx", operands = { w32(), { kind = "reg", class = "gpr", width = 16 } } }
+symas.form{ mnemonic = "xchg", encoder = "xchg", operands = { rw32(), rw32() } }
+for _,m in ipairs({"add","sub","and","or","xor","adc","sbb","cmp","test","imul"}) do
+    local dest=(m=="cmp" or m=="test") and r32() or rw32()
+    symas.form{mnemonic=m,encoder=m,operands={dest,r32()}}
+end
+for _,m in ipairs({"inc","dec","neg","not"}) do symas.form{mnemonic=m,encoder=m,operands={rw32()}} end
+symas.form{ mnemonic = "div", encoder = "div", flags = { "may_trap" }, operands = { r32() } }
+symas.form{ mnemonic = "idiv", encoder = "idiv", flags = { "may_trap" }, operands = { r32() } }
+for _,m in ipairs({"shl","shr","sar"}) do
+    symas.form{mnemonic=m,encoder=m,operands={rw32(),{kind="reg",class="gpr",width=8,constraint="cl"}}}
+end
+symas.form{ mnemonic = "andn", encoder = "andn", required = { "bmi1" }, operands = { w32(), r32(), r32() } }
+symas.form{ mnemonic = "popcnt", encoder = "popcnt", required = { "popcnt" }, operands = { w32(), r32() } }
+symas.form{ mnemonic = "tzcnt", encoder = "tzcnt", required = { "bmi1" }, operands = { w32(), r32() } }
+symas.form{ mnemonic = "lzcnt", encoder = "lzcnt", required = { "lzcnt" }, operands = { w32(), r32() } }
+symas.form{ mnemonic = "push", encoder = "push", operands = { r32() } }
+symas.form{ mnemonic = "pop",  encoder = "pop",  operands = { w32() } }
+symas.form{ mnemonic = "pushf", encoder = "pushf" }
+symas.form{ mnemonic = "popf", encoder = "popf" }
+symas.form{ mnemonic = "call", encoder = "call", flags = { "branch", "reloc" }, operands = { { kind = "sym", width = 32 } } }
+symas.form{ mnemonic = "jmp", encoder = "jmp", flags = { "branch", "terminator", "reloc" }, operands = { { kind = "sym", width = 32 } } }
+symas.form{ mnemonic = "jcc", encoder = "jcc", flags = { "cond_branch", "reloc" },
+    operands = { { kind = "cond", width = 8 }, { kind = "sym", width = 32 } } }
+symas.form{ mnemonic = "leave", encoder = "leave" }
+symas.form{ mnemonic = "syscall", encoder = "syscall", required={"syscall"},flags = { "may_trap" } }
+symas.form{ mnemonic = "int", encoder = "int", flags = { "may_trap" }, operands = {
+    { kind = "imm", width = 8, signed = false, imm_min = 0, imm_max = 255 } } }
+symas.form{ mnemonic = "cpuid", encoder = "cpuid", required={"cpuid"} }
+symas.form{ mnemonic = "movaps", encoder = "movaps", required = { "sse" }, operands = { wxv(), xv() } }
+local xrw={kind="reg",class="vec",width=128,access="readwrite"}
+symas.form{ mnemonic = "addps", encoder = "addps", required = { "sse" }, operands = { xrw, xv() } }
+symas.form{ mnemonic = "vaddps", encoder = "vaddps", required = { "avx" },
+    operands = { wxv(), xv(), xv() } }
+symas.form{ mnemonic = "vfmadd132ps", encoder = "vfmadd132ps", required = { "avx", "fma" },
+    operands = { xrw, xv(), xv() } }
+symas.form{ mnemonic = "aesenc", encoder = "aesenc", required = { "aes", "sse2" }, operands = { xrw, xv() } }
+local st={kind="reg",class="fp",width=80}
+symas.form{ mnemonic = "fld", encoder = "fld", required = { "x87" }, operands = {st} }
+symas.form{ mnemonic = "fadd", encoder = "fadd", required = { "x87" }, operands = {
+    {kind="reg",class="fp",width=80,access="readwrite",constraint="st0"},st} }
+symas.form{ mnemonic = "rdrand", encoder = "rdrand", required = { "rdrnd" }, operands = { w32() } }
+symas.form{ mnemonic = "cli", encoder = "cli", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "sti", encoder = "sti", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "hlt", encoder = "hlt", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "pause", encoder = "pause" }
+
+local function extra(m,name,operands,code,n,flags)
+    symas.encoder{name=name,source=code,max_bytes=n,max_relocs=code:find("emit_relocation",1,true) and 1 or 0}
+    symas.form{mnemonic=m,encoder=name,operands=operands,flags=flags}
+end
+for _,op in ipairs({{"add",0},{"or",1},{"adc",2},{"sbb",3},{"and",4},{"sub",5},{"xor",6},{"cmp",7}}) do
+    local m=op[1]
+    extra(m,m.."_imm",{m=="cmp" and r32() or rw32(),imm32},
+        ("require(r1 >= -2147483648 && r1 <= 4294967295); "..
+         "if (r1 >= -128 && r1 <= 127) {emit8(0x83); emit_modrm(%d,r0); emit8(r1);} "..
+         "else {emit8(0x81); emit_modrm(%d,r0); emit32le(r1);}"):format(op[2],op[2]),6)
+end
+for _,op in ipairs({{"shl",4},{"shr",5},{"sar",7}}) do
+    extra(op[1],op[1].."_imm",{rw32(),{kind="imm",width=8,imm_min=0,imm_max=255}},
+        ("require(r1 >= 0 && r1 <= 255); if (r1 == 1) {emit8(0xd1); emit_modrm(%d,r0);} "..
+         "else {emit8(0xc1); emit_modrm(%d,r0); emit8(r1);}"):format(op[2],op[2]),3)
+end
+for _,op in ipairs({{"movzbl",0xb6,8},{"movzwl",0xb7,16},{"movsbl",0xbe,8},{"movswl",0xbf,16}}) do
+    symas.mnemonic{name=op[1]}
+    extra(op[1],op[1],{w32(),{kind="reg",class="gpr",width=op[3]}},
+          ("emit8(0x0f); emit8(%d); emit_modrm(r0,r1);"):format(op[2]),3)
+end
+local jcc = {{"jo"},{"jno"},{"jb","jc","jnae"},{"jae","jnb","jnc"},
+    {"je","jz"},{"jne","jnz"},{"jbe","jna"},{"ja","jnbe"},{"js"},{"jns"},
+    {"jp","jpe"},{"jnp","jpo"},{"jl","jnge"},{"jge","jnl"},{"jle","jng"},{"jg","jnle"}}
+for i,names in ipairs(jcc) do
+    local m,opcode=names[1],0x80+i-1
+    symas.mnemonic{name=m,aliases={table.unpack(names,2)}}
+    extra(m,m,{{kind="sym",width=32}},("emit8(0x0f); emit8(%d); emit_relocation(sym, R_386_PC32, -4); emit32le(-4);"):
+        format(opcode),6,{"cond_branch","reloc"})
+end
+
+symas.syntax{ name = "intel", comment = ";", separator = ", " }
+symas.syntax{ name = "att", order = 1, reg_prefix = "%", imm_prefix = "$", comment = "#", separator = ", " }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tdata", flags = { "write", "alloc", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tbss", flags = { "write", "alloc", "zerofill", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".init", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".fini", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".plt", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".got", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".eh_frame", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".comment", flags = { "merge", "readonly", "meta" }, align = 1, content = "meta" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_weak", binding = "weak", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "tls_var", binding = "tls", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+symas.linkage{ name = "hidden_func", binding = "global", visibility = "hidden", symtype = "func" }
+
+symas.reloc{ name = "R_386_NONE", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_386_32", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_386_8", width = 8, expr = "S + A" }
+symas.reloc{ name = "R_386_16", width = 16, expr = "S + A" }
+symas.reloc{ name = "R_386_PC8", width = 8, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_386_PC16", width = 16, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_386_PC32", width = 32, signed = true, pcrel = true, addend = "infield", expr = "S + A - P" }
+symas.reloc{ name = "R_386_PLT32", width = 32, signed = true, pcrel = true, addend = "infield", expr = "PLT(S) + A - P" }
+symas.reloc{ name = "R_386_GOT32", width = 32, expr = "GOT(S) + A" }
+symas.reloc{ name = "R_386_GOTPC", width = 32, pcrel = true, expr = "GOT + A - P" }
+symas.reloc{ name = "R_386_GOTOFF", width = 32, expr = "S + A - GOT" }
+symas.reloc{ name = "R_386_GOT32X", width = 32, expr = "GOT(S) + A" }
+symas.reloc{ name = "R_386_TLS_GD", width = 32, pcrel = true, expr = "TLS(S) + A - P" }
+symas.reloc{ name = "R_386_TLS_LDM", width = 32, expr = "TLS_GOT(S) + A" }
+symas.reloc{ name = "R_386_TLS_TPOFF32", width = 32, expr = "TLS(S) + A" }
+symas.reloc{ name = "R_386_TLS_DTPOFF32", width = 32, expr = "TLS(S) + A" }
+symas.reloc{ name = "R_386_GLOB_DAT", width = 32, expr = "S" }
+symas.reloc{ name = "R_386_JMP_SLOT", width = 32, expr = "S" }
+symas.reloc{ name = "R_386_RELATIVE", width = 32, expr = "B + A" }
+symas.reloc{ name = "R_386_IRELATIVE", width = 32, expr = "B + A" }
+symas.reloc{ name = "R_386_COPY", width = 32, expr = "S" }
+
+symas.debug{ msg = "i386 base + bmi + sse/avx/fma + aes + x87 + priv", kind = "target", ref = "" }
+symas.debug{ msg = "vector forms require sse/avx/fma", kind = "form", ref = "vaddps" }
+symas.debug{ msg = "privileged forms require priv", kind = "form", ref = "cli" }
+
+print(symas.emit())

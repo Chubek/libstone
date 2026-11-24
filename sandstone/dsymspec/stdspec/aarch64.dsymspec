@@ -1,0 +1,1474 @@
+-- aarch64.dsymspec — AArch64 (ARMv8-A/ARMv9-A A64), AAPCS64 ABI.
+-- Encoding families follow the Arm A64 instruction index and LLVM 22
+-- AArch64InstrInfo.td. The default profile is Armv8.0-A + FP + AdvSIMD,
+-- not an aggregate Armv9-A CPU. Optional forms carry explicit features.
+-- Normalized operands and coverage: tests/aarch64/README.md.
+-- Strata: base | fp/neon | sve/sve2 | sme | crypto/hash/crc | lse | rcpc |
+--   paca/bti | mte | priv/system.
+local symas = require("backend").new("aarch64")
+local add_form = symas.form
+symas.form = function(record)
+    local required = {"base"}
+    for _, feature in ipairs(record.required or {}) do required[#required+1]=feature end
+    record.required = required
+    return add_form(record)
+end
+
+symas.target{
+    arch = "aarch64", subarch = "armv8-a",
+    addr_size = 64, op_size = 32, addr_def = 64, align = 4,
+    byte_order = "little", obj_format = "ELF64", abi = "AAPCS64",
+    calling_conv = "aapcs64",
+    features = { "base", "fp", "neon" },
+}
+
+symas.feature{ name = "base", desc = "A64 base integer + branches + loads" }
+symas.feature{ name = "fp", desc = "Armv8 floating point (FEAT_FP)" }
+symas.feature{ name = "neon", desc = "Advanced SIMD (NEON, FEAT_AdvSIMD)" }
+symas.feature{ name = "aes", desc = "AES cryptography (FEAT_AES)" }
+symas.feature{ name = "pmull", desc = "64-bit polynomial multiplication (FEAT_PMULL)" }
+symas.feature{ name = "sha2", desc = "SHA1/SHA2 cryptography" }
+symas.feature{ name = "sha3", desc = "SHA3/SHA512 cryptography" }
+symas.feature{ name = "sm4", desc = "SM3/SM4 cryptography" }
+symas.feature{ name = "lse", desc = "Large System Extensions (atomics, FEAT_LSE)" }
+symas.feature{ name = "crc", desc = "CRC32 checksum (FEAT_CRC32)" }
+symas.feature{ name = "rcpc", desc = "RCpc load-acquire (FEAT_LRCPC)" }
+symas.feature{ name = "rcpc2", desc = "Unscaled RCpc loads/stores (FEAT_LRCPC2)" }
+symas.feature{ name = "fp16", desc = "half-precision floating point" }
+symas.feature{ name = "bf16", desc = "BFloat16 (FEAT_BF16)" }
+symas.feature{ name = "i8mm", desc = "int8 matrix multiply" }
+symas.feature{ name = "sve", desc = "Scalable Vector Extension (FEAT_SVE)" }
+symas.feature{ name = "sve2", desc = "Scalable Vector Extension 2" }
+symas.feature{ name = "sme", desc = "Scalable Matrix Extension (FEAT_SME)" }
+symas.feature{ name = "sme2", desc = "Scalable Matrix Extension 2" }
+symas.feature{ name = "paca", desc = "pointer authentication (FEAT_PAC)" }
+symas.feature{ name = "bti", desc = "branch target identification (FEAT_BTI)" }
+symas.feature{ name = "mte", desc = "memory tagging (FEAT_MTE)" }
+symas.feature{ name = "ls64", desc = "64-byte atomic loads/stores (FEAT_LS64)" }
+symas.feature{ name = "cssc", desc = "common short sequence compression" }
+symas.feature{ name = "flagm", desc = "flag manipulation (FEAT_FlagM)" }
+symas.feature{ name = "dit", desc = "data-independent timing state (FEAT_DIT)" }
+symas.feature{ name = "rng", desc = "random number (FEAT_RNG)" }
+symas.feature{ name = "dp", desc = "dot product (FEAT_DotProd)" }
+symas.feature{ name = "jscvt", desc = "JavaScript float-to-integer conversion (FEAT_JSCVT)" }
+symas.feature{ name = "frintts", desc = "float round to int (FEAT_FRINTTS)" }
+symas.feature{ name = "sb", desc = "speculation barrier (FEAT_SB)" }
+symas.feature{ name = "ssbs", desc = "speculative store bypass safe (FEAT_SSBS)" }
+symas.feature{ name = "predres", desc = "prediction restriction (FEAT_PREDRES)" }
+symas.feature{ name = "priv", desc = "privileged system instructions" }
+
+-- GPRs x0..x30 + w0..w30 views (TableGen GPR64common/GPR32common).
+for i = 0, 30 do
+    symas.register{ name = "x" .. i, class = "gpr", width = 64, enc = i,
+                    flags = { "readable", "writable" } }
+end
+for i = 0, 30 do
+    symas.register{ name = "w" .. i, class = "gpr", width = 32, enc = i,
+                    parent = "x" .. i, sub_lo = 0, sub_hi = 32,
+                    flags = { "readable", "writable" } }
+end
+symas.register{ name = "sp",  class = "gpr", width = 64, enc = 31, flags = { "readable", "writable" } }
+symas.register{ name = "wsp", class = "gpr", width = 32, enc = 31, parent = "sp", sub_lo = 0, sub_hi = 32, flags = { "readable", "writable" } }
+-- A destination may name ZR; the instruction architecturally discards the write.
+symas.register{ name = "xzr", class = "gpr", width = 64, enc = 31, flags = { "readable", "writable" } }
+symas.register{ name = "wzr", class = "gpr", width = 32, enc = 31, flags = { "readable", "writable" } }
+symas.register{ name = "fp", class = "gpr", width = 64, enc = 29, parent = "x29", sub_lo = 0, sub_hi = 64, flags = { "readable", "writable" } }
+symas.register{ name = "lr", class = "gpr", width = 64, enc = 30, parent = "x30", sub_lo = 0, sub_hi = 64, flags = { "readable", "writable" } }
+-- SIMD/FP data registers v0..v31 + B/H/S/D/Q views (FPR8/16/32/64/128).
+for i = 0, 31 do
+    symas.register{ name = "v" .. i, class = "vec", width = 128, enc = i,
+                    flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "q" .. i, class = "vec", width = 128, enc = i, parent = "v" .. i,
+                    sub_lo = 0, sub_hi = 128, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "d" .. i, class = "fp", width = 64, enc = i, parent = "v" .. i,
+                    sub_lo = 0, sub_hi = 64, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "s" .. i, class = "fp", width = 32, enc = i, parent = "v" .. i,
+                    sub_lo = 0, sub_hi = 32, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "h" .. i, class = "fp", width = 16, enc = i, parent = "v" .. i,
+                    sub_lo = 0, sub_hi = 16, flags = { "readable", "writable" } }
+end
+for i = 0, 31 do
+    symas.register{ name = "b" .. i, class = "fp", width = 8, enc = i, parent = "v" .. i,
+                    sub_lo = 0, sub_hi = 8, flags = { "readable", "writable" } }
+end
+-- SVE vector (z0..z31) + predicate (p0..p15) registers.
+for i = 0, 31 do
+    symas.register{ name = "z" .. i, class = "vec", width = 128, enc = i,
+                    flags = { "readable", "writable" } }
+end
+for i = 0, 15 do
+    symas.register{ name = "p" .. i, class = "mask", width = 16, enc = i,
+                    flags = { "readable", "writable" } }
+end
+symas.register{ name = "ffr", class = "mask", width = 16, enc = 0, flags = { "readable", "writable" } }
+-- Status + system control registers.
+symas.register{ name = "pc",   class = "special", width = 64, enc = 0 }
+-- System register number is the packed op0:op1:CRn:CRm:op2 field (bits 20:5).
+local sysregs = {
+    {"nzcv",0xda10},{"fpcr",0xda20,"fp"},{"fpsr",0xda21,"fp"},
+    {"tpidr_el0",0xde82},{"tpidrro_el0",0xde83,nil,true},
+    {"ctr_el0",0xd801,nil,true},{"dczid_el0",0xd807,nil,true},
+    {"cntfrq_el0",0xdf00},{"cntpct_el0",0xdf01,nil,true},
+    {"cntv_tval_el0",0xdf18},{"cntv_ctl_el0",0xdf19},{"cntv_cval_el0",0xdf1a},
+    {"daif",0xda11,"priv"},{"spsr_el1",0xc200,"priv"},{"elr_el1",0xc201,"priv"},
+    {"sp_el0",0xc208,"priv"},{"spsel",0xc210,"priv"},{"currentel",0xc212,"priv",true},
+    {"sctlr_el1",0xc080,"priv"},{"tcr_el1",0xc102,"priv"},{"vbar_el1",0xc600,"priv"},
+    {"ttbr0_el1",0xc100,"priv"},{"ttbr1_el1",0xc101,"priv"},{"esr_el1",0xc290,"priv"},
+    {"far_el1",0xc300,"priv"},{"par_el1",0xc3a0,"priv"},{"cpacr_el1",0xc082,"priv"},
+    {"mair_el1",0xc510,"priv"},{"cntvct_el0",0xdf02,nil,true},
+    {"midr_el1",0xc000,"priv",true},{"mpidr_el1",0xc005,"priv",true},
+    {"rndr",0xd920,"rng",true},{"rndrrs",0xd921,"rng",true},
+}
+for _, c in ipairs(sysregs) do
+    local flags = {"readable"}
+    if not c[4] then flags[#flags+1]="writable" end
+    if c[3]=="priv" then flags[#flags+1]="modedep" end
+    symas.register{ name = c[1], class = "ctrl", width = 64, enc = c[2], flags = flags }
+end
+
+-- Encodings: shifts as multiplication (`<< 5` == *32, `<< 16` == *65536,
+-- `<< 10` == *1024). Fixed 32-bit, little-endian. Bases from the ARM ARM.
+symas.encoder{ name = "nop",  source = "emit32le(0xD503201F);", max_bytes = 4 }
+symas.encoder{ name = "dmb",  source = "emit32le(0xD5033FBF);", max_bytes = 4 }
+symas.encoder{ name = "dsb",  source = "emit32le(0xD5033F9F);", max_bytes = 4 }
+symas.encoder{ name = "isb",  source = "emit32le(0xD5033FDF);", max_bytes = 4 }
+symas.encoder{ name = "hint", source = "require(imm >= 0 && imm <= 127); emit32le(0xD503201F + imm*32);", max_bytes = 4 }
+-- Compatibility spellings below use plain vector/base registers and select
+-- one fixed arrangement, not arbitrary GAS SIMD shapes or register lists.
+symas.encoder{ name = "vadd", source = "emit32le(0x4E208400 + r0 + r1*32 + r2*65536);", max_bytes = 4 }
+symas.encoder{ name = "ld1",  source = "emit32le(0x4C407000 + r0 + r1*32);", max_bytes = 4 }
+symas.encoder{ name = "st1",  source = "emit32le(0x4C007000 + r0 + r1*32);", max_bytes = 4 }
+symas.encoder{ name = "aesd", source = "emit32le(0x4E285800 + r0 + r1*32);", max_bytes = 4 }
+symas.encoder{ name = "sha256h", source = "emit32le(0x5E004000 + r0 + r1*32 + r2*65536);", max_bytes = 4 }
+symas.encoder{ name = "udot", source = "emit32le(0x6E809400 + r0 + r1*32 + r2*65536);", max_bytes = 4 }
+symas.encoder{ name = "smull2", source = "emit32le(0x4E20C000 + r0 + r1*32 + r2*65536);", max_bytes = 4 }
+symas.encoder{ name = "rndr", source = "emit32le(0xD53B2400 + r0);", max_bytes = 4 }
+symas.encoder{ name = "bti",  source = "emit32le(0xD503241F);", max_bytes = 4 }
+symas.encoder{ name = "sb",   source = "emit32le(0xD50330FF);", max_bytes = 4 }
+
+local function x() return { kind = "reg", class = "gpr", width = 64 } end
+local function wx() return { kind = "reg", class = "gpr", width = 64, access = "write" } end
+local function v() return { kind = "reg", class = "vec", width = 128 } end
+local function wv() return { kind = "reg", class = "vec", width = 128, access = "write" } end
+local function rwv() return { kind = "reg", class = "vec", width = 128, access = "readwrite" } end
+
+local mnemonics = {}
+local function mnemonic(m)
+    if not mnemonics[m] then
+        symas.mnemonic{name=m}
+        mnemonics[m]=true
+    end
+end
+for _, m in ipairs({ "nop", "add", "sub", "and", "orr", "eor", "mov", "movz",
+    "movk", "addi", "lsl", "lsr", "asr", "mul", "sdiv", "cmp", "ldr", "str",
+    "ldp", "stp", "ldrb", "strb", "adrp", "adr", "ret", "br", "blr", "b", "bl",
+    "cbz", "b.cond", "svc", "dmb", "dsb", "isb", "hint", "mrs", "msr", "ldxr",
+    "stxr", "cas", "fadd", "fmul", "fcmp", "fmov", "vadd", "ld1", "st1", "aesd",
+    "sha256h", "crc32b", "smull2", "udot", "rndr", "pacia", "bti", "irg", "sb", "movn",
+    "ldaxr", "stlxr", "casa", "casl", "casal" }) do
+    mnemonic(m)
+end
+symas.form{ mnemonic = "nop", encoder = "nop" }
+symas.form{ mnemonic = "dmb", encoder = "dmb" }
+symas.form{ mnemonic = "dsb", encoder = "dsb" }
+symas.form{ mnemonic = "isb", encoder = "isb" }
+-- Architectural barrier options (CRm). The no-operand compatibility forms
+-- above are system-scope; ISB only supports SY.
+local options={"oshld","oshst","osh",false,"nshld","nshst","nsh",false,"ishld","ishst","ish",false,"ld","st","sy"}
+for i,name in ipairs(options) do
+    if name then symas.register{name=name,class="special",width=8,enc=i} end
+end
+for _,b in ipairs({{"dmb",0xd50330bf},{"dsb",0xd503309f},{"isb",0xd50330df}}) do
+    local name=b[1].."_opt"
+    local check=b[1]=="isb" and "r0 == 15" or "r0 > 0 && r0 <= 15 && r0%4 != 0"
+    symas.encoder{name=name,source=("require(%s); emit32le(0x%08x + r0*256);"):format(check,b[2]),max_bytes=4}
+    symas.form{mnemonic=b[1],encoder=name,operands={{kind="reg",class="special",width=8}}}
+    symas.form{mnemonic=b[1],encoder=name,operands={{kind="imm",width=4,imm_min=1,imm_max=15}}}
+end
+symas.form{ mnemonic = "hint", encoder = "hint", operands = {
+    { kind = "imm", width = 8, signed = false, imm_min = 0, imm_max = 127 } } }
+for _,c in ipairs(sysregs) do
+    local flags=c[3]=="priv" and {"privileged"} or nil
+    local required=c[3] and {c[3]} or nil
+    local sys={kind="reg",class="ctrl",width=64}
+    local function sysform(m, reg, operands, opcode)
+        local name=m.."_"..c[1]
+        local code=("require(r%d == %d); require(r%d >= 0 && r%d <= 31); emit32le(0x%08x + r%d);"):
+            format(1-reg,c[2],reg,reg,opcode+c[2]*32,reg)
+        symas.encoder{name=name, source=code, max_bytes=4}
+        symas.form{mnemonic=m, encoder=name, operands=operands, required=required and {c[3]} or nil, flags=flags}
+    end
+    sysform("mrs",0,{wx(),sys},0xd5200000)
+    if not c[4] then sysform("msr",1,{sys,x()},0xd5000000) end
+end
+symas.form{ mnemonic = "vadd", encoder = "vadd", required = { "neon" }, operands = { wv(), v(), v() } }
+symas.form{ mnemonic = "ld1", encoder = "ld1", required = { "neon" }, flags = { "reads_mem" },
+    operands = { wv(), x() } }
+symas.form{ mnemonic = "st1", encoder = "st1", required = { "neon" }, flags = { "writes_mem" },
+    operands = { v(), x() } }
+symas.form{ mnemonic = "aesd", encoder = "aesd", required = { "aes", "neon" }, operands = { rwv(), v() } }
+symas.form{ mnemonic = "sha256h", encoder = "sha256h", required = { "sha2", "neon" }, operands = { rwv(), v(), v() } }
+symas.form{ mnemonic = "udot", encoder = "udot", required = { "dp", "neon" }, operands = { rwv(), v(), v() } }
+symas.form{ mnemonic = "smull2", encoder = "smull2", required = { "neon" }, operands = { wv(), v(), v() } }
+symas.form{ mnemonic = "rndr", encoder = "rndr", required = { "rng" }, operands = { wx() }, flags={"aliases"} }
+symas.form{ mnemonic = "bti", encoder = "bti", required = { "bti" } }
+symas.form{ mnemonic = "sb", encoder = "sb", required = { "sb" } }
+
+-- Cephyr/Archon GAS subset. A64 operands specify a syntax constraint as
+-- well as their public register class/width. The syntax reader binds r0..r3
+-- in source order, disp in bytes, and sym without quotes/reloc modifiers.
+for _,m in ipairs({"adds","subs","udiv","msub","smulh","lslv","lsrv","asrv","cmn",
+    "csinv","cset","brk","cbnz","b.ne","b.eq","b.vc","ubfx","sbfx","ldrh","strh",
+    "ldrsb","ldrsh","ldrsw","fsub","fdiv","fcmpe","fcvt","fcvtzs","fcvtzu","scvtf","ucvtf"}) do
+    mnemonic(m)
+end
+local operands = {}
+local function operand(c, access)
+    local key=c..(access or "")
+    if operands[key] then return operands[key] end
+    local kind,width,class="imm",64,nil
+    if c=="x" or c=="xsp" or c=="w" or c=="wsp" then
+        kind,width,class="reg",c:sub(1,1)=="w" and 32 or 64,"gpr"
+    elseif c=="b" or c=="h" or c=="s" or c=="d" then
+        kind,width,class="reg",({b=8,h=16,s=32,d=64})[c],"fp"
+    elseif c=="q" or c=="v" or c:sub(1,2)=="v_" or c:sub(1,2)=="z_" or c:sub(1,3)=="za_" then
+        kind,width,class="reg",128,"vec"
+    elseif c:sub(1,2)=="p_" then kind,width,class="reg",16,"mask"
+    elseif c:sub(1,3)=="mem" then
+        kind,width="mem",(tonumber(c:sub(-2)) or tonumber(c:sub(-1)) or 8)*8
+    elseif c=="got" or c=="lo12" or c=="sym" or c:sub(1,4)=="sym_" then kind="sym"
+    elseif c=="cond" then kind="cond" end
+    local result={kind=kind,width=width,class=class,constraint="a64:"..c,
+                  access=(kind=="reg" or kind=="mem") and access or nil}
+    operands[key]=result
+    return result
+end
+local read_only = {cmp=true, cmn=true, tst=true, fcmp=true, fcmpe=true,
+                   fccmp=true, fccmpe=true, ccmp=true, ccmn=true,
+                   ret=true, br=true, blr=true, cbz=true, cbnz=true, tbz=true, tbnz=true,
+                   str=true, strb=true, strh=true, stp=true}
+local mode_names={r="read",w="write",b="readwrite"}
+local patterns={}
+local function operands_for(args, access)
+    local key=access..":"..args
+    if patterns[key] then return patterns[key] end
+    local ops,bounds={},""
+    for c in args:gmatch("%S+") do
+        local n=#ops+1
+        local mode=mode_names[access:sub(n,n)]
+        local op=operand(c,mode)
+        local pos="r"..(n-1)
+        if op.kind=="reg" or op.kind=="mem" or op.kind=="cond" then
+            local max=(op.class=="mask" or op.kind=="cond") and 15 or 31
+            bounds=bounds.."require("..pos.." >= 0 && "..pos.." <= "..max.."); "
+        end
+        ops[n]=op
+    end
+    local result={ops,bounds}
+    patterns[key]=result
+    return result
+end
+local function form(m, args, base, fields, checks, reloc, flags, fp, access, body)
+    mnemonic(m)
+    access=access or (m=="ldp" and "ww" or read_only[m] and "" or
+                      (m=="movk" or m=="pacia" or m:sub(1,3)=="cas") and "b" or "w")
+    local pattern=operands_for(args,access)
+    local name="a64_"..m:gsub("%.","_").."_"..args:gsub(" ","_")
+    local expr=string.format("0x%08x",base)..(fields and " + "..fields or "")
+    local src=pattern[2]..(checks and "require("..checks.."); " or "")
+    if reloc then src=src.."emit_relocation(sym, R_AARCH64_"..reloc.."); " end
+    src=src..(body or "emit32le("..expr..");")
+    symas.encoder{name=name,source=src,max_bytes=4,max_relocs=reloc and 1 or 0}
+    symas.form{mnemonic=m,encoder=name,operands=pattern[1],flags=flags,
+               required=type(fp)=="table" and fp or type(fp)=="string" and {fp} or fp and {"fp"} or nil}
+end
+local rr="r0 + r1*32"
+local rrr=rr.." + r2*65536"
+local ui12="r2 >= 0 && r2 <= 4095"
+local ui16="r1 >= 0 && r1 <= 65535"
+local function range(binding, lo, hi)
+    return binding.." >= "..lo.." && "..binding.." <= "..hi
+end
+local function u(binding, limit)
+    return range(binding,0,limit)
+end
+for _,v in ipairs({{"add",0x8b000000},{"sub",0xcb000000},{"adds",0xab000000},{"subs",0xeb000000},
+    {"orr",0xaa000000},{"and",0x8a000000},{"eor",0xca000000},{"mul",0x9b007c00},
+    {"smulh",0x9b407c00},{"sdiv",0x9ac00c00},{"udiv",0x9ac00800},
+    {"lslv",0x9ac02000},{"lsrv",0x9ac02400},{"asrv",0x9ac02800}}) do
+    form(v[1],"x x x",v[2],rrr)
+    if v[1]~="smulh" then form(v[1],"w w w",v[2]-0x80000000,rrr) end
+end
+form("msub","x x x x",0x9b008000,rrr.." + r3*1024")
+form("msub","w w w w",0x1b008000,rrr.." + r3*1024")
+for _,v in ipairs({{"add",0x91000000},{"addi",0x91000000},{"sub",0xd1000000}}) do
+    form(v[1],"xsp xsp imm",v[2],rr.." + r2*1024",ui12)
+    form(v[1],"xsp xsp imm lsl",v[2]+0x400000,rr.." + r2*1024",ui12.." && r3 == 12")
+end
+form("add","xsp xsp x uxtx",0x8b206000,rrr)
+form("mov","x x",0xaa0003e0,"r0 + r1*65536")
+form("mov","w w",0x2a0003e0,"r0 + r1*65536")
+form("mov","xsp xsp",0x91000000,rr)
+-- MOV-immediate aliases MOVZ or MOVN if the value (or its complement) fits
+-- in one aligned halfword. The separate logical form accepts N:immr:imms.
+for _,r in ipairs({{"w",0,2},{"x",0x80000000,4}}) do
+    local source=""
+    for _,mw in ipairs({{"r1",0x52800000},{"(-1-r1)",0x12800000}}) do
+        local val=mw[1]
+        if r[1]=="w" then
+            val=mw[2]==0x52800000 and "((r1+4294967296)%4294967296)" or
+                "(4294967295-(r1+4294967296)%4294967296)"
+        end
+        for i=1,r[3] do
+            local divisor=({1,65536,4294967296,281474976710656})[i]
+            local halfword=val.."/"..divisor
+            local high=i==4
+            local check=(high and "" or val.." >= 0 && "..halfword.." <= 65535 && ")..
+                        val.."%"..divisor.." == 0"
+            local bits=high and "(("..halfword.."+65536)%65536)" or halfword
+            source=source..("if (%s) emit32le(0x%08x + r0 + %s*32); else "):
+                format(check,mw[2]+r[2]+(i-1)*0x200000,bits)
+        end
+    end
+    form("mov",r[1].." imm",0,nil,r[1]=="w" and range("r1",-2147483648,4294967295) or nil,
+         nil,nil,nil,nil,source.."require(0);")
+end
+for _,v in ipairs({{"movn",0x92800000},{"movz",0xd2800000},{"movk",0xf2800000}}) do
+    form(v[1],"x imm",v[2],"r0 + r1*32",ui16)
+    form(v[1],"x imm lsl",v[2],"r0 + r1*32 + r2/16*2097152",ui16.." && r2 >= 0 && r2 <= 48 && r2%16 == 0")
+    form(v[1],"w imm",v[2]-0x80000000,"r0 + r1*32",ui16)
+    form(v[1],"w imm lsl",v[2]-0x80000000,"r0 + r1*32 + r2/16*2097152",ui16.." && (r2 == 0 || r2 == 16)")
+end
+local sh="r2 >= 0 && r2 < 64"
+form("lsl","x x imm",0xd3400000,rr.." + ((64-r2)%64)*65536 + (63-r2)*1024",sh)
+form("lsr","x x imm",0xd340fc00,rr.." + r2*65536",sh)
+form("asr","x x imm",0x9340fc00,rr.." + r2*65536",sh)
+for _,v in ipairs({{"ubfx",0xd3400000},{"sbfx",0x93400000}}) do
+    form(v[1],"x x imm imm",v[2],rr.." + r2*65536 + (r2+r3-1)*1024",sh.." && r3 >= 1 && r3 <= 64-r2")
+end
+-- Logical immediate N=1, imms=0 (a single set bit), immr=1 or 33.
+form("eor","x x imm",0xd2410000,rr.." + (r2 == 0x80000000)*0x200000", "r2 == 0x80000000 || r2 == 0x8000000000000000")
+form("cmp","x x",0xeb00001f,"r0*32 + r1*65536")
+form("cmp","x x asr",0xeb80001f,"r0*32 + r1*65536 + r2*1024",sh)
+form("cmp","xsp imm",0xf100001f,"r0*32 + r1*1024","r1 >= 0 && r1 <= 4095")
+form("cmn","xsp imm",0xb100001f,"r0*32 + r1*1024","r1 >= 0 && r1 <= 4095")
+form("csinv","x x x cond",0xda800000,rrr.." + r3*4096")
+form("cset","x cond",0x9a9f07e0,"r0 + (r1 + 1 - (r1%2)*2)*4096","r1 <= 13")
+form("cset","w cond",0x1a9f07e0,"r0 + (r1 + 1 - (r1%2)*2)*4096","r1 <= 13")
+for _,p in ipairs({{"x",8,0xc8000000},{"w",4,0x88000000}}) do
+    local reg,mem,sz=p[1]," mem"..p[2],p[3]
+    for _,op in ipairs({{"ldxr",0x005f7c00},{"ldaxr",0x005ffc00}}) do
+        form(op[1],reg..mem,sz+op[2],rr,"disp == 0",nil,{"reads_mem"})
+    end
+    for _,op in ipairs({{"stxr",0x00007c00},{"stlxr",0x0000fc00}}) do
+        form(op[1],"w "..reg..mem,sz+op[2],"r1 + r2*32 + r0*65536",
+             "disp == 0 && r0 != r1 && (r2 == 31 || r0 != r2)",nil,{"writes_mem"})
+    end
+    for _,op in ipairs({{"cas",0x00a07c00},{"casa",0x00e07c00},{"casl",0x00a0fc00},{"casal",0x00e0fc00}}) do
+        form(op[1],reg.." "..reg..mem,sz+op[2],"r1 + r2*32 + r0*65536",
+             "disp == 0",nil,{"reads_mem","writes_mem"},"lse")
+    end
+end
+for _,v in ipairs({{"crc32b",0x1ac04000,"w"},{"crc32h",0x1ac04400,"w"},
+    {"crc32w",0x1ac04800,"w"},{"crc32x",0x9ac04c00,"x"}}) do
+    form(v[1],"w w "..v[3],v[2],rrr,nil,nil,nil,"crc")
+end
+form("pacia","x xsp",0xdac10000,rr,nil,nil,nil,"paca")
+form("irg","xsp xsp",0x9adf1000,rr,nil,nil,nil,"mte")
+form("irg","xsp xsp x",0x9ac01000,rrr,nil,nil,nil,"mte")
+form("adr","x sym",0x10000000,"r0",nil,"ADR_PREL_LO21",{"reloc"})
+form("adrp","x sym",0x90000000,"r0",nil,"ADR_PREL_PG_HI21",{"reloc"})
+form("adrp","x got",0x90000000,"r0",nil,"ADR_GOT_PAGE",{"reloc"})
+form("adrp","x sym_page_nc",0x90000000,"r0",nil,"ADR_PREL_PG_HI21_NC",{"reloc"})
+form("add","xsp xsp lo12",0x91000000,rr,nil,"ADD_ABS_LO12_NC",{"reloc"})
+form("add","wsp wsp lo12",0x11000000,rr,nil,"ADD_ABS_LO12_NC",{"reloc"})
+form("ldr","x memgot",0xf9400000,rr,nil,"LD64_GOT_LO12_NC",{"reads_mem","reloc"})
+form("ret","",0xd65f03c0,nil,nil,nil,{"return","terminator"})
+form("ret","x",0xd65f0000,"r0*32",nil,nil,{"return","terminator"})
+form("br","x",0xd61f0000,"r0*32",nil,nil,{"branch","terminator"})
+form("blr","x",0xd63f0000,"r0*32",nil,nil,{"branch"})
+form("bl","sym",0x94000000,nil,nil,"CALL26",{"branch","reloc"})
+form("b","sym",0x14000000,nil,nil,"JUMP26",{"branch","terminator","reloc"})
+local bcc={"eq","ne","hs","lo","mi","pl","vs","vc","hi","ls","ge","lt","gt","le","al","nv"}
+for i,cc in ipairs(bcc) do
+    local m = "b."..cc
+    if cc~="eq" and cc~="ne" and cc~="vc" then
+        symas.mnemonic{name=m,aliases=cc=="hs" and {"b.cs"} or cc=="lo" and {"b.cc"} or nil}
+        mnemonics[m]=true
+    end
+    form(m,"sym",0x54000000+i-1,nil,nil,"CONDBR19",{"cond_branch","reloc"})
+    form(m,"imm",0x54000000+i-1,"((r0/4+524288)%524288)*32",
+         "r0 >= -1048576 && r0 <= 1048572 && r0%4 == 0",nil,{"cond_branch"})
+end
+form("b.cond","cond sym",0x54000000,"r0",nil,"CONDBR19",{"cond_branch","reloc"})
+for _,v in ipairs({{"cbz",0xb4000000},{"cbnz",0xb5000000}}) do
+    form(v[1],"x sym",v[2],"r0",nil,"CONDBR19",{"cond_branch","reloc"})
+    form(v[1],"w sym",v[2]-0x80000000,"r0",nil,"CONDBR19",{"cond_branch","reloc"})
+end
+for _,v in ipairs({{"svc",0xd4000001},{"brk",0xd4200000}}) do
+    form(v[1],"imm",v[2],"r0*32","r0 >= 0 && r0 <= 65535",nil,{"may_trap"})
+end
+for i,suffix in ipairs({{"g0_nc","G0_NC"},{"g1_nc","G1_NC"},{"g2_nc","G2_NC"},{"g3","G3"}}) do
+    local args=" sym_abs_"..suffix[1]
+    for _,m in ipairs({{"movz",0xd2800000},{"movk",0xf2800000}}) do
+        form(m[1],"x"..args,m[2]+(i-1)*0x200000,"r0",nil,"MOVW_UABS_"..suffix[2],{"reloc"})
+        if i<=2 then form(m[1],"w"..args,m[2]-0x80000000+(i-1)*0x200000,"r0",nil,"MOVW_UABS_"..suffix[2],{"reloc"}) end
+    end
+end
+for _,f in ipairs({"s","d"}) do
+    local t=f=="d" and 0x00400000 or 0
+    local g=f=="d" and "x" or "w"
+    for _,v in ipairs({{"fadd",0x1e202800},{"fsub",0x1e203800},{"fmul",0x1e200800},{"fdiv",0x1e201800}}) do
+        form(v[1],f.." "..f.." "..f,v[2]+t,rrr,nil,nil,nil,true)
+    end
+    for _,v in ipairs({{"fcmp",0x1e202000},{"fcmpe",0x1e202010}}) do
+        form(v[1],f.." "..f,v[2]+t,"r0*32 + r1*65536",nil,nil,nil,true)
+    end
+    form("fmov",f.." "..f,0x1e204000+t,rr,nil,nil,nil,true)
+    form("fmov",g.." "..f,f=="d" and 0x9e660000 or 0x1e260000,rr,nil,nil,nil,true)
+    form("fmov",f.." "..g,f=="d" and 0x9e670000 or 0x1e270000,rr,nil,nil,nil,true)
+    form("fcvt",f.." "..(f=="d" and "s" or "d"),f=="d" and 0x1e22c000 or 0x1e624000,rr,nil,nil,nil,true)
+    for _,v in ipairs({{"scvtf",0x9e220000},{"ucvtf",0x9e230000}}) do
+        form(v[1],f.." x",v[2]+t,rr,nil,nil,nil,true)
+    end
+    for _,v in ipairs({{"fcvtzs",0x9e380000},{"fcvtzu",0x9e390000}}) do
+        form(v[1],"x "..f,v[2]+t,rr,nil,nil,nil,true)
+    end
+end
+
+-- Integer data processing. X/W operands use register 31 as ZR; XSP/WSP
+-- use it as SP. The form matcher must preserve this distinction.
+local function regs3(r) return r.." "..r.." "..r end
+local function regs2(r) return r.." "..r end
+local shifts = {{"lsl",0},{"lsr",1},{"asr",2},{"ror",3}}
+local addsub = {{"add",0},{"adds",0x20000000},{"sub",0x40000000},{"subs",0x60000000}}
+local logical = {{"and",0},{"bic",0x200000},{"orr",0x20000000},{"orn",0x20200000},
+                 {"eor",0x40000000},{"eon",0x40200000},{"ands",0x60000000},{"bics",0x60200000}}
+for _,sz in ipairs({{"w",32,0},{"x",64,0x80000000}}) do
+    local r,n,sf=sz[1],sz[2],sz[3]
+    local sp=r.."sp"
+    for _,op in ipairs(addsub) do
+        local m,opc=op[1],op[2]
+        local setflags=opc%0x40000000~=0
+        local dst=setflags and r or sp
+        local immbase=0x11000000+sf+opc
+        if r=="w" or setflags then
+            form(m,dst.." "..sp.." imm",immbase,rr.." + r2*1024",ui12)
+            form(m,dst.." "..sp.." imm lsl",immbase+0x400000,rr.." + r2*1024",ui12.." && r3 == 12")
+        end
+        for i=1,3 do
+            local mode=shifts[i]
+            form(m,regs3(r).." "..mode[1],0x0b000000+sf+opc+mode[2]*0x400000,
+                 rrr.." + r3*1024",u("r3",n-1))
+        end
+        for opt,ext in ipairs({"uxtb","uxth","uxtw","uxtx","sxtb","sxth","sxtw","sxtx"}) do
+            local long=opt==4 or opt==8
+            -- Wd forms may name the 64-bit extension UXTX/SXTX, but Rm
+            -- remains a W register. Xd uses an X register for these two.
+            local rm=long and r or "w"
+            local ebase=0x0b200000+sf+opc+(opt-1)*0x2000
+            -- Keep the pre-existing unshifted ADD/UXTX recipe.
+            if m~="add" or r~="x" or ext~="uxtx" then
+                form(m,dst.." "..sp.." "..rm.." "..ext,ebase,rrr)
+            end
+            form(m,dst.." "..sp.." "..rm.." "..ext.."_shift",ebase,rrr.." + r3*1024",u("r3",4))
+        end
+    end
+    local testops={{"cmn",0x2b00001f,0x3100001f},{"cmp",0x6b00001f,0x7100001f}}
+    for _,op in ipairs(testops) do
+        if op[1]~="cmp" or r~="x" then form(op[1],regs2(r),op[2]+sf,"r0*32 + r1*65536") end
+        for i=1,3 do
+            local mode=shifts[i]
+            if op[1]~="cmp" or r~="x" or i~=3 then
+                form(op[1],regs2(r).." "..mode[1],op[2]+sf+mode[2]*0x400000,
+                     "r0*32 + r1*65536 + r2*1024",u("r2",n-1))
+            end
+        end
+        if r=="w" then form(op[1],sp.." imm",op[3]+sf,"r0*32 + r1*1024",u("r1",4095)) end
+        form(op[1],sp.." imm lsl",op[3]+sf+0x400000,"r0*32 + r1*1024",u("r1",4095).." && r2 == 12")
+        for opt,ext in ipairs({"uxtb","uxth","uxtw","uxtx","sxtb","sxth","sxtw","sxtx"}) do
+            local rm=(opt==4 or opt==8) and r or "w"
+            local base=op[2]+sf+0x200000+(opt-1)*0x2000
+            form(op[1],sp.." "..rm.." "..ext,base,"r0*32 + r1*65536")
+            form(op[1],sp.." "..rm.." "..ext.."_shift",base,"r0*32 + r1*65536 + r2*1024",u("r2",4))
+        end
+    end
+    for _,op in ipairs(logical) do
+        if op[1]~="and" and op[1]~="orr" and op[1]~="eor" then form(op[1],regs3(r),0x0a000000+sf+op[2],rrr) end
+        for _,mode in ipairs(shifts) do
+            form(op[1],regs3(r).." "..mode[1],0x0a000000+sf+op[2]+mode[2]*0x400000,
+                 rrr.." + r3*1024",u("r3",n-1))
+        end
+    end
+    -- `logical` is a decoded instruction argument N:immr:imms, not the
+    -- assembly bitmask. Reject every reserved DecodeBitMasks encoding.
+    local function bitmask(b)
+        local imm=b.."%64"
+        local small=imm.." < 62 && "..imm.." != 31 && "..imm.." != 47 && "..
+                    imm.." != 55 && "..imm.." != 59 && "..imm.." != 61"
+        return u(b,n==32 and 4095 or 8191).." && (("..b.." < 4096 && "..small..")"..
+               (n==64 and " || ("..b.." >= 4096 && "..imm.." != 63)" or "")..")"
+    end
+    for _,op in ipairs({{"and",0},{"orr",0x20000000},{"eor",0x40000000},{"ands",0x60000000}}) do
+        form(op[1],(op[1]=="ands" and r or sp).." "..r.." logical",0x12000000+sf+op[2],
+             rr.." + r2*1024",bitmask("r2"))
+    end
+    form("mov",sp.." logical",0x320003e0+sf,"r0 + r1*1024",bitmask("r1"))
+    form("tst",r.." logical",0x7200001f+sf,"r0*32 + r1*1024",bitmask("r1"))
+    form("tst",regs2(r),0x6a00001f+sf,"r0*32 + r1*65536")
+    for _,mode in ipairs(shifts) do
+        form("tst",regs2(r).." "..mode[1],0x6a00001f+sf+mode[2]*0x400000,
+             "r0*32 + r1*65536 + r2*1024",u("r2",n-1))
+    end
+    for _,op in ipairs({{"adc",0},{"adcs",0x20000000},{"sbc",0x40000000},{"sbcs",0x60000000},
+                        {"rorv",0x00c02c00}}) do
+        form(op[1],regs3(r),0x1a000000+sf+op[2],rrr)
+    end
+    form("madd",regs3(r).." "..r,0x1b000000+sf,rrr.." + r3*1024")
+    for _,op in ipairs({{"mneg",0x1b00fc00},{"lsl",0x1ac02000},{"lsr",0x1ac02400},
+                        {"asr",0x1ac02800},{"ror",0x1ac02c00}}) do
+        form(op[1],regs3(r),op[2]+sf,rrr)
+    end
+    for _,op in ipairs({{"rbit",0x5ac00000},{"rev16",0x5ac00400},{"clz",0x5ac01000},
+                        {"cls",0x5ac01400},{"rev",r=="w" and 0x5ac00800 or 0x5ac00c00},
+                        {"ngc",0x5a0003e0},{"ngcs",0x7a0003e0}}) do
+        form(op[1],regs2(r),op[2]+sf,op[1]:sub(1,3)=="ngc" and "r0 + r1*65536" or rr)
+    end
+    for _,op in ipairs({{"neg",0x4b0003e0},{"negs",0x6b0003e0},{"mvn",0x2a2003e0}}) do
+        form(op[1],regs2(r),op[2]+sf,"r0 + r1*65536")
+        for _,mode in ipairs(shifts) do
+            if op[1]=="mvn" or mode[1]~="ror" then
+                form(op[1],regs2(r).." "..mode[1],op[2]+sf+mode[2]*0x400000,
+                     "r0 + r1*65536 + r2*1024",u("r2",n-1))
+            end
+        end
+    end
+    for _,op in ipairs({{"csel",0x1a800000},{"csinc",0x1a800400},{"csinv",0x5a800000},{"csneg",0x5a800400}}) do
+        if r=="w" or op[1]~="csinv" then form(op[1],regs3(r).." cond",op[2]+sf,rrr.." + r3*4096") end
+    end
+    for _,op in ipairs({{"ccmp",0x7a400000},{"ccmn",0x3a400000}}) do
+        form(op[1],regs2(r).." imm cond",op[2]+sf,"r0*32 + r1*65536 + r2 + r3*4096",u("r2",15))
+        form(op[1],r.." imm imm cond",op[2]+sf+0x800,"r0*32 + r1*65536 + r2 + r3*4096",
+             u("r1",31).." && "..u("r2",15))
+    end
+    local inv="(r2 + 1 - (r2%2)*2)*4096"
+    for _,op in ipairs({{"cinc",0x1a800400},{"cinv",0x5a800000},{"cneg",0x5a800400}}) do
+        form(op[1],regs2(r).." cond",op[2]+sf,"r0 + r1*65568 + "..inv,"r2 <= 13")
+    end
+    form("csetm",r.." cond",0x5a9f03e0+sf,"r0 + (r1 + 1 - (r1%2)*2)*4096","r1 <= 13")
+    local bitbase=sf+(r=="x" and 0x00400000 or 0)
+    for _,op in ipairs({{"sbfm",0x13000000},{"bfm",0x33000000},{"ubfm",0x53000000}}) do
+        form(op[1],regs2(r).." imm imm",op[2]+bitbase,rr.." + r2*65536 + r3*1024",
+             u("r2",n-1).." && "..u("r3",n-1),nil,nil,nil,op[1]=="bfm" and "b" or nil)
+    end
+    local fieldcheck=u("r2",n-1).." && "..range("r3",1,n).." && r3 <= "..n.."-r2"
+    for _,op in ipairs({{"sbfx",0x13000000},{"ubfx",0x53000000},{"bfxil",0x33000000},
+                        {"sbfiz",0x13000000,true},{"ubfiz",0x53000000,true},{"bfi",0x33000000,true}}) do
+        if r=="w" or (op[1]~="sbfx" and op[1]~="ubfx") then
+            local bits=op[3] and "(("..n.."-r2)%"..n..")*65536 + (r3-1)*1024" or "r2*65536 + (r2+r3-1)*1024"
+            form(op[1],regs2(r).." imm imm",op[2]+bitbase,rr.." + "..bits,fieldcheck,nil,nil,nil,
+                 op[2]==0x33000000 and "b" or nil)
+        end
+    end
+    form("bfc",r.." imm imm",0x330003e0+bitbase,
+         "r0 + (("..n.."-r1)%"..n..")*65536 + (r2-1)*1024",
+         u("r1",n-1).." && "..range("r2",1,n).." && r2 <= "..n.."-r1",nil,nil,nil,"b")
+    form("extr",regs3(r).." imm",0x13800000+bitbase,rrr.." + r3*1024",u("r3",n-1))
+    form("ror",regs2(r).." imm",0x13800000+bitbase,"r0 + r1*65568 + r2*1024",u("r2",n-1))
+    if r=="w" then
+        form("lsl","w w imm",0x53000000,rr.." + ((32-r2)%32)*65536 + (31-r2)*1024",u("r2",31))
+        form("lsr","w w imm",0x53007c00,rr.." + r2*65536",u("r2",31))
+        form("asr","w w imm",0x13007c00,rr.." + r2*65536",u("r2",31))
+        form("mov","wsp wsp",0x11000000,rr)
+        form("uxtb","w w",0x53001c00,rr)
+        form("uxth","w w",0x53003c00,rr)
+    else
+        form("rev32","x x",0xdac00800,rr)
+        form("sxtw","x w",0x93407c00,rr)
+        form("uxtw","x w",0xd3407c00,rr)
+    end
+    form("sxtb",r.." w",0x13001c00+bitbase,rr)
+    form("sxth",r.." w",0x13003c00+bitbase,rr)
+end
+for _,op in ipairs({{"smaddl",0x9b200000},{"smsubl",0x9b208000},
+                    {"umaddl",0x9ba00000},{"umsubl",0x9ba08000}}) do
+    form(op[1],"x w w x",op[2],rrr.." + r3*1024")
+end
+for _,op in ipairs({{"smull",0x9b207c00},{"smnegl",0x9b20fc00},
+                    {"umull",0x9ba07c00},{"umnegl",0x9ba0fc00}}) do
+    form(op[1],"x w w",op[2],rrr)
+end
+form("umulh","x x x",0x9bc07c00,rrr)
+
+-- A64 branch immediates are signed, scaled PC-relative byte deltas.
+local function delta(binding, high, scale)
+    return range(binding,-high,high-scale).." && "..binding.."%"..scale.." == 0"
+end
+local function signedfield(binding, scale, modulus)
+    return "(("..binding.."/"..scale.."+"..modulus..")%"..modulus..")"
+end
+for _,b in ipairs({{"b",0x14000000,{"branch","terminator"}},{"bl",0x94000000,{"branch"}}}) do
+    form(b[1],"imm",b[2],signedfield("r0",4,67108864),delta("r0",134217728,4),nil,b[3])
+end
+form("b.cond","cond imm",0x54000000,"r0 + "..signedfield("r1",4,524288).."*32",
+     delta("r1",1048576,4),nil,{"cond_branch"})
+for _,b in ipairs({{"cbz",0x34000000},{"cbnz",0x35000000},{"tbz",0x36000000},{"tbnz",0x37000000}}) do
+    for _,r in ipairs({"w","x"}) do
+        local test=b[1]:sub(1,1)=="t"
+        local opc=b[2]+(not test and r=="x" and 0x80000000 or 0)
+        if test then
+            local bits="r0 + r1%32*524288 + r1/32*0x80000000"
+            local check=u("r1",r=="x" and 63 or 31)
+            form(b[1],r.." imm sym",opc,bits,check,"TSTBR14",{"cond_branch","reloc"})
+            form(b[1],r.." imm imm",opc,bits.." + "..signedfield("r2",4,16384).."*32",
+                 check.." && "..delta("r2",32768,4),nil,{"cond_branch"})
+        else
+            form(b[1],r.." imm",opc,"r0 + "..signedfield("r1",4,524288).."*32",
+                 delta("r1",1048576,4),nil,{"cond_branch"})
+        end
+    end
+end
+for _,a in ipairs({{"adr",0x10000000,1},{"adrp",0x90000000,4096}}) do
+    local f=signedfield("r1",a[3],2097152)
+    form(a[1],"x imm",a[2],"r0 + "..f.."%4*0x20000000 + "..f.."/4*32",
+         delta("r1",1048576*a[3],a[3]))
+end
+symas.reloc{name="R_AARCH64_TSTBR14",width=32,signed=true,pcrel=true,expr="S + A - P"}
+symas.reloc{name="R_AARCH64_LD_PREL_LO19",width=32,signed=true,pcrel=true,expr="S + A - P"}
+
+-- Single-register load/stores: unsigned scaled imm12, signed imm9,
+-- writeback, register offset, and unprivileged encodings.
+local loads={"reads_mem"}
+local stores={"writes_mem"}
+local ldst={
+    {"ldr","ldur","ldtr","x",8,0xf9400000},{"str","stur","sttr","x",8,0xf9000000},
+    {"ldr","ldur","ldtr","w",4,0xb9400000},{"str","stur","sttr","w",4,0xb9000000},
+    {"ldrb","ldurb","ldtrb","w",1,0x39400000},{"strb","sturb","sttrb","w",1,0x39000000},
+    {"ldrh","ldurh","ldtrh","w",2,0x79400000},{"strh","sturh","sttrh","w",2,0x79000000},
+    {"ldrsb","ldursb","ldtrsb","w",1,0x39c00000},{"ldrsb","ldursb","ldtrsb","x",1,0x39800000},
+    {"ldrsh","ldursh","ldtrsh","w",2,0x79c00000},{"ldrsh","ldursh","ldtrsh","x",2,0x79800000},
+    {"ldrsw","ldursw","ldtrsw","x",4,0xb9800000},
+    {"ldr","ldur",false,"b",1,0x3d400000},{"str","stur",false,"b",1,0x3d000000},
+    {"ldr","ldur",false,"h",2,0x7d400000},{"str","stur",false,"h",2,0x7d000000},
+    {"ldr","ldur",false,"s",4,0xbd400000},{"str","stur",false,"s",4,0xbd000000},
+    {"ldr","ldur",false,"d",8,0xfd400000},{"str","stur",false,"d",8,0xfd000000},
+    {"ldr","ldur",false,"q",16,0x3dc00000},{"str","stur",false,"q",16,0x3d800000},
+}
+for _,op in ipairs(ldst) do
+    local m,unscaled,unpriv,r,size,base=op[1],op[2],op[3],op[4],op[5],op[6]
+    local fp=r~="w" and r~="x"
+    local isload=m:sub(1,2)=="ld"
+    local flags,access=isload and loads or stores,isload and "w" or "r"
+    local mode=r.." mem"
+    local szbits=signedfield("disp",1,512).."*4096"
+    local overlap=not fp and " && (r1 == 31 || r0 != r1)" or ""
+    form(m,mode..size,base,rr.." + disp/"..size.."*1024",
+         u("disp",4095*size).." && disp%"..size.." == 0",nil,flags,fp,access)
+    form(m,mode.."lo12"..size,base,rr,nil,"LDST"..(size*8).."_ABS_LO12_NC",
+         {flags[1],"reloc"},fp,access)
+    form(unscaled,mode.."off"..size,base-0x01000000,rr.." + "..szbits,
+         range("disp",-256,255),nil,flags,fp,access)
+    if unpriv then
+        form(unpriv,mode.."off"..size,base-0x01000000+0x800,rr.." + "..szbits,
+             range("disp",-256,255),nil,flags,fp,access)
+    end
+    for _,md in ipairs({{"pre",0xc00},{"post",0x400}}) do
+        form(m,mode..md[1]..size,base-0x01000000+md[2],rr.." + "..szbits,
+             range("disp",-256,255)..overlap,nil,flags,fp,access.."b")
+    end
+    form(m,mode.."reg"..size,base-0x01000000+0x200800,
+         rr.." + index*65536 + extend*8192 + scaled*4096",
+         u("index",31).." && (extend == 2 || extend == 3 || extend == 6 || extend == 7) && "..u("scaled",1),
+         nil,flags,fp,access)
+end
+for _,size in ipairs({8,16,32}) do
+    symas.reloc{name="R_AARCH64_LDST"..size.."_ABS_LO12_NC",width=32,expr="S + A"}
+end
+for _,l in ipairs({{"ldr","w",0x18000000},{"ldr","x",0x58000000},{"ldrsw","x",0x98000000},
+                    {"ldr","s",0x1c000000,true},{"ldr","d",0x5c000000,true},{"ldr","q",0x9c000000,true},
+                    {"prfm","imm",0xd8000000}}) do
+    local check=l[1]=="prfm" and u("r0",31) or nil
+    form(l[1],l[2].." sym",l[3],"r0",check,"LD_PREL_LO19",{"reads_mem","reloc"},l[4])
+    form(l[1],l[2].." imm",l[3],"r0 + "..signedfield("r1",4,524288).."*32",
+         (check and check.." && " or "")..delta("r1",1048576,4),nil,loads,l[4])
+end
+for _,p in ipairs({{"x",8,0xa9000000},{"w",4,0x29000000},
+                    {"s",4,0x2d000000,true},{"d",8,0x6d000000,true},{"q",16,0xad000000,true},
+                    {"x",4,0x69400000,false,"ldpsw"}}) do
+    local r,scale,base,fp,special=p[1],p[2],p[3],p[4],p[5]
+    local regs=regs2(r)
+    local f="r0 + r1*1024 + r2*32"
+    for _,d in ipairs(special and {{special,0,loads,"ww","r0 != r1"}} or
+                     {{"stp",0,stores,"rr"},{"ldp",0x400000,loads,"ww","r0 != r1"}}) do
+        local check=d[5] and " && "..d[5] or ""
+        local wbcheck=fp and "" or " && (r2 == 31 || (r2 != r0 && r2 != r1))"
+        local off=delta("disp",64*scale,scale)..check
+        local fields=f.." + "..signedfield("disp",scale,128).."*32768"
+        form(d[1],regs.." mem"..scale,base+d[2],fields,off,nil,d[3],fp,d[4])
+        form(d[1],regs.." xsp imm",base+d[2],f.." + "..signedfield("r3",scale,128).."*32768",
+             delta("r3",64*scale,scale)..check,nil,d[3],fp,d[4])
+        form(d[1],regs.." mempre"..scale,base+d[2]+0x800000,fields,off..wbcheck,nil,d[3],fp,d[4].."b")
+        form(d[1],regs.." mempost"..scale,base+d[2]-0x800000,fields,off..wbcheck,nil,d[3],fp,d[4].."b")
+        if not special then
+            form(d[1]=="ldp" and "ldnp" or "stnp",regs.." mem"..scale,base+d[2]-0x1000000,
+                 fields,off,nil,d[3],fp,d[4])
+        end
+    end
+end
+form("prfm","imm mem8",0xf9800000,rr.." + disp/8*1024",
+     u("r0",31).." && "..u("disp",32760).." && disp%8 == 0",nil,loads)
+form("prfum","imm memoff8",0xf8800000,rr.." + "..signedfield("disp",1,512).."*4096",
+     u("r0",31).." && "..range("disp",-256,255),nil,loads)
+form("prfm","imm memreg8",0xf8a00800,rr.." + index*65536 + extend*8192 + scaled*4096",
+     u("r0",31).." && "..u("index",31).." && (extend == 2 || extend == 3 || extend == 6 || extend == 7) && "..u("scaled",1),nil,loads)
+
+-- Exclusive and ordered accesses, then LSE read-modify-write forms.
+for _,p in ipairs({{"w",1,0x08000000,"b"},{"w",2,0x48000000,"h"},
+                    {"w",4,0x88000000,""},{"x",8,0xc8000000,""}}) do
+    local r,size,base,suffix=p[1],p[2],p[3],p[4]
+    local mem=" mem"..size
+    form("ldar"..suffix,r..mem,base+0xdfFC00,rr,"disp == 0",nil,loads)
+    form("stlr"..suffix,r..mem,base+0x9fFC00,rr,"disp == 0",nil,stores,nil,"r")
+    if size<=2 then
+        for _,op in ipairs({{"ldxr",0x5f7c00},{"ldaxr",0x5ffc00}}) do
+            form(op[1]..suffix,r..mem,base+op[2],rr,"disp == 0",nil,loads)
+        end
+        for _,op in ipairs({{"stxr",0x7c00},{"stlxr",0xfc00}}) do
+            form(op[1]..suffix,"w "..r..mem,base+op[2],"r1 + r2*32 + r0*65536",
+                 "disp == 0 && r0 != r1 && (r2 == 31 || r0 != r2)",nil,stores)
+        end
+        for _,op in ipairs({{"cas",0xa07c00},{"casa",0xe07c00},{"casl",0xa0fc00},{"casal",0xe0fc00}}) do
+            form(op[1]..suffix,regs2(r)..mem,base+op[2],"r1 + r2*32 + r0*65536",
+                 "disp == 0",nil,{"reads_mem","writes_mem"},"lse","b")
+        end
+    else
+        local pairmem=" mem"..(2*size)
+        for _,op in ipairs({{"ldxp",0x7f0000},{"ldaxp",0x7f8000}}) do
+            form(op[1],regs2(r)..pairmem,base+op[2],"r0 + r1*1024 + r2*32",
+                 "disp == 0 && r0 != r1",nil,loads,nil,"ww")
+        end
+        for _,op in ipairs({{"stxp",0x200000},{"stlxp",0x208000}}) do
+            form(op[1],"w "..regs2(r)..pairmem,base+op[2],"r0*65536 + r1 + r2*1024 + r3*32",
+                 "disp == 0 && r0 != r1 && r0 != r2 && (r3 == 31 || r0 != r3)",nil,stores)
+        end
+        for _,op in ipairs({{"casp",0x08207c00},{"caspa",0x08607c00},
+                            {"caspl",0x0820fc00},{"caspal",0x0860fc00}}) do
+            local args=regs2(r).." "..regs2(r)..pairmem
+            form(op[1],args,op[2]+(size==8 and 0x40000000 or 0),"r0*65536 + r2 + r4*32",
+                 "disp == 0 && r0%2 == 0 && r2%2 == 0 && r1 == r0+1 && r3 == r2+1",
+                 nil,{"reads_mem","writes_mem"},"lse","bb")
+        end
+    end
+    for i,op in ipairs({"add","clr","eor","set","smax","smin","umax","umin","swp"}) do
+        for _,order in ipairs({{"",0},{"l",0x400000},{"a",0x800000},{"al",0xc00000}}) do
+            local m=(op=="swp" and op or "ld"..op)..order[1]..suffix
+            local atom=base+0x30200000+(i-1)*0x1000+order[2]
+            form(m,regs2(r)..mem,atom,"r1 + r2*32 + r0*65536","disp == 0",
+                 nil,{"reads_mem","writes_mem"},"lse","rw")
+            if op~="swp" and (order[1]=="" or order[1]=="l") then
+                form("st"..op..order[1]..suffix,r..mem,atom+31,"r1*32 + r0*65536",
+                     "disp == 0",nil,{"reads_mem","writes_mem"},"lse","r")
+            end
+        end
+    end
+    form("ldapr"..suffix,r..mem,base+0x30bfc000,rr,"disp == 0",nil,loads,"rcpc")
+end
+for _,op in ipairs({{"ldapurb","w",1,0x19400000},{"ldapursb","x",1,0x19800000},
+                    {"ldapursb","w",1,0x19c00000},{"ldapurh","w",2,0x59400000},
+                    {"ldapursh","x",2,0x59800000},{"ldapursh","w",2,0x59c00000},
+                    {"ldapur","w",4,0x99400000},{"ldapur","x",8,0xd9400000},
+                    {"ldapursw","x",4,0x99800000},{"stlurb","w",1,0x19000000},
+                    {"stlurh","w",2,0x59000000},{"stlur","w",4,0x99000000},
+                    {"stlur","x",8,0xd9000000}}) do
+    local load=op[1]:sub(1,2)=="ld"
+    form(op[1],op[2].." memoff"..op[3],op[4],rr.." + "..signedfield("disp",1,512).."*4096",
+         range("disp",-256,255),nil,load and loads or stores,{"rcpc","rcpc2"},load and "w" or "r")
+end
+
+-- System instruction families. sysop packs op1:CRn:CRm:op2;
+-- sysreg packs op0:op1:CRn:CRm:op2. Use explicit numeric fields for names
+-- not listed above. Privilege and availability of raw selectors are CPU
+-- state properties and are not inferred from their encoding.
+form("sys","sysop x",0xd5080000,"r0*32 + r1",u("r0",0x3fff),nil,nil,nil,".r")
+form("sys","sysop",0xd508001f,"r0*32",u("r0",0x3fff))
+form("sysl","x sysop",0xd5280000,"r0 + r1*32",u("r1",0x3fff))
+form("mrs","x sysreg",0xd5200000,"r0 + r1*32",range("r1",0x8000,0xffff))
+form("msr","sysreg x",0xd5000000,"r0*32 + r1",range("r0",0x8000,0xffff),nil,nil,nil,".r")
+for _,op in ipairs({{"spsel",0xd50040bf,1},{"daifset",0xd50340df,15},{"daifclr",0xd50340ff,15},
+                    {"ssbs",0xd503403f,1,"ssbs"},{"dit",0xd503405f,1,"dit"},
+                    {"tco",0xd503409f,1,"mte"}}) do
+    form("msr",op[1].." imm",op[2],"r1*256",u("r1",op[3]),nil,
+         not op[4] and {"privileged"} or nil,op[4] or "priv")
+end
+for _,op in ipairs({{"hvc",0xd4000002},{"smc",0xd4000003},{"hlt",0xd4400000},
+                    {"dcps1",0xd4a00001},{"dcps2",0xd4a00002},{"dcps3",0xd4a00003}}) do
+    form(op[1],"imm",op[2],"r0*32",u("r0",65535),nil,{"may_trap","privileged"},"priv")
+end
+for _,op in ipairs({{"eret",0xd69f03e0},{"drps",0xd6bf03e0}}) do
+    form(op[1],"",op[2],nil,nil,nil,{"return","terminator","privileged"},"priv")
+end
+for i,m in ipairs({"yield","wfe","wfi","sev","sevl"}) do form(m,"",0xd503201f+i*32) end
+form("clrex","",0xd5033f5f)
+form("clrex","imm",0xd503305f,"r0*256",u("r0",15))
+form("ssbb","",0xd503309f)
+form("pssbb","",0xd503349f)
+
+-- Scalar FP. Half precision transfers and arithmetic require FP16; the
+-- original H<->S/D format conversions do not.
+for _,p in ipairs({{"s",0,false},{"d",0x400000,false},{"h",0xc00000,true}}) do
+    local f,t,half=p[1],p[2],p[3]
+    local feature=half and {"fp","fp16"} or true
+    for _,op in ipairs({{"fabs",0x1e20c000},{"fneg",0x1e214000},{"fsqrt",0x1e21c000},
+                        {"frintn",0x1e244000},{"frintp",0x1e24c000},{"frintm",0x1e254000},
+                        {"frintz",0x1e25c000},{"frinta",0x1e264000},{"frintx",0x1e274000},
+                        {"frinti",0x1e27c000}}) do
+        form(op[1],regs2(f),op[2]+t,rr,nil,nil,nil,feature)
+    end
+    for _,op in ipairs({{"fmax",0x1e204800},{"fmin",0x1e205800},{"fmaxnm",0x1e206800},
+                        {"fminnm",0x1e207800},{"fnmul",0x1e208800}}) do
+        form(op[1],regs3(f),op[2]+t,rrr,nil,nil,nil,feature)
+    end
+    for _,op in ipairs({{"fmadd",0x1f000000},{"fmsub",0x1f008000},
+                        {"fnmadd",0x1f200000},{"fnmsub",0x1f208000}}) do
+        form(op[1],regs3(f).." "..f,op[2]+t,rrr.." + r3*1024",nil,nil,nil,feature)
+    end
+    form("fcsel",regs3(f).." cond",0x1e200c00+t,rrr.." + r3*4096",nil,nil,nil,feature)
+    form("fmov",f.." fimm8",0x1e201000+t,"r0 + r1*8192",u("r1",255),nil,nil,feature)
+    for _,op in ipairs({{"fcmp",0x1e202000},{"fcmpe",0x1e202010}}) do
+        form(op[1],f.." fpzero",op[2]+t+8,"r0*32","r1 == 0",nil,nil,feature)
+        if half then form(op[1],regs2(f),op[2]+t,"r0*32 + r1*65536",nil,nil,nil,feature) end
+    end
+    for _,op in ipairs({{"fccmp",0x1e200400},{"fccmpe",0x1e200410}}) do
+        form(op[1],regs2(f).." imm cond",op[2]+t,"r0*32 + r1*65536 + r2 + r3*4096",u("r2",15),
+             nil,nil,feature)
+    end
+    if half then
+        for _,op in ipairs({{"fadd",0x1e202800},{"fsub",0x1e203800},{"fmul",0x1e200800},{"fdiv",0x1e201800}}) do
+            form(op[1],regs3(f),op[2]+t,rrr,nil,nil,nil,feature)
+        end
+        form("fmov","h h",0x1ee04000,rr,nil,nil,nil,feature)
+        form("fmov","h w",0x1ee70000,rr,nil,nil,nil,feature)
+        form("fmov","w h",0x1ee60000,rr,nil,nil,nil,feature)
+        form("fmov","h x",0x9ee70000,rr,nil,nil,nil,feature)
+        form("fmov","x h",0x9ee60000,rr,nil,nil,nil,feature)
+    else
+        for _,op in ipairs({{"frint32z",0x1e284000},{"frint32x",0x1e28c000},
+                            {"frint64z",0x1e294000},{"frint64x",0x1e29c000}}) do
+            form(op[1],regs2(f),op[2]+t,rr,nil,nil,nil,{"fp","frintts"})
+        end
+    end
+    for _,g in ipairs({{"w",32,0},{"x",64,0x80000000}}) do
+        local r,n,sf=g[1],g[2],g[3]
+        for _,op in ipairs({{"fcvtns",0x1e200000},{"fcvtnu",0x1e210000},
+                            {"fcvtas",0x1e240000},{"fcvtau",0x1e250000},
+                            {"fcvtps",0x1e280000},{"fcvtpu",0x1e290000},
+                            {"fcvtms",0x1e300000},{"fcvtmu",0x1e310000},
+                            {"fcvtzs",0x1e380000,0x1e180000},{"fcvtzu",0x1e390000,0x1e190000}}) do
+            if not op[3] or half or r=="w" then form(op[1],r.." "..f,op[2]+sf+t,rr,nil,nil,nil,feature) end
+            if op[3] then
+                form(op[1],r.." "..f.." imm",op[3]+sf+t,rr.." + (64-r2)*1024",range("r2",1,n),nil,nil,feature)
+            end
+        end
+        for _,op in ipairs({{"scvtf",0x1e220000,0x1e020000},{"ucvtf",0x1e230000,0x1e030000}}) do
+            if half or r=="w" then form(op[1],f.." "..r,op[2]+sf+t,rr,nil,nil,nil,feature) end
+            form(op[1],f.." "..r.." imm",op[3]+sf+t,rr.." + (64-r2)*1024",range("r2",1,n),nil,nil,feature)
+        end
+    end
+end
+for _,op in ipairs({{"h s",0x1e23c000},{"h d",0x1e63c000},{"s h",0x1ee24000},{"d h",0x1ee2c000}}) do
+    form("fcvt",op[1],op[2],rr,nil,nil,nil,true)
+end
+form("fmov","v_d1 x",0x9eaf0000,rr,nil,nil,nil,true,"b")
+form("fmov","x v_d1",0x9eae0000,rr,nil,nil,nil,true)
+form("fcvtxn","s d",0x7e616800,rr,nil,nil,nil,{"neon","fp"})
+form("fjcvtzs","w d",0x1e7e0000,rr,nil,nil,nil,{"fp","jscvt"})
+form("bfcvt","h s",0x1e634000,rr,nil,nil,nil,{"fp","bf16"})
+
+-- Advanced SIMD arrangement normalization: arr=(log2(element bytes)*2)+Q.
+-- 0..7 = 8B,16B,4H,8H,2S,4S,1D,2D. A form may restrict the set
+-- further; a matcher must also check that arrangement suffixes agree.
+local iv="v_int"
+local fv="v_float"
+local bv="v_byte"
+local arrq="arr%2*0x40000000"
+local arrsize="arr/2*0x400000"
+local intshape=u("arr",7).." && arr != 6"
+local shortshape=u("arr",5)
+local fpvec={"fp","neon"}
+local int3={
+    {"add",0x0e208400},{"sub",0x2e208400},{"addp",0x0e20bc00},
+    {"cmeq",0x2e208c00},{"cmge",0x0e203c00},{"cmgt",0x0e203400},{"cmhs",0x2e203c00},
+    {"cmhi",0x2e203400},{"cmtst",0x0e208c00},
+    {"sqadd",0x0e200c00},{"uqadd",0x2e200c00},{"sqsub",0x0e202c00},{"uqsub",0x2e202c00},
+    {"sqshl",0x0e204c00},{"uqshl",0x2e204c00},{"srshl",0x0e205400},{"urshl",0x2e205400},
+    {"sqrshl",0x0e205c00},{"uqrshl",0x2e205c00},{"sshl",0x0e204400},{"ushl",0x2e204400},
+    {"shadd",0x0e200400,1},{"uhadd",0x2e200400,1},{"srhadd",0x0e201400,1},{"urhadd",0x2e201400,1},
+    {"shsub",0x0e202400,1},{"uhsub",0x2e202400,1},
+    {"smax",0x0e206400,1},{"smin",0x0e206c00,1},{"umax",0x2e206400,1},{"umin",0x2e206c00,1},
+    {"smaxp",0x0e20a400,1},{"sminp",0x0e20ac00,1},{"umaxp",0x2e20a400,1},{"uminp",0x2e20ac00,1},
+    {"saba",0x0e207c00,1,"b"},{"uaba",0x2e207c00,1,"b"},{"sabd",0x0e207400,1},{"uabd",0x2e207400,1},
+    {"mul",0x0e209c00,1},{"mla",0x0e209400,1,"b"},{"mls",0x2e209400,1,"b"},{"pmul",0x2e209c00,2},
+    {"sqdmulh",0x0e20b400,3},{"sqrdmulh",0x2e20b400,3},
+    {"zip1",0x0e003800},{"zip2",0x0e007800},{"uzp1",0x0e001800},
+    {"uzp2",0x0e005800},{"trn1",0x0e002800},{"trn2",0x0e006800},
+}
+for _,op in ipairs(int3) do
+    local check=op[3] and ({shortshape,u("arr",1),range("arr",2,5)})[op[3]] or intshape
+    form(op[1],regs3(iv),op[2],rrr.." + "..arrsize.." + "..arrq,check,nil,nil,"neon",op[4])
+end
+for _,op in ipairs({{"and",0x0e201c00},{"bic",0x0e601c00},{"orr",0x0ea01c00},{"orn",0x0ee01c00},
+                    {"eor",0x2e201c00},{"bsl",0x2e601c00,"b"},{"bit",0x2ea01c00,"b"},{"bif",0x2ee01c00,"b"}}) do
+    form(op[1],regs3(bv),op[2],rrr.." + "..arrq,u("arr",1),nil,nil,"neon",op[3])
+end
+form("mov",regs2(bv),0x0ea01c00,"r0 + r1*65568 + "..arrq,u("arr",1),nil,nil,"neon")
+form("ext",regs3(bv).." imm",0x2e000000,rrr.." + r3*2048 + "..arrq,
+     u("arr",1).." && "..u("r3",15).." && r3 < 8+arr*8",nil,nil,"neon")
+for _,op in ipairs({{"abs",0x0e20b800},{"neg",0x2e20b800},{"sqabs",0x0e207800},{"sqneg",0x2e207800},
+                    {"cls",0x0e204800,5},{"clz",0x2e204800,5},{"cnt",0x0e205800,1},
+                    {"rbit",0x2e605800,1},{"not",0x2e205800,1},{"mvn",0x2e205800,1},
+                    {"rev16",0x0e201800,1},{"rev32",0x2e200800,3},{"rev64",0x0e200800,5},
+                    {"suqadd",0x0e203800,false,"b"},{"usqadd",0x2e203800,false,"b"},
+                    {"saddlp",0x0e202800,5},{"uaddlp",0x2e202800,5},
+                    {"sadalp",0x0e206800,5,"b"},{"uadalp",0x2e206800,5,"b"}}) do
+    local pair=op[1]:sub(-2)=="lp"
+    form(op[1],(pair and "v_pair " or "v_int ")..iv,op[2],rr.." + "..arrsize.." + "..arrq,
+         op[3] and u("arr",op[3]) or intshape,nil,nil,"neon",op[4])
+end
+for _,op in ipairs({{"addv",0x0e31b800},{"smaxv",0x0e30a800},{"sminv",0x0e31a800},
+                    {"umaxv",0x2e30a800},{"uminv",0x2e31a800}}) do
+    for _,r in ipairs({{"b",0},{"h",2},{"s",4}}) do
+        form(op[1],r[1].." "..iv,op[2],rr.." + "..arrsize.." + "..arrq,
+             range("arr",r[2]+(r[2]==4 and 1 or 0),r[2]+1),nil,nil,"neon")
+    end
+end
+local fp3={
+    {"fadd",0x0e20d400},{"fsub",0x0ea0d400},{"fmul",0x2e20dc00},{"fdiv",0x2e20fc00},
+    {"fmax",0x0e20f400},{"fmin",0x0ea0f400},{"fmaxnm",0x0e20c400},{"fminnm",0x0ea0c400},
+    {"fmla",0x0e20cc00,"b"},{"fmls",0x0ea0cc00,"b"},{"fmulx",0x0e20dc00},{"fabd",0x2ea0d400},
+    {"facge",0x2e20ec00},{"facgt",0x2ea0ec00},{"fcmeq",0x0e20e400},{"fcmge",0x2e20e400},
+    {"fcmgt",0x2ea0e400},{"frecps",0x0e20fc00},{"frsqrts",0x0ea0fc00},
+    {"faddp",0x2e20d400},{"fmaxp",0x2e20f400},{"fminp",0x2ea0f400},
+    {"fmaxnmp",0x2e20c400},{"fminnmp",0x2ea0c400},
+}
+local fp2={
+    {"fabs",0x0ea0f800},{"fneg",0x2ea0f800},{"fsqrt",0x2ea1f800},
+    {"frecpe",0x0ea1d800},{"frsqrte",0x2ea1d800},
+    {"frintn",0x0e218800},{"frintp",0x0ea18800},{"frintm",0x0e219800},{"frintz",0x0ea19800},
+    {"frinta",0x2e218800},{"frinti",0x2ea19800},{"frintx",0x2e219800},
+    {"fcvtas",0x0e21c800},{"fcvtau",0x2e21c800},{"fcvtms",0x0e21b800},{"fcvtmu",0x2e21b800},
+    {"fcvtns",0x0e21a800},{"fcvtnu",0x2e21a800},{"fcvtps",0x0ea1a800},{"fcvtpu",0x2ea1a800},
+    {"fcvtzs",0x0ea1b800},{"fcvtzu",0x2ea1b800},{"scvtf",0x0e21d800},{"ucvtf",0x2e21d800},
+}
+local fpbits="(arr/2-2)*0x400000 + "..arrq
+local fpshape=range("arr",4,7).." && arr != 6"
+for _,op in ipairs(fp3) do
+    form(op[1],regs3(fv),op[2],rrr.." + "..fpbits,fpshape,nil,nil,fpvec,op[3])
+    form(op[1],regs3("v_half"),op[2]+0x1f4000,rrr.." + "..arrq,
+         range("arr",2,3),nil,nil,{"fp","neon","fp16"},op[3])
+end
+for _,op in ipairs(fp2) do
+    form(op[1],regs2(fv),op[2],rr.." + "..fpbits,fpshape,nil,nil,fpvec)
+    form(op[1],regs2("v_half"),op[2]+0x580000,rr.." + "..arrq,
+         range("arr",2,3),nil,nil,{"fp","neon","fp16"})
+end
+for _,op in ipairs({{"saddl",0x0e200000},{"uaddl",0x2e200000},{"ssubl",0x0e202000},{"usubl",0x2e202000},
+                    {"saddw",0x0e201000,true},{"uaddw",0x2e201000,true},{"ssubw",0x0e203000,true},{"usubw",0x2e203000,true},
+                    {"smull",0x0e20c000},{"umull",0x2e20c000},{"smlal",0x0e208000,false,"b"},{"umlal",0x2e208000,false,"b"},
+                    {"smlsl",0x0e20a000,false,"b"},{"umlsl",0x2e20a000,false,"b"},
+                    {"sabal",0x0e205000,false,"b"},{"uabal",0x2e205000,false,"b"},{"sabdl",0x0e207000},{"uabdl",0x2e207000},
+                    {"sqdmull",0x0e20d000,false,false,2},{"sqdmlal",0x0e209000,false,"b",2},{"sqdmlsl",0x0e20b000,false,"b",2}}) do
+    local args="v_wide "..(op[3] and "v_wide" or "v_narrow").." v_narrow"
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),args,op[2]+q*0x40000000,rrr.." + "..arrsize,
+             range("arr",op[5] or 0,5).." && arr%2 == "..q,nil,nil,"neon",op[4])
+    end
+end
+for _,op in ipairs({{"addhn",0x0e204000},{"raddhn",0x2e204000},{"subhn",0x0e206000},{"rsubhn",0x2e206000}}) do
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),"v_narrow v_wide v_wide",op[2]+q*0x40000000,rrr.." + "..arrsize,
+             shortshape.." && arr%2 == "..q,nil,nil,"neon",q==1 and "b" or nil)
+    end
+end
+local scalar_int3={
+    add=3, sub=3, cmeq=3, cmge=3, cmgt=3, cmhs=3, cmhi=3, cmtst=3,
+    sshl=3, ushl=3, srshl=3, urshl=3, sqadd=0, uqadd=0, sqsub=0, uqsub=0,
+    sqshl=0, uqshl=0, sqrshl=0, uqrshl=0, sqdmulh=1, sqrdmulh=1,
+}
+for _,op in ipairs(int3) do
+    local first=scalar_int3[op[1]]
+    if first then
+        for i,r in ipairs({"b","h","s","d"}) do
+            if i-1>=first and (first~=1 or i~=4) then
+                form(op[1],regs3(r),op[2]+0x50000000+(i-1)*0x400000,rrr,nil,nil,nil,"neon")
+            end
+        end
+    end
+end
+for _,op in ipairs({{"abs",0x5ee0b800},{"neg",0x7ee0b800}}) do
+    form(op[1],"d d",op[2],rr,nil,nil,nil,"neon")
+end
+for _,op in ipairs({{"sqabs",0x5e207800},{"sqneg",0x7e207800},{"suqadd",0x5e203800,"b"},{"usqadd",0x7e203800,"b"}}) do
+    for i,r in ipairs({"b","h","s","d"}) do
+        form(op[1],regs2(r),op[2]+(i-1)*0x400000,rr,nil,nil,nil,"neon",op[3])
+    end
+end
+for _,op in ipairs({{"cmeq",0x0e209800},{"cmge",0x2e208800},{"cmgt",0x0e208800},
+                    {"cmle",0x2e209800},{"cmlt",0x0e20a800}}) do
+    form(op[1],"d d imm",op[2]+0x50c00000,rr,"r2 == 0",nil,nil,"neon")
+    form(op[1],regs2(iv).." imm",op[2],rr.." + "..arrsize.." + "..arrq,
+         intshape.." && r2 == 0",nil,nil,"neon")
+end
+form("addp","d v_2d",0x5ef1b800,rr,nil,nil,nil,"neon")
+
+local scalar_fp3={fmulx=true,fabd=true,facge=true,facgt=true,fcmeq=true,fcmge=true,
+                 fcmgt=true,frecps=true,frsqrts=true}
+for _,r in ipairs({{"s",0,0,fpvec},{"d",0x400000,0,fpvec},{"h",0x1f4000,0x580000,{"fp","neon","fp16"}}}) do
+    local f,t3,t2,feature=r[1],r[2],r[3],r[4]
+    if f=="d" then t2=0x400000 end
+    for _,op in ipairs(fp3) do
+        if scalar_fp3[op[1]] then form(op[1],regs3(f),op[2]+0x50000000+t3,rrr,nil,nil,nil,feature) end
+    end
+    for _,op in ipairs({{"frecpe",0x5ea1d800},{"frecpx",0x5ea1f800},{"frsqrte",0x7ea1d800}}) do
+        form(op[1],regs2(f),op[2]+t2,rr,nil,nil,nil,feature)
+    end
+    for _,op in ipairs({{"fcmeq",0x0ea0d800},{"fcmge",0x2ea0c800},{"fcmgt",0x0ea0c800},
+                        {"fcmle",0x2ea0d800},{"fcmlt",0x0ea0e800}}) do
+        form(op[1],regs2(f).." fpzero",op[2]+0x50000000+t2,rr,"r2 == 0",nil,nil,feature)
+        if f=="s" then
+            form(op[1],regs2(fv).." fpzero",op[2],rr.." + "..fpbits,fpshape.." && r2 == 0",nil,nil,feature)
+        elseif f=="h" then
+            form(op[1],"v_half v_half fpzero",op[2]+0x580000,rr.." + "..arrq,
+                 range("arr",2,3).." && r2 == 0",nil,nil,feature)
+        end
+    end
+    for _,op in ipairs({{"faddp",0x7e30d800},{"fmaxp",0x7e30f800},{"fminp",0x7eb0f800},
+                        {"fmaxnmp",0x7e30c800},{"fminnmp",0x7eb0c800}}) do
+        form(op[1],f.." v_2"..f,op[2]+(f=="h" and -0x20000000 or f=="d" and 0x400000 or 0),rr,nil,nil,nil,feature)
+    end
+end
+for _,op in ipairs({{"fmaxv",0x6e30f800},{"fminv",0x6eb0f800},{"fmaxnmv",0x6e30c800},{"fminnmv",0x6eb0c800}}) do
+    form(op[1],"s v_4s",op[2],rr,nil,nil,nil,fpvec)
+end
+
+local function element_bytes(e)
+    return "select("..e.." == 0,1,select("..e.." == 1,2,select("..e.." == 2,4,8)))"
+end
+local eb=element_bytes("esize")
+local ab=element_bytes("arr/2")
+local aw="("..ab.."*8)"
+local ashift_right="("..aw.."*2-r2)*65536"
+local ashift_left="("..aw.."+r2)*65536"
+for _,op in ipairs({{"sshr",0x0f000400},{"ushr",0x2f000400},{"ssra",0x0f001400,"b"},
+                    {"usra",0x2f001400,"b"},{"srshr",0x0f002400},{"urshr",0x2f002400},
+                    {"srsra",0x0f003400,"b"},{"ursra",0x2f003400,"b"},{"sri",0x2f004400,"b"}}) do
+    form(op[1],regs2(iv).." imm",op[2],rr.." + "..arrq.." + "..ashift_right,
+         intshape.." && r2 >= 1 && r2 <= "..aw,nil,nil,"neon",op[3])
+    form(op[1],"d d imm",op[2]+0x50000000,rr.." + (128-r2)*65536",
+         range("r2",1,64),nil,nil,"neon",op[3])
+end
+for _,op in ipairs({{"shl",0x0f005400},{"sli",0x2f005400,"b"},{"sqshl",0x0f007400},
+                    {"uqshl",0x2f007400},{"sqshlu",0x2f006400}}) do
+    form(op[1],regs2(iv).." imm",op[2],rr.." + "..arrq.." + "..ashift_left,
+         intshape.." && r2 >= 0 && r2 < "..aw,nil,nil,"neon",op[3])
+    local saturate=op[1]:sub(-1)~="i" and op[1]~="shl"
+    for i,r in ipairs({{"b",8},{"h",16},{"s",32},{"d",64}}) do
+        if i==4 or saturate then
+            form(op[1],regs2(r[1]).." imm",op[2]+0x50000000,rr.." + ("..r[2].."+r2)*65536",
+                 u("r2",r[2]-1),nil,nil,"neon",op[3])
+        end
+    end
+end
+for _,op in ipairs({{"sshll",0x0f00a400},{"ushll",0x2f00a400}}) do
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),"v_wide v_narrow imm",op[2]+q*0x40000000,
+             rr.." + "..ashift_left,shortshape.." && arr%2 == "..q.." && r2 >= 0 && r2 < "..aw,nil,nil,"neon")
+    end
+end
+for _,op in ipairs({{"shrn",0x0f008400},{"rshrn",0x0f008c00},{"sqshrn",0x0f009400,true},
+                    {"uqshrn",0x2f009400,true},{"sqrshrn",0x0f009c00,true},{"uqrshrn",0x2f009c00,true},
+                    {"sqshrun",0x2f008400,true},{"sqrshrun",0x2f008c00,true}}) do
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),"v_narrow v_wide imm",op[2]+q*0x40000000,
+             rr.." + "..ashift_right,shortshape.." && arr%2 == "..q.." && r2 >= 1 && r2 <= "..aw,
+             nil,nil,"neon",q==1 and "b" or nil)
+    end
+    if op[3] then
+        for _,sz in ipairs({{"b h",8},{"h s",16},{"s d",32}}) do
+            form(op[1],sz[1].." imm",op[2]+0x50000000,rr.." + ("..(sz[2]*2).."-r2)*65536",
+                 range("r2",1,sz[2]),nil,nil,"neon")
+        end
+    end
+end
+for _,op in ipairs({{"xtn",0x0e212800},{"sqxtn",0x0e214800,true},
+                    {"uqxtn",0x2e214800,true},{"sqxtun",0x2e212800,true}}) do
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),"v_narrow v_wide",op[2]+q*0x40000000,rr.." + "..arrsize,
+             shortshape.." && arr%2 == "..q,nil,nil,"neon",q==1 and "b" or nil)
+    end
+    if op[3] then
+        for i,sz in ipairs({"b h","h s","s d"}) do
+            form(op[1],sz,op[2]+0x50000000+(i-1)*0x400000,rr,nil,nil,nil,"neon")
+        end
+    end
+end
+for _,op in ipairs({{"fcvtn",0x0e216800,"v_narrow v_wide",2},
+                    {"fcvtl",0x0e217800,"v_wide v_narrow",2},
+                    {"fcvtxn",0x2e216800,"v_narrow v_wide",4}}) do
+    for q=0,1 do
+        form(op[1]..(q==1 and "2" or ""),op[3],op[2]+q*0x40000000,rr.." + (arr/2-1)*0x400000",
+             range("arr",op[4],5).." && arr%2 == "..q,nil,nil,fpvec,q==1 and op[1]~="fcvtl" and "b" or nil)
+    end
+end
+local imm8bits="r1/32*65536 + r1%32*32"
+local cmode_shape="((cmode < 8 || (cmode >= 12 && cmode <= 13)) && arr >= 4 && arr <= 5) || "..
+                  "(cmode >= 8 && cmode <= 11 && arr >= 2 && arr <= 3)"
+for _,op in ipairs({{"movi",0x0f000400,false},{"mvni",0x2f000400,false},
+                    {"orr",0x0f000400,true},{"bic",0x2f000400,true}}) do
+    local legal=op[3] and "cmode < 12 && cmode%2 != 0" or
+                "(cmode < 12 && cmode%2 == 0) || cmode == 12 || cmode == 13"
+    local shape="(("..legal..") && ("..cmode_shape.."))"
+    if op[1]=="movi" then shape=shape.." || (cmode == 14 && arr >= 0 && arr <= 1)" end
+    form(op[1],"v_int simdimm8",op[2],"r0 + "..imm8bits.." + cmode*4096 + "..arrq,
+         u("r1",255).." && "..u("cmode",14).." && ("..shape..")",nil,nil,"neon",op[3] and "b" or nil)
+end
+form("movi","d simdimm8",0x2f00e400,"r0 + "..imm8bits,u("r1",255),nil,nil,"neon")
+form("movi","v_2d simdimm8",0x6f00e400,"r0 + "..imm8bits,u("r1",255),nil,nil,"neon")
+form("fmov","v_float fimm8",0x0f00f400,"r0 + "..imm8bits.." + "..arrq.." + (arr == 7)*0x20000000",
+     u("r1",255).." && "..fpshape,nil,nil,fpvec)
+form("fmov","v_half fimm8",0x0f00fc00,"r0 + "..imm8bits.." + "..arrq,
+     u("r1",255).." && "..range("arr",2,3),nil,nil,{"fp","neon","fp16"})
+local lm5="(2*lane+1)*"..eb.."*65536"
+local lanecheck=u("lane",15).." && lane < 16/"..eb
+for _,g in ipairs({{"w",0,2,1,0},{"x",3,3,2,1}}) do
+    local r,lo,hi,sm,q=g[1],g[2],g[3],g[4],g[5]
+    form("dup",iv.." "..r,0x0e000c00,rr.." + "..ab.."*65536 + "..arrq,
+         range("arr",r=="x" and 7 or 0,r=="x" and 7 or 5),nil,nil,"neon")
+    form("ins","v_lane "..r,0x4e001c00,rr.." + "..lm5,
+         range("esize",lo,hi).." && "..lanecheck,nil,nil,"neon","b")
+    form("umov",r.." v_lane",0x0e003c00+q*0x40000000,rr.." + "..lm5,
+         range("esize",lo,hi).." && "..lanecheck,nil,nil,"neon")
+    form("smov",r.." v_lane",0x0e002c00+q*0x40000000,rr.." + "..lm5,
+         u("esize",sm).." && "..lanecheck,nil,nil,"neon")
+end
+form("dup",iv.." v_lane",0x0e000400,rr.." + (2*lane+1)*"..ab.."*65536 + "..arrq,
+     intshape.." && "..u("lane",15).." && lane < 16/"..ab,nil,nil,"neon")
+for _,r in ipairs({{"b",1,15},{"h",2,7},{"s",4,3},{"d",8,1}}) do
+    form("dup",r[1].." v_lane",0x5e000400,rr.." + (2*lane+1)*"..r[2].."*65536",
+         u("lane",r[3]),nil,nil,"neon")
+end
+form("ins","v_lane v_lane",0x6e000400,rr.." + "..lm5.." + lane_src*"..eb.."*2048",
+     u("esize",3).." && "..lanecheck.." && "..u("lane_src",15).." && lane_src < 16/"..eb,nil,nil,"neon","b")
+for _,op in ipairs({{"tbl",0x0e000000},{"tbx",0x0e001000}}) do
+    form(op[1],"v_byte v_table v_byte",op[2],rrr.." + (nregs-1)*8192 + "..arrq,
+         u("arr",1).." && "..range("nregs",1,4),nil,nil,"neon",op[1]=="tbx" and "b" or nil)
+end
+-- Multiple-register structures and replicate loads. v_list is the first
+-- register in a consecutive list (wraps mod 32); nregs is bound for LD1/ST1.
+for _,op in ipairs({{"ld1",0x0c400000,0,loads,"w"},{"ld2",0x0c408000,2,loads,"w"},
+                    {"ld3",0x0c404000,3,loads,"w"},{"ld4",0x0c400000,4,loads,"w"},
+                    {"st1",0x0c000000,0,stores,"r"},{"st2",0x0c008000,2,stores,"r"},
+                    {"st3",0x0c004000,3,stores,"r"},{"st4",0x0c000000,4,stores,"r"},
+                    {"ld1r",0x0d40c000,1,loads,"w",true},{"ld2r",0x0d60c000,2,loads,"w",true},
+                    {"ld3r",0x0d40e000,3,loads,"w",true},{"ld4r",0x0d60e000,4,loads,"w",true}}) do
+    local m,base,n,flags,access,repl=op[1],op[2],op[3],op[4],op[5],op[6]
+    local layout=n==0 and " + select(nregs == 1,7,select(nregs == 2,10,select(nregs == 3,6,2)))*4096" or ""
+    local fields=rr.." + "..arrq.." + arr/2*1024"..layout
+    local chk=((n==0 or repl) and u("arr",7) or intshape).." && disp == 0"..
+              (n==0 and " && "..range("nregs",1,4) or "")
+    local amount=(n==0 and "nregs" or n).."*"..(repl and ab or "(8+arr%2*8)")
+    form(m,"v_list memstruct",base,fields,chk,nil,flags,"neon",access)
+    form(m,"v_list memstruct x",base+0x800000,fields.." + r2*65536",chk.." && r2 <= 30",nil,flags,"neon",access.."b")
+    form(m,"v_list memstruct imm",base+0x9f0000,fields,chk.." && r2 == "..amount,nil,flags,"neon",access.."b")
+end
+local lanelayout="select(esize == 0,lane%8*1024 + lane/8*0x40000000,"..
+    "select(esize == 1,0x4000 + lane%4*2048 + lane/4*0x40000000,"..
+    "select(esize == 2,0x8000 + lane%2*4096 + lane/2*0x40000000,0x8400 + lane*0x40000000)))"
+for n=1,4 do
+    local regbits=({0,0x200000,0x2000,0x202000})[n]
+    for _,op in ipairs({{"ld",0x0d400000,loads,"b"},{"st",0x0d000000,stores,"r"}}) do
+        local name=op[1]..n
+        local base=op[2]+regbits
+        local fields=rr.." + "..lanelayout
+        local check=u("esize",3).." && "..lanecheck.." && disp == 0"
+        form(name,"v_list_lane memstruct",base,fields,check,nil,op[3],"neon",op[4])
+        form(name,"v_list_lane memstruct x",base+0x800000,fields.." + r2*65536",
+             check.." && r2 <= 30",nil,op[3],"neon",op[4].."b")
+        form(name,"v_list_lane memstruct imm",base+0x9f0000,fields,
+             check.." && r2 == "..n.."*"..eb,nil,op[3],"neon",op[4].."b")
+    end
+end
+
+-- Optional data processing and system features.
+for _,g in ipairs({{"w","wsp",0},{"x","xsp",0x80000000}}) do
+    local r,sf=g[1],g[3]
+    for _,op in ipairs({{"abs",0x5ac02000},{"cnt",0x5ac01c00},{"ctz",0x5ac01800}}) do
+        form(op[1],regs2(r),op[2]+sf,rr,nil,nil,nil,"cssc")
+    end
+    for _,op in ipairs({{"smax",0x1ac06000,0x11c00000,true},{"smin",0x1ac06800,0x11c80000,true},
+                        {"umax",0x1ac06400,0x11c40000},{"umin",0x1ac06c00,0x11cc0000}}) do
+        form(op[1],regs3(r),op[2]+sf,rrr,nil,nil,nil,"cssc")
+        form(op[1],regs2(r).." imm",op[3]+sf,rr.." + ((r2+256)%256)*1024",
+             op[4] and range("r2",-128,127) or u("r2",255),nil,nil,"cssc")
+    end
+end
+form("cfinv","",0xd500401f,nil,nil,nil,nil,"flagm")
+form("rmif","x imm imm",0xba000400,"r0*32 + r1*32768 + r2",
+     u("r1",63).." && "..u("r2",15),nil,nil,"flagm","r")
+form("setf8","w",0x3a00080d,"r0*32",nil,nil,nil,"flagm","r")
+form("setf16","w",0x3a00480d,"r0*32",nil,nil,nil,"flagm","r")
+form("bti","bti_target",0xd503241f,"r0*64",range("r0",1,3),nil,nil,"bti")
+for _,op in ipairs({{"cfp",0xd50b7380},{"dvp",0xd50b73a0},{"cpp",0xd50b73e0}}) do
+    form(op[1],"rctx x",op[2],"r1","r0 == 0",nil,{"privileged"},{"priv","predres"},".r")
+end
+for _,op in ipairs({{"crc32cb","w",0x1ac05000},{"crc32ch","w",0x1ac05400},
+                    {"crc32cw","w",0x1ac05800},{"crc32cx","x",0x9ac05c00}}) do
+    form(op[1],"w w "..op[2],op[3],rrr,nil,nil,nil,"crc")
+end
+for i,op in ipairs({{"pacia","paciza"},{"pacib","pacizb"},{"pacda","pacdza"},{"pacdb","pacdzb"},
+                     {"autia","autiza"},{"autib","autizb"},{"autda","autdza"},{"autdb","autdzb"}}) do
+    local base=0xdac10000+(i-1)*1024
+    if i~=1 then form(op[1],"x xsp",base,rr,nil,nil,nil,"paca","b") end
+    form(op[2],"x",base+0x23e0,"r0",nil,nil,nil,"paca","b")
+end
+form("xpaci","x",0xdac143e0,"r0",nil,nil,nil,"paca","b")
+form("xpacd","x",0xdac147e0,"r0",nil,nil,nil,"paca","b")
+form("pacga","x x xsp",0x9ac03000,rrr,nil,nil,nil,"paca")
+for _,op in ipairs({{"xpaclri",7},{"pacia1716",8},{"pacib1716",10},{"autia1716",12},{"autib1716",14},
+                    {"paciaz",24},{"paciasp",25},{"pacibz",26},{"pacibsp",27},
+                    {"autiaz",28},{"autiasp",29},{"autibz",30},{"autibsp",31}}) do
+    form(op[1],"",0xd503201f+op[2]*32,nil,nil,nil,nil,"paca")
+end
+for _,op in ipairs({{"braa",0xd71f0800,true},{"brab",0xd71f0c00,true},
+                    {"blraa",0xd73f0800},{"blrab",0xd73f0c00}}) do
+    local flags=op[3] and {"branch","terminator"} or {"branch"}
+    form(op[1],"x xsp",op[2],"r0*32 + r1",nil,nil,flags,"paca","rr")
+    form(op[1].."z","x",op[2]-0x1000000+31,"r0*32",nil,nil,flags,"paca","r")
+end
+for _,op in ipairs({{"retaa",0xd65f0bff},{"retab",0xd65f0fff},{"eretaa",0xd69f0bff,true},{"eretab",0xd69f0fff,true}}) do
+    form(op[1],"",op[2],nil,nil,nil,op[3] and {"return","terminator","privileged"} or {"return","terminator"},
+         op[3] and {"priv","paca"} or "paca")
+end
+for _,op in ipairs({{"ldraa",0xf8200400},{"ldrab",0xf8a00400}}) do
+    local f=signedfield("disp",8,1024)
+    local fields=rr.." + "..f.."%512*4096 + "..f.."/512*0x400000"
+    form(op[1],"x memoff8",op[2],fields,delta("disp",4096,8),nil,loads,"paca")
+    form(op[1],"x mempre8",op[2]+0x800,fields,delta("disp",4096,8).." && (r1 == 31 || r0 != r1)",
+         nil,loads,"paca","wb")
+end
+for _,op in ipairs({{"addg",0x91800000},{"subg",0xd1800000}}) do
+    form(op[1],"xsp xsp imm imm",op[2],rr.." + r2/16*65536 + r3*1024",
+         u("r2",1008).." && r2%16 == 0 && "..u("r3",15),nil,nil,"mte")
+end
+form("subp","x xsp xsp",0x9ac00000,rrr,nil,nil,nil,"mte")
+form("subps","x xsp xsp",0xbac00000,rrr,nil,nil,nil,"mte")
+form("cmpp","xsp xsp",0xbac0001f,"r0*32 + r1*65536",nil,nil,nil,"mte","rr")
+form("gmi","x xsp x",0x9ac01400,rrr,nil,nil,nil,"mte")
+form("ldg","x memoff16",0xd9600000,rr.." + "..signedfield("disp",16,512).."*4096",
+     delta("disp",4096,16),nil,loads,"mte")
+for _,op in ipairs({{"stg",0xd9200000},{"stzg",0xd9600000},{"st2g",0xd9a00000},{"stz2g",0xd9e00000}}) do
+    for _,mode in ipairs({{"off",0x800},{"pre",0xc00},{"post",0x400}}) do
+        local wb=mode[1]~="off"
+        form(op[1],"xsp mem"..mode[1].."16",op[2]+mode[2],rr.." + "..signedfield("disp",16,512).."*4096",
+             delta("disp",4096,16)..(wb and " && (r1 == 31 || r0 != r1)" or ""),nil,stores,"mte",wb and "rb" or "r")
+    end
+end
+for _,op in ipairs({{"mem16",0x69000000},{"mempre16",0x69800000},{"mempost16",0x68800000}}) do
+    local wb=op[1]~="mem16"
+    form("stgp","x x "..op[1],op[2],"r0 + r1*1024 + r2*32 + "..signedfield("disp",16,128).."*32768",
+         delta("disp",1024,16)..(wb and " && (r2 == 31 || (r2 != r0 && r2 != r1))" or ""),
+         nil,stores,"mte",wb and "rrb" or "rr")
+end
+for _,op in ipairs({{"ld64b",0xf83fd000,loads,"w"},{"st64b",0xf83f9000,stores,"r"}}) do
+    form(op[1],"x mem64",op[2],rr,"disp == 0 && r0%2 == 0 && r0 <= 22",nil,op[3],"ls64",op[4])
+end
+
+-- Fixed-geometry Advanced SIMD crypto and matrix families. No implied
+-- dependency on Armv8.x's mandatory/optional feature bundles.
+local aes={"neon","aes"}
+local sha2={"neon","sha2"}
+local sha3={"neon","sha3"}
+local sm={"neon","sm4"}
+local bf={"neon","bf16"}
+local i8={"neon","i8mm"}
+for _,op in ipairs({{"aese",0x4e284800,"b"},{"aesd",0x4e285800,"b"},
+                    {"aesmc",0x4e286800},{"aesimc",0x4e287800}}) do
+    form(op[1],"v_16b v_16b",op[2],rr,nil,nil,nil,aes,op[3])
+end
+for _,op in ipairs({{"sha1c","q s v_4s",0x5e000000,"b"},{"sha1m","q s v_4s",0x5e002000,"b"},
+                    {"sha1p","q s v_4s",0x5e001000,"b"},{"sha1su0","v_4s v_4s v_4s",0x5e003000,"b"},
+                    {"sha256h","q q v_4s",0x5e004000,"b"},{"sha256h2","q q v_4s",0x5e005000,"b"},
+                    {"sha256su1","v_4s v_4s v_4s",0x5e006000,"b"}}) do
+    form(op[1],op[2],op[3],rrr,nil,nil,nil,sha2,op[4])
+end
+form("sha1h","s s",0x5e280800,rr,nil,nil,nil,sha2)
+form("sha1su1","v_4s v_4s",0x5e281800,rr,nil,nil,nil,sha2,"b")
+form("sha256su0","v_4s v_4s",0x5e282800,rr,nil,nil,nil,sha2,"b")
+for _,op in ipairs({{"sha512h","q q v_2d",0xce608000,"b"},{"sha512h2","q q v_2d",0xce608400,"b"},
+                    {"sha512su1","v_2d v_2d v_2d",0xce608800,"b"},{"rax1","v_2d v_2d v_2d",0xce608c00}}) do
+    form(op[1],op[2],op[3],rrr,nil,nil,nil,sha3,op[4])
+end
+form("sha512su0","v_2d v_2d",0xcec08000,rr,nil,nil,nil,sha3,"b")
+for _,op in ipairs({{"eor3",0xce000000},{"bcax",0xce200000}}) do
+    form(op[1],"v_16b v_16b v_16b v_16b",op[2],rrr.." + r3*1024",nil,nil,nil,sha3)
+end
+form("xar","v_2d v_2d v_2d imm",0xce800000,rrr.." + r3*1024",u("r3",63),nil,nil,sha3)
+form("sm4e","v_4s v_4s",0xcec08400,rr,nil,nil,nil,sm,"b")
+form("sm4ekey","v_4s v_4s v_4s",0xce60c800,rrr,nil,nil,nil,sm)
+form("sm3ss1","v_4s v_4s v_4s v_4s",0xce400000,rrr.." + r3*1024",nil,nil,nil,sm)
+for i,m in ipairs({"sm3tt1a","sm3tt1b","sm3tt2a","sm3tt2b"}) do
+    form(m,"v_4s v_4s v_s_lane",0xce408000+(i-1)*1024,rrr.." + lane*4096",u("lane",3),nil,nil,sm,"b")
+end
+form("sm3partw1","v_4s v_4s v_4s",0xce60c000,rrr,nil,nil,nil,sm,"b")
+form("sm3partw2","v_4s v_4s v_4s",0xce60c400,rrr,nil,nil,nil,sm,"b")
+for _,op in ipairs({{"pmull",0},{"pmull2",0x40000000}}) do
+    form(op[1],op[2]==0 and "v_8h v_8b v_8b" or "v_8h v_16b v_16b",0x0e20e000+op[2],rrr,nil,nil,nil,"neon")
+    form(op[1],op[2]==0 and "v_1q v_1d v_1d" or "v_1q v_2d v_2d",0x0ee0e000+op[2],rrr,nil,nil,nil,{"neon","pmull"})
+end
+for _,op in ipairs({{"sdot",0x0e809400,{"neon","dp"}},{"udot",0x2e809400,{"neon","dp"}},
+                    {"usdot",0x0e809c00,i8},{"bfdot",0x2e40fc00,bf}}) do
+    local src=op[1]=="bfdot" and "v_half" or bv
+    form(op[1],"v_dot "..regs2(src),op[2],rrr.." + "..arrq,
+         u("arr",1),nil,nil,op[3],"b")
+end
+for _,op in ipairs({{"smmla",0x4e80a400},{"ummla",0x6e80a400},{"usmmla",0x4e80ac00}}) do
+    form(op[1],"v_4s v_16b v_16b",op[2],rrr,nil,nil,nil,i8,"b")
+end
+for _,op in ipairs({{"bfmmla",0x6e40ec00},{"bfmlalb",0x2ec0fc00},{"bfmlalt",0x6ec0fc00}}) do
+    form(op[1],"v_4s v_8h v_8h",op[2],rrr,nil,nil,nil,bf,"b")
+end
+form("bfcvtn","v_4h v_4s",0x0ea16800,rr,nil,nil,nil,bf)
+form("bfcvtn2","v_8h v_4s",0x4ea16800,rr,nil,nil,nil,bf,"b")
+
+-- Initial scalable register/predicate arithmetic and streaming/ZA forms.
+-- VL is not encoded in these instructions. `esize` is a B/H/S/D code,
+-- not a vector length. Predicate fields that use 3 bits check P0..P7.
+local zp="z_elem"
+local ppat=u("pattern",31).." && (pattern <= 13 || pattern >= 29)"
+local szbit="esize*0x400000"
+local valid_sz=u("esize",3)
+local sve2={"sve","sve2"}
+form("ptrue","p_elem",0x2518e3e0,"r0 + "..szbit,valid_sz,nil,nil,"sve")
+form("ptrue","p_elem imm",0x2518e000,"r0 + r1*32 + "..szbit,
+     valid_sz.." && "..u("r1",31).." && (r1 <= 13 || r1 >= 29)",nil,nil,"sve")
+form("pfalse","p_b",0x2518e400,"r0",nil,nil,nil,"sve")
+for _,op in ipairs({{"whilelt",0x25200400},{"whilele",0x25200410},
+                    {"whilelo",0x25200c00},{"whilels",0x25200c10}}) do
+    for _,r in ipairs({"w","x"}) do
+        form(op[1],"p_elem "..regs2(r),op[2]+(r=="x" and 0x1000 or 0),rrr.." + "..szbit,
+             valid_sz,nil,nil,"sve")
+    end
+end
+for i,s in ipairs({"b","h","w","d"}) do
+    for _,op in ipairs({{"cnt",0x0420e000},{"inc",0x0430e000},{"dec",0x0430e400}}) do
+        local base=op[2]+(i-1)*0x400000
+        local access=op[1]=="cnt" and "w" or "b"
+        form(op[1]..s,"x",base+31*32,"r0",nil,nil,nil,"sve",access)
+        form(op[1]..s,"x pattern mult",base,"r0 + pattern*32 + (r2-1)*65536",
+             ppat.." && "..range("r2",1,16),nil,nil,"sve",access)
+    end
+end
+for _,op in ipairs({{"add",0x04200000},{"sub",0x04200400},{"sqadd",0x04201000},
+                    {"uqadd",0x04201400},{"sqsub",0x04201800},{"uqsub",0x04201c00}}) do
+    form(op[1],regs3(zp),op[2],rrr.." + "..szbit,valid_sz,nil,nil,"sve")
+end
+for _,op in ipairs({{"and",0x04203000},{"orr",0x04603000},{"eor",0x04a03000},{"bic",0x04e03000}}) do
+    form(op[1],"z_d z_d z_d",op[2],rrr,nil,nil,nil,"sve")
+end
+form("movprfx","z_any z_any",0x0420bc00,rr,nil,nil,nil,"sve")
+form("sel","z_elem p_plain z_elem z_elem",0x0520c000,
+     "r0 + r2*32 + r1*1024 + r3*65536 + "..szbit,valid_sz,nil,nil,"sve")
+for _,op in ipairs({{"add",0x04000000},{"sub",0x04010000},{"mul",0x04100000},
+                    {"smax",0x04080000},{"umax",0x04090000},{"smin",0x040a0000},{"umin",0x040b0000}}) do
+    form(op[1],"z_elem p_merge z_elem z_elem",op[2],"r0 + r3*32 + r1*1024 + "..szbit,
+         valid_sz.." && r0 == r2 && r1 <= 7",nil,nil,"sve","b")
+end
+form("histcnt","z_elem p_zero z_elem z_elem",0x4520c000,
+     "r0 + r2*32 + r1*1024 + r3*65536 + "..szbit,range("esize",2,3).." && r1 <= 7",nil,nil,sve2)
+for i,m in ipairs({"saddlb","saddlt","uaddlb","uaddlt","ssublb","ssublt","usublb","usublt"}) do
+    form(m,"z_wide z_elem z_elem",0x45000000+(i-1)*1024,rrr.." + "..szbit,
+         range("esize",1,3),nil,nil,sve2)
+end
+for _,op in ipairs({{"smstart",0xd503437f},{"smstop",0xd503427f}}) do
+    form(op[1],"",op[2]+0x400,nil,nil,nil,nil,"sme")
+    form(op[1],"sm_za",op[2],"r0*512",u("r0",1),nil,nil,"sme")
+end
+form("zero","za_mask",0xc0080000,"r0",u("r0",255),nil,nil,"sme")
+for _,op in ipairs({{"smopa",0xa0800000,"z_b"},{"umopa",0xa1a00000,"z_b"},{"fmopa",0x80800000,"z_s"}}) do
+    form(op[1],"za_s p_merge p_merge "..regs2(op[3]),op[2],
+         "r0 + r3*32 + r1*1024 + r2*8192 + r4*65536",
+         "r0 <= 3 && r1 <= 7 && r2 <= 7",nil,nil,"sme","b")
+end
+form("add","za_vgx2 z_group",0xc1a01c10,"r1*32 + (wsel-8)*8192 + slice",
+     range("wsel",8,11).." && "..u("slice",7).." && r0 == 0 && r1%2 == 0",
+     nil,nil,{"sme","sme2"},"b")
+
+symas.reloc{name="R_AARCH64_ADR_GOT_PAGE",width=32,pcrel=true,signed=true,expr="Page(GOT(S)) - Page(P)"}
+symas.reloc{name="R_AARCH64_LD64_GOT_LO12_NC",width=32,expr="GOT(S)"}
+
+symas.syntax{ name = "default", comment = "//", separator = ", " }
+symas.syntax{ name = "llvm", comment = "//", separator = ", ", tmpl = "{mnemonic} {ops}" }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tdata", flags = { "write", "alloc", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tbss", flags = { "write", "alloc", "zerofill", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".init", flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".fini", flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".plt", flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".got", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".eh_frame", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".comment", flags = { "merge", "readonly", "meta" }, align = 1, content = "meta" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_weak", binding = "weak", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "tls_var", binding = "tls", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+symas.linkage{ name = "hidden_func", binding = "global", visibility = "hidden", symtype = "func" }
+
+symas.reloc{ name = "R_AARCH64_NONE", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_ABS64", width = 64, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_ABS32", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_ABS16", width = 16, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_PREL64", width = 64, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_PREL32", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_PREL16", width = 16, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_JUMP26", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_CALL26", width = 32, signed = true, pcrel = true, expr = "PLT(S) + A - P" }
+symas.reloc{ name = "R_AARCH64_ADR_PREL_PG_HI21", width = 32, signed = true, pcrel = true, expr = "Page(S + A) - Page(P)" }
+symas.reloc{ name = "R_AARCH64_ADR_PREL_LO21", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_CONDBR19", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_AARCH64_ADR_PREL_PG_HI21_NC", width = 32, pcrel = true, expr = "Page(S + A) - Page(P)" }
+symas.reloc{ name = "R_AARCH64_ADD_ABS_LO12_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_LDST64_ABS_LO12_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_LDST128_ABS_LO12_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_MOVW_UABS_G0_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_MOVW_UABS_G1_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_MOVW_UABS_G2_NC", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_MOVW_UABS_G3", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_GOTREL64", width = 64, signed = true, expr = "S + A - GOT" }
+symas.reloc{ name = "R_AARCH64_GOTREL32", width = 32, signed = true, expr = "S + A - GOT" }
+symas.reloc{ name = "R_AARCH64_GOT_LD_PREL19", width = 32, signed = true, pcrel = true, expr = "GOT(S) - P" }
+symas.reloc{ name = "R_AARCH64_TLSDESC_ADR_PREL21", width = 32, signed = true, pcrel = true, expr = "TLS(S) + A - P" }
+symas.reloc{ name = "R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21", width = 32, signed = true, pcrel = true, expr = "TLS(S) + A - P" }
+symas.reloc{ name = "R_AARCH64_TLSLE_ADD_TPREL_LO12_NC", width = 32, expr = "TLS(S) + A" }
+symas.reloc{ name = "R_AARCH64_GLOB_DAT", width = 64, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_JUMP_SLOT", width = 64, expr = "S + A" }
+symas.reloc{ name = "R_AARCH64_RELATIVE", width = 64, expr = "B + A" }
+symas.reloc{ name = "R_AARCH64_IRELATIVE", width = 64, expr = "B + A" }
+
+symas.debug{ msg = "A64 base/FP, selected Advanced SIMD, crypto, LSE and system forms", kind = "target", ref = "" }
+symas.debug{ msg = "Normalized Advanced SIMD ADD vD.16b, vN.16b, vM.16b", kind = "form", ref = "vadd" }
+symas.debug{ msg = "privileged system forms need priv", kind = "form", ref = "mrs" }
+
+print(symas.emit())

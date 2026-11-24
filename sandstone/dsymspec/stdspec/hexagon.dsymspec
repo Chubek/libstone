@@ -1,0 +1,139 @@
+-- Qualcomm Hexagon v68. Each form emits one complete, non-duplex packet
+-- with Parse=11 (end of packet). Joining forms does not make a multi-slot
+-- packet. The operands are flattened; native assignment/braced syntax,
+-- packet formation, constant extenders and .new forwarding are not modeled.
+-- Byte reference: llvm-mc -triple=hexagon -mcpu=hexagonv68 -mhvx -show-encoding.
+local symas = require("backend").new("hexagon")
+
+symas.target{
+    arch = "hexagon", subarch = "v68",
+    addr_size = 32, op_size = 32, addr_def = 32, align = 4,
+    byte_order = "little", obj_format = "ELF32", abi = "Hexagon",
+    calling_conv = "hexagon",
+    features = { "base", "v60", "v68" },
+}
+
+symas.feature{ name = "base", desc = "Hexagon base scalar" }
+symas.feature{ name = "v60", desc = "Hexagon V60" }
+symas.feature{ name = "v65", desc = "Hexagon V65" }
+symas.feature{ name = "v68", desc = "Hexagon V68" }
+symas.feature{ name = "hvx", desc = "Hexagon Vector eXtensions (128B)" }
+symas.feature{ name = "hvx128", desc = "HVX 128-byte" }
+symas.feature{ name = "audio", desc = "audio extensions" }
+symas.feature{ name = "duplex", desc = "duplex/sub-instruction" }
+symas.feature{ name = "compound", desc = "compound (new-value) jumps" }
+symas.feature{ name = "zreg", desc = "HVX temporaries" }
+symas.feature{ name = "priv", desc = "privileged (guest/supervisor)" }
+
+local rw = { "readable", "writable" }
+for i = 0, 31 do
+    symas.register{ name = "r" .. i, class = "gpr", width = 32, enc = i, flags = rw }
+end
+for _, x in ipairs({ {"sp",29},{"fp",30},{"lr",31} }) do
+    symas.register{ name = x[1], class = "gpr", width = 32, enc = x[2], flags = rw,
+        parent = "r" .. x[2], sub_lo = 0, sub_hi = 32 }
+end
+for i = 0, 3 do
+    symas.register{ name = "p" .. i, class = "mask", width = 8, enc = i, flags = rw }
+    symas.register{ name = "q" .. i, class = "mask", width = 128, enc = i, flags = rw }
+end
+for i = 0, 31 do
+    symas.register{ name = "v" .. i, class = "vec", width = 1024, enc = i, flags = rw }
+end
+for _, x in ipairs({ {"sa0",0},{"lc0",1},{"sa1",2},{"lc1",3},{"p3:0",4},
+    {"m0",6},{"m1",7},{"usr",8},{"pc",9},{"ugp",10},{"gp",11} }) do
+    symas.register{ name = x[1], class = "ctrl", width = 32, enc = x[2],
+        flags = x[1] == "pc" and { "readable" } or rw }
+end
+local function reg(cls,w,a) return { kind = "reg", class = cls, width = w, access = a } end
+local r, rd = reg("gpr",32), reg("gpr",32,"write")
+local v, vd = reg("vec",1024), reg("vec",1024,"write")
+local function imm(w,lo,hi,constraint)
+    return { kind = "imm", width = w, imm_min = lo, imm_max = hi, signed = lo < 0, constraint = constraint }
+end
+local declared = {}
+local function form(n,tag,ops,src,flags,req,relo)
+    if not declared[n] then symas.mnemonic{ name = n }; declared[n] = true end
+    local enc = n .. "_" .. tag
+    symas.encoder{ name = enc, source = src, max_bytes = 4, max_relocs = relo or 0 }
+    symas.form{ mnemonic = n, encoder = enc, operands = ops, flags = flags, required = req }
+end
+local function fit(n,lo,hi) return ("require(%s >= %s && %s <= %s); "):format(n,lo,n,hi) end
+local function ck(n) return fit(n,0,31) end
+local function packet(op,fields) return ("emit32le(0x%08x%s); "):format(op+0xc000,fields or "") end
+form("nop","single",nil,packet(0x7f000000))
+for _, o in ipairs({ {"add",0xf3000000},{"sub",0xf3200000,true},
+    {"and",0xf1000000},{"or",0xf1200000},{"xor",0xf1600000},{"mpyi",0xed000000} }) do
+    form(o[1],"rrr",{rd,r,r},ck("a") .. ck("b") .. ck("c") ..
+        packet(o[2],o[3] and " + a + c*65536 + b*256" or " + a + b*65536 + c*256"))
+end
+local rri = ck("a") .. ck("b")
+form("mov","rr",{rd,r},rri .. packet(0x70600000," + a + b*65536"))
+form("cmp.eq","rr",{reg("mask",8,"write"),r,r},fit("a",0,3) .. ck("b") .. ck("c") ..
+    packet(0xf2000000," + a + b*65536 + c*256"))
+local addi = rri .. fit("c",-32768,32767) ..
+    packet(0xb0000000," + a + b*65536 + ((c+65536) % 512)*32 + ((c+65536) % 65536 / 512)*2097152")
+local i16 = imm(16,-32768,32767)
+form("add","imm",{rd,r,i16},addi)
+form("addi","imm",{rd,r,i16},addi) -- flattened spelling for add(...,#imm)
+form("mpyi","imm",{rd,r,imm(9,-255,255)},rri .. fit("c",-255,255) ..
+    packet(0xe0000000," + a + b*65536 + select(c < 0, -c*32 + 8388608, c*32)"))
+
+local moff = imm(13,-4096,4092,"byte displacement, multiple of four")
+local function memcheck(ra,o)
+    return ck(ra) .. fit(o,-4096,4092) .. "require(" .. o .. " % 4 == 0); "
+end
+form("memw.ld","baseoff",{rd,r,moff},ck("a") .. memcheck("b","c") ..
+    packet(0x91800000," + a + b*65536 + ((c/4+2048) % 512)*32 + ((c/4+2048) % 2048 / 512)*33554432"),
+    {"reads_mem"})
+form("memw.st","baseoff",{r,moff,r},memcheck("a","b") .. ck("c") ..
+    packet(0xa1800000," + a*65536 + c*256 + (b/4+2048)%256 + ((b/4+2048)%512/256)*8192"
+        .. " + ((b/4+2048)%2048/512)*33554432"),{"writes_mem"})
+
+local bdisp = imm(24,-8388608,8388604,"byte displacement from the packet start, multiple of four")
+for _, o in ipairs({ {"jump",0x58000000,{"branch","terminator"}},{"call",0x5a000000,{"branch"}} }) do
+    form(o[1],"disp",{bdisp},fit("a",-8388608,8388604) .. "require(a % 4 == 0); " ..
+        packet(o[2]," + ((a/4+4194304) % 8192)*2 + ((a/4+4194304) % 4194304 / 8192)*65536"),o[3])
+    local flags = { table.unpack(o[3]) }; flags[#flags+1] = "reloc"
+    form(o[1],"sym",{{kind="sym",width=32}},"emit_relocation(sym, R_HEX_B22_PCREL); " .. packet(o[2]),flags,nil,1)
+end
+form("jumpr","reg",{r},ck("a") .. packet(0x52800000," + a*65536"),{"branch","terminator"})
+form("callr","reg",{r},ck("a") .. packet(0x50a00000," + a*65536"),{"branch"})
+form("dealloc_return","fp",nil,packet(0x961e001e),{"return","terminator","reads_mem","implicit_ops"})
+form("allocframe","sp",{imm(14,0,16376,"frame bytes; multiple of eight")},fit("a",0,16376) ..
+    "require(a % 8 == 0); " .. packet(0xa09d0000," + a/8"),{"writes_mem","implicit_ops"})
+form("trap0","imm",{imm(8,0,255)},fit("a",0,255) ..
+    packet(0x54000000," + (a%8)*4 + (a/8)*256"),{"may_trap"})
+
+local hvx = { "hvx","hvx128" }
+form("vadd.w","vvv",{vd,v,v},rri .. ck("c") ..
+    packet(0x1c400000," + a + b*256 + c*65536"),nil,hvx)
+local voff = imm(4,-8,7,"displacement in 128-byte vectors")
+local function vdisp(n) return ("((%s+16)%%8)*256 + ((%s+16)%%16/8)*8192"):format(n,n) end
+form("vmem.ld","baseoff",{vd,r,voff},rri .. fit("c",-8,7) ..
+    packet(0x28000000," + a + b*65536 + " .. vdisp("c")),{"reads_mem"},hvx)
+form("vmem.st","baseoff",{r,voff,v},ck("a") .. fit("b",-8,7) .. ck("c") ..
+    packet(0x28200000," + c + a*65536 + " .. vdisp("b")),{"writes_mem"},hvx)
+symas.mnemonic{ name = "vmpy" } -- widening and lane-type variants not modeled here
+symas.syntax{ name = "default", comment = "//", separator = ", " }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 4, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 4, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 4, content = "data" }
+symas.section{ name = ".tdata", flags = { "write", "alloc", "tls", "data" }, align = 4, content = "data" }
+symas.section{ name = ".got", flags = { "write", "alloc", "data" }, align = 4, content = "data" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_weak", binding = "weak", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+
+-- B22 writes split fields in bits 24:16 and 13:1 of the instruction.
+symas.reloc{ name = "R_HEX_B22_PCREL", width = 22, signed = true, pcrel = true, expr = "(S + A - P) / 4" }
+symas.reloc{ name = "R_HEX_32", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_HEX_16", width = 16, expr = "S + A" }
+symas.reloc{ name = "R_HEX_LO16", width = 16, expr = "(S + A) & 0xffff" }
+symas.reloc{ name = "R_HEX_HI16", width = 16, expr = "(S + A) >> 16" }
+
+print(symas.emit())

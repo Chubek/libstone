@@ -1,0 +1,51 @@
+/* Profile, encoder, llvm-mc triple, CPU (or ""), reference syntax, bytes, and
+ * named encoder inputs. These test encoding independently of source parsing.
+ */
+ENCODING(aarch64, "nop", "aarch64", "", "nop", "\x1f\x20\x03\xd5",
+         NO_OPERANDS)
+ENCODING(amd64, "nop", "x86_64", "", "nop", "\x90",
+         NO_OPERANDS)
+ENCODING(amd64, "add", "x86_64", "", "addq %r10, %r9", "\x4d\x01\xd1",
+         OPERANDS(OP("r0", 9), OP("r1", 10)))
+ENCODING(amdgpu, "s_endpgm_plain", "amdgcn", "gfx900", "s_endpgm", "\x00\x00\x81\xbf",
+         NO_OPERANDS)
+ENCODING(arm32, "add", "armv7-none-eabi", "", "add r1, r2, r3", "\x03\x10\x82\xe0",
+         OPERANDS(OP("r0", 1), OP("r1", 2), OP("r2", 3)))
+ENCODING(avr, "add", "avr", "atmega328p", "add r27, r20", "\xb4\x0f",
+         OPERANDS(OP("r0", 27), OP("r1", 20)))
+ENCODING(bpf, "exit_base", "bpfel", "", "exit", "\x95\x00\x00\x00\x00\x00\x00\x00",
+         NO_OPERANDS)
+ENCODING(bpf, "mov_reg", "bpfel", "", "r1 = r2", "\xbf\x21\x00\x00\x00\x00\x00\x00",
+         OPERANDS(OP("a", 1), OP("b", 2)))
+ENCODING(hexagon, "nop_single", "hexagon", "", "{ nop }", "\x00\xc0\x00\x7f",
+         NO_OPERANDS)
+ENCODING(lanai, "nop", "lanai", "", "nop", "\x00\x00\x00\x01",
+         NO_OPERANDS)
+ENCODING(loongarch32, "nop", "loongarch32", "", "nop", "\x00\x00\x40\x03",
+         NO_OPERANDS)
+ENCODING(loongarch64, "nop", "loongarch64", "", "nop", "\x00\x00\x40\x03",
+         NO_OPERANDS)
+ENCODING(msp430, "nop", "msp430", "", "nop", "\x03\x43",
+         NO_OPERANDS)
+ENCODING(ppc32, "addi", "powerpc", "", "addi 3, 4, -42", "\x38\x64\xff\xd6",
+         OPERANDS(OP("r0", 3), OP("r1", 4), OP("r2", -42)))
+ENCODING(ppc64, "addi", "powerpc64le", "", "addi 3, 4, -42", "\xd6\xff\x64\x38",
+         OPERANDS(OP("r0", 3), OP("r1", 4), OP("r2", -42)))
+ENCODING(riscv32, "add", "riscv32", "", "add x1, x2, x3", "\xb3\x00\x31\x00",
+         OPERANDS(OP("rd", 1), OP("rs1", 2), OP("rs2", 3)))
+ENCODING(riscv64, "addi", "riscv64", "", "addi x1, x2, -16", "\x93\x00\x01\xff",
+         OPERANDS(OP("r0", 1), OP("r1", 2), OP("r2", -16)))
+ENCODING(rv64im, "addi", "riscv64", "", "addi x1, x2, -16", "\x93\x00\x01\xff",
+         OPERANDS(OP("r0", 1), OP("r1", 2), OP("r2", -16)))
+ENCODING(s390x, "nop", "s390x", "", "bcr 0, %r0", "\x07\x00",
+         NO_OPERANDS)
+ENCODING(sparc64, "add", "sparcv9", "", "add %g2, %g3, %g1", "\x82\x00\x80\x03",
+         OPERANDS(OP("r0", 2), OP("r1", 3), OP("r2", 1)))
+ENCODING(wasm, "nop_plain", "wasm32", "", "nop", "\x01",
+         NO_OPERANDS)
+ENCODING(wasm, "i32.const_imm", "wasm32", "", "i32.const -65", "\x41\xbf\x7f",
+         OPERANDS(OP("a", -65)))
+ENCODING(x86, "nop", "i386", "", "nop", "\x90",
+         NO_OPERANDS)
+ENCODING(x86, "movzx", "i386", "", "movzwl %dx, %ecx", "\x0f\xb7\xca",
+         OPERANDS(OP("r0", 1), OP("r1", 2)))

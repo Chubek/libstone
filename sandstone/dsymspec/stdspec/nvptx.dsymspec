@@ -1,0 +1,48 @@
+-- NVIDIA PTX virtual ISA, .address_size 64, .target sm_80. Metadata only.
+-- Register names and types are declared by .reg, not from a fixed numbered bank.
+-- Labels, state spaces, and parameter symbols are PTX source constructs, not
+-- cubin ELF sections or relocation records. ptxas or a CUDA driver selects and
+-- encodes SASS for the requested GPU. PTX .version is separate from .target.
+local symas = require("backend").new("nvptx")
+
+symas.target{
+    arch = "nvptx", subarch = "sm_80",
+    addr_size = 64, op_size = 32, addr_def = 64, align = 1,
+    byte_order = "little", obj_format = "ptx", abi = "NVPTX",
+    calling_conv = "nvptx-kernel",
+    features = { "base", "sm_80", "mma", "wmma", "cp.async", "shfl", "vote",
+        "atomics", "fp16", "bf16" },
+}
+
+symas.feature{ name = "base", desc = "PTX base integer + moves + branches" }
+symas.feature{ name = "sm_50", desc = "compute capability 5.0" }
+symas.feature{ name = "sm_70", desc = "compute capability 7.0" }
+symas.feature{ name = "sm_80", desc = "compute capability 8.0" }
+symas.feature{ name = "sm_90", desc = "compute capability 9.0 (wgmma/dist)" }
+symas.feature{ name = "mma", desc = "matrix multiply-accumulate" }
+symas.feature{ name = "wmma", desc = "warp matrix ops" }
+symas.feature{ name = "cp.async", desc = "asynchronous global-to-shared copy (PTX 7.0+, sm_80+)" }
+symas.feature{ name = "shfl", desc = "synchronized warp shuffle (shfl.sync)" }
+symas.feature{ name = "vote", desc = "synchronized warp vote (vote.sync)" }
+symas.feature{ name = "atomics", desc = "atomics (atom.add/cas)" }
+symas.feature{ name = "fp16", desc = "half-precision" }
+symas.feature{ name = "bf16", desc = "brain float 16" }
+symas.feature{ name = "cluster", desc = "thread-block clusters (sm_90+, operation-dependent PTX version)" }
+
+-- Example concrete PTX spellings, not exhaustive forms or aliases.
+for _, m in ipairs({ "mov.u32", "add.u32", "sub.u32", "mul.lo.u32",
+    "mad.lo.u32", "and.b32", "or.b32", "xor.b32", "shl.b32", "setp.eq.u32",
+    "cvt.u64.u32", "ld.global.u32", "st.global.u32", "ld.param.u64",
+    "cp.async.ca.shared.global", "atom.global.add.u32", "bra", "call", "ret",
+    "exit", "bar.sync", "membar.gl", "shfl.sync.bfly.b32", "vote.sync.ballot.b32",
+    "add.f32", "mul.f32", "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32" }) do
+    symas.mnemonic{ name = m }
+end
+-- PTX's `;` terminates a statement, it is not a comment delimiter.
+symas.syntax{ name = "ptx", comment = "//", separator = ", " }
+symas.linkage{ name = "kernel_entry", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_device", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "var_global", binding = "global", visibility = "default", symtype = "object" }
+symas.debug{ msg = "PTX is text; no SASS byte forms or cubin relocations", kind = "target", ref = "" }
+
+print(symas.emit())

@@ -1,0 +1,986 @@
+-- Shared RISC-V instruction bank: RV32GC / RV64GC, plus the RV64IM profile.
+-- Data: domainlet/bekern/arch/_arch_specs.py; encodings: RISC-V ISA manual
+-- (unpriv + priv + vector), cross-checked via arch_oracle / tablegen_inquiry
+-- (RISCVFeatures.td: FeatureStdExtM/A/F/D/C/V, Zba/Zbb/Zbs/Zbkb, Zk*, Zfh,
+-- Zfa, Zicond, Zihintpause, Zicsr, Zifencei) and isa_reference RV64 quick spec
+-- (x0-x31 ABI roles, R/I/S/B/U/J formats).
+-- Operand names used by encoders: rd, rs1, rs2, imm, sym, id.
+-- Opcode inventory: riscv/riscv-opcodes cdd4192b1e0215a305f2f610a820fa43e6694290.
+-- Strata: base I | M | A | F/D | C | Zb*/Zk* | V | Zicsr/Zifencei/priv.
+local profile = ...
+local rv32, im = profile == "rv32gc", profile == "rv64im"
+local xlen = rv32 and 32 or 64
+local arch = rv32 and "riscv32" or "riscv64"
+local symas = require("backend").new(arch)
+local form = symas.form
+symas.form = function(record)
+    local required = {"i"}
+    for _, feature in ipairs(record.required or {}) do required[#required+1]=feature end
+    record.required = required
+    return form(record)
+end
+
+symas.target{
+    arch = arch, subarch = rv32 and "rv32gc" or im and "rv64im" or "rv64gc",
+    addr_size = xlen, op_size = 32, addr_def = xlen, align = im and 4 or 2,
+    byte_order = "little", obj_format = rv32 and "ELF32" or "ELF64",
+    abi = rv32 and "ILP32D" or im and "LP64" or "LP64D",
+    calling_conv = rv32 and "ilp32d" or im and "lp64" or "lp64d",
+    features = im and { "i", "m" } or { "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" },
+}
+
+-- Base + M/A/F/D/C (as before) plus stratified extensions.
+symas.feature{ name = "i", desc = "Base integer, XLEN=" .. xlen }
+symas.feature{ name = "m", desc = "integer multiply/divide" }
+symas.feature{ name = "a", desc = "atomic (lr/sc/amo)" }
+symas.feature{ name = "f", desc = "single-precision floating point" }
+symas.feature{ name = "d", desc = "double-precision floating point" }
+symas.feature{ name = "c", desc = "compressed (16-bit) instructions" }
+symas.feature{ name = "zicsr", desc = "control and status registers" }
+symas.feature{ name = "zifencei", desc = "instruction-fetch fence" }
+symas.feature{ name = "v", desc = "vector extension (RVV 1.0; requires F and D)" }
+symas.feature{ name = "zba", desc = "address-generation (sh*add)" }
+symas.feature{ name = "zbb", desc = "basic bit-manipulation" }
+symas.feature{ name = "zbs", desc = "single-bit instructions" }
+symas.feature{ name = "zbkb", desc = "bitmanip for cryptography" }
+symas.feature{ name = "zknd", desc = "NIST AES decryption" }
+symas.feature{ name = "zkne", desc = "NIST AES encryption" }
+symas.feature{ name = "zknh", desc = "NIST hash (SHA2-256/512)" }
+symas.feature{ name = "zfh", desc = "half-precision floating point" }
+symas.feature{ name = "zfa", desc = "additional floating-point instructions" }
+symas.feature{ name = "zicond", desc = "integer conditional ops (czero)" }
+symas.feature{ name = "zihintpause", desc = "pause hint" }
+symas.feature{ name = "priv", desc = "privileged (mret/sret/wfi/sfence)" }
+
+-- General-purpose registers x0..x31.
+for i = 0, 31 do
+    symas.register{ name = "x" .. i, class = "gpr", width = xlen, enc = i,
+                    flags = i == 0 and { "readable" } or { "readable", "writable" } }
+end
+-- Floating-point registers f0..f31.
+for i = 0, 31 do
+    symas.register{ name = "f" .. i, class = "fp", width = 64, enc = i,
+                    flags = { "readable", "writable" } }
+end
+-- ABI aliases (isa_reference RV64 quick spec roles).
+local function alias(name, class, width, enc, base)
+    symas.register{ name = name, class = class, width = width, enc = enc,
+                    parent = base .. enc, sub_lo = 0, sub_hi = width,
+                    flags = name == "zero" and { "readable" } or { "readable", "writable" } }
+end
+local abi_gprs = {
+    "zero","ra","sp","gp","tp","t0","t1","t2","s0","s1","a0","a1","a2","a3","a4","a5",
+    "a6","a7","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","t3","t4","t5","t6",
+}
+local abi_fprs = {
+    "ft0","ft1","ft2","ft3","ft4","ft5","ft6","ft7","fs0","fs1","fa0","fa1","fa2","fa3","fa4","fa5",
+    "fa6","fa7","fs2","fs3","fs4","fs5","fs6","fs7","fs8","fs9","fs10","fs11","ft8","ft9","ft10","ft11",
+}
+for i, name in ipairs(abi_gprs) do alias(name, "gpr", xlen, i-1, "x") end
+for i, name in ipairs(abi_fprs) do alias(name, "fp", 64, i-1, "f") end
+alias("fp", "gpr", xlen, 8, "x")
+-- Vector registers v0..v31 (RVV; VLEN-agnostic, modelled as 128-bit).
+for i = 0, 31 do
+    symas.register{ name = "v" .. i, class = "vec", width = 128, enc = i,
+                    flags = { "readable", "writable" } }
+end
+-- CSRs as control-class registers (readable/writable subset).
+local function csr(name, address, mode)
+    local flags = { "readable" }
+    if address < 0xc00 then table.insert(flags, "writable") end
+    if mode then table.insert(flags, "modedep") end
+    symas.register{ name = name, class = "ctrl", width = xlen, enc = address, flags = flags }
+end
+for _, c in ipairs({
+    {"fflags",0x001},{"frm",0x002},{"fcsr",0x003},{"cycle",0xc00},{"time",0xc01},{"instret",0xc02},
+    {"vstart",0x008},{"vxsat",0x009},{"vxrm",0x00a},{"vcsr",0x00f},{"vl",0xc20},{"vtype",0xc21},{"vlenb",0xc22},
+    {"sstatus",0x100},{"sie",0x104},{"stvec",0x105},{"sscratch",0x140},{"sepc",0x141},
+    {"scounteren",0x106},{"senvcfg",0x10a},{"scause",0x142},{"stval",0x143},{"sip",0x144},{"satp",0x180},
+    {"mstatus",0x300},{"misa",0x301},{"medeleg",0x302},{"mideleg",0x303},{"mie",0x304},
+    {"mtvec",0x305},{"mscratch",0x340},{"mepc",0x341},{"mcause",0x342},{"mtval",0x343},{"mip",0x344},
+    {"mcounteren",0x306},{"menvcfg",0x30a},{"mcountinhibit",0x320},{"mcycle",0xb00},{"minstret",0xb02},
+    {"mvendorid",0xf11},{"marchid",0xf12},{"mimpid",0xf13},{"mhartid",0xf14},{"mconfigptr",0xf15},
+}) do csr(c[1],c[2],c[2]>=0x100 and c[2]<0xc00 or c[2]>=0xf00) end
+for i = 3, 31 do
+    csr("hpmcounter"..i,0xc00+i); csr("mhpmcounter"..i,0xb00+i,true); csr("mhpmevent"..i,0x320+i,true)
+    if rv32 then csr("hpmcounter"..i.."h",0xc80+i); csr("mhpmcounter"..i.."h",0xb80+i,true) end
+end
+for i = 0, 63 do csr("pmpaddr"..i,0x3b0+i,true) end
+for i = 0, 15, rv32 and 1 or 2 do csr("pmpcfg"..i,0x3a0+i,true) end
+if rv32 then
+    csr("cycleh",0xc80); csr("timeh",0xc81); csr("instreth",0xc82); csr("mstatush",0x310,true)
+    csr("mcycleh",0xb80,true); csr("minstreth",0xb82,true); csr("menvcfgh",0x31a,true)
+end
+symas.register{ name = "pc", class = "special", width = xlen, enc = 0 }
+
+-- Encoder inputs r0..r4 follow textual operand order, except the documented
+-- GAS normalization of effective addresses to register + signed displacement.
+-- The original recipes retain their published rd/rs1/rs2/imm bindings.
+local function check_reg(name)
+    return "require("..name.." >= 0 && "..name.." <= 31); "
+end
+local named_rr = check_reg("rd")..check_reg("rs1")
+local named_rrr = named_rr..check_reg("rs2")
+local positional_rr = check_reg("r0")..check_reg("r1")
+local positional_rrr = positional_rr..check_reg("r2")
+local function named_r(m, base)
+    symas.encoder{name=m, source=named_rrr..
+        "emit32le("..base.." + rd*128 + rs1*32768 + rs2*1048576);", max_bytes=4}
+end
+-- Base R-type ALU.
+symas.encoder{ name = "nop", source = "emit32le(0x00000013);", max_bytes = 4 }
+for _,op in ipairs({{"add",0x33},{"sub",0x40000033},{"sll",0x1033},{"slt",0x2033},{"sltu",0x3033},
+                    {"xor",0x4033},{"srl",0x5033},{"sra",0x40005033},{"or",0x6033},{"and",0x7033}}) do
+    named_r(op[1],op[2])
+end
+-- Base I-type.
+symas.encoder{ name = "addi", source = positional_rr.."require(r2 >= -2048 && r2 <= 2047); emit32le(0x00000013 + r0*128 + r1*32768 + ((r2 + 4096) % 4096)*1048576);", max_bytes = 4 }
+symas.encoder{ name = "li",   source = check_reg("r0").."require(r1 >= -2048 && r1 <= 2047); emit32le(0x00000013 + r0*128 + ((r1 + 4096) % 4096)*1048576);", max_bytes = 4 }
+symas.encoder{ name = "lui",  source = check_reg("r0").."require(r1 >= 0 && r1 <= 1048575); emit32le(0x00000037 + r0*128 + r1*4096);", max_bytes = 4 }
+symas.encoder{ name = "auipc", source = check_reg("r0").."require(r1 >= 0 && r1 <= 1048575); emit32le(0x00000017 + r0*128 + r1*4096);", max_bytes = 4 }
+-- Loads / stores (word, double, byte, half).
+local function memory_form(m, base, store)
+    local offset = "((imm + 4096) % 4096)"
+    local fields = store and ("r0*1048576 + ("..offset.." % 32)*128 + ("..offset.." / 32)*33554432")
+                         or ("rd*128 + "..offset.."*1048576")
+    symas.encoder{ name = m, max_bytes = 4, source = check_reg(store and "r0" or "rd")..check_reg("rs1")..
+        "require(imm >= -2048 && imm <= 2047); emit32le("..
+        base.." + rs1*32768 + "..fields..");" }
+end
+for i,m in ipairs({"lb","lh","lw","ld","lbu","lhu","lwu"}) do
+    if not rv32 or (m ~= "ld" and m ~= "lwu") then memory_form(m, 3+(i-1)*4096, false) end
+end
+for i,m in ipairs({"sb","sh","sw","sd"}) do
+    if not rv32 or m ~= "sd" then memory_form(m, 35+(i-1)*4096, true) end
+end
+-- Control transfer.
+symas.encoder{ name = "jalr", source = positional_rr.."require(r2 >= -2048 && r2 <= 2047); emit32le(0x00000067 + r0*128 + r1*32768 + ((r2 + 4096) % 4096)*1048576);", max_bytes = 4 }
+symas.encoder{ name = "jal", source = check_reg("rd").."emit_relocation(sym, R_RISCV_JAL); emit32le(0x0000006F + rd*128);", max_bytes = 4, max_relocs = 1 }
+for _,op in ipairs({{"beq",0x0063},{"bne",0x1063},{"blt",0x4063},{"bge",0x5063}}) do
+    symas.encoder{name=op[1],source=positional_rr.."emit_relocation(sym, R_RISCV_BRANCH); emit32le("..
+        op[2].." + r0*32768 + r1*1048576);",max_bytes=4,max_relocs=1}
+end
+symas.encoder{ name = "ret",  source = "emit32le(0x00008067);", max_bytes = 4 }
+-- M extension.
+named_r("mul",0x02000033); named_r("div",0x02004033); named_r("rem",0x02006033)
+-- Zicsr / fences / priv.
+symas.encoder{ name = "fence", source = "emit32le(0x0FF0000F);", max_bytes = 4 }
+symas.encoder{ name = "fencei", source = "emit32le(0x0000100F);", max_bytes = 4 }
+symas.encoder{ name = "ecall", source = "emit32le(0x00000073);", max_bytes = 4 }
+symas.encoder{ name = "ebreak", source = "emit32le(0x00100073);", max_bytes = 4 }
+symas.encoder{ name = "mret", source = "emit32le(0x30200073);", max_bytes = 4 }
+symas.encoder{ name = "wfi",  source = "emit32le(0x10500073);", max_bytes = 4 }
+-- Zb* / Zicond / pause.
+named_r("andn",0x40007033); named_r("sh1add",0x20002033); named_r("czeroeqz",0x0e005033)
+symas.encoder{ name = "bseti", source = positional_rr.."require(r2 >= 0 && r2 < "..xlen.."); emit32le(0x28001013 + r0*128 + r1*32768 + r2*1048576);", max_bytes = 4 }
+symas.encoder{ name = "pause", source = "emit32le(0x0100000F);", max_bytes = 4 }
+-- Original encoders kept under their public names; the full banks follow.
+symas.encoder{ name = "vaddvv", source = positional_rrr.."emit32le(0x02000057 + r0*128 + r2*32768 + r1*1048576);", max_bytes = 4 }
+symas.encoder{ name = "vle32v", source = positional_rr.."emit32le(0x02006007 + r0*128 + r1*32768);", max_bytes = 4 }
+symas.encoder{ name = "vse32v", source = positional_rr.."emit32le(0x02006027 + r0*128 + r1*32768);", max_bytes = 4 }
+symas.encoder{ name = "vsetvli", source = positional_rr.."require(r2 >= 0 && r2 <= 255 && r2%8 != 4 && (r2/8)%8 <= 3); emit32le(0x00007057 + r0*128 + r1*32768 + r2*1048576);", max_bytes = 4 }
+-- Original compressed encoders.
+symas.encoder{ name = "caddi", source = check_reg("r0").."require(r0 != 0 && r1 >= -32 && r1 <= 31 && r1 != 0); emit16le(0x0001 + r0*128 + ((r1 + 64) % 32)*4 + (r1 < 0)*4096);", max_bytes = 2 }
+symas.encoder{ name = "cnop",  source = "emit16le(0x0001);", max_bytes = 2 }
+
+local function reg()
+    return { kind = "reg", class = "gpr", width = xlen, access = "read" }
+end
+local function rreg(pos)
+    return { kind = "reg", class = "gpr", width = xlen, access = pos == 0 and "write" or "read" }
+end
+local function freg(pos)
+    local a = "read"
+    if pos == 0 then a = "write" end
+    return { kind = "reg", class = "fp", width = 64, access = a }
+end
+local function vreg(pos)
+    local a = "read"
+    if pos == 0 then a = "write" end
+    return { kind = "reg", class = "vec", width = 128, access = a }
+end
+
+for _, m in ipairs({ "nop", "add", "sub", "and", "or", "xor", "sll", "srl", "sra",
+    "slt", "sltu", "addi", "li", "lui", "auipc", "jalr", "jal", "beq", "bne", "blt", "bge", "ret",
+    "mul", "div", "rem", "fence", "fence.i", "ecall", "ebreak", "mret", "wfi",
+    "andn", "sh1add", "bseti", "czero.eqz", "pause", "vadd.vv", "vle32.v",
+    "vse32.v", "vsetvli", "c.addi", "c.nop" }) do
+    symas.mnemonic{ name = m }
+end
+
+symas.form{ mnemonic = "nop", encoder = "nop" }
+symas.form{ mnemonic = "add", encoder = "add", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "sub", encoder = "sub", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "and", encoder = "and", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "or",  encoder = "or",  operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "xor", encoder = "xor", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "sll", encoder = "sll", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "srl", encoder = "srl", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "sra", encoder = "sra", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "slt", encoder = "slt", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "sltu", encoder = "sltu", operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "addi", encoder = "addi", operands = { rreg(0,64), reg(64),
+    { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
+symas.form{ mnemonic = "li", encoder = "li", operands = { rreg(0,64),
+    { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
+symas.form{ mnemonic = "lui", encoder = "lui", operands = { rreg(0), { kind = "imm", width = 20, imm_min = 0, imm_max = 1048575 } } }
+symas.form{ mnemonic = "auipc", encoder = "auipc", operands = { rreg(0), { kind = "imm", width = 20, imm_min = 0, imm_max = 1048575 } } }
+local signed12 = {kind="imm", width=12, signed=true, imm_min=-2048, imm_max=2047}
+local loads_stores = {"lb","lh","lw","lbu","lhu","sb","sh","sw"}
+if not rv32 then for _, m in ipairs({"ld","lwu","sd"}) do table.insert(loads_stores, m) end end
+for _,m in ipairs(loads_stores) do
+    symas.mnemonic{name=m}
+    local store = string.sub(m,1,1) == "s"
+    symas.form{mnemonic=m, encoder=m, operands={store and reg(64) or rreg(0,64),reg(64),signed12},
+        flags={store and "writes_mem" or "reads_mem"}}
+end
+symas.form{ mnemonic = "jalr", encoder = "jalr", flags = { "branch" }, operands = { rreg(0,64), reg(64),
+    { kind = "imm", width = 12, signed = true, imm_min = -2048, imm_max = 2047 } } }
+symas.form{ mnemonic = "jal", encoder = "jal", flags = { "branch", "reloc" }, operands = { rreg(0), { kind = "sym", width = xlen } } }
+symas.form{ mnemonic = "beq", encoder = "beq", flags = { "cond_branch", "reloc" }, operands = { reg(64), reg(64),
+    { kind = "sym", width = xlen } } }
+symas.form{ mnemonic = "bne", encoder = "bne", flags = { "cond_branch", "reloc" }, operands = { reg(64), reg(64),
+    { kind = "sym", width = xlen } } }
+symas.form{ mnemonic = "blt", encoder = "blt", flags = { "cond_branch", "reloc" }, operands = { reg(64), reg(64),
+    { kind = "sym", width = xlen } } }
+symas.form{ mnemonic = "bge", encoder = "bge", flags = { "cond_branch", "reloc" }, operands = { reg(64), reg(64),
+    { kind = "sym", width = xlen } } }
+symas.form{ mnemonic = "ret", encoder = "ret", flags = { "return", "terminator" } }
+symas.form{ mnemonic = "mul", encoder = "mul", required = { "m" }, operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "div", encoder = "div", required = { "m" }, operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "rem", encoder = "rem", required = { "m" }, operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "fence", encoder = "fence" }
+symas.form{ mnemonic = "fence.i", encoder = "fencei", required = { "zifencei" } }
+symas.form{ mnemonic = "ecall", encoder = "ecall", flags = { "may_trap" } }
+symas.form{ mnemonic = "ebreak", encoder = "ebreak", flags = { "may_trap" } }
+symas.form{ mnemonic = "mret", encoder = "mret", required = { "priv" }, flags = { "privileged", "return", "terminator" } }
+symas.form{ mnemonic = "wfi", encoder = "wfi", required = { "priv" }, flags = { "privileged" } }
+symas.form{ mnemonic = "andn", encoder = "andn", required = { "zbb" },
+    operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "sh1add", encoder = "sh1add", required = { "zba" },
+    operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "bseti", encoder = "bseti", required = { "zbs" },
+    operands = { rreg(0,64), reg(64),
+        { kind = "imm", width = rv32 and 5 or 6, imm_min = 0, imm_max = xlen-1 } } }
+symas.form{ mnemonic = "czero.eqz", encoder = "czeroeqz", required = { "zicond" },
+    operands = { rreg(0,64), reg(64), reg(64) } }
+symas.form{ mnemonic = "pause", encoder = "pause", required = { "zihintpause" } }
+symas.form{ mnemonic = "vadd.vv", encoder = "vaddvv", required = { "v", "f", "d" },
+    operands = { vreg(0), vreg(1), vreg(1) } }
+symas.form{ mnemonic = "vle32.v", encoder = "vle32v", required = { "v", "f", "d" }, flags = { "reads_mem" },
+    operands = { vreg(0), reg() } }
+symas.form{ mnemonic = "vse32.v", encoder = "vse32v", required = { "v", "f", "d" }, flags = { "writes_mem" },
+    operands = { vreg(1), reg() } }
+symas.form{ mnemonic = "vsetvli", encoder = "vsetvli", required = { "v", "f", "d" },
+    operands = { rreg(0,64), reg(64),
+        { kind = "imm", width = 8, imm_min = 0, imm_max = 255 } } }
+symas.form{ mnemonic = "c.addi", encoder = "caddi", required = { "c" }, operands = {
+    {kind="reg",class="gpr",width=xlen,access="readwrite"},
+    { kind = "imm", width = 6, signed = true, imm_min = -32, imm_max = 31 } } }
+symas.form{ mnemonic = "c.nop", encoder = "cnop", required = { "c" } }
+
+-- Gas normalization supplies ordinary register/immediate operands. All
+-- instruction words and relocation kinds are chosen by the compiled bank.
+local dst, src, symbol = rreg(0), reg(), {kind="sym",width=xlen}
+local added = {fence=true,li=true}
+local function extra(m, operands, body, required, flags, size, suffix)
+    if not added[m] then symas.mnemonic{name=m}; added[m]=true end
+    local name=m..(suffix or "")
+    local guards = ""
+    for i, operand in ipairs(operands) do
+        local r = "r"..(i-1)
+        if operand.kind == "reg" then
+            local max = operand.class == "ctrl" and 4095 or 31
+            guards = guards.."require("..r.." >= 0 && "..r.." <= "..max.."); "
+        elseif operand.kind == "imm" and operand.imm_min ~= nil then
+            guards = guards.."require("..r.." >= "..operand.imm_min.." && "..r.." <= "..operand.imm_max.."); "
+        end
+    end
+    symas.encoder{name=name, source=guards..body, max_bytes=size or 4,
+        max_relocs=body:find("emit_relocation",1,true) and 1 or 0}
+    symas.form{mnemonic=m, encoder=name, operands=operands, required=required,flags=flags}
+end
+local function word(base, fields)
+    return ("emit32le(0x%08x%s);"):format(base, fields and " + "..fields or "")
+end
+local function unsigned(bits)
+    return {kind="imm",width=bits,imm_min=0,imm_max=(1<<bits)-1}
+end
+local function signed(bits)
+    local half = 1<<(bits-1)
+    return {kind="imm",width=bits,signed=true,imm_min=-half,imm_max=half-1}
+end
+-- A slice is {source low bit, bit count, destination low bit}; arithmetic
+-- spelling works in the standalone recipe interpreter as well as in the DSL.
+local function scatter(value, slices)
+    local fields = "0"
+    for _, s in ipairs(slices) do
+        fields = fields.." + (("..value..")/"..(1<<s[1]).." % "..(1<<s[2])..")*"..(1<<s[3])
+    end
+    return fields
+end
+local function relative(value, bits, slices)
+    return scatter(value.."+"..(1<<bits),slices)
+end
+local function aligned(value, alignment)
+    return "require("..value.." % "..alignment.." == 0); "
+end
+local rr = "r0*128 + r1*32768"
+local rrr = rr.." + r2*1048576"
+local i12 = rr.." + ((r2+4096)%4096)*1048576"
+for _,op in ipairs({{"mulh",0x02001033},{"mulhsu",0x02002033},{"mulhu",0x02003033},
+                    {"divu",0x02005033},{"remu",0x02007033}}) do
+    extra(op[1],{dst,src,src},word(op[2],rrr),{"m"})
+end
+for _,op in ipairs({{"slti",0x2013},{"sltiu",0x3013},{"xori",0x4013},{"ori",0x6013},{"andi",0x7013}}) do
+    extra(op[1],{dst,src,signed12},"require(r2 >= -2048 && r2 <= 2047); "..word(op[2],i12))
+end
+local function shift(m, opcode, bits, required)
+    extra(m,{dst,src,unsigned(bits)},("require(r2 >= 0 && r2 < %d); "):format(1<<bits)..word(opcode,rrr),required)
+end
+for _,op in ipairs({{"slli",0x1013},{"srli",0x5013},{"srai",0x40005013}}) do
+    shift(op[1],op[2],rv32 and 5 or 6)
+end
+if not rv32 then
+    for _,op in ipairs({{"addw",0x3b},{"subw",0x4000003b},{"sllw",0x103b},{"srlw",0x503b},{"sraw",0x4000503b}}) do
+        extra(op[1],{dst,src,src},word(op[2],rrr))
+    end
+    for _,op in ipairs({{"mulw",0x0200003b},{"divw",0x0200403b},{"divuw",0x0200503b},
+                       {"remw",0x0200603b},{"remuw",0x0200703b}}) do
+        extra(op[1],{dst,src,src},word(op[2],rrr),{"m"})
+    end
+    extra("addiw",{dst,src,signed12},"require(r2 >= -2048 && r2 <= 2047); "..word(0x1b,i12))
+    shift("slliw",0x101b,5); shift("srliw",0x501b,5); shift("sraiw",0x4000501b,5)
+else
+    -- The RV32 source path has no GAS li expansion. Materialize the full
+    -- 32-bit bit pattern with rounded LUI and an optional signed low ADDI.
+    local low = "((r1+4294967296)%4096)"
+    local high = "(((r1+4294967296+2048)/4096)%1048576)"
+    extra("li",{dst,{kind="imm",width=32,signed=true,imm_min=-2147483648,imm_max=4294967295}},
+        "require(r1 >= -2147483648 && r1 <= 4294967295 && (r1 < -2048 || r1 > 2047)); "..
+        "if (r1 >= 4294965248) {"..word(0x13,"r0*128 + "..low.."*1048576").."} else {"..
+        word(0x37,"r0*128 + "..high.."*4096")..
+        "if ("..low.." != 0) {"..word(0x13,"r0*32896 + "..low.."*1048576").."}}",
+        nil,{"aliases"},8,"_wide")
+end
+extra("fence",{unsigned(4),unsigned(4)},"require(r0 >= 0 && r0 <= 15 && r1 >= 0 && r1 <= 15); "..
+    word(0xf,"r0*16777216 + r1*1048576"),nil,nil,nil,"_pred_succ")
+-- Four-bit FENCE sets are I=8, O=4, R=2, W=1. Do not expose reserved
+-- fm/rd/rs1 fields as operands; FENCE.TSO is the defined fm=8 case.
+extra("fence.tso",{},word(0x8330000f))
+extra("sret",{},word(0x10200073),{"priv"},{"privileged","return","terminator"})
+extra("sfence.vma",{src,src},word(0x12000073,"r0*32768 + r1*1048576"),{"priv"},{"privileged"})
+extra("sfence.vma",{src},word(0x12000073,"r0*32768"),{"priv"},{"privileged"},nil,"_rs1")
+extra("sfence.vma",{},word(0x12000073),{"priv"},{"privileged"},nil,"_all")
+
+local b_scatter = {{12,1,31},{5,6,25},{1,4,8},{11,1,7}}
+local j_scatter = {{20,1,31},{1,10,21},{11,1,20},{12,8,12}}
+local b_regs = "r0*32768 + r1*1048576"
+local function branch(m, opcode, textual, registers, alias)
+    local numeric, symbolic = {}, {}
+    for _, operand in ipairs(textual) do
+        numeric[#numeric+1] = operand; symbolic[#symbolic+1] = operand
+    end
+    local field = "r"..#numeric
+    numeric[#numeric+1] = signed(13); symbolic[#symbolic+1] = symbol
+    extra(m,numeric,aligned(field,2)..word(opcode,registers.." + "..relative(field,13,b_scatter)),
+          nil,alias and {"cond_branch","aliases"} or {"cond_branch"},nil,"_offset")
+    if alias or m == "bgeu" or m == "bltu" then
+        extra(m,symbolic,"emit_relocation(sym, R_RISCV_BRANCH); "..word(opcode,registers),
+              nil,alias and {"cond_branch","aliases","reloc"} or {"cond_branch","reloc"})
+    end
+end
+for _,op in ipairs({{"beq",0x0063},{"bne",0x1063},{"blt",0x4063},{"bge",0x5063},
+                    {"bltu",0x6063},{"bgeu",0x7063}}) do
+    added[op[1]] = op[1] ~= "bgeu" and op[1] ~= "bltu"
+    branch(op[1],op[2],{src,src},b_regs,false)
+end
+for _,op in ipairs({{"bgt",0x4063},{"ble",0x5063},{"bgtu",0x6063},{"bleu",0x7063}}) do
+    branch(op[1],op[2],{src,src},"r1*32768 + r0*1048576",true)
+end
+added.jal = true
+extra("jal",{dst,signed(21)},aligned("r1",2)..word(0x6f,"r0*128 + "..relative("r1",21,j_scatter)),
+      nil,{"branch"},nil,"_offset")
+extra("jal",{symbol},"emit_relocation(sym, R_RISCV_JAL); "..word(0xef),nil,{"branch","reloc","aliases"},nil,"_ra")
+extra("jal",{signed(21)},aligned("r0",2)..word(0xef,relative("r0",21,j_scatter)),
+      nil,{"branch","aliases"},nil,"_ra_offset")
+extra("mv",{dst,src},word(0x13,rr),nil,{"aliases"})
+extra("not",{dst,src},word(0xfff04013,rr),nil,{"aliases"})
+extra("neg",{dst,src},word(0x40000033,"r0*128 + r1*1048576"),nil,{"aliases"})
+extra("seqz",{dst,src},word(0x00103013,rr),nil,{"aliases"})
+extra("snez",{dst,src},word(0x00003033,"r0*128 + r1*1048576"),nil,{"aliases"})
+extra("sltz",{dst,src},word(0x2033,rr),nil,{"aliases"})
+extra("sgtz",{dst,src},word(0x2033,"r0*128 + r1*1048576"),nil,{"aliases"})
+if not rv32 then
+    extra("negw",{dst,src},word(0x4000003b,"r0*128 + r1*1048576"),nil,{"aliases"})
+    extra("sext.w",{dst,src},word(0x1b,rr),nil,{"aliases"})
+end
+added.jalr = true
+extra("jalr",{src},word(0xe7,"r0*32768"),nil,{"aliases","branch"},nil,"_ra")
+extra("jalr",{dst,src},word(0x67,rr),nil,{"aliases","branch"},nil,"_no_offset")
+extra("jr",{src},word(0x67,"r0*32768"),nil,{"aliases","branch","terminator"})
+extra("jr",{src,signed12},word(0x67,"r0*32768 + ((r1+4096)%4096)*1048576"),
+      nil,{"aliases","branch","terminator"},nil,"_offset")
+extra("j",{symbol},"emit_relocation(sym, R_RISCV_JAL); "..word(0x6f),nil,{"aliases","branch","terminator","reloc"})
+extra("j",{signed(21)},aligned("r0",2)..word(0x6f,relative("r0",21,j_scatter)),
+      nil,{"aliases","branch","terminator"},nil,"_offset")
+for _,op in ipairs({{"beqz",0x0063},{"bnez",0x1063},{"bltz",0x4063},{"bgez",0x5063}}) do
+    branch(op[1],op[2],{src},"r0*32768",true)
+end
+branch("bgtz",0x4063,{src},"r0*1048576",true)
+branch("blez",0x5063,{src},"r0*1048576",true)
+extra("call", {symbol}, "emit_relocation(sym, R_RISCV_CALL_PLT); emit32le(0x97); emit32le(0x80e7);",
+      nil, {"branch","reloc","aliases"}, 8)
+for _,op in ipairs({{"rv_pcrel_hi", "R_RISCV_PCREL_HI20"},{"rv_got_hi","R_RISCV_GOT_HI20"}}) do
+    extra(op[1], {dst,symbol}, "emit_relocation(sym, "..op[2].."); "..word(0x17,"r0*128"), nil, {"reloc"})
+end
+for _,op in ipairs({{"rv_pcrel_jalr",0x67},{"rv_pcrel_addi",0x13},
+                     {rv32 and "rv_pcrel_lw" or "rv_pcrel_ld",rv32 and 0x2003 or 0x3003}}) do
+    extra(op[1], {dst,src,symbol}, "emit_relocation(sym, R_RISCV_PCREL_LO12_I); "..word(op[2],rr),
+          nil,{"reloc"})
+end
+
+-- A extension. The address operand is a base register (no displacement
+-- bits); clients normalize the architectural `(rs1)` notation.
+for _,width in ipairs(rv32 and {32} or {32,64}) do
+    for _,order in ipairs({{"",0},{".rl",1},{".aq",2},{".aqrl",3}}) do
+        for _,op in ipairs({{"amoadd",0},{"amoswap",1},{"lr",2},{"sc",3},{"amoxor",4},
+                            {"amoor",8},{"amoand",12},{"amomin",16},{"amomax",20},
+                            {"amominu",24},{"amomaxu",28}}) do
+            local load, store = op[1]=="lr", op[1]=="sc"
+            local name = op[1]..(width==32 and ".w" or ".d")..order[1]
+            local base = 0x2f + (width==32 and 2 or 3)*4096 + (op[2]*4+order[2])*33554432
+            extra(name,load and {dst,src} or {dst,src,src},
+                word(base,load and rr or "r0*128 + r2*32768 + r1*1048576"),
+                {"a"},load and {"reads_mem"} or store and {"writes_mem"} or {"reads_mem","writes_mem"})
+        end
+    end
+end
+
+-- Zicsr numeric and named CSR forms. Zero source in CSRRS/CSRRC is permitted
+-- for read-only CSRs; read-only CSR writes otherwise trap at execution time.
+local ctl = {kind="reg",class="ctrl",width=xlen}
+for _,kind in ipairs({{ctl,"_named"},{unsigned(12),"_numeric"}}) do
+    for _,op in ipairs({{"csrrw","csrw",1},{"csrrs","csrs",2},{"csrrc","csrc",3},
+                        {"csrrwi","csrwi",5},{"csrrsi","csrsi",6},{"csrrci","csrci",7}}) do
+        local base, input = 0x73 + op[3]*4096, op[3] < 5 and src or unsigned(5)
+        extra(op[1],{dst,kind[1],input},word(base,"r0*128 + r1*1048576 + r2*32768"),
+              {"zicsr"},{"may_trap"},nil,kind[2])
+        extra(op[2],{kind[1],input},word(base,"r0*1048576 + r1*32768"),
+              {"zicsr"},{"aliases","may_trap"},nil,kind[2])
+    end
+    extra("csrr",{dst,kind[1]},word(0x2073,"r0*128 + r1*1048576"),
+          {"zicsr"},{"aliases","may_trap"},nil,kind[2])
+end
+
+-- F/D/Zfh/Zfa. The normalized rm operand is the architectural three-bit
+-- rounding field (rne/rtz/rdn/rup/rmm = 0..4, dyn = 7; 5 and 6 reserved).
+-- Omitted rm is dyn except for exact widening conversions, where it is rne.
+local fw,fr = freg(0),freg(1)
+local fs = {{ "s",0,{"f"},"flw","fsw",0x2000 },
+            { "d",1,{"f","d"},"fld","fsd",0x3000 },
+            { "h",2,{"f","zfh"},"flh","fsh",0x1000 }}
+local function rounded(m, base, fields, operands, ext, exact)
+    extra(m,operands,word(base+(exact and 0 or 0x7000),fields),ext)
+    local with_rm = {}
+    for _, operand in ipairs(operands) do with_rm[#with_rm+1] = operand end
+    local rm = "r"..#with_rm
+    with_rm[#with_rm+1] = unsigned(3)
+    extra(m,with_rm,"require("..rm.." <= 4 || "..rm.." == 7); "..
+          word(base,fields.." + "..rm.."*4096"),ext,nil,nil,"_rm")
+end
+for _,fp in ipairs(fs) do
+    local fmt, fmt_bits, ext, suffix = fp[1],fp[2]*33554432,fp[3],"."..fp[1]
+    local off = "((r2+4096)%4096)"
+    extra(fp[4],{fw,src,signed12},word(fp[6]+7,i12),ext,{"reads_mem"})
+    extra(fp[5],{fr,src,signed12},word(fp[6]+0x27,
+        "r0*1048576 + r1*32768 + ("..off.." % 32)*128 + ("..off.."/32)*33554432"),ext,{"writes_mem"})
+    for _,op in ipairs({{"fadd",0},{"fsub",1},{"fmul",2},{"fdiv",3}}) do
+        rounded(op[1]..suffix,0x53+op[2]*134217728+fmt_bits,rrr,{fw,fr,fr},ext)
+    end
+    rounded("fsqrt"..suffix,0x58000053+fmt_bits,rr,{fw,fr},ext)
+    for i,m in ipairs({"fmadd","fmsub","fnmsub","fnmadd"}) do
+        rounded(m..suffix,0x3f+i*4+fmt_bits,rrr.." + r3*134217728",{fw,fr,fr,fr},ext)
+    end
+    for _,op in ipairs({{"fsgnj",0x20000053},{"fsgnjn",0x20001053},{"fsgnjx",0x20002053},
+                        {"fmin",0x28000053},{"fmax",0x28001053},{"feq",0xa0002053,dst},
+                        {"flt",0xa0001053,dst},{"fle",0xa0000053,dst}}) do
+        extra(op[1]..suffix,{op[3] or fw,fr,fr},word(op[2]+fmt_bits,rrr),ext)
+    end
+    for i,m in ipairs({"fmv","fneg","fabs"}) do
+        extra(m..suffix,{fw,fr},word(0x20000053+fmt_bits+(i-1)*4096,"r0*128 + r1*1081344"),ext,{"aliases"})
+    end
+    extra("fclass"..suffix,{dst,fr},word(0xe0001053+fmt_bits,rr),ext)
+    if fmt ~= "d" or not rv32 then
+        local move = fmt == "s" and "w" or fmt
+        extra("fmv.x."..move,{dst,fr},word(0xe0000053+fmt_bits,rr),ext)
+        extra("fmv."..move..".x",{fw,src},word(0xf0000053+fmt_bits,rr),ext)
+    end
+    for i,m in ipairs(rv32 and {"w","wu"} or {"w","wu","l","lu"}) do
+        local int_bits = (i-1)*1048576
+        rounded("fcvt."..m..suffix,0xc0000053+fmt_bits+int_bits,rr,{dst,fr},ext)
+        rounded("fcvt"..suffix.."."..m,0xd0000053+fmt_bits+int_bits,rr,{fw,src},ext,fmt=="d" and i<=2)
+    end
+    local zfa = {"zfa"}
+    for _,f in ipairs(ext) do zfa[#zfa+1] = f end
+    -- The caller maps the textual floating constant to its fli table index.
+    extra("fli"..suffix,{fw,unsigned(5)},word(0xf0100053+fmt_bits,rr),zfa)
+    for _,op in ipairs({{"fminm",0x28002053},{"fmaxm",0x28003053},
+                        {"fleq",0xa0004053,dst},{"fltq",0xa0005053,dst}}) do
+        extra(op[1]..suffix,{op[3] or fw,fr,fr},word(op[2]+fmt_bits,rrr),zfa)
+    end
+    rounded("fround"..suffix,0x40400053+fmt_bits,rr,{fw,fr},zfa)
+    rounded("froundnx"..suffix,0x40500053+fmt_bits,rr,{fw,fr},zfa)
+end
+for _,op in ipairs({{"s","d",0,1,{"f","d"}},{"d","s",1,0,{"f","d"},true},
+                    {"s","h",0,2,{"f","zfh"},true},{"h","s",2,0,{"f","zfh"}},
+                    {"d","h",1,2,{"f","d","zfh"},true},{"h","d",2,1,{"f","d","zfh"}}}) do
+    rounded("fcvt."..op[1].."."..op[2],0x40000053+op[3]*33554432+op[4]*1048576,rr,{fw,fr},op[5],op[6])
+end
+extra("fcvtmod.w.d",{dst,fr,{kind="imm",width=3,imm_min=1,imm_max=1}},
+      word(0xc2801053,rr),{"zfa","f","d"})
+if rv32 then
+    extra("fmvh.x.d",{dst,fr},word(0xe2100053,rr),{"zfa","f","d"})
+    extra("fmvp.d.x",{fw,src,src},word(0xb2000053,rrr),{"zfa","f","d"})
+end
+
+-- C / C+D / RV32 C+F. Textual memory operands are normalized to
+-- (value, base, byte displacement). The compact register banks take
+-- architectural register numbers 8..15, not pre-subtracted indices.
+local c, cd, cf = {"c"}, {"c","f","d"}, {"c","f"}
+local rw = {kind="reg",class="gpr",width=xlen,access="readwrite"}
+local function half(base, fields)
+    return ("emit16le(0x%04x%s);"):format(base,fields and " + "..fields or "")
+end
+local function compact(r)
+    return "require("..r.." >= 8 && "..r.." <= 15); "
+end
+local function nz(r)
+    return "require("..r.." != 0); "
+end
+local function sp(r)
+    return "require("..r.." == 2); "
+end
+local ci = {{0,5,2},{5,1,12}}
+added["c.nop"] = true
+extra("c.nop",{signed(6)},half(1,relative("r0",6,ci)),c,{"aliases"},2,"_hint")
+extra("c.li",{dst,signed(6)},nz("r0")..half(0x4001,"r0*128 + "..relative("r1",6,ci)),c,nil,2)
+extra("c.addi4spn",{dst,src,unsigned(10)},compact("r0")..sp("r1")..nz("r2")..aligned("r2",4)..
+      half(0,"(r0-8)*4 + "..scatter("r2",{{2,1,6},{3,1,5},{4,2,11},{6,4,7}})),c,nil,2)
+extra("c.addi16sp",{rw,signed(10)},sp("r0")..nz("r1")..aligned("r1",16)..
+      half(0x6101,relative("r1",10,{{4,1,6},{5,1,2},{6,1,5},{7,2,3},{9,1,12}})),c,nil,2)
+-- LLVM/GNU spelling uses the sign-extended 20-bit LUI immediate.
+extra("c.lui",{dst,unsigned(20)},nz("r0").."require(r0 != 2 && ((r1 >= 1 && r1 <= 31) || r1 >= 1048544)); "..
+      half(0x6001,"r0*128 + "..scatter("r1",ci)),c,nil,2)
+extra("c.andi",{rw,signed(6)},compact("r0")..half(0x8801,"(r0-8)*128 + "..relative("r1",6,ci)),c,nil,2)
+local c_shift = unsigned(rv32 and 5 or 6)
+for _,op in ipairs({{"c.srli",0x8001},{"c.srai",0x8401}}) do
+    extra(op[1],{rw,c_shift},compact("r0")..nz("r1")..half(op[2],"(r0-8)*128 + "..scatter("r1",ci)),c,nil,2)
+end
+extra("c.slli",{rw,c_shift},nz("r0")..nz("r1")..half(0x0002,"r0*128 + "..scatter("r1",ci)),c,nil,2)
+for _,op in ipairs({{"c.sub",0x8c01},{"c.xor",0x8c21},{"c.or",0x8c41},{"c.and",0x8c61},
+                    {"c.subw",0x9c01,true},{"c.addw",0x9c21,true}}) do
+    if not op[3] or not rv32 then
+        extra(op[1],{rw,src},compact("r0")..compact("r1")..half(op[2],"(r0-8)*128 + (r1-8)*4"),c,nil,2)
+    end
+end
+if not rv32 then
+    extra("c.addiw",{rw,signed(6)},nz("r0")..half(0x2001,"r0*128 + "..relative("r1",6,ci)),c,nil,2)
+end
+extra("c.mv",{dst,src},nz("r0")..nz("r1")..half(0x8002,"r0*128 + r1*4"),c,nil,2)
+extra("c.add",{rw,src},nz("r0")..nz("r1")..half(0x9002,"r0*128 + r1*4"),c,nil,2)
+extra("c.jr",{src},nz("r0")..half(0x8002,"r0*128"),c,{"branch","terminator"},2)
+extra("c.jalr",{src},nz("r0")..half(0x9002,"r0*128"),c,{"branch"},2)
+extra("c.ebreak",{},half(0x9002),c,{"may_trap"},2)
+
+local cj = {{11,1,12},{4,1,11},{8,2,9},{10,1,8},{6,1,7},{7,1,6},{1,3,3},{5,1,2}}
+local cb = {{8,1,12},{3,2,10},{6,2,5},{1,2,3},{5,1,2}}
+for _,op in ipairs({{"c.j",0xa001},{"c.jal",0x2001,true}}) do
+    if not op[3] or rv32 then
+        local flags = op[3] and {"branch"} or {"branch","terminator"}
+        extra(op[1],{signed(12)},aligned("r0",2)..half(op[2],relative("r0",12,cj)),c,flags,2,"_offset")
+        extra(op[1],{symbol},"emit_relocation(sym, R_RISCV_RVC_JUMP); "..half(op[2]),c,
+              op[3] and {"branch","reloc"} or {"branch","terminator","reloc"},2)
+    end
+end
+for _,op in ipairs({{"c.beqz",0xc001},{"c.bnez",0xe001}}) do
+    extra(op[1],{src,signed(9)},compact("r0")..aligned("r1",2)..
+          half(op[2],"(r0-8)*128 + "..relative("r1",9,cb)),c,{"cond_branch"},2,"_offset")
+    extra(op[1],{src,symbol},compact("r0").."emit_relocation(sym, R_RISCV_RVC_BRANCH); "..
+          half(op[2],"(r0-8)*128"),c,{"cond_branch","reloc"},2)
+end
+
+for _,op in ipairs({{"lw","sw",2,6,4,c,dst,src},
+                    {"fld","fsd",1,5,8,cd,fw,fr},
+                    {rv32 and "flw" or "ld",rv32 and "fsw" or "sd",3,7,rv32 and 4 or 8,
+                     rv32 and cf or c,rv32 and fw or dst,rv32 and fr or src}}) do
+    local load, store, lfun, sfun, scale, ext, ldreg, streg = op[1],op[2],op[3],op[4],op[5],op[6],op[7],op[8]
+    local off = scale == 4 and {{2,1,6},{3,3,10},{6,1,5}} or {{3,3,10},{6,2,5}}
+    local limit = unsigned(scale == 4 and 7 or 8)
+    local common = compact("r0")..compact("r1")..aligned("r2",scale)
+    local compact_addr = "(r0-8)*4 + (r1-8)*128 + "..scatter("r2",off)
+    extra("c."..load,{ldreg,src,limit},common..half(lfun*8192,compact_addr),ext,{"reads_mem"},2)
+    extra("c."..store,{streg,src,limit},common..half(sfun*8192,compact_addr),ext,{"writes_mem"},2)
+    local sp_load = scale == 4 and {{2,3,4},{5,1,12},{6,2,2}} or {{3,2,5},{5,1,12},{6,3,2}}
+    local sp_store = scale == 4 and {{2,4,9},{6,2,7}} or {{3,3,10},{6,3,7}}
+    local splimit = unsigned(scale == 4 and 8 or 9)
+    local sp_common = sp("r1")..aligned("r2",scale)
+    extra("c."..load.."sp",{ldreg,src,splimit},sp_common..(ldreg.class=="gpr" and nz("r0") or "")..
+          half(lfun*8192+2,"r0*128 + "..scatter("r2",sp_load)),ext,{"reads_mem"},2)
+    extra("c."..store.."sp",{streg,src,splimit},sp_common..
+          half(sfun*8192+2,"r0*4 + "..scatter("r2",sp_store)),ext,{"writes_mem"},2)
+end
+
+-- Scalar bit manipulation and crypto. Shared encodings have independent
+-- forms for their alternative required-feature sets; enabling just one
+-- of the features suffices (required lists themselves are conjunctions).
+local zb = {"zbb"}
+local kb = {"zbkb"}
+local function r3(m, opcode, ext, suffix)
+    extra(m,{dst,src,src},word(opcode,rrr),ext,nil,nil,suffix)
+end
+local function r2(m, opcode, ext, suffix)
+    extra(m,{dst,src},word(opcode,rr),ext,nil,nil,suffix)
+end
+for i = 1, 3 do
+    if i ~= 1 then r3("sh"..i.."add",0x20000033+i*8192,{"zba"}) end
+    if not rv32 then r3("sh"..i.."add.uw",0x2000003b+i*8192,{"zba"}) end
+end
+if not rv32 then
+    r3("add.uw",0x0800003b,{"zba"})
+    r2("zext.w",0x0800003b,{"zba"})
+    shift("slli.uw",0x0800101b,6,{"zba"})
+end
+added.andn = true
+r3("andn",0x40007033,kb,"_zbkb")
+for _,op in ipairs({{"orn",0x40006033},{"xnor",0x40004033},{"rol",0x60001033},{"ror",0x60005033},
+                    {"rolw",0x6000103b,true},{"rorw",0x6000503b,true}}) do
+    if not op[3] or not rv32 then r3(op[1],op[2],zb); r3(op[1],op[2],kb,"_zbkb") end
+end
+local shamt = rv32 and 5 or 6
+shift("rori",0x60005013,shamt,zb)
+extra("rori",{dst,src,unsigned(shamt)},word(0x60005013,rrr),kb,nil,nil,"_zbkb")
+if not rv32 then
+    shift("roriw",0x6000501b,5,zb)
+    extra("roriw",{dst,src,unsigned(5)},word(0x6000501b,rrr),kb,nil,nil,"_zbkb")
+end
+local rev8 = rv32 and 0x69805013 or 0x6b805013
+r2("rev8",rev8,zb); r2("rev8",rev8,kb,"_zbkb")
+for i,m in ipairs({"clz","ctz","cpop"}) do
+    r2(m,0x60001013+(i-1)*1048576,zb)
+    if not rv32 then r2(m.."w",0x6000101b+(i-1)*1048576,zb) end
+end
+for i,m in ipairs({"min","minu","max","maxu"}) do r3(m,0x0a004033+(i-1)*4096,zb) end
+r2("sext.b",0x60401013,zb); r2("sext.h",0x60501013,zb)
+r2("orc.b",0x28705013,zb); r2("zext.h",rv32 and 0x08004033 or 0x0800403b,zb)
+r3("pack",0x08004033,kb); r3("packh",0x08007033,kb)
+r2("brev8",0x68705013,kb)
+if rv32 then r2("zip",0x08f01013,kb); r2("unzip",0x08f05013,kb)
+else r3("packw",0x0800403b,kb) end
+for _,op in ipairs({{"bclr",0x48001000},{"bext",0x48005000},{"binv",0x68001000},{"bset",0x28001000}}) do
+    r3(op[1],op[2]+0x33,{"zbs"})
+    if op[1] ~= "bset" then shift(op[1].."i",op[2]+0x13,shamt,{"zbs"}) end
+end
+r3("czero.nez",0x0e007033,{"zicond"})
+local kd, ke, kh = {"zknd"}, {"zkne"}, {"zknh"}
+if rv32 then
+    for _,op in ipairs({{"aes32dsi",0x2a000033,kd},{"aes32dsmi",0x2e000033,kd},
+                        {"aes32esi",0x22000033,ke},{"aes32esmi",0x26000033,ke}}) do
+        extra(op[1],{dst,src,src,unsigned(2)},word(op[2],rrr.." + r3*1073741824"),op[3])
+    end
+    for _,op in ipairs({{"sha512sum0r",0x50000033},{"sha512sum1r",0x52000033},
+                        {"sha512sig0l",0x54000033},{"sha512sig0h",0x5c000033},
+                        {"sha512sig1l",0x56000033},{"sha512sig1h",0x5e000033}}) do
+        r3(op[1],op[2],kh)
+    end
+else
+    for _,op in ipairs({{"aes64ds",0x3a000033,kd},{"aes64dsm",0x3e000033,kd},
+                        {"aes64es",0x32000033,ke},{"aes64esm",0x36000033,ke}}) do
+        r3(op[1],op[2],op[3])
+    end
+    r2("aes64im",0x30001013,kd)
+    r3("aes64ks2",0x7e000033,kd); r3("aes64ks2",0x7e000033,ke,"_zkne")
+    local rnum = {kind="imm",width=4,imm_min=0,imm_max=10}
+    extra("aes64ks1i",{dst,src,rnum},word(0x31001013,rrr),kd)
+    extra("aes64ks1i",{dst,src,rnum},word(0x31001013,rrr),ke,nil,nil,"_zkne")
+end
+for i,m in ipairs({"sum0","sum1","sig0","sig1"}) do
+    r2("sha256"..m,0x10001013+(i-1)*1048576,kh)
+    if not rv32 then r2("sha512"..m,0x10401013+(i-1)*1048576,kh) end
+end
+
+-- RVV 1.0. Register widths are nominal catalog storage widths, not a
+-- constraint on the target's VLEN. Optional masks are textual v0.t, while
+-- carry and merge mnemonics require an explicit v0 input. Both are normalized
+-- as a register number (0), never a direct binding for the inverse vm bit.
+local vx = {"v","f","d"}
+local vd, vs = vreg(0), vreg(1)
+local va = {kind="reg",class="vec",width=128,access="readwrite"}
+local function vector(m, base, regs, fields, mask, guards, flags)
+    if mask ~= "required" then
+        extra(m,regs,(guards or "")..word(base+(mask=="optional" and 33554432 or 0),fields),vx,flags)
+    end
+    if mask ~= "none" then
+        local operands = {}
+        for _, operand in ipairs(regs) do operands[#operands+1] = operand end
+        local bound_mask = "r"..#operands
+        operands[#operands+1] = vs
+        extra(m,operands,(guards or "").."require("..bound_mask.." == 0); "..word(base,fields),vx,flags,nil,"_mask")
+    end
+end
+local vtype = "require(r2 % 8 != 4 && (r2/8) % 8 <= 3); "
+extra("vsetvl",{dst,src,src},word(0x80007057,rrr),vx)
+extra("vsetivli",{dst,unsigned(5),unsigned(8)},vtype..word(0xc0007057,rrr),vx)
+
+-- Unit stride, strided, unordered/ordered indexed, and unit-stride fault
+-- only first loads all share the same nf/EEW construction. The spelling
+-- bakes in the segment count; it is not a user-supplied bitfield.
+for _,size in ipairs({{8,0},{16,5},{32,6},{64,7}}) do
+    local eew, funct3 = size[1],size[2]
+    for _,mode in ipairs({
+        {"vl","vlseg","e",0,0,false},{"vs","vsseg","e",0,0,true},
+        {"vl","vlseg","e",0,16,false,nil,"ff"},
+        {"vls","vlsseg","e",2,0,false,src},{"vss","vssseg","e",2,0,true,src},
+        {"vlux","vluxseg","ei",1,0,false,vs},{"vsux","vsuxseg","ei",1,0,true,vs},
+        {"vlox","vloxseg","ei",3,0,false,vs},{"vsox","vsoxseg","ei",3,0,true,vs},
+    }) do
+        local reg, flags = mode[6] and vs or vd, mode[6] and {"writes_mem"} or {"reads_mem"}
+        local regs, fields = {reg,src},rr
+        if mode[7] then regs[3]=mode[7]; fields=rrr end
+        -- 64-bit index elements are outside the RV32 profile, unlike
+        -- 64-bit data elements in unit-stride, strided, and whole loads.
+        if not (rv32 and eew == 64 and (mode[4] == 1 or mode[4] == 3)) then
+            for n = 1, 8 do
+                local m = (n==1 and mode[1] or mode[2]..n)..mode[3]..eew..(mode[8] or "")..".v"
+                local base = (mode[6] and 0x27 or 7) + funct3*4096 + mode[4]*67108864 +
+                             mode[5]*1048576 + (n-1)*536870912
+                if m == "vle32.v" or m == "vse32.v" then
+                    added[m] = true
+                    extra(m,{reg,src,vs},"require(r2 == 0); "..word(base,rr),vx,flags,nil,"_mask")
+                else
+                    vector(m,base,regs,fields,"optional",nil,flags)
+                end
+            end
+        end
+    end
+end
+vector("vlm.v",0x02b00007,{vd,src},rr,"none",nil,{"reads_mem"})
+vector("vsm.v",0x02b00027,{vs,src},rr,"none",nil,{"writes_mem"})
+for _,n in ipairs({1,2,4,8}) do
+    local reg_group = aligned("r0",n)
+    local base = 0x02800000+(n-1)*536870912
+    for _,size in ipairs({{8,0},{16,5},{32,6},{64,7}}) do
+        vector("vl"..n.."re"..size[1]..".v",base+7+size[2]*4096,{vd,src},rr,"none",reg_group,{"reads_mem"})
+    end
+    vector("vl"..n.."r.v",base+7,{vd,src},rr,"none",reg_group,{"reads_mem","aliases"})
+    vector("vs"..n.."r.v",base+0x27,{vs,src},rr,"none",reg_group,{"writes_mem"})
+    vector("vmv"..n.."r.v",0x9e003057+(n-1)*32768,{vd,vs},"r0*128 + r1*1048576","none",
+           reg_group..aligned("r1",n))
+end
+
+-- Vector arithmetic opcode inventory follows riscv-opcodes rv_v. Group
+-- by textual operand order; accumulators take vs1/rs1 before vs2, while
+-- other operations generally take vs2 first. Data and floating scalar
+-- operands can occupy the same encoding field but have different classes.
+local vr = "r0*128 + r1*1048576"
+local vrr = vr.." + r2*32768"
+local acc = "r0*128 + r1*32768 + r2*1048576"
+local function varith(ops, base_fields, mask, rows)
+    for _,op in ipairs(rows) do
+        if op[1] == "vadd.vv" then
+            added[op[1]] = true
+            extra(op[1],{vd,vs,vs,vs},"require(r3 == 0); "..word(op[2],base_fields),vx,nil,nil,"_mask")
+        else
+            local guards = ""
+            if op[1]:find("vslideup",1,true)==1 or op[1]:find("slide1up",1,true) or op[1]:find("vrgather",1,true)==1
+               or op[1] == "vcompress.vm" then
+                guards = "require(r0 != r1); "
+                if op[1]=="vrgather.vv" or op[1]=="vrgatherei16.vv" or op[1]=="vcompress.vm" then
+                    guards = guards.."require(r0 != r2); "
+                end
+            end
+            if op[1]:find("vadc.",1,true)==1 or op[1]:find("vsbc.",1,true)==1 then guards = nz("r0") end
+            vector(op[1],op[2],ops,base_fields,mask,guards)
+        end
+    end
+end
+varith({vd,vs,fr},vrr,"optional",{
+    {"vfadd.vf",0x00005057},{"vfsub.vf",0x08005057},{"vfmin.vf",0x10005057},{"vfmax.vf",0x18005057},
+    {"vfsgnj.vf",0x20005057},{"vfsgnjn.vf",0x24005057},{"vfsgnjx.vf",0x28005057},{"vfslide1up.vf",0x38005057},
+    {"vfslide1down.vf",0x3c005057},{"vmfeq.vf",0x60005057},{"vmfle.vf",0x64005057},{"vmflt.vf",0x6c005057},
+    {"vmfne.vf",0x70005057},{"vmfgt.vf",0x74005057},{"vmfge.vf",0x7c005057},{"vfdiv.vf",0x80005057},
+    {"vfrdiv.vf",0x84005057},{"vfmul.vf",0x90005057},{"vfrsub.vf",0x9c005057},{"vfwadd.vf",0xc0005057},
+    {"vfwsub.vf",0xc8005057},{"vfwadd.wf",0xd0005057},{"vfwsub.wf",0xd8005057},{"vfwmul.vf",0xe0005057},
+})
+varith({va,fr,vs},acc,"optional",{
+    {"vfmadd.vf",0xa0005057},{"vfnmadd.vf",0xa4005057},{"vfmsub.vf",0xa8005057},{"vfnmsub.vf",0xac005057},
+    {"vfmacc.vf",0xb0005057},{"vfnmacc.vf",0xb4005057},{"vfmsac.vf",0xb8005057},{"vfnmsac.vf",0xbc005057},
+    {"vfwmacc.vf",0xf0005057},{"vfwnmacc.vf",0xf4005057},{"vfwmsac.vf",0xf8005057},{"vfwnmsac.vf",0xfc005057},
+})
+varith({vd,vs,vs},vrr,"optional",{
+    {"vfadd.vv",0x00001057},{"vfredusum.vs",0x04001057},{"vfsub.vv",0x08001057},{"vfredosum.vs",0x0c001057},
+    {"vfmin.vv",0x10001057},{"vfredmin.vs",0x14001057},{"vfmax.vv",0x18001057},{"vfredmax.vs",0x1c001057},
+    {"vfsgnj.vv",0x20001057},{"vfsgnjn.vv",0x24001057},{"vfsgnjx.vv",0x28001057},{"vmfeq.vv",0x60001057},
+    {"vmfle.vv",0x64001057},{"vmflt.vv",0x6c001057},{"vmfne.vv",0x70001057},{"vfdiv.vv",0x80001057},
+    {"vfmul.vv",0x90001057},{"vfwadd.vv",0xc0001057},{"vfwredusum.vs",0xc4001057},{"vfwsub.vv",0xc8001057},
+    {"vfwredosum.vs",0xcc001057},{"vfwadd.wv",0xd0001057},{"vfwsub.wv",0xd8001057},{"vfwmul.vv",0xe0001057},
+    {"vadd.vv",0x00000057},{"vsub.vv",0x08000057},{"vminu.vv",0x10000057},{"vmin.vv",0x14000057},
+    {"vmaxu.vv",0x18000057},{"vmax.vv",0x1c000057},{"vand.vv",0x24000057},{"vor.vv",0x28000057},
+    {"vxor.vv",0x2c000057},{"vrgather.vv",0x30000057},{"vrgatherei16.vv",0x38000057},{"vmseq.vv",0x60000057},
+    {"vmsne.vv",0x64000057},{"vmsltu.vv",0x68000057},{"vmslt.vv",0x6c000057},{"vmsleu.vv",0x70000057},
+    {"vmsle.vv",0x74000057},{"vsaddu.vv",0x80000057},{"vsadd.vv",0x84000057},{"vssubu.vv",0x88000057},
+    {"vssub.vv",0x8c000057},{"vsll.vv",0x94000057},{"vsmul.vv",0x9c000057},{"vsrl.vv",0xa0000057},
+    {"vsra.vv",0xa4000057},{"vssrl.vv",0xa8000057},{"vssra.vv",0xac000057},{"vnsrl.wv",0xb0000057},
+    {"vnsra.wv",0xb4000057},{"vnclipu.wv",0xb8000057},{"vnclip.wv",0xbc000057},{"vwredsumu.vs",0xc0000057},
+    {"vwredsum.vs",0xc4000057},{"vredsum.vs",0x00002057},{"vredand.vs",0x04002057},{"vredor.vs",0x08002057},
+    {"vredxor.vs",0x0c002057},{"vredminu.vs",0x10002057},{"vredmin.vs",0x14002057},{"vredmaxu.vs",0x18002057},
+    {"vredmax.vs",0x1c002057},{"vaaddu.vv",0x20002057},{"vaadd.vv",0x24002057},{"vasubu.vv",0x28002057},
+    {"vasub.vv",0x2c002057},{"vdivu.vv",0x80002057},{"vdiv.vv",0x84002057},{"vremu.vv",0x88002057},
+    {"vrem.vv",0x8c002057},{"vmulhu.vv",0x90002057},{"vmul.vv",0x94002057},{"vmulhsu.vv",0x98002057},
+    {"vmulh.vv",0x9c002057},{"vwaddu.vv",0xc0002057},{"vwadd.vv",0xc4002057},{"vwsubu.vv",0xc8002057},
+    {"vwsub.vv",0xcc002057},{"vwaddu.wv",0xd0002057},{"vwadd.wv",0xd4002057},{"vwsubu.wv",0xd8002057},
+    {"vwsub.wv",0xdc002057},{"vwmulu.vv",0xe0002057},{"vwmulsu.vv",0xe8002057},{"vwmul.vv",0xec002057},
+})
+varith({va,vs,vs},acc,"optional",{
+    {"vfmadd.vv",0xa0001057},{"vfnmadd.vv",0xa4001057},{"vfmsub.vv",0xa8001057},{"vfnmsub.vv",0xac001057},
+    {"vfmacc.vv",0xb0001057},{"vfnmacc.vv",0xb4001057},{"vfmsac.vv",0xb8001057},{"vfnmsac.vv",0xbc001057},
+    {"vfwmacc.vv",0xf0001057},{"vfwnmacc.vv",0xf4001057},{"vfwmsac.vv",0xf8001057},{"vfwnmsac.vv",0xfc001057},
+    {"vmadd.vv",0xa4002057},{"vnmsub.vv",0xac002057},{"vmacc.vv",0xb4002057},{"vnmsac.vv",0xbc002057},
+    {"vwmaccu.vv",0xf0002057},{"vwmacc.vv",0xf4002057},{"vwmaccsu.vv",0xfc002057},
+})
+varith({vd,vs},vr,"optional",{
+    {"vfcvt.xu.f.v",0x48001057},{"vfcvt.x.f.v",0x48009057},{"vfcvt.f.xu.v",0x48011057},{"vfcvt.f.x.v",0x48019057},
+    {"vfcvt.rtz.xu.f.v",0x48031057},{"vfcvt.rtz.x.f.v",0x48039057},{"vfwcvt.xu.f.v",0x48041057},{"vfwcvt.x.f.v",0x48049057},
+    {"vfwcvt.f.xu.v",0x48051057},{"vfwcvt.f.x.v",0x48059057},{"vfwcvt.f.f.v",0x48061057},{"vfwcvt.rtz.xu.f.v",0x48071057},
+    {"vfwcvt.rtz.x.f.v",0x48079057},{"vfncvt.xu.f.w",0x48081057},{"vfncvt.x.f.w",0x48089057},{"vfncvt.f.xu.w",0x48091057},
+    {"vfncvt.f.x.w",0x48099057},{"vfncvt.f.f.w",0x480a1057},{"vfncvt.rod.f.f.w",0x480a9057},{"vfncvt.rtz.xu.f.w",0x480b1057},
+    {"vfncvt.rtz.x.f.w",0x480b9057},{"vfsqrt.v",0x4c001057},{"vfrsqrt7.v",0x4c021057},{"vfrec7.v",0x4c029057},
+    {"vfclass.v",0x4c081057},{"vzext.vf8",0x48012057},{"vsext.vf8",0x4801a057},{"vzext.vf4",0x48022057},
+    {"vsext.vf4",0x4802a057},{"vzext.vf2",0x48032057},{"vsext.vf2",0x4803a057},{"vmsbf.m",0x5000a057},
+    {"vmsof.m",0x50012057},{"vmsif.m",0x5001a057},{"viota.m",0x50082057},
+})
+varith({vd,vs,src},vrr,"optional",{
+    {"vadd.vx",0x00004057},{"vsub.vx",0x08004057},{"vrsub.vx",0x0c004057},{"vminu.vx",0x10004057},
+    {"vmin.vx",0x14004057},{"vmaxu.vx",0x18004057},{"vmax.vx",0x1c004057},{"vand.vx",0x24004057},
+    {"vor.vx",0x28004057},{"vxor.vx",0x2c004057},{"vrgather.vx",0x30004057},{"vslideup.vx",0x38004057},
+    {"vslidedown.vx",0x3c004057},{"vmseq.vx",0x60004057},{"vmsne.vx",0x64004057},{"vmsltu.vx",0x68004057},
+    {"vmslt.vx",0x6c004057},{"vmsleu.vx",0x70004057},{"vmsle.vx",0x74004057},{"vmsgtu.vx",0x78004057},
+    {"vmsgt.vx",0x7c004057},{"vsaddu.vx",0x80004057},{"vsadd.vx",0x84004057},{"vssubu.vx",0x88004057},
+    {"vssub.vx",0x8c004057},{"vsll.vx",0x94004057},{"vsmul.vx",0x9c004057},{"vsrl.vx",0xa0004057},
+    {"vsra.vx",0xa4004057},{"vssrl.vx",0xa8004057},{"vssra.vx",0xac004057},{"vnsrl.wx",0xb0004057},
+    {"vnsra.wx",0xb4004057},{"vnclipu.wx",0xb8004057},{"vnclip.wx",0xbc004057},{"vaaddu.vx",0x20006057},
+    {"vaadd.vx",0x24006057},{"vasubu.vx",0x28006057},{"vasub.vx",0x2c006057},{"vslide1up.vx",0x38006057},
+    {"vslide1down.vx",0x3c006057},{"vdivu.vx",0x80006057},{"vdiv.vx",0x84006057},{"vremu.vx",0x88006057},
+    {"vrem.vx",0x8c006057},{"vmulhu.vx",0x90006057},{"vmul.vx",0x94006057},{"vmulhsu.vx",0x98006057},
+    {"vmulh.vx",0x9c006057},{"vwaddu.vx",0xc0006057},{"vwadd.vx",0xc4006057},{"vwsubu.vx",0xc8006057},
+    {"vwsub.vx",0xcc006057},{"vwaddu.wx",0xd0006057},{"vwadd.wx",0xd4006057},{"vwsubu.wx",0xd8006057},
+    {"vwsub.wx",0xdc006057},{"vwmulu.vx",0xe0006057},{"vwmulsu.vx",0xe8006057},{"vwmul.vx",0xec006057},
+})
+varith({va,src,vs},acc,"optional",{
+    {"vmadd.vx",0xa4006057},{"vnmsub.vx",0xac006057},{"vmacc.vx",0xb4006057},{"vnmsac.vx",0xbc006057},
+    {"vwmaccu.vx",0xf0006057},{"vwmacc.vx",0xf4006057},{"vwmaccus.vx",0xf8006057},{"vwmaccsu.vx",0xfc006057},
+})
+local svimm = signed(5)
+local vsimm = vr.." + ((r2+32)%32)*32768"
+varith({vd,vs,svimm},vsimm,"optional",{
+    {"vadd.vi",0x00003057},{"vrsub.vi",0x0c003057},{"vand.vi",0x24003057},{"vor.vi",0x28003057},
+    {"vxor.vi",0x2c003057},{"vmseq.vi",0x60003057},{"vmsne.vi",0x64003057},{"vmsleu.vi",0x70003057},
+    {"vmsle.vi",0x74003057},{"vmsgtu.vi",0x78003057},{"vmsgt.vi",0x7c003057},{"vsaddu.vi",0x80003057},
+    {"vsadd.vi",0x84003057},
+})
+varith({vd,vs,unsigned(5)},vrr,"optional",{
+    {"vrgather.vi",0x30003057},{"vslideup.vi",0x38003057},{"vslidedown.vi",0x3c003057},{"vsll.vi",0x94003057},
+    {"vsrl.vi",0xa0003057},{"vsra.vi",0xa4003057},{"vssrl.vi",0xa8003057},{"vssra.vi",0xac003057},
+    {"vnsrl.wi",0xb0003057},{"vnsra.wi",0xb4003057},{"vnclipu.wi",0xb8003057},{"vnclip.wi",0xbc003057},
+})
+varith({vd,vs,src},vrr,"required",{
+    {"vadc.vxm",0x40004057},{"vmadc.vxm",0x44004057},{"vsbc.vxm",0x48004057},{"vmsbc.vxm",0x4c004057},
+    {"vmerge.vxm",0x5c004057},
+})
+varith({vd,vs,vs},vrr,"required",{
+    {"vadc.vvm",0x40000057},{"vmadc.vvm",0x44000057},{"vsbc.vvm",0x48000057},{"vmsbc.vvm",0x4c000057},
+    {"vmerge.vvm",0x5c000057},
+})
+varith({vd,vs,svimm},vsimm,"required",{
+    {"vadc.vim",0x40003057},{"vmadc.vim",0x44003057},{"vmerge.vim",0x5c003057},
+})
+vector("vfmerge.vfm",0x5c005057,{vd,vs,fr},vrr,"required")
+varith({vd,vs,vs},vrr,"none",{
+    {"vmadc.vv",0x46000057},{"vmsbc.vv",0x4e000057},{"vcompress.vm",0x5e002057},{"vmandn.mm",0x62002057},
+    {"vmand.mm",0x66002057},{"vmor.mm",0x6a002057},{"vmxor.mm",0x6e002057},{"vmorn.mm",0x72002057},
+    {"vmnand.mm",0x76002057},{"vmnor.mm",0x7a002057},{"vmxnor.mm",0x7e002057},
+})
+varith({vd,vs,src},vrr,"none",{{"vmadc.vx",0x46004057},{"vmsbc.vx",0x4e004057}})
+vector("vmadc.vi",0x46003057,{vd,vs,svimm},vsimm,"none")
+vector("vmv.v.i",0x5e003057,{vd,svimm},"r0*128 + ((r1+32)%32)*32768","none")
+vector("vmv.v.v",0x5e000057,{vd,vs},rr,"none")
+vector("vmv.v.x",0x5e004057,{vd,src},rr,"none")
+vector("vfmv.v.f",0x5e005057,{vd,fr},rr,"none")
+vector("vmv.s.x",0x42006057,{va,src},rr,"none")
+vector("vfmv.s.f",0x42005057,{va,fr},rr,"none")
+vector("vmv.x.s",0x42002057,{dst,vs},vr,"none")
+vector("vfmv.f.s",0x42001057,{fw,vs},vr,"none")
+vector("vid.v",0x5008a057,{vd},"r0*128","optional")
+vector("vcpop.m",0x40082057,{dst,vs},vr,"optional")
+vector("vfirst.m",0x4008a057,{dst,vs},vr,"optional")
+
+symas.syntax{ name = "default", comment = "#", separator = ", " }
+symas.syntax{ name = "abi", comment = "#", separator = ", ", tmpl = "{mnemonic} {ops}" }
+
+symas.section{ name = ".text",   flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 4, content = "data" }
+symas.section{ name = ".data",   flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".bss",    flags = { "write", "alloc", "zerofill", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tdata",  flags = { "write", "alloc", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".tbss",   flags = { "write", "alloc", "zerofill", "tls", "data" }, align = 8, content = "data" }
+symas.section{ name = ".init",   flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".fini",   flags = { "exec", "alloc", "code" }, align = 4, content = "code" }
+symas.section{ name = ".plt",    flags = { "exec", "alloc", "code" }, align = 16, content = "code" }
+symas.section{ name = ".got",    flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".eh_frame", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".comment", flags = { "merge", "readonly", "meta" }, align = 1, content = "meta" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "func_weak", binding = "weak", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "tls_var", binding = "tls", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+symas.linkage{ name = "hidden_func", binding = "global", visibility = "hidden", symtype = "func" }
+
+symas.reloc{ name = "R_RISCV_NONE", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_32", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_64", width = 64, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_RELATIVE", width = xlen, expr = "B + A" }
+symas.reloc{ name = "R_RISCV_BRANCH", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_RISCV_JAL", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_RISCV_RVC_BRANCH", width = 16, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_RISCV_RVC_JUMP", width = 16, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_RISCV_CALL", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_RISCV_CALL_PLT", width = 32, signed = true, pcrel = true, expr = "PLT(S) + A - P" }
+symas.reloc{ name = "R_RISCV_PCREL_HI20", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+-- S names the anchor at the matching HI20 relocation, not the ultimate
+-- target. Both halves use that high relocation's delta and place.
+symas.reloc{ name = "R_RISCV_PCREL_LO12_I", width = 32, signed = true, pcrel = true, expr = "LO12(HI20_DELTA(S))" }
+symas.reloc{ name = "R_RISCV_PCREL_LO12_S", width = 32, signed = true, pcrel = true, expr = "LO12(HI20_DELTA(S))" }
+symas.reloc{ name = "R_RISCV_HI20", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_LO12_I", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_LO12_S", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_GOT_HI20", width = 32, signed = true, pcrel = true, expr = "GOT(S) + A - P" }
+symas.reloc{ name = "R_RISCV_TLS_GD_HI20", width = 32, signed = true, pcrel = true, expr = "TLS(S) + A - P" }
+symas.reloc{ name = "R_RISCV_TLS_GOT_HI20", width = 32, signed = true, pcrel = true, expr = "TLS(S) + A - P" }
+symas.reloc{ name = "R_RISCV_TPREL_HI20", width = 32, expr = "TLS(S) + A" }
+symas.reloc{ name = "R_RISCV_TPREL_LO12_I", width = 32, expr = "TLS(S) + A" }
+symas.reloc{ name = "R_RISCV_ALIGN", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_RELAX", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_RISCV_SUB6", width = 8, expr = "SUB6(V, S + A)" }
+symas.reloc{ name = "R_RISCV_SUB8", width = 8, expr = "V - S - A" }
+symas.reloc{ name = "R_RISCV_SUB16", width = 16, expr = "V - S - A" }
+symas.reloc{ name = "R_RISCV_SUB32", width = 32, expr = "V - S - A" }
+-- Unlike most ELF ABIs, RISC-V uses R_RISCV_32/64 rather than GLOB_DAT.
+symas.reloc{ name = "R_RISCV_JUMP_SLOT", width = xlen, expr = "S" }
+
+symas.debug{ msg = "Default profile: "..(rv32 and "rv32gc" or im and "rv64im" or "rv64gc"), kind = "target", ref = "" }
+symas.debug{ msg = "vector forms require v", kind = "form", ref = "vadd.vv" }
+symas.debug{ msg = "privileged forms require priv", kind = "form", ref = "mret" }
+
+print(symas.emit())

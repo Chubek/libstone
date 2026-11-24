@@ -1,0 +1,89 @@
+-- Classic 16-bit MSP430, little endian, TI EABI (not MSP430X).
+-- Resolved TableGen records and DomSleigh p-code are emitted in backend.
+-- Source precedes destination; register-direct and literal-immediate forms.
+local symas = require("backend").new("msp430")
+symas.target{ arch = "msp430", subarch = "msp430", addr_size = 16,
+    op_size = 16, addr_def = 16, align = 2, byte_order = "little",
+    obj_format = "ELF32", abi = "TI-EABI", calling_conv = "msp430",
+    features = { "base" } }
+symas.feature{ name = "base", desc = "Classic MSP430; 16-bit addresses and registers" }
+for i = 0, 15 do
+    symas.register{ name = "r" .. i, class = "gpr", width = 16, enc = i,
+        flags = { "readable", "writable" } }
+end
+for _, a in ipairs({ { "pc", 0 }, { "sp", 1 }, { "sr", 2 }, { "cg", 3 }, { "fp", 4 } }) do
+    symas.register{ name = a[1], class = "gpr", width = 16, enc = a[2],
+        parent = "r" .. a[2], sub_lo = 0, sub_hi = 16 }
+end
+local function r(access)
+    return { kind = "reg", class = "gpr", width = 16, access = access }
+end
+local function imm(w, lo, hi)
+    return { kind = "imm", width = w, signed = lo < 0, imm_min = lo, imm_max = hi }
+end
+local mnemonics = {}
+local function form(m, tag, operands, code, bytes, flags, reloc)
+    if not mnemonics[m] then symas.mnemonic{ name = m }; mnemonics[m] = true end
+    local enc = m .. tag
+    symas.encoder{ name = enc, source = code, max_bytes = bytes or 2, max_relocs = reloc or 0 }
+    symas.form{ mnemonic = m, encoder = enc, operands = operands, flags = flags }
+end
+for _, op in ipairs({ { "mov", 4, "write" }, { "add", 5 }, { "addc", 6 },
+    { "subc", 7 }, { "sub", 8 }, { "cmp", 9, "read" }, { "dadd", 10 }, { "bit", 11, "read" },
+    { "bic", 12 }, { "bis", 13 }, { "xor", 14 }, { "and", 15 } }) do
+    for _, size in ipairs({ { "", 16, 0 }, { ".w", 16, 0 }, { ".b", 8, 64 } }) do
+        local m, w, opc = op[1] .. size[1], size[2], op[2]*4096 + size[3]
+        local dest = r(op[3] or "readwrite")
+        local lo, hi, modulus = -(2^(w-1)), 2^w-1, 2^w
+        form(m, "_rr", { r("read"), dest }, "emit16le(" .. opc .. " + r0*256 + r1);")
+        -- Constant generator: (register, source mode) = (3,0/1/2/3) for
+        -- 0/1/2/-1 and (2,2/3) for 4/8. Other immediates follow the opcode.
+        local src = string.format("require(r0 >= %d); require(r0 <= %d); ", lo, hi)
+        for _, cg in ipairs({ { 0, 0x300 }, { 1, 0x310 }, { 2, 0x320 },
+                               { 4, 0x220 }, { 8, 0x230 }, { -1, 0x330 } }) do
+            src = src .. string.format("if (r0 == %d) {emit16le(%d + r1);} else {", cg[1], opc + cg[2])
+        end
+        src = src .. string.format("emit16le(%d + r1); emit16le((r0 + %d) %% %d);", opc + 0x30, modulus, modulus)
+        form(m, "_ir", { imm(w, lo, hi), dest }, src .. string.rep("}", 6), 4)
+    end
+end
+for _, op in ipairs({ { "rrc", 0x1000 }, { "swpb", 0x1080, true }, { "rra", 0x1100 },
+    { "sxt", 0x1180, true }, { "push", 0x1200, false, "read" },
+    { "call", 0x1280, true, "read" } }) do
+    local flags = op[1] == "call" and { "branch", "writes_mem", "implicit_ops" }
+        or (op[1] == "push" and { "writes_mem", "implicit_ops" } or nil)
+    form(op[1], "", { r(op[4] or "readwrite") }, "emit16le(" .. op[2] .. " + r0);", 2, flags)
+    if not op[3] then
+        form(op[1] .. ".b", "", { r(op[4] or "readwrite") },
+            "emit16le(" .. (op[2] + 64) .. " + r0);", 2, flags)
+    end
+end
+form("call", "_imm", { imm(16, 0, 65535) }, "require(r0 >= 0); require(r0 <= 65535); emit16le(0x12b0); emit16le(r0);",
+    4, { "branch", "writes_mem", "implicit_ops" })
+form("call", "_sym", { { kind = "sym", width = 16 } },
+    "emit16le(0x12b0); emit_relocation(sym, R_MSP430_16_BYTE); emit16le(0);",
+    4, { "branch", "writes_mem", "implicit_ops", "reloc" }, 1)
+for _, op in ipairs({ { "jne", 0 }, { "jnz", 0 }, { "jeq", 1 }, { "jz", 1 }, { "jnc", 2 },
+    { "jlo", 2 }, { "jc", 3 }, { "jhs", 3 }, { "jn", 4 }, { "jge", 5 }, { "jl", 6 }, { "jmp", 7 } }) do
+    form(op[1], "_label", { { kind = "sym", width = 16 } },
+        "emit_relocation(sym, R_MSP430_10_PCREL); emit16le(" .. (0x2000 + op[2]*1024) .. ");",
+        2, op[2] == 7 and { "branch", "terminator", "reloc" } or { "cond_branch", "reloc" }, 1)
+end
+local retflags = { "return", "terminator", "reads_mem", "implicit_ops" }
+form("ret", "", {}, "emit16le(0x4130);", 2, retflags)
+form("reti", "", {}, "emit16le(0x1300);", 2, retflags)
+form("nop", "", {}, "emit16le(0x4303);")
+form("eint", "", {}, "emit16le(0xd232);", 2, { "implicit_ops" })
+form("dint", "", {}, "emit16le(0xc232);", 2, { "implicit_ops" })
+form("clr", "", { r("write") }, "emit16le(0x4300 + r0);")
+form("pop", "", { r("write") }, "emit16le(0x4130 + r0);", 2, { "reads_mem", "implicit_ops" })
+symas.syntax{ name = "default", comment = ";", imm_prefix = "#", separator = ", " }
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 2, content = "code" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 2, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 2, content = "data" }
+symas.reloc{ name = "R_MSP430_16", width = 16, addend = "explicit", expr = "S + A" }
+symas.reloc{ name = "R_MSP430_16_BYTE", width = 16, addend = "explicit", expr = "S + A" }
+-- P is the instruction address; MSP430 jumps are relative to the next word.
+symas.reloc{ name = "R_MSP430_10_PCREL", width = 16, signed = true, pcrel = true,
+    addend = "explicit", expr = "(S + A - P - 2) / 2" }
+print(symas.emit())

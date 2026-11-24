@@ -1,0 +1,162 @@
+-- eBPF bytecode, little-endian v3 profile. Forms use flat mnemonic operands;
+-- LLVM's assignment expressions and *(type *)(base+off) are a parser dialect.
+-- bpfeb reverses nibble order as well as multibyte field endianness; it cannot
+-- be selected merely by changing byte_order. This bank does not target bpfeb.
+local symas = require("backend").new("bpf")
+
+symas.target{
+    arch = "bpf", subarch = "bpfel",
+    addr_size = 64, op_size = 64, addr_def = 64, align = 8,
+    byte_order = "little", obj_format = "ELF64", abi = "eBPF",
+    calling_conv = "bpf-helper",
+    features = { "base", "alu32", "ldimm64", "byteswap", "jmp32",
+        "helpers", "atomics", "bpf-to-bpf" },
+}
+
+symas.feature{ name = "base", desc = "eBPF base 64-bit ALU + jumps" }
+symas.feature{ name = "alu32", desc = "32-bit ALU sub-register ops" }
+symas.feature{ name = "ldimm64", desc = "16-byte load-immediate-64" }
+symas.feature{ name = "byteswap", desc = "BE/LE 16/32/64 conversions" }
+symas.feature{ name = "jmp32", desc = "32-bit comparison branch class (v3+)" }
+symas.feature{ name = "store-imm", desc = "store immediate opcodes in the v4 compiler profile" }
+symas.feature{ name = "callx", desc = "indirect-call extension; not a Linux helper or local call" }
+symas.feature{ name = "maps", desc = "BPF maps (fd/lookup/update)" }
+symas.feature{ name = "helpers", desc = "helper calls (r1-r5 args, r0 ret)" }
+symas.feature{ name = "tail-calls", desc = "tail calls" }
+symas.feature{ name = "bpf-to-bpf", desc = "BPF-to-BPF calls" }
+symas.feature{ name = "btf", desc = "BPF Type Format" }
+symas.feature{ name = "atomics", desc = "atomic add/or/and/xor/fetch" }
+symas.feature{ name = "bounded-loops", desc = "bounded loops (verifier v2)" }
+symas.feature{ name = "priv", desc = "privileged (map update, kfuncs)" }
+
+for i = 0, 10 do
+    local flags = i == 10 and { "readable" } or { "readable", "writable" }
+    symas.register{ name = "r" .. i, class = "gpr", width = 64, enc = i, flags = flags }
+    symas.register{ name = "w" .. i, class = "gpr", width = 32, enc = i, parent = "r" .. i,
+        sub_lo = 0, sub_hi = 32, flags = flags }
+end
+symas.register{ name = "fp", class = "gpr", width = 64, enc = 10, parent = "r10",
+    sub_lo = 0, sub_hi = 64, flags = { "readable" } }
+
+local function reg(width, access) return { kind = "reg", class = "gpr", width = width, access = access } end
+local function imm(width, lo, hi, constraint)
+    return { kind = "imm", width = width, signed = lo < 0, imm_min = lo, imm_max = hi, constraint = constraint }
+end
+local s32 = imm(32, -2147483648, 2147483647)
+local u32 = imm(32, 0, 4294967295)
+local off = imm(16, -32768, 32767, "signed byte displacement")
+local disp = imm(16, -32768, 32767, "signed instruction-slot displacement from the next slot")
+local sym = { kind = "sym", width = 64 }
+local function fit(n,lo,hi)
+    return ("require(%s >= %s && %s <= %s); "):format(n,lo,n,hi)
+end
+local function insn(op, dst, src, offset, val)
+    return ("emit8(0x%02x); emit8(%s + %s*16); emit16le(%s); emit32le(%s); "):
+        format(op, dst or "0", src or "0", offset or "0", val or "0")
+end
+local declared = {}
+local function form(name, tag, operands, code, required, flags, bytes, nreloc)
+    if not declared[name] then symas.mnemonic{ name = name }; declared[name] = true end
+    local enc = name .. "_" .. tag
+    symas.encoder{ name = enc, source = code, max_bytes = bytes or 8, max_relocs = nreloc or 0 }
+    symas.form{ mnemonic = name, encoder = enc, operands = operands, required = required, flags = flags }
+end
+local function rcheck(n, write) return fit(n, 0, write and 9 or 10) end
+local function schk(n) return fit(n, -2147483648, 2147483647) end
+local function ochk(n) return fit(n, -32768, 32767) end
+
+for _, width in ipairs({ 64, 32 }) do
+    local class = width == 64 and 7 or 4
+    local suffix = width == 64 and "" or "32"
+    local req = width == 32 and { "alu32" } or nil
+    for _, op in ipairs({ {"add",0x00}, {"sub",0x10}, {"mul",0x20}, {"div",0x30},
+        {"or",0x40}, {"and",0x50}, {"lsh",0x60}, {"rsh",0x70}, {"mod",0x90},
+        {"xor",0xa0}, {"mov",0xb0}, {"arsh",0xc0} }) do
+        local n, w = op[1] .. suffix, reg(width, op[1] == "mov" and "write" or "readwrite")
+        form(n, "reg", { w, reg(width) },
+            rcheck("a",true) .. rcheck("b") .. insn(class + op[2] + 8,"a","b"), req)
+        -- RFC 9669 masks shift counts and defines division/modulo by zero.
+        -- Linux verifier checks are separate from this raw imm32 encoding.
+        form(n, "imm", { w, s32 }, rcheck("a",true) .. schk("b") .. insn(class + op[2],"a",nil,nil,"b"), req)
+    end
+    form("neg" .. suffix, "reg", { reg(width,"readwrite") },
+        rcheck("a",true) .. insn(class + 0x80,"a"), req)
+end
+for _, dir in ipairs({ {"le",0xd4}, {"be",0xdc} }) do
+    for _, width in ipairs({ 16, 32, 64 }) do
+        form(dir[1] .. width, "reg", { reg(64,"readwrite") },
+            rcheck("a",true) .. insn(dir[2],"a",nil,nil,tostring(width)), { "byteswap" })
+    end
+end
+-- Both imm32 halves are in the high word of their respective slots.
+form("ldimm64", "imm", { reg(64,"write"), imm(64, math.mininteger, math.maxinteger) },
+    rcheck("a",true) .. insn(0x18,"a",nil,nil,"b") ..
+    insn(0,nil,nil,nil,"b / 4294967296 - select(b < 0 && b % 4294967296 != 0, 1, 0)"),
+    { "ldimm64" }, nil, 16)
+-- These are ELF REL records at the first byte of the instruction, not synthetic
+-- branch relocations. Map-FD and BTF/CO-RE resolution are loader operations.
+form("ldimm64", "sym", { reg(64,"write"), sym }, rcheck("a",true) ..
+    "emit_relocation(sym, R_BPF_64_64); " .. insn(0x18,"a") .. insn(0),
+    { "ldimm64" }, { "reloc" }, 16, 1)
+
+for _, ty in ipairs({ {"w",0,32}, {"h",8,16}, {"b",16,8}, {"dw",24,64} }) do
+    local t, size, bits = ty[1],ty[2],ty[3]
+    local base = reg(64); base.constraint = "memory base register"
+    form("ldx" .. t, "baseoff", { reg(64,"write"), base, off },
+        rcheck("a",true) .. rcheck("b") .. ochk("c") .. insn(0x61+size,"a","b","c"),
+        nil, { "reads_mem" })
+    form("stx" .. t, "baseoff", { base, off, reg(64) },
+        rcheck("a") .. ochk("b") .. rcheck("c") .. insn(0x63+size,"a","c","b"),
+        nil, { "writes_mem" })
+    form("st" .. t, "baseoff", { base, off, s32 },
+        rcheck("a") .. ochk("b") .. schk("c") .. insn(0x62+size,"a",nil,"b","c"),
+        { "store-imm" }, { "writes_mem" })
+    if bits == 32 or bits == 64 then
+        form("stxadd" .. t, "baseoff", { base, off, reg(bits) },
+            rcheck("a") .. ochk("b") .. rcheck("c") .. insn(0xc3+size,"a","c","b"),
+            { "atomics" }, { "reads_mem", "writes_mem" })
+    end
+end
+form("ja", "disp", { disp }, ochk("a") .. insn(0x05,nil,nil,"a"), nil, { "branch", "terminator" })
+for _, width in ipairs({ 64, 32 }) do
+    local req = width == 32 and { "jmp32" } or nil
+    local cl, suffix = width == 32 and 6 or 5, width == 32 and "32" or ""
+    for _, op in ipairs({ {"jeq",0x10}, {"jgt",0x20}, {"jge",0x30}, {"jset",0x40},
+        {"jne",0x50}, {"jsgt",0x60}, {"jsge",0x70}, {"jlt",0xa0}, {"jle",0xb0},
+        {"jslt",0xc0}, {"jsle",0xd0} }) do
+        local n, flags = op[1] .. suffix, { "cond_branch" }
+        form(n, "reg", { reg(width), reg(width), disp }, rcheck("a") .. rcheck("b") ..
+            ochk("c") .. insn(op[2]+cl+8,"a","b","c"), req, flags)
+        form(n, "imm", { reg(width), s32, disp }, rcheck("a") .. schk("b") ..
+            ochk("c") .. insn(op[2]+cl,"a",nil,"c","b"), req, flags)
+    end
+end
+form("call", "helper", { u32 }, fit("a",0,4294967295) .. insn(0x85,nil,nil,nil,"a"),
+    { "helpers" }, { "branch", "implicit_ops" })
+form("call", "local", { sym }, "emit_relocation(sym, R_BPF_64_32); " .. insn(0x85,nil,"1",nil,"-1"),
+    { "bpf-to-bpf" }, { "branch", "reloc", "implicit_ops" }, 8, 1)
+form("callx", "reg", { reg(64) }, rcheck("a") .. insn(0x8d,"a"),
+    { "callx" }, { "branch", "implicit_ops" })
+form("exit", "base", nil, insn(0x95), nil, { "return", "terminator", "implicit_ops" })
+symas.syntax{ name = "default", comment = "#", separator = ", " }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 8, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 8, content = "data" }
+symas.section{ name = ".maps", flags = { "write", "alloc", "data" }, align = 8, content = "data" }
+symas.section{ name = ".BTF", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+symas.section{ name = ".BTF.ext", flags = { "alloc", "readonly", "meta" }, align = 4, content = "meta" }
+symas.section{ name = ".license", flags = { "alloc", "readonly", "meta" }, align = 1, content = "meta" }
+
+symas.linkage{ name = "prog_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "map_def", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+
+-- Linux Documentation/bpf/llvm_reloc.rst: both REL entries name the
+-- instruction start. Both fields are imm32 at r_offset + 4, even LD_IMM64.
+-- The call relocation resolves a section-relative target; the BPF loader
+-- computes the final displacement after laying out its instruction stream.
+symas.reloc{ name = "R_BPF_64_64", width = 32, offset = 32, expr = "S + A", addend = "infield" }
+symas.reloc{ name = "R_BPF_64_32", width = 32, offset = 32, signed = true,
+    expr = "(S + A) / 8 - 1", addend = "infield" }
+
+print(symas.emit())

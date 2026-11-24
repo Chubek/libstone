@@ -1,0 +1,178 @@
+-- Infineon TriCore TC1.6.2, little-endian EABI, mixed 16/32-bit instructions.
+-- Field layouts cross-checked with TriCore GNU binutils opcodes/tricore-opc.c,
+-- gas/config/tc-tricore.c, and Capstone's CS_MODE_TRICORE_162 disassembler.
+-- Address registers are distinct from data registers. Bare base/displacement
+-- is the numeric projection of GNU `[aN]off`; update modes are not modeled.
+local symas = require("backend").new("tricore")
+
+symas.target{
+    arch = "tricore", subarch = "tc1.6.2",
+    addr_size = 32, op_size = 32, addr_def = 32, align = 2,
+    byte_order = "little", obj_format = "ELF32", abi = "TriCore-EABI",
+    calling_conv = "tricore-eabi",
+    features = { "base", "fpu", "simd1", "saturation", "bitops", "loops" },
+}
+
+symas.feature{ name = "base", desc = "TriCore base integer" }
+symas.feature{ name = "fpu", desc = "floating-point unit" }
+symas.feature{ name = "simd1", desc = "SIMD packed arithmetic 1" }
+symas.feature{ name = "simd2", desc = "SIMD packed arithmetic 2" }
+symas.feature{ name = "pcp", desc = "Peripheral Control Processor" }
+symas.feature{ name = "saturation", desc = "saturating arithmetic" }
+symas.feature{ name = "bitops", desc = "bit operations (extr/ins)" }
+symas.feature{ name = "loops", desc = "zero-overhead loops" }
+symas.feature{ name = "mmu", desc = "MMU (vm/vmt)" }
+symas.feature{ name = "priv", desc = "privileged (PSW/CSFR access)" }
+
+local rw = { "readable","writable" }
+for i = 0, 15 do
+    symas.register{ name = "d" .. i, class = "gpr", width = 32, enc = i, flags = rw }
+    symas.register{ name = "a" .. i, class = "special", width = 32, enc = i, flags = rw }
+end
+for i = 0, 14, 2 do
+    symas.register{ name = "e" .. i, class = "gpr", width = 64, enc = i, flags = rw }
+    symas.register{ name = "p" .. i, class = "special", width = 64, enc = i, flags = rw }
+end
+symas.register{ name = "sp", class = "special", width = 32, enc = 10, flags = rw,
+    parent = "a10", sub_lo = 0, sub_hi = 32 }
+for _, x in ipairs({ {"pcxi",0xfe00},{"psw",0xfe04},{"pc",0xfe08},{"isp",0xfe28},
+    {"fcx",0xfe38},{"lcx",0xfe3c} }) do
+    -- CSFR encodings are MTCR/MFCR addresses, not ordinary register numbers.
+    symas.register{ name = x[1], class = "ctrl", width = 32, enc = x[2], flags = {"modedep"} }
+end
+local function reg(cls,access) return {kind="reg",class=cls,width=32,access=access} end
+local d, wd = reg("gpr"), reg("gpr","write")
+local a, wa = reg("special"), reg("special","write")
+local function imm(w,l,h,c)
+    return {kind="imm",width=w,imm_min=l,imm_max=h,signed=l<0,constraint=c}
+end
+local function fit(v,l,h) return ("require(%s >= %s && %s <= %s); "):format(v,l,v,h) end
+local function rr(v) return fit(v,0,15) end
+local function emit(n,op,fields) return ("emit%dle(0x%x%s); "):format(n,op,fields or "") end
+local declared = {}
+local function form(name,tag,bits,ops,src,flags,req,nreloc)
+    if not declared[name] then symas.mnemonic{ name = name }; declared[name] = true end
+    local enc = name .. "_" .. tag
+    symas.encoder{ name = enc, max_bytes = bits//8, max_relocs = nreloc or 0, source = src }
+    symas.form{ mnemonic = name, encoder = enc, operands = ops, flags = flags, required = req }
+end
+form("nop","sr",16,nil,emit(16,0))
+form("ret","sr",16,nil,emit(16,0x9000),{"return","terminator","implicit_ops"})
+form("rfe","sr",16,nil,emit(16,0x8000),{"return","terminator","implicit_ops","privileged"},{"priv"})
+for _, x in ipairs({ {"mov",0x02,wd,d},{"mov.a",0x60,wa,d},{"mov.aa",0x40,wa,a},
+    {"mov.d",0x80,wd,a} }) do
+    form(x[1],"srr",16,{x[3],x[4]},rr("a") .. rr("b") .. emit(16,x[2]," + a*256 + b*4096"))
+end
+form("mov","src",16,{wd,imm(4,-8,7)},rr("a") .. fit("b",-8,7) ..
+    emit(16,0x82," + a*256 + ((b+16)%16)*4096"))
+form("mov","rlc",32,{wd,imm(16,-32768,32767)},rr("a") .. fit("b",-32768,32767) ..
+    "require(b < -8 || b > 7); " .. emit(32,0x3b," + a*268435456 + ((b+65536)%65536)*4096"))
+for _, x in ipairs({ {"movh",0x7b,wd},{"movh.a",0x91,wa} }) do
+    form(x[1],"rlc",32,{x[3],imm(16,0,65535)},rr("a") .. fit("b",0,65535) ..
+        emit(32,x[2]," + a*268435456 + b*4096"))
+end
+local check3 = rr("a") .. rr("b") .. rr("c")
+for _, x in ipairs({ {"add",0x0000000b},{"sub",0x0080000b},{"and",0x0080000f},
+    {"or",0x00a0000f},{"xor",0x00c0000f},{"mul",0x000a0073},{"sh",0x0000000f},
+    {"adds",0x0020000b,"saturation"},{"add.h",0x0600000b,"simd1"},{"add.b",0x0400000b,"simd1"} }) do
+    form(x[1],"rr",32,{wd,d,d},check3 .. emit(32,x[2]," + a*268435456 + b*256 + c*4096"),
+        nil,x[3] and {x[3]} or nil)
+end
+form("add.a","rr",32,{wa,a,a},check3 .. emit(32,0x00100001," + a*268435456 + b*256 + c*4096"))
+form("addi","rlc",32,{wd,d,imm(16,-32768,32767)},rr("a") .. rr("b") .. fit("c",-32768,32767) ..
+    emit(32,0x1b," + a*268435456 + b*256 + ((c+65536)%65536)*4096"))
+for _, x in ipairs({ {"addih",0x9b,wd,d},{"addih.a",0x11,wa,a} }) do
+    form(x[1],"rlc",32,{x[3],x[4],imm(16,0,65535)},rr("a") .. rr("b") .. fit("c",0,65535) ..
+        emit(32,x[2]," + a*268435456 + b*256 + c*4096"))
+end
+form("madd","rrr2",32,{wd,d,d,d},check3 .. rr("d") ..
+    emit(32,0x000a0003," + a*268435456 + b*16777216 + c*256 + d*4096"))
+for _, x in ipairs({ {"extr",0x00400037},{"extr.u",0x00600037} }) do
+    form(x[1],"rrpw",32,{wd,d,imm(5,0,31,"bit position"),imm(5,0,31,"bit width")},
+        rr("a") .. rr("b") .. fit("c",0,31) .. fit("d",0,31) .. "require(c+d <= 32); " ..
+        emit(32,x[2]," + a*268435456 + b*256 + c*8388608 + d*65536"),nil,{"bitops"})
+end
+form("add.f","rrr",32,{wd,d,d},check3 ..
+    emit(32,0x0021006b," + a*268435456 + b*16777216 + c*256"),nil,{"fpu"})
+local boff = imm(16,-32768,32767,"unscaled signed byte displacement")
+local function bol(n)
+    local u = "((" .. n .. "+65536)%65536)"
+    return (" + (%s%%64)*65536 + (%s/1024)*4194304 + (%s/64%%16)*268435456"):format(u,u,u)
+end
+for _, x in ipairs({ {"ld.w",0x19,wd},{"ld.b",0x79,wd},{"ld.bu",0x39,wd},
+    {"ld.h",0xc9,wd},{"ld.hu",0xb9,wd},{"ld.a",0x99,wa},{"lea",0xd9,wa} }) do
+    form(x[1],"bol",32,{x[3],a,boff},rr("a") .. rr("b") .. fit("c",-32768,32767) ..
+        emit(32,x[2]," + a*256 + b*4096" .. bol("c")),x[1] ~= "lea" and {"reads_mem","may_trap"} or nil)
+end
+for _, x in ipairs({ {"st.w",0x59,d},{"st.b",0xe9,d},{"st.h",0xf9,d},{"st.a",0xb5,a} }) do
+    form(x[1],"bol",32,{a,boff,x[3]},rr("a") .. rr("c") .. fit("b",-32768,32767) ..
+        emit(32,x[2]," + a*4096 + c*256" .. bol("b")),{"writes_mem","may_trap"})
+end
+form("ld.w","slr",16,{wd,a},rr("a") .. rr("b") .. emit(16,0x54," + a*256 + b*4096"),{"reads_mem","may_trap"})
+form("st.w","ssr",16,{a,d},rr("a") .. rr("b") .. emit(16,0x74," + a*256 + b*4096"),{"writes_mem","may_trap"})
+
+local rel = {kind="sym",width=32}
+local function disp(width,lo,hi)
+    return imm(width,lo,hi,"signed byte displacement from the instruction address; multiple of two")
+end
+local function branchfit(n,lo,hi) return fit(n,lo,hi) .. "require(" .. n .. "%2 == 0); " end
+for _, x in ipairs({ {"j",0x1d,0x3c,{"branch","terminator"}},
+    {"jl",0x5d,nil,{"branch","implicit_ops"}},{"call",0x6d,0x5c,{"branch","implicit_ops"}} }) do
+    local check = branchfit("a",-16777216,16777214)
+    if x[3] then
+        form(x[1],"sb",16,{disp(9,-256,254)},branchfit("a",-256,254) ..
+            emit(16,x[3]," + ((a/2+256)%256)*256"),x[4])
+        check = check .. "require(a < -256 || a > 254); "
+    end
+    form(x[1],"b",32,{disp(25,-16777216,16777214)},check ..
+        emit(32,x[2]," + ((a/2+16777216)%65536)*65536 + ((a/2+16777216)%16777216/65536)*256"),x[4])
+    local f = {table.unpack(x[4])}; f[#f+1] = "reloc"
+    form(x[1],"sym",32,{rel},"emit_relocation(sym, R_TRICORE_24REL); " .. emit(32,x[2]),f,nil,1)
+end
+for _, x in ipairs({ {"ji",0xdc,16,{"branch","terminator"}}, {"jli",0x0020002d,32,{"branch","implicit_ops"}},
+    {"calli",0x0000002d,32,{"branch","implicit_ops"}} }) do
+    form(x[1],"indirect",x[3],{a},rr("a") .. emit(x[3],x[2]," + a*256"),x[4])
+end
+for _, x in ipairs({ {"jeq",0x5f},{"jne",0x8000005f},{"jlt",0x3f},{"jge",0x7f} }) do
+    form(x[1],"brr",32,{d,d,disp(16,-32768,32766)},rr("a") .. rr("b") .. branchfit("c",-32768,32766) ..
+        emit(32,x[2]," + a*256 + b*4096 + ((c/2+32768)%32768)*65536"),{"cond_branch"})
+    form(x[1],"sym",32,{d,d,rel},rr("a") .. rr("b") .. "emit_relocation(sym, R_TRICORE_15REL); " ..
+        emit(32,x[2]," + a*256 + b*4096"),{"cond_branch","reloc"},nil,1)
+end
+form("loop","sbr",16,{reg("special","readwrite"),disp(6,-32,-2)},rr("a") .. branchfit("b",-32,-2) ..
+    emit(16,0xfc," + a*4096 + (b/2+16)*256"),{"cond_branch"},{"loops"})
+form("loop","brr",32,{reg("special","readwrite"),disp(16,-32768,32766)},rr("a") ..
+    branchfit("b",-32768,32766) .. "require(b < -32 || b > -2); " ..
+    emit(32,0xfd," + a*4096 + ((b/2+32768)%32768)*65536"),{"cond_branch"},{"loops"})
+form("loop","sym",32,{reg("special","readwrite"),rel},rr("a") .. "emit_relocation(sym, R_TRICORE_15REL); " ..
+    emit(32,0xfd," + a*4096"),{"cond_branch","reloc"},{"loops"},1)
+form("bisr","sc",16,{imm(8,0,255)},fit("a",0,255) .. emit(16,0xe0," + a*256"),
+    {"privileged","implicit_ops"},{"priv"})
+form("syscall","rc",32,{imm(8,0,255)},fit("a",0,255) .. emit(32,0x008000ad," + a*4096"),{"may_trap"})
+form("isync","sys",32,nil,emit(32,0x04c0000d))
+form("dsync","sys",32,nil,emit(32,0x0480000d))
+form("rslcx","sys",32,nil,emit(32,0x0240000d),{"reads_mem","may_trap","implicit_ops"})
+form("svlcx","sys",32,nil,emit(32,0x0200000d),{"writes_mem","may_trap","implicit_ops"})
+symas.syntax{ name = "default", comment = "#", separator = ", " }
+
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 2, content = "code" }
+symas.section{ name = ".rodata", flags = { "alloc", "readonly", "data" }, align = 4, content = "data" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 4, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 4, content = "data" }
+symas.section{ name = ".csa", flags = { "write", "alloc", "data" }, align = 64, content = "data" }
+
+symas.linkage{ name = "func_global", binding = "global", visibility = "default", symtype = "func" }
+symas.linkage{ name = "object_global", binding = "global", visibility = "default", symtype = "object" }
+symas.linkage{ name = "local_sym", binding = "local", visibility = "default", symtype = "none" }
+
+-- EABI ELF RELA names. B format scatters rel24; BRR stores rel15 in bits 30:16.
+symas.reloc{ name = "R_TRICORE_24REL", width = 24, signed = true, pcrel = true, expr = "(S + A - P) / 2" }
+symas.reloc{ name = "R_TRICORE_15REL", width = 15, signed = true, pcrel = true, expr = "(S + A - P) / 2" }
+symas.reloc{ name = "R_TRICORE_32ABS", width = 32, expr = "S + A" }
+symas.reloc{ name = "R_TRICORE_32REL", width = 32, signed = true, pcrel = true, expr = "S + A - P" }
+symas.reloc{ name = "R_TRICORE_HI", width = 16, expr = "(S + A) >> 16" }
+symas.reloc{ name = "R_TRICORE_HIADJ", width = 16, expr = "(S + A + 32768) >> 16" }
+symas.reloc{ name = "R_TRICORE_LO", width = 16, expr = "(S + A) & 0xffff" }
+symas.reloc{ name = "R_TRICORE_LO2", width = 16, expr = "(S + A) & 0xffff" }
+
+print(symas.emit())

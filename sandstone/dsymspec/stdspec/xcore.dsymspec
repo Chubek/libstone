@@ -1,0 +1,115 @@
+-- XCore/XS1: 32-bit registers, 16/32-bit instructions, little endian.
+-- LLVM 22.1.8 XCoreInstrFormats.td, XCoreInstrInfo.td and
+-- XCoreDisassembler.cpp describe the mixed-radix register fields below.
+-- LLVM has a disassembler but no textual assembler for this target.
+-- Memory and resource syntax is flattened here; no symbolic fixups.
+local symas = require("backend").new("xcore")
+symas.target{ arch = "xcore", subarch = "xs1", addr_size = 32, op_size = 32,
+    addr_def = 32, align = 2, byte_order = "little", obj_format = "ELF32",
+    abi = "XCore", calling_conv = "xcore", features = { "base" } }
+symas.feature{ name = "base", desc = "XS1 XCore integer and resource ISA" }
+for i = 0, 11 do
+    symas.register{ name = "r" .. i, class = "gpr", width = 32, enc = i,
+        flags = { "readable", "writable" } }
+end
+for _, a in ipairs({ { "cp", 12 }, { "dp", 13 }, { "sp", 14 }, { "lr", 15 } }) do
+    symas.register{ name = a[1], class = "special", width = 32, enc = a[2],
+        flags = { "readable", "writable" } }
+end
+local function reg(access, constraint)
+    return { kind = "reg", class = "gpr", width = 32, access = access, constraint = constraint }
+end
+local function imm(w,lo,hi,constraint)
+    return { kind = "imm", width = w, imm_min = lo, imm_max = hi, signed = lo < 0, constraint = constraint }
+end
+local r, rd = reg("read"), reg("write")
+local resource = reg("read","register containing a resource ID")
+local function fit(n,lo,hi) return ("require(%s >= %s && %s <= %s); "):format(n,lo,n,hi) end
+local function gr(n) return fit(n,0,11) end
+local function emit(op,exp) return ("emit16le(0x%04x%s); "):format(op,exp or "") end
+local declared = {}
+local function form(name,tag,ops,src,bytes,flags)
+    if not declared[name] then symas.mnemonic{ name = name }; declared[name] = true end
+    local enc = name .. "_" .. tag
+    symas.encoder{ name = enc, source = src, max_bytes = bytes or 2, max_relocs = 0 }
+    symas.form{ mnemonic = name, encoder = enc, operands = ops, flags = flags }
+end
+-- GRRegs are r0..r11. Three high base-3 digits are packed as one number.
+local pack3 = " + (a/4 + (b/4)*3 + (c/4)*9)*64 + (a%4)*16 + (b%4)*4 + c%4"
+local reg3 = gr("a") .. gr("b") .. gr("c")
+for _, o in ipairs({ {"add",2,18},{"sub",3,19},{"and",7},{"or",8},
+    {"eq",6,22},{"lss",24},{"lsu",25},{"shl",4},{"shr",5} }) do
+    form(o[1],"3r",{rd,r,r},reg3 .. emit(o[2]*2048,pack3))
+    if o[3] then
+        form(o[1],"2rus",{rd,r,imm(4,0,11)},reg3 .. emit(o[3]*2048,pack3))
+    end
+end
+for _, o in ipairs({ {"xor",0x1c},{"mul",0x7c},{"divs",0x8c},{"divu",0x9c},
+    {"ashr",0x2c},{"rems",0x18c},{"remu",0x19c} }) do
+    local trap = o[1]:find("^div") or o[1]:find("^rem")
+    form(o[1],"l3r",{rd,r,r},reg3 .. emit(0xf800,pack3) ..
+        emit((o[2]//16)*2048 + 0x7e0 + o[2]%16),4,trap and {"may_trap"} or nil)
+end
+local word = "displacement in 4-byte words"
+for _, op in ipairs({ {"ldw",0x5c00,rd,{"reads_mem","implicit_ops"},"sp"},
+    {"stw",0x5400,r,{"writes_mem","implicit_ops"},"sp"},
+    {"ldaw",0x6400,rd,{"implicit_ops"},"sp"},
+    {"ldw",0x5800,rd,{"reads_mem"},"dp",13},
+    {"stw",0x5000,r,{"writes_mem"},"dp",13},
+    {"ldaw",0x6000,rd,nil,"dp",13},
+    {"ldw",0x6c00,rd,{"reads_mem"},"cp",12},
+    {"ldc",0x6800,rd,nil},
+}) do
+    local n = op[6] and "c" or "b"
+    local check = gr("a")
+    local function ops(max,rwidth)
+        local i = imm(rwidth,0,max,op[5] and (op[5] .. "-relative " .. word) or "unsigned constant")
+        local base = { kind = "reg", class = "special", width = 32, constraint = op[5] }
+        return op[6] and {op[3],base,i} or {op[3],i}
+    end
+    if op[6] then check = check .. ("require(b == %d); "):format(op[6]) end
+    local tag = op[5] or "imm"
+    form(op[1],tag .. "_ru6",ops(63,6),check .. fit(n,0,63) .. emit(op[2]," + a*64 + " .. n),nil,op[4])
+    form(op[1],tag .. "_lru6",ops(65535,16),check .. fit(n,64,65535) ..
+        emit(0xf000," + " .. n .. "/64") .. emit(op[2]," + a*64 + " .. n .. "%64"),4,op[4])
+end
+for _, o in ipairs({ {"ldw",9,1,rd,{"reads_mem"}}, {"stw",0x0c,0,r,{"writes_mem"}} }) do
+    form(o[1],"index",{o[4],r,r},reg3 ..
+        (o[1] == "ldw" and emit(o[2]*2048,pack3) or emit(0xf800,pack3) .. emit(0x07ec)),
+        o[1] == "ldw" and 2 or 4,o[5])
+    form(o[1],"off",{o[4],r,imm(4,0,11,word)},reg3 .. emit(o[3]*2048,pack3),nil,o[5])
+end
+for _, op in ipairs({ {"entsp",0x7740,{"implicit_ops","writes_mem"}},
+    {"extsp",0x7780,{"implicit_ops"}}, {"retsp",0x77c0,{"implicit_ops","reads_mem","return","terminator"}} }) do
+    form(op[1],"u6",{imm(6,0,63,word)},fit("a",0,63) .. emit(op[2]," + a"),nil,op[3])
+    form(op[1],"lu6",{imm(16,64,65535,word)},fit("a",64,65535) ..
+        emit(0xf000," + a/64") .. emit(op[2]," + a%64"),4,op[3])
+end
+for _, o in ipairs({ {"bl",0xd000,0xd400,1024,1048576,{"branch","implicit_ops"},11,21},
+    {"bu",0x7300,0x7700,64,65536,{"branch","terminator"},7,17} }) do
+    local function choice(v) return ("select(a < 0, %d - %s, %d + %s)"):format(o[3],v,o[2],v) end
+    local short = fit("a",1-o[4],o[4]-1)
+    form(o[1],"short",{imm(o[7],1-o[4],o[4]-1,"resolved halfword displacement")},
+        short .. "emit16le(" .. choice("a") .. "); ",nil,o[6])
+    form(o[1],"long",{imm(o[8],1-o[5],o[5]-1,"resolved halfword displacement")},
+        fit("a",1-o[5],o[5]-1) .. ("require(a <= -%d || a >= %d); "):format(o[4],o[4]) ..
+        emit(0xf000,(" + select(a < 0, -a, a)/%d"):format(o[4])) ..
+        "emit16le(" .. choice(("a%%%d"):format(o[4])) .. "); ",4,o[6])
+end
+for _, o in ipairs({ {"bru",0x2fe0,{r},{"branch","terminator"}},
+    {"bla",0x27e0,{r},{"branch","implicit_ops"}}, {"syncr",0x87f0,{resource},nil} }) do
+    form(o[1],"reg",o[3],gr("a") .. emit(o[2]," + a"),nil,o[4])
+end
+local function pack2(a,b)
+    local v = "(" .. a .. "/4 + (" .. b .. "/4)*3)"
+    return (" + ((%s+27) - select(%s >= 5,5,0))*64 + select(%s >= 5,32,0) + (%s%%4)*4 + %s%%4"):
+        format(v,v,v,a,b)
+end
+form("in","resource",{rd,resource},gr("a") .. gr("b") .. emit(0xb000,pack2("a","b")))
+form("out","resource",{resource,r},gr("a") .. gr("b") .. emit(0xa800,pack2("b","a")))
+form("waiteu","implicit",nil,emit(0x07ec),nil,{"branch","terminator","implicit_ops"})
+symas.syntax{ name = "default", comment = "#", separator = ", " }
+symas.section{ name = ".text", flags = { "exec", "alloc", "code" }, align = 2, content = "code" }
+symas.section{ name = ".data", flags = { "write", "alloc", "data" }, align = 4, content = "data" }
+symas.section{ name = ".bss", flags = { "write", "alloc", "zerofill", "data" }, align = 4, content = "data" }
+print(symas.emit())
