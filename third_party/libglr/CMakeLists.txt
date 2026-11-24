@@ -75,6 +75,15 @@ if(ENABLE_CACHE AND HAVE_LMDB AND NOT OpenSSL_FOUND)
 endif()
 
 # Bundle the local S-expression parser used by the rewrite subsystem.
+if(NOT DEFINED GLR_KLIB_DIR)
+    set(GLR_KLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/klib"
+        CACHE PATH "Path to klib sources")
+endif()
+if(NOT DEFINED GLR_CTL_DIR)
+    set(GLR_CTL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctl"
+        CACHE PATH "Path to the CTL repository")
+endif()
+get_filename_component(GLR_KLIB_INCLUDE_DIR "${GLR_KLIB_DIR}/.." ABSOLUTE)
 file(GLOB SFSEXP_SOURCES CONFIGURE_DEPENDS
     third_party/sfsexp/src/*.c
 )
@@ -134,11 +143,11 @@ set(GLR_SOURCES
     src/glr/thread.c
     src/glr/atn.c
     src/glr/atn_lookahead.c
-    third_party/klib/kalloc.c
-    third_party/klib/kthread.c
+    "${GLR_KLIB_DIR}/kalloc.c"
+    "${GLR_KLIB_DIR}/kthread.c"
 )
 
-set_source_files_properties(third_party/klib/kalloc.c third_party/klib/kthread.c
+set_source_files_properties("${GLR_KLIB_DIR}/kalloc.c" "${GLR_KLIB_DIR}/kthread.c"
     PROPERTIES COMPILE_OPTIONS "-w")
 
 # Add cache sources if LMDB is available
@@ -172,11 +181,12 @@ target_include_directories(${PROJECT_NAME}
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
+        ${GLR_KLIB_INCLUDE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctl
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctl/ctl)
+    ${GLR_CTL_DIR}
+    ${GLR_CTL_DIR}/ctl)
 target_link_libraries(${PROJECT_NAME} PUBLIC sfsexp Threads::Threads)
 
 # Optional third-party regex backends for the lexer adapters. The adapters

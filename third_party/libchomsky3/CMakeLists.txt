@@ -76,6 +76,9 @@ endif()
 file(GLOB_RECURSE CHOMSKY3_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 )
+if(NOT CHOMSKY3_JIT_ENABLED)
+    list(FILTER CHOMSKY3_SOURCES EXCLUDE REGEX "/vm/jit(_sljit)?\\.c$")
+endif()
 
 add_library(chomsky3 ${CHOMSKY3_SOURCES})
 

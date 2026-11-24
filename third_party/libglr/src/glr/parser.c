@@ -709,6 +709,9 @@ memory:
 static size_t
 skip_trivia (const glr_parser_t *parser, size_t position)
 {
+  if (parser->trivia_hook != NULL)
+    return parser->trivia_hook (parser->input, parser->input_length, position,
+                                parser->trivia_data);
   if (parser->trivia != NULL)
     {
       size_t length = strlen (parser->trivia);
@@ -781,6 +784,11 @@ scan_task (parse_run_t *run, const parse_task_t *task)
 {
   glr_parser_t *parser = run->parser;
   size_t position = run->reader ? task->position : skip_trivia (parser, task->position);
+  if (position < task->position || position > parser->input_length)
+    {
+      parser->error = GLR_PARSE_ERROR_GRAMMAR;
+      return -1;
+    }
   if (parser->snapshot_hook != NULL && task->position != 0)
     parser->snapshot_hook (task->stack, task->position, parser->snapshot_data);
   if (position > run->furthest)
@@ -812,7 +820,7 @@ run_parser (glr_parser_t *parser, const glr_stack_t *seed, size_t position)
   run.reader = !run.scannerless && is_utf16 (parser->input, parser->input_length);
   run.cached_position = SIZE_MAX;
   run.furthest = position;
-  run.adaptive = parser->adaptive_lookahead;
+  run.adaptive = parser->adaptive_lookahead && parser->trivia_hook == NULL;
   run.max_depth = parser->atn_max_depth != 0 ? parser->atn_max_depth
                                              : GLR_ATN_LOOKAHEAD_DEFAULT_DEPTH;
   run.window_valid = false;
@@ -1126,6 +1134,17 @@ const char *
 glr_parser_get_trivia (const glr_parser_t *parser)
 {
   return parser != NULL ? parser->trivia : NULL;
+}
+
+int
+glr_parser_set_trivia_hook (glr_parser_t *parser, glr_parser_trivia_fn hook,
+                            void *user_data)
+{
+  if (parser == NULL)
+    return -1;
+  parser->trivia_hook = hook;
+  parser->trivia_data = hook != NULL ? user_data : NULL;
+  return 0;
 }
 
 const glr_reader_token_t *

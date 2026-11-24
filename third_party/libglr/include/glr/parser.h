@@ -89,7 +89,10 @@ extern "C"
    * @param user_data Caller context.
    */
   typedef void (*glr_parser_snapshot_fn) (glr_stack_t *stack, size_t position,
-                                          void *user_data);
+                                           void *user_data);
+  /** Return the first byte after trivia, or position if nothing is skipped. */
+  typedef size_t (*glr_parser_trivia_fn) (const char *input, size_t length,
+                                         size_t position, void *user_data);
 
   /**
    * @struct glr_parser_t
@@ -150,6 +153,8 @@ extern "C"
     unsigned long long atn_conflicts_seen;    ///< Conflict cells visited
     unsigned long long atn_conflicts_decided; ///< Conflicts narrowed to one action
     unsigned long long atn_actions_pruned;    ///< Actions removed by the filter
+    glr_parser_trivia_fn trivia_hook;
+    void *trivia_data;
   };
 
   /* ========================================================================
@@ -505,6 +510,12 @@ extern "C"
    * @see glr_parser_get_trivia
    */
   int glr_parser_set_trivia (glr_parser_t *parser, const char *trivia);
+
+  /** Override literal trivia for byte/scannerless parsing. The returned
+      cursor must be in [position, length]. No ownership of user_data is taken.
+      Adaptive lookahead is disabled while a trivia hook is installed. */
+  int glr_parser_set_trivia_hook (glr_parser_t *parser, glr_parser_trivia_fn hook,
+                                  void *user_data);
 
   /**
    * @brief Get the trivia literal currently skipped by the tokenizer.
