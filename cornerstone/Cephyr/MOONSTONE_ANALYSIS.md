@@ -34,6 +34,10 @@ cephyr --moonstone-analyze -fsyntax-only input.c
 cephyr --moonstone-analyze --diagnostics-format=sarif -fsyntax-only input.c
 ```
 
+With `--emit-interface=sexp`, findings are advisory data inside the
+`native-analysis` form, rather than compilation diagnostics on stderr.
+See the [C11 interface contract](docs/C11Interface.md#analysis-facts-and-bounded-proofs).
+
 Integration cases: a direct uninitialized load, an initialized slot overwritten
 normally, a CFG join with a possible uninitialized load, a dead CFG block, a
 call and escaped/projection addresses, exact closed arithmetic and a cheaper

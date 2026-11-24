@@ -30,13 +30,18 @@ def run(cephyr, enabled):
             return result
 
         if not enabled:
-            result = compile_c("int f(void) { return 1; }",
-                               ("-fsyntax-only", *analysis), success=False)
-            assert "built without Moonstone analysis support" in result.stderr, result.stderr
+            for stage in ("-fsyntax-only", "--emit-interface=sexp"):
+                result = compile_c("int f(void) { return 1; }", (stage, *analysis), success=False)
+                assert "built without Moonstone analysis support" in result.stderr, result.stderr
             return
 
         result = compile_c("int f(void) { return 1; }", ("-E", *analysis), success=False)
-        assert "requires C lowering, not -E" in result.stderr, result.stderr
+        assert "requires C lowering" in result.stderr, result.stderr
+
+        report = compile_c("int f(void) { int x; return x; }",
+                           ("--emit-interface=sexp", "--no-factir", *analysis))
+        assert "(status lowered)" in report.stdout
+        assert "cephyr.moonstone.chisel.uninitialized" in report.stdout
 
         c = """\
             int uninitialized(void) {

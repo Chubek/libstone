@@ -545,7 +545,7 @@ bool parse_options(std::size_t argc, const char *const *argv, bool embedding,
     if (opts.shared && opts.stage != Stage::link)
         diag.error("cephyr.option", "-shared requires the link stage; use -fPIC to compile an object");
     if (opts.moonstone_analysis &&
-        (opts.stage == Stage::preprocess || opts.stage == Stage::ast || opts.stage == Stage::interface_))
+        (opts.stage == Stage::preprocess || opts.stage == Stage::ast))
         diag.error("cephyr.moonstone.analysis", "Moonstone analysis requires C lowering");
     else if (opts.moonstone_analysis && !opts.inputs.empty() &&
              std::none_of(opts.inputs.begin(), opts.inputs.end(), [](const auto &input) {
@@ -1615,7 +1615,7 @@ bool compile(Options &opts, Invocation &invocation, SdkPipeline &request_sdk, Di
             if (opts.stage == Stage::interface_) {
                 const auto text = measured(profile, "emit_interface", name, [&] {
                     return project_interface(parsed->root(), *prep, diag, preprocessor.hosted,
-                                             target->triple, target->abi);
+                                             *target, config.factir_enabled, opts.moonstone_analysis);
                 });
                 return text && !diag.error_count() &&
                     publish_text(opts.output.empty() ? fs::path("-") : opts.output,

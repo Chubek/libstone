@@ -35,9 +35,9 @@ C layouts, used by `x86_64-linux-gnu`, `aarch64-linux-gnu`, and
 are not supported. An SDK assembly override for a built-in target does not
 change its C layout.
 
-Cephyr parses the translation unit and resolves file-scope declarations, but
-does not lower function bodies, run MIR hooks, or invoke the assembler or
-linker. Success is not a guarantee that the entire translation unit can be
+Cephyr resolves file-scope declarations and, for units containing function
+definitions, attempts native analysis. It does not run SDK MIR hooks or invoke
+the assembler or linker. Success is not a guarantee that the entire translation unit can be
 compiled. The result is not a compilable AST. It identifies the calling
 convention but does not describe register assignments, argument passing,
 machine code, or final linker visibility.
@@ -106,6 +106,27 @@ and check the version and target before interpreting the declarations.
 
 ## Analysis facts and bounded proofs
 
+The top-level `(native-analysis 1 ...)` reports Cephyr's own analysis of
+the translation unit. With FactIR enabled (the default), Cephyr lowers to
+target MIR and runs the same verifier, Datalog rules, known-bit inference,
+and Satie-checked rewrites used by the native pipeline. `status analyzed`
+includes `factir-schema`, `relations` (the FactIR facts file as a quoted
+string), `rewrites` (the number applied to the analysis copy), and `smtlib`
+(the rewrite queries). Function, block, and value IDs refer to that MIR;
+use the `function` relation to resolve a function ordinal to its MIR name.
+The relations include direct calls, control edges, and value dependencies.
+They describe lowered code, not source-level guarantees about aliases, taint,
+or termination.
+
+`lowering-unavailable`, `analysis-unavailable`, and `budget-exceeded` carry
+no partial relations. Native diagnostics are retained in the optional
+`diagnostics` string; declaration errors still fail the request. Units without
+function definitions report `no-definitions`. `--no-factir` skips this pass
+(`disabled`) without affecting the source-level proofs below. Builds with
+Moonstone analysis also accept `--moonstone-analyze` to include its typed MIR
+findings in `diagnostics`; if FactIR is disabled, successful lowering then
+reports `lowered`.
+
 The additive `(analysis-model 1 ...)` extension identifies these fields.
 Existing version-1 readers can skip forms they do not recognize.
 
@@ -153,6 +174,21 @@ equal and asking whether changing that parameter can change the result.
 witness exists; a solver limit yields `unknown`. If a definition cannot be
 modeled or the translation-unit analysis budget is exhausted, `body-proof`
 is absent. Treat this as unknown, not as evidence of independence.
+
+`return-known-bits` reports individual bits fixed across all returns of the
+modeled definition. Wetstone propagates known-zero and known-one masks through
+bitwise expressions, retaining common bits across conditional arms and array
+elements. After the bounds check succeeds, Satie checks for any input that
+violates either mask. For `return (x & 15u) | 128u;` the result is:
+
+```lisp
+(return-known-bits 1 (analysis wetstone) (solver satie) (scope this-definition)
+  (width 32) (zero-mask 4294967152) (one-mask 128))
+```
+
+An unset bit in both masks is unknown. The form is omitted if no fixed bits
+are inferred or the checks do not succeed; absence does not imply that all
+bits can vary.
 
 `return-policies` checks whether the result fits in 8, 16, or 31 unsigned
 bits on every execution of a proved definition. These are narrow sanitization

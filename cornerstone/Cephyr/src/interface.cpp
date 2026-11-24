@@ -1,12 +1,15 @@
 #include "interface.hpp"
 
 #include "declarations.hpp"
+#include "../FactIR.hpp"
+#include "moonstone_analysis.hpp"
 
 #include <cephyr/preprocess.hpp>
 
 #include <AbstractSyntaxTree.h>
 #include <SatieCDCL.hpp>
 #include <SatieTheoryUtils.hpp>
+#include <wetstone/abstract-interp/KnownBits.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -113,6 +116,7 @@ struct Declaration {
 class ReturnProof {
     using Bits = std::vector<satie::Lit>;
     using Encoder = satie::theory::Encoder;
+    using KnownBits = wetstone::ai::KnownBits;
     const TypeContext context;
     std::vector<std::string> names;
     std::map<std::string, std::vector<std::uint32_t>> arrays;
@@ -211,10 +215,13 @@ class ReturnProof {
     }
 
     std::optional<Bits> encode(Node *node, Encoder &enc,
-                               const std::vector<Bits> &inputs, satie::Lit path)
+                               const std::vector<Bits> &inputs, satie::Lit path,
+                               KnownBits *known = nullptr)
     {
         if (!present(node) || ++budget > 24)
             return {};
+        if (known)
+            *known = KnownBits::top(32);
         switch (node->getKind()) {
         case NK_IDENT_NODE:
             for (std::size_t i = 0; i < names.size(); ++i)
@@ -225,6 +232,8 @@ class ReturnProof {
             const auto value = integer_constant(node, context);
             if (!value || !uint_type(value->type))
                 return {};
+            if (known)
+                *known = KnownBits::constant(value->value, 32);
             return constant(enc, static_cast<std::uint32_t>(value->value));
         }
         case NK_COND_EXPR: {
@@ -232,10 +241,13 @@ class ReturnProof {
             const auto test = condition(choice->getCondition(), enc, inputs, path);
             if (!test)
                 return {};
-            const auto a = encode(choice->getThenClause(), enc, inputs, enc.land2(path, *test));
-            const auto b = encode(choice->getElseClause(), enc, inputs, enc.land2(path, -*test));
+            KnownBits left, right;
+            const auto a = encode(choice->getThenClause(), enc, inputs, enc.land2(path, *test), known ? &left : nullptr);
+            const auto b = encode(choice->getElseClause(), enc, inputs, enc.land2(path, -*test), known ? &right : nullptr);
             if (!a || !b)
                 return {};
+            if (known)
+                *known = left.join(right);
             return select(enc, *test, *a, *b);
         }
         case NK_ARRAY_REF: {
@@ -250,6 +262,11 @@ class ReturnProof {
             // no C result; the placeholder result bits below are used only
             // after proving no such lookup can be evaluated.
             const auto &data = array->second;
+            if (known) {
+                *known = KnownBits::bottom(32);
+                for (auto element : data)
+                    *known = known->join(KnownBits::constant(element, 32));
+            }
             const auto within = enc.ult(*index, constant(enc, data.size()));
             unsafe.push_back(enc.land2(path, -within));
             auto value = constant(enc, 0);
@@ -273,9 +290,15 @@ class ReturnProof {
         default:
             return {};
         }
-        const auto a = encode(lhs, enc, inputs, path), b = encode(rhs, enc, inputs, path);
+        KnownBits left, right;
+        const auto a = encode(lhs, enc, inputs, path, known ? &left : nullptr);
+        const auto b = encode(rhs, enc, inputs, path, known ? &right : nullptr);
         if (!a || !b)
             return {};
+        if (known)
+            *known = node->getKind() == NK_BIT_AND_EXPR ? left.bit_and(right) :
+                     node->getKind() == NK_BIT_IOR_EXPR ? left.bit_or(right) :
+                                                          left.bit_xor(right);
         Bits bits;
         for (unsigned i = 0; i < 32; ++i) {
             bits.push_back(node->getKind() == NK_BIT_AND_EXPR ? enc.land2((*a)[i], (*b)[i]) :
@@ -331,7 +354,8 @@ public:
         for (auto &input : baseline)
             for (auto &bit : input)
                 bit = enc.fresh_lit();
-        const auto value = encode(expression, enc, baseline, enc.const_true());
+        KnownBits known;
+        const auto value = encode(expression, enc, baseline, enc.const_true(), &known);
         if (!value)
             return;
         const auto memory = check(enc, unsafe);
@@ -340,6 +364,17 @@ public:
             << ") (checked-accesses " << unsafe.size() << ") (solver satie))";
         if (!memory.unsatisfiable())
             return;
+        Bits violations;
+        for (unsigned i = 0; i < known.width; ++i) {
+            if ((known.zero >> i) & 1)
+                violations.push_back((*value)[i]);
+            if ((known.one >> i) & 1)
+                violations.push_back(-(*value)[i]);
+        }
+        if (!violations.empty() && check(enc, std::move(violations)).unsatisfiable())
+            out << " (return-known-bits 1 (analysis wetstone) (solver satie) (scope this-definition)"
+                   " (width " << known.width << ") (zero-mask " << known.zero
+                << ") (one-mask " << known.one << "))";
         out << " (body-proof (model closed-unsigned-expression-v2) (scope this-definition)"
                " (memory-effects none-by-construction) (return-dependencies";
         for (std::size_t i = 0; i < names.size(); ++i) {
@@ -817,15 +852,71 @@ public:
         }
     }
 
-    std::string write(std::string_view triple, std::string_view abi) const
+    void write_native_analysis(std::ostream &out, Node *root, const Target &target,
+                               bool factir_enabled, bool moonstone) const
     {
+        out << "\n  (native-analysis 1 (scope translation-unit)";
+        if (!factir_enabled && !moonstone) {
+            out << " (status disabled))";
+            return;
+        }
+        if (std::ranges::none_of(declarations, [](const Declaration &decl) {
+                return decl.symbol && decl.symbol->definition &&
+                       decl.symbol->type.kind == CType::Kind::function;
+            })) {
+            out << " (status no-definitions))";
+            return;
+        }
+        // Native ABI restrictions and MIR limits must not invalidate a valid
+        // declaration projection. Keep this pass's diagnostics in its report.
+        Diagnostics findings;
+        detail::MoonstoneAnalysis *inspector = nullptr;
+#ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
+        detail::MoonstoneAnalysis inspection(findings);
+        if (moonstone)
+            inspector = &inspection;
+#endif
+        auto lowered = lower(root, unit.source, findings, unit.hosted, inspector);
+        if (!lowered)
+            out << " (status lowering-unavailable)";
+        else if (!factir_enabled)
+            out << " (status lowered) (factir disabled)";
+        else {
+            auto facts = factir::run(lowered->mir, target, unit.source.file, findings);
+            if (!facts)
+                out << " (status analysis-unavailable)";
+            else if (facts->budget_exceeded)
+                out << " (status budget-exceeded)";
+            else {
+                out << " (status analyzed) (factir-schema ";
+                quoted(out, factir::schema);
+                out << ") (relations ";
+                quoted(out, facts->facts);
+                out << ") (rewrites " << facts->rewrites << ") (smtlib ";
+                quoted(out, facts->smtlib);
+                out << ')';
+            }
+        }
+        std::ostringstream messages;
+        findings.render(messages);
+        if (!messages.view().empty()) {
+            out << " (diagnostics ";
+            quoted(out, messages.view());
+            out << ')';
+        }
+        out << ')';
+    }
+
+    std::string write(Node *root, const Target &target, bool factir_enabled, bool moonstone) const
+    {
+        const auto &abi = target.abi;
         std::ostringstream out;
         out.imbue(std::locale::classic());
         out << "(interface 1\n  (target ";
-        quoted(out, triple);
+        quoted(out, target.triple);
         out << ")\n  (data-model LP64)\n  (abi ";
         quoted(out, abi);
-        out << ")\n  (analysis-model 1 (scope declarations bounded-return-proof)"
+        out << ")\n  (analysis-model 1 (scope declarations bounded-return-proof native-mir)"
                " (facts c11-frontend) (unknown not-a-guarantee))"
                "\n  (target-properties (byte-bits 8) (byte-order little)"
                " (pointer-bits 64) (integer-representation twos-complement)"
@@ -836,6 +927,7 @@ public:
         unsigned proof_budget = 128;
         for (const auto &decl : declarations)
             write_declaration(out, decl, convention, proof_budget);
+        write_native_analysis(out, root, target, factir_enabled, moonstone);
         out << ")\n";
         return std::move(out).str();
     }
@@ -845,7 +937,7 @@ public:
 
 std::optional<std::string> project_interface(cparser::ASTNode *root, const Preprocessed &source,
                                              Diagnostics &diagnostics, bool hosted,
-                                             std::string_view triple, std::string_view abi)
+                                             const Target &target, bool factir_enabled, bool moonstone)
 {
     const auto before = diagnostics.error_count();
     Unit unit(source, diagnostics, hosted);
@@ -854,7 +946,7 @@ std::optional<std::string> project_interface(cparser::ASTNode *root, const Prepr
         Projection projection(unit);
         projection.resolve(root, at);
         if (diagnostics.error_count() == before) {
-            auto text = projection.write(triple, abi);
+            auto text = projection.write(root, target, factir_enabled, moonstone);
             if (diagnostics.error_count() == before)
                 return text;
         }

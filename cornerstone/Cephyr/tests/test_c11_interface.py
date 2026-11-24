@@ -316,6 +316,8 @@ unsigned lookup(unsigned x) { unsigned a[2] = {3u, 9u}; return x < 2u ? a[x] : 0
 unsigned unsafe_lookup(unsigned x) { unsigned a[2] = {3u, 9u}; return a[x]; }
 unsigned polarity(unsigned x) { unsigned a[2] = {3u, 9u}; return x < 2u ? 0u : a[x]; }
 unsigned width_test(unsigned x) { return x & 65535u; }
+unsigned tag(unsigned x) { return ((x & 15u) | 128u) ^ 3u; }
+unsigned identity(unsigned x) { return x; }
 void span(int x[static restrict 4]);
 void dynamic(unsigned n, int x[static n]);
 _Noreturn void stop(void);
@@ -335,6 +337,15 @@ unsigned long long widest;
             assert not forms(named(analysis, "function", name), "body-proof")
             assert value(one(named(analysis, "function", name), "memory-safety"), "status") == "unknown"
         lookup = named(analysis, "function", "lookup")
+        lookup_bits = one(lookup, "return-known-bits")
+        assert value(lookup_bits, "zero-mask") == 0xfffffff4
+        assert value(lookup_bits, "one-mask") == 0
+        tag = one(named(analysis, "function", "tag"), "return-known-bits")
+        assert tag[1] == 1 and value(tag, "analysis") == "wetstone"
+        assert value(tag, "solver") == "satie" and value(tag, "width") == 32
+        assert value(tag, "zero-mask") == 0xffffff70 and value(tag, "one-mask") == 128
+        for name in ("identity", "opaque_body", "unsafe_lookup"):
+            assert not forms(named(analysis, "function", name), "return-known-bits")
         safety = one(lookup, "memory-safety")
         assert value(safety, "status") == "proved" and value(safety, "checked-accesses") == 1
         assert ["unsigned-width", 8, "proved"] in one(one(lookup, "body-proof"), "return-policies")
@@ -357,16 +368,39 @@ unsigned long long widest;
         widest_type = value(named(analysis, "object", "widest"), "type")
         assert one(widest_type, "value-range")[1:] == [0, 2**64 - 1]
 
-        # Function bodies are parsed, but not lowered to native MachineIR.
+        # Native analysis must expose the same committed facts/obligations as
+        # the normal MIR pipeline, even for bodies outside ReturnProof.
+        loop = b"""extern int step(int);
+int count(int n) { while (n > 0) n = step(n); return n; }
+"""
+        native = one(parse(run(target, STAGE, "-", data=loop)), "native-analysis")
+        assert value(native, "status") == "analyzed"
+        run(target, "--emit-mir", "--factir-facts", "facts.txt", "--factir-smtlib",
+            "queries.smt2", "-", data=loop)
+        facts = value(native, "relations")
+        assert facts == (work / "facts.txt").read_text()
+        assert "[control_edge]" in facts and "[direct_call]" in facts and "step" in facts
+        assert value(native, "smtlib") == (work / "queries.smt2").read_text()
+        disabled = one(parse(run(target, "--no-factir", STAGE, "-", data=loop)), "native-analysis")
+        assert value(disabled, "status") == "disabled" and not forms(disabled, "relations")
+
+        # Failure of native lowering does not invalidate the declaration.
         vla = b"int body(int n) { int body_only[n]; return sizeof body_only; }\n"
-        interface = run(target, STAGE, "-", data=vla)
-        assert b'"body"' in interface and b"body_only" not in interface, interface
+        interface = parse(run(target, STAGE, "-", data=vla))
+        assert value(named(interface, "function", "body"), "definition") == "defined"
+        assert not forms(interface, "object")
+        unavailable = one(interface, "native-analysis")
+        assert value(unavailable, "status") == "lowering-unavailable"
+        assert "variable-length arrays" in value(unavailable, "diagnostics")
+        assert not forms(unavailable, "relations")
         run(target, "-fsyntax-only", "-", data=vla, error=b"variable-length arrays")
 
         # A declaration can be valid even if codegen's static image limit
         # prevents emission. The projection should not allocate that image.
         oversized = b"char large[5 * 1024 * 1024] = {1};\n"
-        large = named(parse(run(target, STAGE, "-", data=oversized)), "object", "large")
+        globals_only = parse(run(target, STAGE, "-", data=oversized))
+        assert value(one(globals_only, "native-analysis"), "status") == "no-definitions"
+        large = named(globals_only, "object", "large")
         assert value(large, "definition") == "defined" and size_align(large) == (5 * 1024 * 1024, 1)
         run(target, "-S", "-", "-o", "-", data=oversized, error=b"cephyr.global.initializer-limit")
 
