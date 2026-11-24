@@ -104,6 +104,68 @@ and check the version and target before interpreting the declarations.
   along with the storage container's byte offset within the record.
   A flexible array member is identified separately and has no fixed count.
 
+## Analysis facts and bounded proofs
+
+The additive `(analysis-model 1 ...)` extension identifies these fields.
+Existing version-1 readers can skip forms they do not recognize.
+
+- `target-properties` describes the byte order, byte and pointer widths,
+  integer representation, and C hosted mode. `value-range` is an inclusive
+  representable range for an integer type or bit-field, not the range of a
+  particular expression. Bounds may require arbitrary-precision integers.
+- `declarations` lists source sites (presumed file/line) in declaration
+  order. Parameter indexes are zero-based. For a parameter declared as an
+  array with `static`, `requires-array-access` gives the evaluated minimum
+  number of elements the caller must supply, or `unknown` if it is not a
+  known constant. It is a caller obligation at that declaration, not an
+  observed buffer size. `adjusted-pointer-qualifiers` reports the spelling
+  inside the brackets; it is not a proof of non-aliasing.
+- `call-contract` reports the fixed parameter count, presence of a variadic
+  tail, and whether `_Noreturn` forbids normal return under C's rules. It
+  does not prove termination, and an unprototyped declaration does not
+  establish an argument count. `traits` describes record members and
+  `storage-duration` describes file-scope objects.
+- `behavior` deliberately leaves general effects, pointer properties, and
+  taint transfer unknown. `const` is not a purity annotation and `restrict`
+  is not evidence that arbitrary pointers supplied by a caller are disjoint.
+  No unknown result grants permission to omit, reorder, or sanitize a call.
+
+`memory-safety` reports `proved`, `disproved`, or `unknown`. For the
+`closed-unsigned-expression-v2` model it covers every evaluated access in the
+definition: only fully initialized, fixed-size automatic arrays of `unsigned
+int` may be read, and their addresses cannot escape. Satie checks the bounds
+under the path condition of each access, including both arms of `?:`.
+`disproved` means a modeled out-of-bounds access is reachable; `unknown`
+includes bodies outside this model and solver limit hits. `checked-accesses`
+counts modeled access sites, not dynamic accesses. This is not a general C
+pointer, alias, heap, or lifetime analysis.
+
+The model handles a final `return` of a bitwise or conditional expression on
+32-bit `unsigned int` arguments, literals, and reads from those local arrays.
+It excludes calls, general pointer operations, volatile parameters,
+assignments, loops, and other statements. Cephyr emits `body-proof` only
+after proving memory safety in this model. Observable memory effects outside
+the function are absent by construction; this does not constrain machine-level
+loads and stores. Satie checks
+each parameter with two copies of the expression, holding all other inputs
+equal and asking whether changing that parameter can change the result.
+`independent` means the query was unsatisfiable; `may-influence` means a
+witness exists; a solver limit yields `unknown`. If a definition cannot be
+modeled or the translation-unit analysis budget is exhausted, `body-proof`
+is absent. Treat this as unknown, not as evidence of independence.
+
+`return-policies` checks whether the result fits in 8, 16, or 31 unsigned
+bits on every execution of a proved definition. These are narrow sanitization
+policies: a `proved` 8-bit result, for example, can satisfy a sink that
+requires a value in `[0, 255]`, but that value can still depend on untrusted
+input. A consumer must choose the right policy for its sink; there is no
+universal untainted bit or built-in source/sink classification.
+
+These proofs describe the exact definition in the translation unit, not a
+replacement definition selected by linking or interposition. Return-value
+independence does not by itself prove absence of side channels, establish a
+taint policy, or classify sources and sinks.
+
 ## Embedding
 
 Use `cephyr_emit_interface(&request, &result)`, `cephyr::emit_interface(args,

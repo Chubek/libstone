@@ -305,6 +305,58 @@ int named(int x, int y) { return x + y; }
             "parameter-names", "x", "y",
         ], names
 
+        analysis = parse(run(target, STAGE, "-", data=b"""\
+#line 70 "proof.h"
+unsigned mask(unsigned x, unsigned secret) { return (x & 255u) | (secret ^ secret); }
+unsigned caller(unsigned x);
+unsigned opaque_body(unsigned x) { return caller(x); }
+unsigned volatile_body(volatile unsigned x) { return x; }
+unsigned statement(unsigned x) { unsigned y = x; return y; }
+unsigned lookup(unsigned x) { unsigned a[2] = {3u, 9u}; return x < 2u ? a[x] : 0u; }
+unsigned unsafe_lookup(unsigned x) { unsigned a[2] = {3u, 9u}; return a[x]; }
+unsigned polarity(unsigned x) { unsigned a[2] = {3u, 9u}; return x < 2u ? 0u : a[x]; }
+unsigned width_test(unsigned x) { return x & 65535u; }
+void span(int x[static restrict 4]);
+void dynamic(unsigned n, int x[static n]);
+_Noreturn void stop(void);
+unsigned long long widest;
+"""))
+        assert one(analysis, "analysis-model")[1] == 1
+        mask = named(analysis, "function", "mask")
+        proof = one(mask, "body-proof")
+        assert value(proof, "solver") == "satie"
+        assert one(proof, "return-dependencies")[1:] == [
+            ["parameter", 0, "may-influence"], ["parameter", 1, "independent"],
+        ], proof
+        assert value(one(mask, "behavior"), "taint-transfer") == "unknown"
+        site = one(one(mask, "declarations"), "site")
+        assert value(site, "file") == "proof.h" and value(site, "line") == 70
+        for name in ("caller", "opaque_body", "volatile_body", "statement"):
+            assert not forms(named(analysis, "function", name), "body-proof")
+            assert value(one(named(analysis, "function", name), "memory-safety"), "status") == "unknown"
+        lookup = named(analysis, "function", "lookup")
+        safety = one(lookup, "memory-safety")
+        assert value(safety, "status") == "proved" and value(safety, "checked-accesses") == 1
+        assert ["unsigned-width", 8, "proved"] in one(one(lookup, "body-proof"), "return-policies")
+        for name in ("unsafe_lookup", "polarity"):
+            fn = named(analysis, "function", name)
+            assert value(one(fn, "memory-safety"), "status") == "disproved"
+            assert not forms(fn, "body-proof")
+        width = named(analysis, "function", "width_test")
+        policies = one(one(width, "body-proof"), "return-policies")
+        assert ["unsigned-width", 8, "disproved"] in policies and ["unsigned-width", 16, "proved"] in policies
+        assert ["parameter", 0, "may-influence"] in one(one(width, "body-proof"), "return-dependencies")
+        site = one(one(named(analysis, "function", "span"), "declarations"), "site")
+        param = one(site, "parameter")
+        assert value(param, "requires-array-access") == 4
+        assert value(param, "adjusted-pointer-qualifiers") == "restrict"
+        dynamic = one(one(named(analysis, "function", "dynamic"), "declarations"), "site")
+        assert value(one(dynamic, "parameter"), "requires-array-access") == "unknown"
+        assert value(one(named(analysis, "function", "stop"), "call-contract"),
+                     "normal-return") == "forbidden-by-declaration"
+        widest_type = value(named(analysis, "object", "widest"), "type")
+        assert one(widest_type, "value-range")[1:] == [0, 2**64 - 1]
+
         # Function bodies are parsed, but not lowered to native MachineIR.
         vla = b"int body(int n) { int body_only[n]; return sizeof body_only; }\n"
         interface = run(target, STAGE, "-", data=vla)
