@@ -94,8 +94,8 @@ and [`tests/json.g`](tests/json.g) for executable examples.
 
 | Backend | Algorithms | Generated runtime |
 | --- | --- | --- |
-| `portable` (default) | `earley` | Standalone C99 |
-| `liblr` | `lr1` (default), `lalr1`, `slr1` | Same standalone runtime as `portable`; liblr supplies generation-time analysis only |
+| `portable` (default) | `earley` | Standalone C99 unless the grammar uses `%fault` |
+| `liblr` | `lr1` (default), `lalr1`, `slr1` | Same runtime as `portable`; liblr supplies LR analysis at generation time |
 | `libglr` | `lr1` | Linked C99 using `aurocks/Runtime.h` and the `Aurocks::Runtime` CMake target |
 
 Use `%backend`, `%algorithm` (or `%algo`), and `%disambiguator` to set
@@ -177,19 +177,76 @@ The sandbox applies only to Lua. C prologues, actions, and epilogues are
 emitted as native code; only compile and run generated parsers from
 grammars you trust.
 
-`%Fault CODE ["message prefix"] => "replacement"` (also `%fault`)
-customizes a native generator diagnostic's message. Declare it at grammar
-scope. The code must match exactly; if supplied, the literal prefix must
-match the beginning of the original message. The first matching declaration
-wins. Directives in the C prologue serve as fallbacks only when there is
-no top-level `%fault`.
+## Runtime fault rules
 
-Grammar-source errors can use overrides the reader has already collected
-before it stops, except errors that reject the source before parsing (such
-as embedded NUL bytes). Invalid `%fault` declarations report `fault-syntax`,
-which cannot be overridden. Overrides change neither code, severity, nor
-source position, and do not affect errors from generated parsers. The
-Perl generator did not implement `%fault` overrides.
+Declare `%fault` (or `%Fault`) at grammar scope. Rules run **only in the
+generated parser**, on a syntax failure or rejected ambiguity, before
+semantic actions run. The first matching rule wins. The generator checks
+declaration syntax and PEG validity; rules cannot customize build diagnostics.
+
+```text
+%start statement
+%fault "','" => silent_patch ";"
+%fault "!." => loud_patch ";" "inserted a missing semicolon"
+%fault "'?' / '!'" => inform "expected a statement terminator"
+%fault "[a-z]+" => warn "unexpected word" using describe_fault
+%fault "." => error "unexpected input"
+
+statement: "quit" ";";
+```
+
+The quoted pattern is a Firestone liblr **byte PEG**, anchored at the
+parser's error offset. It supports single- or double-quoted literals,
+classes such as `[a-z]` and `[^a-z]`, `.`, sequence, ordered choice `/`,
+groups, lookahead `&` and `!`, and suffixes `?`, `*`, and `+`. `!.`
+matches true EOF without consuming input; `''` matches empty text anywhere.
+The directive's outer string has its own escaping, so write `\\xFF` there
+to pass `\xFF` to the PEG.
+
+| Disposition | Runtime behavior |
+| --- | --- |
+| `silent_patch "replacement"` | Replace the matched bytes and retry without a message. An empty replacement deletes the match. |
+| `loud_patch "replacement" ["message"]` | Patch and retry, reporting the edit on stderr. `load_patch`, `load patch`, and `loud patch` are aliases; `silent patch` is also accepted. |
+| `inform "message"` | Report an informational diagnostic on stderr; the parse still fails. |
+| `warn "message"` | Report a warning on stderr; the parse still fails. |
+| `error "message"` | Report an error on stderr and return failure. |
+
+Any rule can end in `using handler_name`. Define the callback in the C
+epilogue; it receives the live parser state and can change the message or
+the patch span and replacement. For example:
+
+```c
+static void describe_fault(const aurocks_fault_state *state,
+                           aurocks_fault_response *response) {
+    if (state->reason == AUROCKS_FAULT_AMBIGUITY)
+        response->message = "more than one parse fits this input";
+}
+```
+
+`state` exposes the current and original inputs, byte offsets, match end,
+retry number, failure reason, and backend. For `portable` and `liblr`,
+cast `native_parser` to `const aurocks_parser *` in the epilogue to inspect
+the generated Earley chart, items, and forest edges. For `libglr`, include
+`<glr/parser.h>` and cast to `const glr_parser_t *` to inspect the native
+grammar, parse table, and forest. The `frontier` field also exposes LibGLR
+stack snapshots at the farthest visited token boundary, when available
+(up to 256 stacks, bounded by one million copied stack entries per attempt;
+`truncated` flags incomplete snapshots). All parser state is read-only and
+borrowed during the callback. Response strings must outlive the callback.
+
+Recovery is limited to eight edits, with progress, input size, and PEG
+work checks. Patches affect only a private copy; final error pointers still
+point into the caller's original input, and successful semantic actions run
+once on the accepted parse. Failures caused by resource exhaustion or
+semantic evaluation do not invoke fault rules.
+
+Grammars with fault rules still emit C99, but must link `Aurocks::FaultRuntime`
+(plus `Aurocks::Runtime` if using `libglr`):
+
+```cmake
+add_executable(my-parser main.c parser.c)
+target_link_libraries(my-parser PRIVATE Aurocks::FaultRuntime)
+```
 
 ## Migrating from `aurocks.pl` 2.0
 

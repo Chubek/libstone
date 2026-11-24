@@ -2,6 +2,7 @@
 #define AUROCKS_RUNTIME_H
 
 #include <stddef.h>
+#include "aurocks/Fault.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,6 +53,8 @@ void *aurocks_parse_glr(const aurocks_parser_spec *spec, const char *input);
 /* On failure, error points into input at the furthest reported position.
  * A successful action may return NULL without setting an error. */
 void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, const char **error);
+void *aurocks_parse_glr_observed(const aurocks_parser_spec *spec, const char *input,
+                                const char **error, aurocks_fault_observer observer, void *data);
 
 #ifdef __cplusplus
 }

@@ -99,10 +99,19 @@ void emitLinkedParser(std::ostream& out, const Grammar& grammar, const Analysis&
         << ", aurocks_action, aurocks_terminal_use\n};\n";
     const std::string canonical = "parse_" + grammar.start;
     const auto entry = entrypoint.empty() ? std::string_view(canonical) : entrypoint;
+    if (!grammar.faults.empty())
+        out << "static void *aurocks_fault_attempt_linked(const char *input, const char **error,\n"
+               "  aurocks_fault_observer observer, void *data, const void *spec) {\n"
+               "  return aurocks_parse_glr_observed((const aurocks_parser_spec *)spec, input, error, observer, data);\n"
+               "}\n";
     out << "static AUROCKS_THREAD_LOCAL const char *aurocks_error_position;\n"
-        << "void *" << entry << "(const char *input) { "
-        << "return aurocks_parse_glr_ex(&aurocks_parser, input, &aurocks_error_position); }\n"
-        << "const char *" << entry << "_error(void) { return aurocks_error_position; }\n";
+        << "void *" << entry << "(const char *input) { ";
+    if (grammar.faults.empty())
+        out << "return aurocks_parse_glr_ex(&aurocks_parser, input, &aurocks_error_position); }\n";
+    else
+        out << "return aurocks_fault_run(input, &aurocks_error_position, aurocks_fault_attempt_linked,"
+            << " &aurocks_parser, aurocks_fault_rules, " << grammar.faults.size() << "); }\n";
+    out << "const char *" << entry << "_error(void) { return aurocks_error_position; }\n";
     if (entry != canonical)
         out << "void *" << canonical << "(const char *input) { return " << entry << "(input); }\n"
             << "const char *" << canonical << "_error(void) { return aurocks_error_position; }\n";

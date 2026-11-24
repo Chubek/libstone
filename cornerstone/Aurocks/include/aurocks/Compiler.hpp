@@ -45,6 +45,11 @@ struct Rule {
     Location location;
 };
 
+struct FaultRule {
+    std::string pattern, disposition, replacement, message, handler;
+    Location location;
+};
+
 struct Grammar {
     std::string prologue;
     std::string epilogue;
@@ -52,6 +57,7 @@ struct Grammar {
     std::optional<std::string> skip;
     std::vector<Directive> directives;
     std::vector<Rule> rules;
+    std::vector<FaultRule> faults;
 };
 
 struct Options {
@@ -83,15 +89,13 @@ Result compile(std::string_view source, const Options& options = {});
 
 // Implementation seams shared by the frontend, backends and emitters.
 namespace detail {
-// On syntax failure, the partial grammar retains declarations for diagnostics.
 Grammar parse(std::string_view source, std::vector<Diagnostic>& diagnostics);
 Analysis analyze(const Grammar& grammar, const Options& options,
                  std::vector<Diagnostic>& diagnostics);
 std::string emit(const Grammar& grammar, const Analysis& analysis,
                  std::string_view entrypoint, std::vector<Diagnostic>& diagnostics);
 void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>& diagnostics);
-void validateFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics);
-void applyFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics);
+void compileFaultRules(Grammar& grammar, std::vector<Diagnostic>& diagnostics);
 }
 
 } // namespace aurocks

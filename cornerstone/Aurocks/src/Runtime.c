@@ -18,6 +18,38 @@ typedef struct parse_context {
     regex_t skip;
 } parse_context;
 
+/* LibGLR discards working stacks at the end of recognition. Preserve the
+ * last frontier for fault handlers, but bound the total cost of copying it. */
+enum { FRONTIER_LIMIT = 256, SNAPSHOT_WORK_LIMIT = 1048576 };
+typedef struct fault_snapshots {
+    const void *stacks[FRONTIER_LIMIT];
+    size_t count, offset, work;
+    int truncated;
+} fault_snapshots;
+
+static void clear_snapshots(fault_snapshots *snapshots) {
+    while (snapshots->count)
+        glr_stack_destroy((glr_stack_t *)snapshots->stacks[--snapshots->count]);
+}
+
+static void snapshot(glr_stack_t *stack, size_t offset, void *opaque) {
+    fault_snapshots *snapshots = opaque;
+    if (offset < snapshots->offset) return;
+    if (offset > snapshots->offset) {
+        clear_snapshots(snapshots);
+        snapshots->offset = offset;
+        snapshots->truncated = 0;
+    }
+    if (snapshots->count == FRONTIER_LIMIT || stack->height > SNAPSHOT_WORK_LIMIT - snapshots->work) {
+        snapshots->truncated = 1;
+        return;
+    }
+    snapshots->work += stack->height;
+    glr_stack_t *copy = glr_stack_copy(stack);
+    if (copy) snapshots->stacks[snapshots->count++] = copy;
+    else snapshots->truncated = 1;
+}
+
 static size_t skip_trivia(const char *input, size_t length, size_t position, void *opaque) {
     parse_context *context = opaque;
     while (position < length) {
@@ -114,7 +146,8 @@ static int consider_symbol(const parse_context *context, production_choice *best
     return 0;
 }
 
-static const glr_forest_node_t *select_root(const parse_context *context, const glr_parser_t *parser) {
+static const glr_forest_node_t *select_root(const parse_context *context, const glr_parser_t *parser,
+                                          int *ambiguous) {
     production_choice best = {0};
     /* Different amounts of terminal text may precede trailing %skip. LibGLR's
      * forest->root is only the last accepted root, not all accepted spans. */
@@ -124,7 +157,10 @@ static const glr_forest_node_t *select_root(const parse_context *context, const 
                             glr_stack_node_get_forest_node(stack->states[stack->height - 1])) != 0)
             return NULL;
     }
-    if (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS) return NULL;
+    if (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS) {
+        *ambiguous = 1;
+        return NULL;
+    }
     return best.node;
 }
 
@@ -163,9 +199,11 @@ static int evaluate(parse_context *context, const glr_forest_node_t *node,
             if (visited++ == AUROCKS_TREE_LIMIT) goto done;
             if (node->type == GLR_NODE_NONTERMINAL) {
                 production_choice best = {0};
-                if (consider_symbol(context, &best, node) != 0 ||
-                    (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS))
+                if (consider_symbol(context, &best, node) != 0) goto done;
+                if (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS) {
+                    status = -2;
                     goto done;
+                }
                 node = best.node;
             }
             visit_frame *grown = grow_stack(stack, &stack_capacity, depth, sizeof(*stack));
@@ -211,7 +249,8 @@ done:
     return status;
 }
 
-void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, const char **error) {
+void *aurocks_parse_glr_observed(const aurocks_parser_spec *spec, const char *input, const char **error,
+                                aurocks_fault_observer observer, void *data) {
     glr_grammar_t *grammar = NULL;
     glr_parser_t *parser = NULL;
     int *symbols = NULL;
@@ -221,6 +260,11 @@ void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, c
     void *result = NULL;
     int has_skip = 0;
     parse_context context = {0};
+    fault_snapshots snapshots;
+    if (observer) {
+        snapshots.count = snapshots.offset = snapshots.work = 0;
+        snapshots.truncated = 0;
+    }
     if (error) *error = input;
     if (!spec || !input || !spec->symbols || !spec->rules || !spec->action ||
         spec->start >= spec->symbol_count || spec->symbol_count > INT_MAX ||
@@ -281,20 +325,36 @@ void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, c
     }
     parser = glr_parser_create(grammar);
     if (!parser || glr_parser_set_scannerless(parser, true) != 0) goto done;
+    if (observer && glr_parser_set_snapshot_hook(parser, snapshot, &snapshots) != 0) goto done;
     if (spec->skip) {
         if (regcomp(&context.skip, spec->skip, REG_EXTENDED) != 0) goto done;
         has_skip = 1;
         if (glr_parser_set_trivia_hook(parser, skip_trivia, &context) != 0) goto done;
     }
     const glr_parse_result_t parsed = glr_parse(parser, input, length);
-    if (parsed.error == GLR_PARSE_SUCCESS &&
-        evaluate(&context, select_root(&context, parser), input, &result) == 0) {
-        if (error) *error = NULL;
-    } else if (error && parsed.position <= length) {
-        *error = input + parsed.position;
+    aurocks_fault_frontier frontier = {0};
+    if (observer)
+        frontier = (aurocks_fault_frontier){snapshots.stacks, snapshots.count, snapshots.offset, snapshots.truncated};
+    if (parsed.error == GLR_PARSE_SUCCESS) {
+        int ambiguous = 0;
+        const glr_forest_node_t *root = select_root(&context, parser, &ambiguous);
+        const int evaluated = root ? evaluate(&context, root, input, &result) : ambiguous ? -2 : -1;
+        if (evaluated == 0) {
+            if (error) *error = NULL;
+        } else {
+            if (error) *error = input + length;
+            if (observer && evaluated == -2)
+                observer(data, AUROCKS_FAULT_LIBGLR, AUROCKS_FAULT_AMBIGUITY, parser, length, &frontier);
+        }
+    } else {
+        const size_t offset = parsed.position <= length ? parsed.position : length;
+        if (error) *error = input + offset;
+        if (observer && (parsed.error == GLR_PARSE_ERROR_SYNTAX || parsed.error == GLR_PARSE_ERROR_UNRECOVERABLE))
+            observer(data, AUROCKS_FAULT_LIBGLR, AUROCKS_FAULT_SYNTAX, parser, offset, &frontier);
     }
 
 done:
+    if (observer) clear_snapshots(&snapshots);
     if (parser) glr_parser_destroy(parser);
     if (grammar) glr_grammar_destroy(grammar);
     if (has_skip) regfree(&context.skip);
@@ -304,6 +364,10 @@ done:
     free(indices);
     free(symbols);
     return result;
+}
+
+void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, const char **error) {
+    return aurocks_parse_glr_observed(spec, input, error, NULL, NULL);
 }
 
 void *aurocks_parse_glr(const aurocks_parser_spec *spec, const char *input) {

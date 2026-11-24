@@ -36,7 +36,7 @@ public:
         try {
             readSections(grammar, fallback);
         } catch (const ParseFailure&) {
-            // Keep declarations read before the error so they can customize it.
+            return grammar; // The diagnostic has already been recorded.
         }
         if (!fallback.directives.empty()) {
             std::unordered_set<std::string> defined;

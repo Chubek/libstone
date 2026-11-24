@@ -117,7 +117,8 @@ Result compile(std::string_view source, const Options& options) {
         return result;
     }
     auto grammar = detail::parse(source, result.diagnostics);
-    detail::validateFaultPatterns(grammar, result.diagnostics);
+    if (result.ok())
+        detail::compileFaultRules(grammar, result.diagnostics);
 
     auto effective = options;
     if (result.ok())
@@ -144,7 +145,6 @@ Result compile(std::string_view source, const Options& options) {
         else
             result.source = detail::emit(grammar, result.analysis, effective.entrypoint, result.diagnostics);
     }
-    detail::applyFaultPatterns(grammar, result.diagnostics);
     if (!result.ok())
         result.source.clear();
     return result;

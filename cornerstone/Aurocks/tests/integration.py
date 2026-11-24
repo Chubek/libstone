@@ -325,15 +325,14 @@ def test(binary, cc, cwd):
 
     invalid.write_text(
         '%start entry\n'
-        '%fault undefined-nonterminal "another message" => "wrong prefix"\n'
-        '%fault undefined-nonterminal "no productions" => "did you spell the rule correctly?"\n'
-        '%fault undefined-nonterminal => "matched too late"\n'
+        '%fault "!." => error "only a runtime message"\n'
         "entry: misspelled;\n",
         encoding="ascii",
     )
     failure = cli("--check", invalid, status=1)
-    require(b"[undefined-nonterminal]: did you spell the rule correctly?" in failure.stderr,
-            f"%fault did not customize the diagnostic: {failure.stderr!r}")
+    require(b"[undefined-nonterminal]: no productions" in failure.stderr and
+            b"only a runtime message" not in failure.stderr,
+            f"%fault changed a build diagnostic: {failure.stderr!r}")
     invalid.write_text("%start entry\nentry: 'a' { $$ = $2; };\n", encoding="ascii")
     require(b"[invalid-action-reference]" in cli("--check", invalid, status=1).stderr,
             "--check accepted an invalid semantic action reference")

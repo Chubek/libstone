@@ -442,12 +442,19 @@ done:
     return value;
 }
 
-static void *aurocks_parse_input(const char *input, const char **error) {
+static void *aurocks_parse_input(const char *input, const char **error
+#ifdef AUROCKS_WITH_FAULTS
+                                 , aurocks_fault_observer observer, void *data, const void *unused
+#endif
+) {
     aurocks_parser *p;
     aurocks_visit *stack = NULL;
     size_t stack_capacity = 0, at, size, selected = 0;
     unsigned count = 0;
     void *result = NULL;
+#ifdef AUROCKS_WITH_FAULTS
+    (void)unused;
+#endif
     *error = input;
     if (!input) return NULL;
     for (size = 0; size < AUROCKS_INPUT_LIMIT && input[size]; ++size) {}
@@ -488,6 +495,12 @@ static void *aurocks_parse_input(const char *input, const char **error) {
         result = aurocks_evaluate(p, selected);
         if (!p->failed) *error = NULL;
     }
+#ifdef AUROCKS_WITH_FAULTS
+    else if (observer && !p->failed) {
+        observer(data, AUROCKS_FAULT_EARLEY,
+                 selected ? AUROCKS_FAULT_AMBIGUITY : AUROCKS_FAULT_SYNTAX, p, p->furthest, NULL);
+    }
+#endif
 done:
     if (*error) *error = input + p->furthest;
     if (p->chart)

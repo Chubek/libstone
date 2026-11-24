@@ -202,7 +202,9 @@ Apply appropriate input and resource limits before processing untrusted grammars
 
 Include `<liblr/DiagnosticsEngine.hpp>` to use `LRDiagEngine`. Register rules
 in priority order with `addRule(pattern, action)`: the first matching pattern
-chooses the action. If none matches, the engine returns a fatal diagnostic.
+chooses the action. If none matches, `diagnose` returns a fatal diagnostic;
+`tryDiagnose` returns `std::nullopt` so a parser adapter can retain its own
+default behavior.
 You can dispatch directly from a custom lexer or parser by passing an
 `LRDiagState` to `diagnose`. The state carries the current source and
 provenance, a half-open byte span, and, when available, the grammar, token
@@ -219,12 +221,23 @@ grammar's terminals; an unmapped byte anywhere in the suffix prevents a match.
 `syntacticPEG` requires compatible terminal IDs and names. PEG `end()` tests
 the actual end of the byte or token input.
 
+For scannerless input, compile a byte pattern directly with
+`LRDiagBytePEG(R"(',' !.)")`. `matchPrefixAt(source, begin)` returns the
+absolute exclusive end, including `begin` for an empty match, or
+`std::nullopt` on a mismatch. An overload consumes a caller-supplied work
+budget shared across matches. The syntax supports quoted literals, byte
+classes, `.`, ordered choice `/`, grouping, `&` and `!` lookahead, and
+`?`, `*`, and `+` repetition. `!.` matches EOF. Use
+`lexicalPEG(compiledPattern)` when only a Boolean rule predicate is needed.
+
 An action can request an in-memory patch, report information or a warning,
 or mark the failure as fatal. Messages and fix suggestions are data: the
 library does not print, write the original source file, or terminate the
 process. A byte patch replaces a range in the current source; a token patch
 replaces a range in the current token stream. Empty ranges are insertions.
-Fatal actions never edit input. Invalid states or actions and exceptions from
+Use `silent_patch` for an edit without a message, and `loud_patch` for an
+edit with a message. Legacy `patch` keeps its optional message. Fatal actions
+never edit input. Invalid states or actions and exceptions from
 rule callbacks become fatal diagnostics. Register rules before dispatching;
 callbacks must not modify the engine's rule list during dispatch.
 

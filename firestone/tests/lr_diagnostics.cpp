@@ -90,6 +90,7 @@ void testDispatch() {
     const std::string source("x\0\xff!", 4);
     const auto state = lexical(source, 1, 3);
     LRDiagEngine engine;
+    CHECK(!engine.tryDiagnose(state));
     checkFatal(engine.diagnose(state));
 
     std::string calls;
@@ -187,6 +188,13 @@ void testSyntacticPEG() {
     foreign.grammar = &different;
     checkFatal(prefix.diagnose(foreign)); // equal IDs alone cannot establish compatibility
     CHECK(tokens == std::vector<Symbol>({s.other, s.a, s.b}));
+
+    const auto tokenSet = s.peg(Expr::tokenSet({s.b, s.a}));
+    const auto tree = tokenSet.parsePrefix(tokens, 2);
+    CHECK(tree && tree->end == 3 && tree->children.size() == 1);
+    CHECK(tree->children.front().symbol == s.b);
+    CHECK(!tokenSet.matchPrefix(tokens));
+    expectThrow<std::invalid_argument>([&] { (void)s.peg(Expr::tokenSet({s.a, s.grammar.eof()})); });
 }
 
 void testLexicalPEG() {
@@ -219,6 +227,59 @@ void testLexicalPEG() {
     for (const auto invalid : {s.grammar.eof(), s.start, std::numeric_limits<Symbol>::max()}) {
         mapping['?'] = invalid;
         expectThrow<std::invalid_argument>([&] { (void)lexicalPEG(s.peg(ab), mapping); });
+    }
+}
+
+void testBytePEGText() {
+    const LRDiagBytePEG pattern(R"PEG(&[a-z] ("abc" / 'ab') [0-9]+ '-'? !.)PEG");
+    CHECK(pattern.matchPrefixAt("..abc123-", 2) == 9);
+    CHECK(pattern.matchPrefixAt("ab9") == 3);
+    CHECK(!pattern.matchPrefixAt("..abc123-", 0)); // No scan ahead.
+    CHECK(!pattern.matchPrefixAt("abc123-X"));
+    CHECK(!pattern.matchPrefixAt("abc"));
+    CHECK(!LRDiagBytePEG("('a' / 'ab') !.").matchPrefixAt("ab"));
+    CHECK(!LRDiagBytePEG("'a'* 'a'").matchPrefixAt("a")); // Possessive.
+    CHECK(LRDiagBytePEG("'a'* 'b'").matchPrefixAt("aaabx") == 4);
+    CHECK(LRDiagBytePEG("! 'a' .").matchPrefixAt("b") == 1);
+    CHECK(!LRDiagBytePEG("!'a' .").matchPrefixAt("a"));
+    CHECK(LRDiagBytePEG("!.").matchPrefixAt("x", 1) == 1);
+    CHECK(!LRDiagBytePEG("!.").matchPrefixAt("x", 0));
+    CHECK(!LRDiagBytePEG("!.").matchPrefixAt("x", 2));
+    CHECK(LRDiagBytePEG("''").matchPrefixAt("abc", 1) == 1);
+
+    std::size_t remaining = 50;
+    const LRDiagBytePEG bounded(".* !.");
+    CHECK(bounded.matchPrefixAt("abc", 0, remaining) == 3);
+    CHECK(remaining < 50);
+    expectThrow<std::length_error>([&] { (void)bounded.matchPrefixAt(std::string(50, 'a'), 0, remaining); });
+    CHECK(remaining == 0);
+    CHECK(!bounded.matchPrefixAt("", 1, remaining));
+
+    const std::string binary("x\0\xff\r\n", 5);
+    const LRDiagBytePEG escaped(R"('\0' [\x80-\xFF] '\r\n')");
+    CHECK(escaped.matchPrefixAt(binary, 1) == 5);
+    CHECK(LRDiagBytePEG("[^a-z]+").matchPrefixAt(binary, 1) == 5);
+    CHECK(LRDiagBytePEG(".").matchPrefixAt(binary, 1) == 2);
+    CHECK(LRDiagBytePEG(R"([\]\-\\]+ !.)").matchPrefixAt("]-\\") == 3);
+    CHECK(LRDiagBytePEG("[-a]+").matchPrefixAt("-aa") == 3);
+    CHECK(LRDiagBytePEG("[a-]+").matchPrefixAt("a--") == 3);
+    CHECK(!LRDiagBytePEG(R"([^\x00-\xff])").matchPrefixAt(binary));
+
+    auto engine = engineWith(lexicalPEG(escaped));
+    const auto action = engine.tryDiagnose(lexical(binary, 1, 2));
+    CHECK(action && action->message == "matched");
+    CHECK(!engine.tryDiagnose(lexical(binary, 0, 2)));
+
+    for (const std::string_view invalid : {"", "word", "()", "('a'", "'a'/", "/'a'", "'a')",
+             "'a'**", "'unclosed", "[]", "[^]", "[a-z", "[z-a]", R"('\x7')", R"('\q')",
+             "''*", "'a'?+", "('a'?)*", "(&'a')+", "('' / 'a')*", "(!.)*"})
+        expectThrow<LRDiagBytePEGError>([&] { (void)LRDiagBytePEG(invalid); });
+    expectThrow<LRDiagBytePEGError>([] { (void)LRDiagBytePEG(std::string(1000, '!') + "."); });
+    try {
+        (void)LRDiagBytePEG("  [z-a]");
+        CHECK(false);
+    } catch (const LRDiagBytePEGError& error) {
+        CHECK(error.offset() == 5);
     }
 }
 
@@ -282,6 +343,11 @@ void testInvalidActions() {
         CHECK(calls == 1); // invalid actions must not fall through to another rule
     };
     rejects(bytes, {LRDiagSeverity::patch, "", {}, {}});
+    rejects(bytes, {LRDiagSeverity::silent_patch, "", {}, {}});
+    rejects(bytes, {LRDiagSeverity::silent_patch, "not silent", LRBytePatch{1, 2, "!"}, {}});
+    rejects(bytes, {LRDiagSeverity::silent_patch, "", LRBytePatch{1, 2, "!"}, "not silent"});
+    rejects(bytes, {LRDiagSeverity::loud_patch, "", LRBytePatch{1, 2, "!"}, {}});
+    rejects(bytes, {LRDiagSeverity::loud_patch, "missing edit", {}, {}});
     rejects(bytes, {LRDiagSeverity::patch, "", LRBytePatch{2, 1, ""}, {}});
     rejects(bytes, {LRDiagSeverity::warning, "bad edit", LRBytePatch{1, 4, ""}, {}});
     rejects(bytes, {LRDiagSeverity::patch, "", LRTokenPatch{0, 0, {}}, {}});
@@ -302,6 +368,24 @@ void testInvalidActions() {
     CHECK(source == "xyz" && tokens == std::vector<Symbol>({s.a}));
 }
 
+void testExplicitPatchOutcomes() {
+    for (const auto severity : {LRDiagSeverity::silent_patch, LRDiagSeverity::loud_patch}) {
+        LRDiagEngine engine;
+        const bool loud = severity == LRDiagSeverity::loud_patch;
+        engine.addRule(lexicalPEG(LRDiagBytePEG("'!'")), [=](const LRDiagState& state) {
+            return LRDiagAction{severity, loud ? "replace invalid byte" : "",
+                LRBytePatch{state.byteBegin, state.byteEnd, "?"}, loud ? "try a question mark" : ""};
+        });
+        const auto action = engine.tryDiagnose(lexical("a!", 1, 2));
+        CHECK(action && action->severity == severity && action->patch);
+        CHECK(action->message.empty() != loud);
+        CHECK(action->suggestion.empty() != loud);
+        CHECK(!engine.tryDiagnose(lexical("a?", 1, 2)));
+        const auto invalid = engine.tryDiagnose(lexical("a!", 1, 3));
+        CHECK(invalid && invalid->severity == LRDiagSeverity::error);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -310,9 +394,11 @@ int main() {
         testLiteralAndRegex();
         testSyntacticPEG();
         testLexicalPEG();
+        testBytePEGText();
         testTokenPatch();
         testInvalidStates();
         testInvalidActions();
+        testExplicitPatchOutcomes();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

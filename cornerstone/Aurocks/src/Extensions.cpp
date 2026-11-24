@@ -13,7 +13,6 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <map>
 #include <memory>
 #include <utility>
 
@@ -22,10 +21,6 @@ namespace {
 
 bool alpha(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
-}
-
-bool nameChar(char c) {
-    return alpha(c) || (c >= '0' && c <= '9') || c == '-' || c == '.';
 }
 
 bool horizontalSpace(char c) {
@@ -37,50 +32,76 @@ void report(std::vector<Diagnostic>& diagnostics, Location location,
     diagnostics.push_back({Severity::error, location, code, std::move(message)});
 }
 
-struct Fault {
-    std::string code;
-    std::optional<std::string> prefix;
-    std::string replacement;
-};
-
 class FaultParser {
 public:
     explicit FaultParser(std::string_view input) : input_(input) {}
 
-    std::optional<Fault> parse() {
-        Fault fault;
+    std::optional<FaultRule> parse() {
+        FaultRule fault;
         spaces();
-        const auto begin = pos_;
-        if (!alpha(peek())) return fail("expected a diagnostic code");
-        while (nameChar(peek())) ++pos_;
-        fault.code = input_.substr(begin, pos_ - begin);
+        auto pattern = quoted();
+        if (!pattern) return std::nullopt;
+        if (pattern->empty()) return fail("expected a nonempty PEG pattern");
+        if (pattern->size() > 4096) return fail("PEG pattern exceeds 4096 bytes");
+        fault.pattern = std::move(*pattern);
         spaces();
-        if (peek() == '"') {
-            fault.prefix = quoted();
-            if (!fault.prefix) return std::nullopt;
-            if (fault.prefix->empty()) return fail("message prefix cannot be empty");
-            spaces();
-        }
-        if (input_.substr(pos_, 2) != "=>") return fail("expected '=>' before replacement");
+        if (input_.substr(pos_, 2) != "=>") return fail("expected '=>' before the disposition");
         pos_ += 2;
         spaces();
-        auto replacement = quoted();
-        if (!replacement) return std::nullopt;
-        if (replacement->empty()) return fail("replacement cannot be empty");
-        fault.replacement = std::move(*replacement);
+        auto disposition = word();
+        if (disposition == "silent" || disposition == "loud" || disposition == "load") {
+            spaces();
+            if (word() != "patch") return fail("expected 'patch' after the disposition");
+            disposition = disposition == "silent" ? "silent_patch" : "loud_patch";
+        }
+        if (disposition == "load_patch") disposition = "loud_patch";
+        if (disposition != "silent_patch" && disposition != "loud_patch" &&
+            disposition != "inform" && disposition != "warn" && disposition != "error")
+            return fail("expected silent_patch, loud_patch, inform, warn, or error");
+        fault.disposition = disposition;
         spaces();
-        if (pos_ != input_.size()) return fail("unexpected text after replacement");
+        if (disposition == "silent_patch" || disposition == "loud_patch") {
+            auto replacement = quoted();
+            if (!replacement) return std::nullopt;
+            fault.replacement = std::move(*replacement);
+            spaces();
+        }
+        if (disposition != "silent_patch") {
+            if (disposition == "loud_patch" && peek() != '"') {
+                fault.message = "repaired input";
+            } else {
+                auto message = quoted();
+                if (!message) return std::nullopt;
+                if (message->empty()) return fail("diagnostic message cannot be empty");
+                if (message->size() > 4096) return fail("diagnostic message exceeds 4096 bytes");
+                fault.message = std::move(*message);
+                spaces();
+            }
+        }
+        if (pos_ != input_.size()) {
+            if (word() != "using") return fail("expected 'using' before a C fault handler");
+            spaces();
+            if (!alpha(peek())) return fail("expected a C handler identifier");
+            fault.handler = word();
+            spaces();
+            if (pos_ != input_.size()) return fail("unexpected text after C fault handler");
+        }
         return fault;
     }
 
     std::string error() const {
         return "invalid %fault at argument byte " + std::to_string(pos_ + 1) + ": " +
-            error_ + "; expected %fault CODE [\"message prefix\"] => \"replacement\"";
+            error_ + "; expected %fault \"PEG\" => DISPOSITION ... [using HANDLER]";
     }
 
 private:
     char peek() const { return pos_ < input_.size() ? input_[pos_] : '\0'; }
     void spaces() { while (horizontalSpace(peek())) ++pos_; }
+    std::string_view word() {
+        const auto begin = pos_;
+        while (alpha(peek()) || (peek() >= '0' && peek() <= '9')) ++pos_;
+        return input_.substr(begin, pos_ - begin);
+    }
 
     std::nullopt_t fail(const char* error) {
         error_ = error;
@@ -570,40 +591,26 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
         diagnostics.push_back({Severity::warning, location, "lua-warning", safeMessage(call.warnings[i].view())});
 }
 
-void validateFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics) {
+void compileFaultRules(Grammar& grammar, std::vector<Diagnostic>& diagnostics) {
     for (const auto& directive : grammar.directives) {
         if (directive.name != "fault") continue;
+        if (grammar.faults.size() == 64) {
+            report(diagnostics, directive.location, "fault-syntax", "at most 64 %fault rules are supported");
+            return;
+        }
         FaultParser parser(directive.value);
-        if (!parser.parse())
+        auto fault = parser.parse();
+        if (!fault) {
             report(diagnostics, directive.location, "fault-syntax", parser.error());
-    }
-}
-
-void applyFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics) {
-    namespace lr = firestone::lr;
-    if (diagnostics.empty()) return;
-    std::map<std::string, lr::LRDiagEngine, std::less<>> engines;
-    for (const auto& directive : grammar.directives) {
-        if (directive.name != "fault") continue;
-        auto fault = FaultParser(directive.value).parse();
-        if (!fault) continue; // The declaration error has already been reported.
-        auto& engine = engines[fault->code];
-        const auto match = fault->prefix ? lr::lexicalLiteral(std::move(*fault->prefix)) : lr::lexicalLiteral("");
-        engine.addRule(std::move(match), [message = std::move(fault->replacement)](const lr::LRDiagState&) {
-            return lr::LRDiagAction{lr::LRDiagSeverity::inform, message, std::nullopt, {}};
-        });
-    }
-
-    for (auto& diagnostic : diagnostics) {
-        if (diagnostic.code == "fault-syntax") continue; // Never obscure malformed declarations.
-        const auto engine = engines.find(diagnostic.code);
-        if (engine == engines.end()) continue;
-        // Match against the already-formed diagnostic message, not the grammar
-        // source or a future parser's input. The engine owns first-match dispatch.
-        const lr::LRDiagState state{lr::LRDiagPhase::lexical, diagnostic.message, diagnostic.code,
-                                    0, diagnostic.message.size(), nullptr, nullptr, 0, std::nullopt, {}};
-        auto action = engine->second.diagnose(state);
-        if (action.severity == lr::LRDiagSeverity::inform) diagnostic.message = std::move(action.message);
+            continue;
+        }
+        try {
+            (void)firestone::lr::LRDiagBytePEG(fault->pattern);
+            fault->location = directive.location;
+            grammar.faults.push_back(std::move(*fault));
+        } catch (const std::invalid_argument& error) {
+            report(diagnostics, directive.location, "fault-peg", error.what());
+        }
     }
 }
 

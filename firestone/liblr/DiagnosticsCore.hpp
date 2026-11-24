@@ -15,10 +15,12 @@
 namespace firestone::lr {
 
 enum class LRDiagPhase { lexical, syntactic };
-enum class LRDiagSeverity { patch, inform, warning, error };
+// Keep the legacy patch action (message/advice optional) for existing callers.
+// Use silent_patch or loud_patch when the reporting policy must be explicit.
+enum class LRDiagSeverity { patch, inform, warning, error, silent_patch, loud_patch };
 
 // Borrowed views and pointers refer to the current input for the duration of
-// diagnose(). Byte spans are half-open; use [0, 0) if no source span is available.
+// dispatch. Byte spans are half-open; use [0, 0) if no source span is available.
 // In lexical state, tokens may contain the successfully scanned prefix.
 // Syntactic state requires both the grammar and the current token stream.
 struct LRDiagState {
@@ -67,7 +69,9 @@ public:
     // The first matching rule wins, even if its action is invalid. Rule
     // exceptions become fatal diagnostics; callbacks must not modify the
     // engine's rules during dispatch. The caller owns mutation and retry policy.
-    LRDiagAction diagnose(const LRDiagState& state) const {
+    // No matching rule yields nullopt; invalid state and explicit errors still
+    // yield an error action. This lets adapters supply their own default.
+    std::optional<LRDiagAction> tryDiagnose(const LRDiagState& state) const {
         if (!validState(state)) return fatal("invalid diagnostic state");
         for (const auto& rule : rules_) {
             try {
@@ -81,6 +85,11 @@ public:
                 return fatal("diagnostic rule threw an exception");
             }
         }
+        return std::nullopt;
+    }
+
+    LRDiagAction diagnose(const LRDiagState& state) const {
+        if (auto action = tryDiagnose(state)) return std::move(*action);
         return fatal(state.phase == LRDiagPhase::lexical ? "lexical error" : "syntax error");
     }
 
@@ -140,6 +149,12 @@ private:
         case LRDiagSeverity::patch:
             // A patch-only action may be silent, but must supply an edit.
             if (!action.patch) return false;
+            break;
+        case LRDiagSeverity::silent_patch:
+            if (!action.patch || !action.message.empty() || !action.suggestion.empty()) return false;
+            break;
+        case LRDiagSeverity::loud_patch:
+            if (!action.patch || action.message.empty()) return false;
             break;
         case LRDiagSeverity::inform:
         case LRDiagSeverity::warning:

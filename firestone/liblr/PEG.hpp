@@ -2,6 +2,7 @@
 
 #include "EBNF.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <memory>
@@ -20,6 +21,11 @@ public:
     static PEGExpression fail() { return choice({}); }
     static PEGExpression end() { return make(Kind::end); }
     static PEGExpression token(Symbol symbol) { return make(Kind::token, symbol); }
+    // Consume exactly one of the listed terminals. An empty set never matches.
+    static PEGExpression tokenSet(std::vector<Symbol> symbols) {
+        std::sort(symbols.begin(), symbols.end());
+        return make(Kind::tokenSet, 0, {}, std::move(symbols));
+    }
     static PEGExpression rule(Symbol symbol) { return make(Kind::rule, symbol); }
     static PEGExpression sequence(std::vector<PEGExpression> parts) {
         return make(Kind::sequence, 0, std::move(parts));
@@ -46,18 +52,21 @@ public:
 private:
     friend class PEG;
     enum class Kind {
-        end, token, rule, sequence, choice, optional, repeat, oneOrMore, andPredicate, notPredicate
+        end, token, tokenSet, rule, sequence, choice, optional, repeat, oneOrMore, andPredicate, notPredicate
     };
     struct Node {
         Kind kind;
         Symbol symbol;
         std::vector<PEGExpression> children;
+        std::vector<Symbol> symbols;
     };
 
     explicit PEGExpression(std::shared_ptr<const Node> node) : node_(std::move(node)) {}
 
-    static PEGExpression make(Kind kind, Symbol symbol = 0, std::vector<PEGExpression> children = {}) {
-        return PEGExpression(std::make_shared<const Node>(Node{kind, symbol, std::move(children)}));
+    static PEGExpression make(Kind kind, Symbol symbol = 0, std::vector<PEGExpression> children = {},
+                              std::vector<Symbol> symbols = {}) {
+        return PEGExpression(std::make_shared<const Node>(Node{kind, symbol, std::move(children),
+                                                               std::move(symbols)}));
     }
 
     std::shared_ptr<const Node> node_;
@@ -105,10 +114,7 @@ public:
     // Ordered PEG match at begin; the end and tree spans are absolute offsets.
     std::optional<std::size_t> matchPrefixAt(const std::vector<Symbol>& tokens, std::size_t begin) const {
         validatePrefix(tokens, begin);
-        Evaluation evaluation(*this, tokens, false);
-        const auto match = evaluation.matchRule(grammar_.start(), begin);
-        if (!match) return std::nullopt;
-        return match->end;
+        return matchPrefixUnchecked(tokens, begin);
     }
 
     std::optional<ParseNode> parsePrefix(const std::vector<Symbol>& tokens,
@@ -133,19 +139,32 @@ public:
     }
 
 private:
+    friend class LRDiagBytePEG;
     using Kind = PEGExpression::Kind;
+
+    // The byte PEG supplies a view whose every element is a valid terminal.
+    template<class Input>
+    std::optional<std::size_t> matchPrefixUnchecked(const Input& tokens, std::size_t begin,
+                                                    std::size_t* remaining = nullptr) const {
+        Evaluation evaluation(*this, tokens, false, remaining);
+        const auto match = evaluation.matchRule(grammar_.start(), begin);
+        if (!match) return std::nullopt;
+        return match->end;
+    }
 
     void validatePrefix(const std::vector<Symbol>& tokens, std::size_t begin) const {
         if (begin > tokens.size()) throw std::out_of_range("PEG position outside input");
         validateInput(grammar_, tokens);
     }
 
+    template<class Input>
     class Evaluation {
     public:
         struct Match { std::size_t end, node; };
 
-        Evaluation(const PEG& peg, const std::vector<Symbol>& tokens, bool witness)
-            : peg_(peg), tokens_(tokens), witness_(witness), memo_(peg.grammar_.symbols().size()) {}
+        Evaluation(const PEG& peg, const Input& tokens, bool witness, std::size_t* remaining = nullptr)
+            : peg_(peg), tokens_(tokens), witness_(witness), remaining_(remaining),
+              memo_(peg.grammar_.symbols().size()) {}
 
         std::optional<Match> matchRule(Symbol rule, std::size_t begin) {
             auto pos = begin;
@@ -174,6 +193,10 @@ private:
             };
             pushRule(rule);
             while (!work.empty()) {
+                if (remaining_) {
+                    if (*remaining_ == 0) throw std::length_error("PEG evaluation work limit exceeded");
+                    --*remaining_;
+                }
                 auto& frame = work.back();
                 const auto restore = [&] {
                     pos = frame.begin;
@@ -209,12 +232,19 @@ private:
                     complete(pos == tokens_.size());
                     break;
                 case Kind::token:
-                    if (pos == tokens_.size() || tokens_[pos] != expr.symbol) {
+                case Kind::tokenSet:
+                    if (pos == tokens_.size()) {
                         complete(false);
-                    } else {
-                        if (witness_) children.push_back(addProof(expr.symbol, pos, pos + 1, {}));
+                        break;
+                    }
+                    if (const auto symbol = tokens_[pos];
+                        expr.kind == Kind::token ? symbol == expr.symbol :
+                            std::binary_search(expr.symbols.begin(), expr.symbols.end(), symbol)) {
+                        if (witness_) children.push_back(addProof(symbol, pos, pos + 1, {}));
                         ++pos;
                         complete(true);
+                    } else {
+                        complete(false);
                     }
                     break;
                 case Kind::rule:
@@ -298,14 +328,20 @@ private:
         }
 
         const PEG& peg_;
-        const std::vector<Symbol>& tokens_;
+        const Input& tokens_;
         bool witness_;
+        std::size_t* remaining_;
         std::vector<std::map<std::size_t, Memo>> memo_;
         std::vector<Proof> proofs_;
     };
 
     bool isNonterminal(Symbol symbol) const {
         return symbol < grammar_.symbols().size() && !grammar_.symbols()[symbol].terminal;
+    }
+
+    bool isInputTerminal(Symbol symbol) const {
+        return symbol < grammar_.symbols().size() && symbol != grammar_.eof() &&
+            grammar_.symbols()[symbol].terminal;
     }
 
     void validateRules() const {
@@ -320,9 +356,10 @@ private:
             work.pop_back();
             if (node == nullptr) throw std::invalid_argument("missing PEG expression");
             if (!seen.insert(node).second) continue;
-            if (node->kind == Kind::token && (node->symbol >= grammar_.symbols().size() ||
-                node->symbol == grammar_.eof() || isNonterminal(node->symbol)))
+            if (node->kind == Kind::token && !isInputTerminal(node->symbol))
                 throw std::invalid_argument("invalid PEG token symbol");
+            for (const auto symbol : node->symbols)
+                if (!isInputTerminal(symbol)) throw std::invalid_argument("invalid PEG token set symbol");
             if (node->kind == Kind::rule && rules_.find(node->symbol) == rules_.end())
                 throw std::invalid_argument("invalid PEG rule reference");
             for (const auto& child : node->children) work.push_back(child.node_.get());

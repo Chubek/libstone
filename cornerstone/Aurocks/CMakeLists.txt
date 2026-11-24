@@ -56,6 +56,13 @@ target_include_directories(aurocks_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/i
 target_link_libraries(aurocks_runtime PUBLIC libglr)
 libstone_warnings(aurocks_runtime)
 
+add_library(aurocks_fault_runtime STATIC src/FaultRuntime.cpp)
+add_library(Aurocks::FaultRuntime ALIAS aurocks_fault_runtime)
+target_compile_features(aurocks_fault_runtime PRIVATE cxx_std_20)
+target_include_directories(aurocks_fault_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(aurocks_fault_runtime SYSTEM PRIVATE "${AUROCKS_ROOT}/firestone/liblr")
+libstone_warnings(aurocks_fault_runtime)
+
 if(LIBSTONE_BUILD_TOOLS)
   add_executable(aurocks CLI/main.cpp)
   target_link_libraries(aurocks PRIVATE aurocks_compiler)
@@ -75,8 +82,27 @@ if(LIBSTONE_BUILD_TESTS)
     add_test(NAME aurocks.integration COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py" "$<TARGET_FILE:aurocks>"
       "${CMAKE_C_COMPILER}")
+    set(fault_parsers)
+    foreach(backend portable liblr libglr)
+      set(fault_case "${CMAKE_CURRENT_BINARY_DIR}/faults_${backend}.c")
+      set(fault_target "aurocks_faults_${backend}")
+      add_custom_command(OUTPUT "${fault_case}"
+        COMMAND aurocks --backend "${backend}" -o "${fault_case}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/faults.g"
+        DEPENDS aurocks tests/faults.g
+        VERBATIM)
+      add_executable(${fault_target} "${fault_case}")
+      target_link_libraries(${fault_target} PRIVATE aurocks_fault_runtime)
+      set_target_properties(${fault_target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+      if(backend STREQUAL "libglr")
+        target_compile_definitions(${fault_target} PRIVATE TEST_LINKED)
+        target_link_libraries(${fault_target} PRIVATE aurocks_runtime)
+        set_target_properties(${fault_target} PROPERTIES C_STANDARD 11)
+      endif()
+      libstone_warnings(${fault_target})
+      list(APPEND fault_parsers "$<TARGET_FILE:${fault_target}>")
+    endforeach()
     add_test(NAME aurocks.faults COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/faults.py" "$<TARGET_FILE:aurocks>")
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/faults.py" "$<TARGET_FILE:aurocks>" ${fault_parsers})
     set(linked_case "${CMAKE_CURRENT_BINARY_DIR}/linked_generated.c")
     add_custom_command(OUTPUT "${linked_case}"
       COMMAND aurocks --backend libglr --entrypoint parse_linked

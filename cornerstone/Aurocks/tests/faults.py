@@ -1,4 +1,4 @@
-"""Check the native compiler's %Fault diagnostic overrides."""
+"""Check source validation and failures in generated parsers."""
 
 from pathlib import Path
 import sys
@@ -7,85 +7,54 @@ import tempfile
 from integration import require, run
 
 
-def test(binary, cwd):
+def test(binary, parsers, cwd):
     grammar = cwd / "faults.g"
 
-    def check(text, status=1):
-        grammar.write_text(text, encoding="ascii")
-        result = run([binary, "--check", grammar], cwd=cwd, status=status)
-        require(bool(result.stdout) == (status == 0), f"unexpected stdout: {result.stdout!r}")
-        return result.stderr
+    def check(declaration, *, backend="portable"):
+        grammar.write_text(f"%start entry\n{declaration}\nentry: 'a';\n", encoding="ascii")
+        return run([binary, "--check", "--backend", backend, grammar], cwd=cwd, status=1).stderr
 
-    overlapping = (
-        "%start entry\n"
-        '%fault syntax.quote "not at the start" => "wrong prefix"\n'
-        '%Fault syntax.quote "unterminated quoted" => "close the terminal"; // trailing comment\n'
-        '%fault syntax.quote => "too late"\n'
-        "entry: 'a\n"
-    )
-    require(check(overlapping).endswith(
-        b":5:8: error [syntax.quote]: close the terminal\n"),
-        "%Fault did not replace a Reader error while preserving its location and code")
-    require(check('%Fault syntax.start => "choose a start"\nentry: \'a\';\n').endswith(
-        b":1:1: error [syntax.start]: choose a start\n"),
-        "%Fault did not handle an end-of-read check")
-    require(check("entry: 'a\n" + overlapping).endswith(
-        b":1:8: error [syntax.quote]: unterminated quoted terminal\n"),
-        "a declaration after the failure should not be read")
-    require(check('%Fault syntax.nul => "masked"\n%start entry\nentry: \'a\';\0\n').endswith(
-        b":3:12: error [syntax.nul]: embedded NUL byte in grammar source\n"),
-        "a declaration must not override pre-parse rejection of the source")
-
-    warning = check(
-        "%start entry\n"
-        r'%Fault unsupported-directive "%layout" => "quoted \"value\"; C:\\path"' "\n"
-        "%layout custom\n"
-        "entry: 'a';\n",
-        status=0,
-    )
-    require(warning.endswith(b':3:1: warning [unsupported-directive]: quoted "value"; C:\\path\n'),
-            f"%Fault changed the warning's status, metadata or escaped message: {warning!r}")
-
-    for rest, reason in (
-        ("", b"expected a diagnostic code"),
-        ("syntax.quote =>", b"expected a double-quoted string"),
-        ('syntax.quote "unterminated', b"unterminated quoted string"),
-        ('syntax.quote => "unterminated', b"unterminated quoted string"),
-        (r'syntax.quote => "bad\q"', b"expected a quoted-string escape"),
-        ('syntax.quote => "ok" extra', b"unexpected text after replacement"),
+    for text, code, fragment in (
+        ('%Fault incomplete', b"fault-syntax", b"expected a double-quoted string"),
+        ('%fault "!.', b"fault-syntax", b"unterminated quoted string"),
+        ('%fault "\'a\'" => typo ""', b"fault-syntax", b"expected silent_patch"),
+        ('%fault "([a-c]" => warn "bad"', b"fault-peg", b"expected ')'"),
+        ('%fault "(!.)*" => silent_patch ""', b"fault-peg", b"repetition"),
+        ('%fault "\'a\'" => error "bad" using int', b"fault-syntax", b"available C identifier"),
     ):
-        diagnostic = check(
-            "%start entry\n"
-            '%fault fault-syntax => "masked"\n'
-            f"%Fault {rest}\n"
-            "entry: 'a';\n")
-        require(b":3:1: error [fault-syntax]:" in diagnostic and reason in diagnostic
-                and b"[syntax.quote]" not in diagnostic and b"masked" not in diagnostic,
-                f"wrong diagnosis for malformed %Fault {rest}: {diagnostic!r}")
+        diagnostic = check(text)
+        require(b":2:1: error [" + code + b"]:" in diagnostic and fragment in diagnostic, diagnostic)
 
-    for rule, column in (
-        ('entry %Fault syntax.quote => "wrong": \'a\' | \'b\';\n', 7),
-        ('entry: \'a\' %fault syntax.quote => "wrong";\n', 12),
-    ):
-        diagnostic = check("%start entry\n" + rule)
-        require(diagnostic.endswith(f":2:{column}: error [fault-syntax]: ".encode()
-                                    + b"%fault must be declared at grammar scope\n")
-                and diagnostic.count(b"[fault-syntax]") == 1,
-                f"expected one source-located scope error: {diagnostic!r}")
+    grammar.write_text('%start entry\nentry: \'a\' %Fault "!." => error "end";\n', encoding="ascii")
+    failure = run([binary, "--check", grammar], cwd=cwd, status=1)
+    require(b"[fault-syntax]: %fault must be declared at grammar scope" in failure.stderr, failure.stderr)
 
-    prologue = (
-        "%{\n"
-        '%fault syntax.quote "nonmatching" => "wrong"\n'
-        '%Fault syntax.quote => "close the prologue fallback terminal"\n'
-        "%}\n"
-        "%start entry\n"
-    )
-    require(check(prologue + "entry: 'a\n").endswith(b"close the prologue fallback terminal\n"),
-            "the reader lost a later fallback pattern after a syntax error")
-    require(check(prologue + '%Fault syntax.quote => "top level wins"\nentry: \'a\n').endswith(
-        b"top level wins\n"), "a prologue pattern displaced a top-level declaration")
+    for parser in parsers:
+        for text, stdout, diagnostic in (
+            ("n;", b"ok 1 0\n", b""),
+            ("n,", b"ok 1 1\n", b""),
+            ("n", b"ok 1 1\n", b"patch at byte 1: inserted semicolon"),
+            ("n?", b"1 0 1\n", b"info at byte 1: unexpected question mark"),
+            ("?", b"0 0 1\n", b"info at byte 0: unexpected question mark"),
+            ("n!", b"1 0 1\n", b"warning at byte 1: unexpected punctuation"),
+            ("n~", b"1 0 1\n", b"error at byte 1: explicit runtime error"),
+            ("n$", b"1 0 1\n", b"error at byte 1: explicit runtime error"),
+            ("n,x", b"2 0 1\n", b""),
+            ("n:x", b"2 0 1\n", b""),
+            ("n:!", b"2 0 2\n", b"warning at byte 2: unexpected punctuation"),
+            ("n:", b"ok 1 2\n", b"patch at byte 2: inserted semicolon"),
+            ("n,,", b"1 0 0\n", b""),
+            ("n#", b"1 0 1\n", b"fault patch made no progress"),
+            ("n%", b"1 0 9\n", b"exceeded recovery limits"),
+            ("n@", b"1 0 1\n", b"invalid diagnostic action"),
+            ("tx", b"2 0 1\n", b"fault patch made no progress"),
+        ):
+            result = run([parser, text], cwd=cwd)
+            require(result.stdout == stdout and (diagnostic in result.stderr if diagnostic else not result.stderr),
+                    f"{parser} on {text!r}: {result.stdout!r}, {result.stderr!r}")
 
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="aurocks-faults-") as output:
-        test(str(Path(sys.argv[1]).resolve()), Path(output))
+        test(str(Path(sys.argv[1]).resolve()), [str(Path(name).resolve()) for name in sys.argv[2:]],
+             Path(output))

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DiagnosticsBytePEG.hpp"
 #include "DiagnosticsCore.hpp"
 #include "DFA.hpp"
 #include "PEG.hpp"
@@ -32,6 +33,13 @@ inline auto lexicalRegex(std::string_view pattern) {
     return [dfa = determinize(compile_regex(pattern))](const LRDiagState& state) {
         return state.phase == LRDiagPhase::lexical && state.byteBegin <= state.source.size() &&
             dfa.match_prefix(state.source.substr(state.byteBegin)).has_value();
+    };
+}
+
+inline auto lexicalPEG(LRDiagBytePEG peg) {
+    return [peg = std::move(peg)](const LRDiagState& state) {
+        return state.phase == LRDiagPhase::lexical &&
+            peg.matchPrefixAt(state.source, state.byteBegin).has_value();
     };
 }
 

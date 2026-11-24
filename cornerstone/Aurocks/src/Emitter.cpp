@@ -44,6 +44,13 @@ bool validEntrypoint(std::string_view s) {
         "aurocks_scan", "aurocks_sets", "aurocks_skip", "aurocks_skip_rx", "aurocks_slot",
         "aurocks_start", "aurocks_states", "aurocks_step", "aurocks_symbol", "aurocks_symbols",
         "aurocks_terminal_use", "aurocks_visit", "aurocks_word_byte", "yyparse_error",
+        "aurocks_fault_attempt_linked", "aurocks_fault_rules", "aurocks_fault_run", "aurocks_parse_glr_observed",
+        "aurocks_fault_backend", "aurocks_fault_reason", "aurocks_fault_disposition", "aurocks_fault_state",
+        "aurocks_fault_response", "aurocks_fault_handler", "aurocks_fault_rule", "aurocks_fault_observer",
+        "aurocks_fault_frontier",
+        "aurocks_fault_attempt", "AUROCKS_WITH_FAULTS", "AUROCKS_FAULT_EARLEY", "AUROCKS_FAULT_LIBGLR",
+        "AUROCKS_FAULT_SYNTAX", "AUROCKS_FAULT_AMBIGUITY",
+        "AUROCKS_SILENT_PATCH", "AUROCKS_LOUD_PATCH", "AUROCKS_INFORM", "AUROCKS_WARN", "AUROCKS_ERROR",
         "aurocks_symbol_kind", "aurocks_symbol_spec", "aurocks_rule_spec", "aurocks_forest_policy",
         "aurocks_action_fn", "aurocks_terminal_use_fn", "aurocks_parser_spec",
         "AUROCKS_EDGE_LIMIT", "AUROCKS_INPUT_LIMIT",
@@ -434,6 +441,38 @@ void quote(std::ostream& out, std::string_view text) {
     out << '"';
 }
 
+void checkFaultHandlers(const Grammar& grammar, std::string_view entrypoint, Diagnostics& diagnostics) {
+    const auto canonical = "parse_" + grammar.start;
+    for (const auto& fault : grammar.faults) {
+        const auto& name = fault.handler;
+        if (!name.empty() && (!validEntrypoint(name) || name == canonical || name == canonical + "_error" ||
+                              name == "yyparse" || name == "main" || name == entrypoint ||
+                              (!entrypoint.empty() && name == std::string(entrypoint) + "_error")))
+            error(diagnostics, fault.location, "fault-syntax", "fault handler must be an available C identifier");
+    }
+}
+
+void emitFaultRules(std::ostream& out, const Grammar& grammar) {
+    std::set<std::string> handlers;
+    for (const auto& fault : grammar.faults)
+        if (!fault.handler.empty() && handlers.insert(fault.handler).second)
+            out << "static void " << fault.handler << "(const aurocks_fault_state *, aurocks_fault_response *);\n";
+    out << "static const aurocks_fault_rule aurocks_fault_rules[] = {\n";
+    for (const auto& fault : grammar.faults) {
+        out << "  {";
+        quote(out, fault.pattern);
+        out << ", " << (fault.disposition == "silent_patch" ? "AUROCKS_SILENT_PATCH" :
+                         fault.disposition == "loud_patch" ? "AUROCKS_LOUD_PATCH" :
+                         fault.disposition == "inform" ? "AUROCKS_INFORM" :
+                         fault.disposition == "warn" ? "AUROCKS_WARN" : "AUROCKS_ERROR") << ", ";
+        quote(out, fault.replacement);
+        out << ", ";
+        quote(out, fault.message);
+        out << ", " << (fault.handler.empty() ? "NULL" : fault.handler) << "},\n";
+    }
+    out << "};\n";
+}
+
 void emitPortable(std::ostream& out, const Grammar& grammar, const Analysis& analysis,
                   const std::vector<Action>& actions, std::string_view entrypoint,
                   Diagnostics& diagnostics) {
@@ -547,8 +586,10 @@ void emitPortable(std::ostream& out, const Grammar& grammar, const Analysis& ana
         << "static const size_t aurocks_start = " << names.at(grammar.start) << ";\n"
         << "static const size_t aurocks_skip_rx = " << skip << ";\n"
         << "static const int aurocks_has_skip = " << grammar.skip.has_value() << ";\n"
-        << "static const int aurocks_ambiguity_error = " << (analysis.disambiguator == "error") << ";\n"
-        << portable::Runtime;
+        << "static const int aurocks_ambiguity_error = " << (analysis.disambiguator == "error") << ";\n";
+    if (!grammar.faults.empty()) out << "#define AUROCKS_WITH_FAULTS 1\n";
+    out << portable::Runtime;
+    if (!grammar.faults.empty()) out << "#undef AUROCKS_WITH_FAULTS\n";
 
     const auto defaultName = "parse_" + grammar.start;
     out << R"aurocks(
@@ -557,9 +598,13 @@ void emitPortable(std::ostream& out, const Grammar& grammar, const Analysis& ana
 static AUROCKS_THREAD_LOCAL const char *aurocks_error_position;
 )aurocks"
         << "void *" << defaultName << "(const char *input) {\n"
-           "    const char *error;\n"
-           "    void *value = aurocks_parse_input(input, &error);\n"
-           "    aurocks_error_position = error;\n"
+           "    const char *error;\n";
+    if (grammar.faults.empty())
+        out << "    void *value = aurocks_parse_input(input, &error);\n";
+    else
+        out << "    void *value = aurocks_fault_run(input, &error, aurocks_parse_input, NULL,"
+            << " aurocks_fault_rules, " << grammar.faults.size() << ");\n";
+    out << "    aurocks_error_position = error;\n"
            "    return value;\n"
            "}\n"
         << "const char *" << defaultName << "_error(void) { return aurocks_error_position; }\n"
@@ -584,6 +629,7 @@ bool checkEntrypoint(const Grammar& grammar, std::string_view entrypoint, Diagno
 void validateEmission(const Grammar& grammar, const Analysis&, std::string_view entrypoint,
                       Diagnostics& diagnostics) {
     checkEntrypoint(grammar, entrypoint, diagnostics);
+    checkFaultHandlers(grammar, entrypoint, diagnostics);
     const bool legacySList = grammar.prologue.find("SList") != std::string::npos;
     for (const auto& rule : grammar.rules)
         transform(rule, legacySList, diagnostics);
@@ -595,6 +641,7 @@ std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_v
                  Diagnostics& diagnostics) {
     if (!checkEntrypoint(grammar, entrypoint, diagnostics))
         return {};
+    checkFaultHandlers(grammar, entrypoint, diagnostics);
     std::vector<Action> actions;
     actions.reserve(grammar.rules.size());
     const bool legacySList = grammar.prologue.find("SList") != std::string::npos;
@@ -607,7 +654,10 @@ std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_v
         return {};
 
     std::ostringstream out;
-    out << LegacyRuntimeHelpers << '\n' << grammar.prologue << '\n';
+    out << LegacyRuntimeHelpers << '\n';
+    if (!grammar.faults.empty()) out << "#include <aurocks/Fault.h>\n";
+    out << grammar.prologue << '\n';
+    if (!grammar.faults.empty()) emitFaultRules(out, grammar);
     emitActions(out, grammar, actions);
     if (analysis.backend == "libglr") {
         emitTerminalUse(out, actions);
