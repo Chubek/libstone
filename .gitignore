@@ -4,7 +4,7 @@ third_party/
 !/third_party/
 /third_party/*
 !/third_party/boost/
-
+generated/
 # Info
 .info
 
