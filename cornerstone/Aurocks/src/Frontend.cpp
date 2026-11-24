@@ -32,6 +32,38 @@ public:
     Grammar read() {
         Grammar grammar;
         Grammar fallback;
+        const auto initialDiagnosticCount = diagnostics_.size();
+        try {
+            readSections(grammar, fallback);
+        } catch (const ParseFailure&) {
+            // Keep declarations read before the error so they can customize it.
+        }
+        if (!fallback.directives.empty()) {
+            std::unordered_set<std::string> defined;
+            for (const auto& directive : grammar.directives) defined.insert(directive.name);
+            const bool hasTopLevelFault = defined.contains("fault");
+            for (auto& directive : fallback.directives) {
+                // Fault patterns are ordered and repeatable, unlike singleton
+                // fallbacks. Top-level declarations still take precedence.
+                const bool repeatable = directive.name == "fault";
+                if (repeatable ? hasTopLevelFault : !defined.insert(directive.name).second)
+                    continue;
+                if (directive.name == "start") grammar.start = std::move(fallback.start);
+                if (directive.name == "skip") grammar.skip = std::move(fallback.skip);
+                grammar.directives.push_back(std::move(directive));
+            }
+        }
+        if (diagnostics_.size() == initialDiagnosticCount) {
+            if (grammar.start.empty())
+                diagnostics_.push_back({Severity::error, {}, "syntax.start", "missing %start directive"});
+            else if (grammar.rules.empty())
+                diagnostics_.push_back({Severity::error, cursor_, "syntax.production", "no productions found"});
+        }
+        return grammar;
+    }
+
+private:
+    void readSections(Grammar& grammar, Grammar& fallback) {
         bool productionSection = false;
         bool hasPrologue = false;
         while (true) {
@@ -58,25 +90,10 @@ public:
                 fail(cursor_, "syntax.production", "expected a directive or production name");
             }
         }
-        if (!fallback.directives.empty()) {
-            std::unordered_set<std::string> defined;
-            for (const auto& directive : grammar.directives) defined.insert(directive.name);
-            for (auto& directive : fallback.directives) {
-                if (!defined.insert(directive.name).second) continue;
-                if (directive.name == "start") grammar.start = std::move(fallback.start);
-                if (directive.name == "skip") grammar.skip = std::move(fallback.skip);
-                grammar.directives.push_back(std::move(directive));
-            }
-        }
-        if (grammar.start.empty())
-            fail({}, "syntax.start", "missing %start directive");
-        if (grammar.rules.empty())
-            fail(cursor_, "syntax.production", "no productions found");
-        return grammar;
     }
 
-private:
     enum class DirectiveScope { global, header, alternative };
+    enum class QuotedContext { terminal, code, faultArgument };
 
     std::string_view source_;
     std::vector<Diagnostic>& diagnostics_;
@@ -161,15 +178,15 @@ private:
         return std::string(from(begin));
     }
 
-    std::string readQuoted(bool cCode = false) {
+    std::string readQuoted(QuotedContext context = QuotedContext::terminal) {
+        const bool cCode = context == QuotedContext::code;
         const Location begin = cursor_;
         const char quote = take();
         std::string decoded;
-        while (!atEnd()) {
+        while (!atEnd() && !newline(peek())) {
             if (cCode && lineSplice()) continue;
             const char c = take();
             if (c == quote) return decoded;
-            if (newline(c)) break;
             if (c != '\\') {
                 if (!cCode) decoded += c;
                 continue;
@@ -181,6 +198,8 @@ private:
             if (escaped != '\\' && escaped != '\'' && escaped != '"') decoded += '\\';
             decoded += escaped;
         }
+        // Preserve the raw unterminated argument for the fault syntax checker.
+        if (context == QuotedContext::faultArgument) return decoded;
         fail(begin, "syntax.quote", cCode ? "unterminated C string or character literal"
                                          : "unterminated quoted terminal");
     }
@@ -195,7 +214,7 @@ private:
         while (!atEnd()) {
             if (skipComment(true) || lineSplice()) continue;
             if (peek() == '"' || peek() == '\'') {
-                readQuoted(true);
+                readQuoted(QuotedContext::code);
                 continue;
             }
             if (prologue ? starts("%}") : (peek() == '}' && depth == 0)) {
@@ -434,7 +453,7 @@ private:
 
     // Metadata is opaque. Quotes and grouped arguments can contain delimiters;
     // those delimiters are only structural at the outermost level.
-    std::string readDirectiveValue(DirectiveScope scope) {
+    std::string readDirectiveValue(DirectiveScope scope, bool faultArgument = false) {
         const auto begin = cursor_.offset;
         auto end = begin;
         std::vector<char> groups;
@@ -445,7 +464,7 @@ private:
             } else if (skipComment()) {
                 continue;
             } else if (peek() == '"' || peek() == '\'') {
-                readQuoted();
+                readQuoted(faultArgument ? QuotedContext::faultArgument : QuotedContext::terminal);
                 end = cursor_.offset;
             } else {
                 const char c = peek();
@@ -497,10 +516,18 @@ private:
             if (directive.name == "empty")
                 fail(directive.location, "syntax.empty", "%empty is only valid in a production alternative");
             if (arg.line == directive.location.line)
-                directive.value = readDirectiveValue(DirectiveScope::global);
+                directive.value = readDirectiveValue(DirectiveScope::global, directive.name == "fault");
         }
         if (peek() == ';') take();
         grammar.directives.push_back(std::move(directive));
+    }
+
+    void readRuleDirectiveValue(Directive& directive, DirectiveScope scope) {
+        const bool fault = directive.name == "fault";
+        if (fault)
+            diagnostics_.push_back({Severity::error, directive.location, "fault-syntax",
+                                    "%fault must be declared at grammar scope"});
+        directive.value = readDirectiveValue(scope, fault);
     }
 
     void readProduction(Grammar& grammar) {
@@ -510,7 +537,7 @@ private:
         std::vector<Directive> header;
         while (peek() == '%' && letter(peek(1))) {
             auto directive = readDirectiveName();
-            directive.value = readDirectiveValue(DirectiveScope::header);
+            readRuleDirectiveValue(directive, DirectiveScope::header);
             header.push_back(std::move(directive));
             skipTrivia();
         }
@@ -579,7 +606,7 @@ private:
                             fail(cursor_, "syntax.dprec", "unexpected text after %dprec integer");
                         directive.value = from(begin);
                     } else {
-                        directive.value = readDirectiveValue(DirectiveScope::alternative);
+                        readRuleDirectiveValue(directive, DirectiveScope::alternative);
                     }
                     rule.directives.push_back(std::move(directive));
                     continue;
@@ -611,12 +638,8 @@ private:
 
 } // namespace
 
-std::optional<Grammar> parse(std::string_view source, std::vector<Diagnostic>& diagnostics) {
-    try {
-        return Reader(source, diagnostics).read();
-    } catch (const ParseFailure&) {
-        return std::nullopt;
-    }
+Grammar parse(std::string_view source, std::vector<Diagnostic>& diagnostics) {
+    return Reader(source, diagnostics).read();
 }
 
 } // namespace aurocks::detail

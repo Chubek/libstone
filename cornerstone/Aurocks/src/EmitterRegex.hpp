@@ -170,7 +170,8 @@ class RegexReader {
                 throw std::runtime_error("missing ')'");
             return node;
         }
-        if ((c == '^' && allowBegin) || (c == '$' && (peek() < 0 || peek() == ')')))
+        if ((c == '^' && allowBegin) ||
+            (c == '$' && (peek() < 0 || peek() == ')' || peek() == '|')))
             return std::make_unique<Regex>(c == '^' ? Regex::begin : Regex::end);
         if (c == '*' || c == '+' || c == '?')
             throw std::runtime_error("repetition without an operand");
@@ -243,19 +244,18 @@ class RegexReader {
         }
         return child;
     }
-    Node sequence(unsigned depth, bool allowBegin) {
+    Node sequence(unsigned depth) {
         auto node = std::make_unique<Regex>(Regex::concat);
         while (peek() >= 0 && peek() != ')' && peek() != '|') {
-            node->children.push_back(repetition(depth, allowBegin));
-            allowBegin = false;
+            node->children.push_back(repetition(depth, node->children.empty()));
         }
         return node;
     }
     Node alternation(unsigned depth) {
         auto node = std::make_unique<Regex>(Regex::alternate);
-        node->children.push_back(sequence(depth, true));
+        node->children.push_back(sequence(depth));
         while (accept('|'))
-            node->children.push_back(sequence(depth, false));
+            node->children.push_back(sequence(depth));
         return node;
     }
 

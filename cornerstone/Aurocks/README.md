@@ -105,12 +105,20 @@ count comes from LR(1) analysis, while the state count is the number of
 dotted production positions, not the number of runtime chart entries.
 The disambiguator names are `first` (default), `error`, `prefer`, and
 `priority`. `%prefer` / `%avoid` and `%priority N` / `%dprec N`
-annotate production alternatives.
+annotate production alternatives. `prefer` compares preference before
+numeric priority; the other policies compare priority first. `error`
+rejects a remaining tie before running any actions. Grammars that can
+recurse without consuming input are rejected because they can produce
+cyclic parse forests.
 
 The linked backend builds a LibGLR parse forest and evaluates semantic
-actions after selecting a derivation. Matching uses LibGLR's POSIX ERE
-scanner; libchomsky3 supplies supplemental regex diagnostics. It does
-not support all extensions of the portable regex dialect. After generating
+actions once per occurrence in the selected tree, including repeated
+nullable symbols at the same input position. Matching uses LibGLR's
+POSIX ERE scanner; libchomsky3 supplies supplemental regex diagnostics.
+The linked scanner can offer multiple matching prefixes for a terminal,
+while the portable matcher uses the longest prefix only. The linked
+scanner does not support all extensions of the portable regex dialect.
+After generating
 with `aurocks --backend libglr grammar.g -o parser.c`, link the resulting
 source against the runtime target:
 
@@ -129,31 +137,59 @@ and diagnostics; pointers returned by its accessors are borrowed until
 ## Extensions
 
 Supply Lua source at generation time with `--lua FILE` (or as source text
-through the embedding API). Scripts can inspect the grammar with
-`laurocks.get_start`, `production_count`, `production`, and `symbol`, add
-warnings with `laurocks.warn`, or choose a built-in policy with
-`laurocks.select_disambiguator` unless it contradicts an explicit host
-option.
+through the embedding API). Grammar text cannot load a script. The
+`laurocks` API provides:
+
+- `get_start()` and `production_count()`.
+- `production(rule)`, returning a table with `lhs`, `rhs_count`,
+  `directive_count`, `line`, and `column`.
+- `symbol(rule, index)`, returning the symbol kind and text.
+- `production_directive(rule, index)`, returning the directive name
+  (without `%`) and its raw argument text (an empty string if absent).
+  This exposes source annotations such as `%prefer` and `%dprec`, not
+  semantic action code or scores staged by the script.
+- `warn(message)` and `select_disambiguator(policy)`. Policy selection
+  cannot contradict an explicit host option and is unavailable in Lua
+  scoring mode.
+
+To change the grammar or supply production scores, declare the corresponding
+extension:
 
 - `%rewriter lua` enables edits through `laurocks.set_start(name)` and
-  `laurocks.replace_literal(rule, symbol, text)`. For example,
-  `laurocks.replace_literal(1, 1, "new")` replaces the first symbol of the
-  first production, if it is a literal.
+  `laurocks.replace_literal(rule, symbol, text)` or
+  `laurocks.replace_nonterminal(rule, symbol, name)`. Replacements keep
+  the original symbol kind and production arity, so action references
+  keep their positions. A new start or nonterminal reference must name
+  an existing production. `get_start` and `symbol` see staged edits.
 - `%disambiguator lua` (or `--disambiguator lua`) enables
-  `laurocks.set_rule_priority(rule, score)`. The script must assign a score
-  to at least one production. Scores become priorities in the generated
-  C; Lua is not used by the generated parser.
+  `laurocks.set_rule_priority(rule, score)`. The script must assign at least
+  one signed integer score and cannot replace an existing `%priority` or
+  `%dprec` annotation. Scores become priorities in the generated C; Lua
+  does not run in the generated parser.
 
 Indices are one-based and address production alternatives in grammar
-order. Lua execution is bounded and has no file I/O or module loading.
+order. At most 16 distinct symbol replacements and 256 distinct rule
+scores may be staged per invocation. Repeated assignments to the same
+target keep the last value. Edits, scores, and warnings from a failed
+script are discarded. Lua execution is bounded and has no file I/O or
+module loading.
 The sandbox applies only to Lua. C prologues, actions, and epilogues are
 emitted as native code; only compile and run generated parsers from
 grammars you trust.
 
-`%fault CODE ["message prefix"] => "replacement"` customizes a
-generator diagnostic's message; the first matching declaration wins.
-It does not change the diagnostic code, severity, or source position,
-and it does not affect generated-parser errors.
+`%Fault CODE ["message prefix"] => "replacement"` (also `%fault`)
+customizes a native generator diagnostic's message. Declare it at grammar
+scope. The code must match exactly; if supplied, the literal prefix must
+match the beginning of the original message. The first matching declaration
+wins. Directives in the C prologue serve as fallbacks only when there is
+no top-level `%fault`.
+
+Grammar-source errors can use overrides the reader has already collected
+before it stops, except errors that reject the source before parsing (such
+as embedded NUL bytes). Invalid `%fault` declarations report `fault-syntax`,
+which cannot be overridden. Overrides change neither code, severity, nor
+source position, and do not affect errors from generated parsers. The
+Perl generator did not implement `%fault` overrides.
 
 ## Migrating from `aurocks.pl` 2.0
 

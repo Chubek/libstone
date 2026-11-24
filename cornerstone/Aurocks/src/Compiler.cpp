@@ -117,38 +117,34 @@ Result compile(std::string_view source, const Options& options) {
         return result;
     }
     auto grammar = detail::parse(source, result.diagnostics);
-    if (!grammar) {
-        if (result.ok())
-            result.diagnostics.push_back({Severity::error, {}, "frontend", "could not read grammar"});
-        return result;
-    }
+    detail::validateFaultPatterns(grammar, result.diagnostics);
 
     auto effective = options;
     if (result.ok())
-        detail::applyExtensions(*grammar, effective, result.diagnostics);
+        detail::applyExtensions(grammar, effective, result.diagnostics);
     if (result.ok()) {
-        const auto canonical = "parse_" + grammar->start;
+        const auto canonical = "parse_" + grammar.start;
         if (effective.entrypoint == "main" ||
             (!effective.entrypoint.empty() && effective.entrypoint + "_error" == canonical))
             result.diagnostics.push_back({Severity::error, {}, "invalid-entrypoint",
                                           "entry point must be an available C identifier"});
     }
     if (result.ok()) {
-        const auto profile = std::find_if(grammar->directives.begin(), grammar->directives.end(),
+        const auto profile = std::find_if(grammar.directives.begin(), grammar.directives.end(),
                                           [](const auto& d) { return d.name == "backend"; });
         if (effective.backend == "libglr" ||
-            (effective.backend.empty() && profile != grammar->directives.end() && profile->value == "libglr"))
-            preparePatterns(*grammar, result.diagnostics);
+            (effective.backend.empty() && profile != grammar.directives.end() && profile->value == "libglr"))
+            preparePatterns(grammar, result.diagnostics);
     }
     if (result.ok())
-        result.analysis = detail::analyze(*grammar, effective, result.diagnostics);
+        result.analysis = detail::analyze(grammar, effective, result.diagnostics);
     if (result.ok()) {
         if (effective.check_only)
-            detail::validateEmission(*grammar, result.analysis, effective.entrypoint, result.diagnostics);
+            detail::validateEmission(grammar, result.analysis, effective.entrypoint, result.diagnostics);
         else
-            result.source = detail::emit(*grammar, result.analysis, effective.entrypoint, result.diagnostics);
+            result.source = detail::emit(grammar, result.analysis, effective.entrypoint, result.diagnostics);
     }
-    detail::applyFaultPatterns(*grammar, result.diagnostics);
+    detail::applyFaultPatterns(grammar, result.diagnostics);
     if (!result.ok())
         result.source.clear();
     return result;

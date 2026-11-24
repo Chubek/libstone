@@ -43,6 +43,10 @@ std::string canonicalName(std::string value) {
 
 template <typename Integer>
 std::optional<Integer> parseInteger(std::string_view text) {
+    if (!text.empty() && text.front() == '+') {
+        text.remove_prefix(1);
+        if (text.empty() || text.front() < '0' || text.front() > '9') return std::nullopt;
+    }
     if (text.empty()) return std::nullopt;
     Integer value{};
     const auto end = text.data() + text.size();

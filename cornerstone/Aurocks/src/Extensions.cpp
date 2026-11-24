@@ -168,7 +168,7 @@ struct Buffer {
     std::string_view view() const { return {data, size}; }
 };
 
-struct LiteralEdit {
+struct SymbolEdit {
     std::size_t rule = 0;
     std::size_t symbol = 0;
     Buffer<4096> text;
@@ -189,8 +189,8 @@ struct LuaInvocation {
     bool scoreRules;
     Buffer<256> start{};
     Buffer<64> disambiguator{};
-    std::array<LiteralEdit, 16> literals{};
-    std::size_t literalCount = 0;
+    std::array<SymbolEdit, 16> symbols{};
+    std::size_t symbolCount = 0;
     std::array<PriorityEdit, 256> priorities{};
     std::size_t priorityCount = 0;
     std::array<Buffer<512>, 16> warnings{};
@@ -293,11 +293,13 @@ int production(lua_State* state) {
     requireArgs(state, 1);
     const auto& rules = invocation(state).grammar.rules;
     const auto& rule = rules[getIndex(state, 1, rules.size())];
-    lua_createtable(state, 0, 4);
+    lua_createtable(state, 0, 5);
     pushText(state, rule.lhs);
     lua_setfield(state, -2, "lhs");
     pushSize(state, rule.rhs.size());
     lua_setfield(state, -2, "rhs_count");
+    pushSize(state, rule.directives.size());
+    lua_setfield(state, -2, "directive_count");
     pushSize(state, rule.location.line);
     lua_setfield(state, -2, "line");
     pushSize(state, rule.location.column);
@@ -305,9 +307,19 @@ int production(lua_State* state) {
     return 1;
 }
 
-LiteralEdit* findEdit(LuaInvocation& call, std::size_t rule, std::size_t symbol) {
-    for (std::size_t i = 0; i < call.literalCount; ++i)
-        if (call.literals[i].rule == rule && call.literals[i].symbol == symbol) return &call.literals[i];
+int productionDirective(lua_State* state) {
+    requireArgs(state, 2);
+    const auto& rules = invocation(state).grammar.rules;
+    const auto& directives = rules[getIndex(state, 1, rules.size())].directives;
+    const auto& directive = directives[getIndex(state, 2, directives.size())];
+    pushText(state, directive.name);
+    pushText(state, directive.value);
+    return 2;
+}
+
+SymbolEdit* findEdit(LuaInvocation& call, std::size_t rule, std::size_t symbol) {
+    for (std::size_t i = 0; i < call.symbolCount; ++i)
+        if (call.symbols[i].rule == rule && call.symbols[i].symbol == symbol) return &call.symbols[i];
     return nullptr;
 }
 
@@ -330,25 +342,32 @@ int inspectSymbol(lua_State* state) {
     return 2;
 }
 
-int replaceLiteral(lua_State* state) {
+int replaceSymbol(lua_State* state, SymbolKind kind, const char* expected) {
     requireArgs(state, 3);
     auto& call = invocation(state);
     if (!call.rewriter) return luaL_error(state, "grammar edits require %%rewriter lua");
     const auto rule = getIndex(state, 1, call.grammar.rules.size());
     const auto& rhs = call.grammar.rules[rule].rhs;
     const auto symbol = getIndex(state, 2, rhs.size());
-    if (rhs[symbol].kind != SymbolKind::literal)
-        return luaL_argerror(state, 2, "expected a literal terminal");
+    if (rhs[symbol].kind != kind) return luaL_argerror(state, 2, expected);
     auto* edit = findEdit(call, rule, symbol);
     if (!edit) {
-        if (call.literalCount == call.literals.size())
-            return luaL_error(state, "Lua literal edit budget exceeded");
-        edit = &call.literals[call.literalCount++];
+        if (call.symbolCount == call.symbols.size())
+            return luaL_error(state, "Lua symbol edit budget exceeded");
+        edit = &call.symbols[call.symbolCount++];
         edit->rule = rule;
         edit->symbol = symbol;
     }
     getText(state, 3, edit->text);
     return 0;
+}
+
+int replaceLiteral(lua_State* state) {
+    return replaceSymbol(state, SymbolKind::literal, "expected a literal terminal");
+}
+
+int replaceNonterminal(lua_State* state) {
+    return replaceSymbol(state, SymbolKind::nonterminal, "expected a nonterminal");
 }
 
 int warn(lua_State* state) {
@@ -375,7 +394,7 @@ int runLua(lua_State* state) {
         lua_getfield(state, base, name);
         lua_setfield(state, environment, name);
     }
-    lua_createtable(state, 0, 9);
+    lua_createtable(state, 0, 11);
     static constexpr luaL_Reg functions[] = {
         {"set_start", setStart},
         {"get_start", getStart},
@@ -383,8 +402,10 @@ int runLua(lua_State* state) {
         {"set_rule_priority", setRulePriority},
         {"production_count", productionCount},
         {"production", production},
+        {"production_directive", productionDirective},
         {"symbol", inspectSymbol},
         {"replace_literal", replaceLiteral},
+        {"replace_nonterminal", replaceNonterminal},
         {"warn", warn},
         {nullptr, nullptr},
     };
@@ -446,13 +467,7 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
     const Directive* disambiguator = nullptr;
     bool valid = true;
     for (const auto& directive : grammar.directives) {
-        if (directive.name == "fault") {
-            FaultParser parser(directive.value);
-            if (!parser.parse()) {
-                report(diagnostics, directive.location, "fault-syntax", parser.error());
-                valid = false;
-            }
-        } else if (directive.name == "rewriter") {
+        if (directive.name == "rewriter") {
             if (rewriter) {
                 report(diagnostics, directive.location, "rewriter", "duplicate %rewriter directive");
                 valid = false;
@@ -477,9 +492,8 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
     }
     for (const auto& rule : grammar.rules) {
         for (const auto& directive : rule.directives) {
-            if (directive.name != "fault" && directive.name != "rewriter") continue;
-            report(diagnostics, directive.location, directive.name == "fault" ? "fault-syntax" : "rewriter",
-                   "%" + directive.name + " must be declared at grammar scope");
+            if (directive.name != "rewriter") continue;
+            report(diagnostics, directive.location, "rewriter", "%rewriter must be declared at grammar scope");
             valid = false;
         }
     }
@@ -504,10 +518,21 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
     auto& call = *invocationStorage;
     if (!executeLua(call, location, diagnostics)) return;
 
-    if (call.start.size && !std::any_of(grammar.rules.begin(), grammar.rules.end(),
-                                        [&](const Rule& rule) { return rule.lhs == call.start.view(); })) {
+    const auto hasProduction = [&](std::string_view name) {
+        return std::any_of(grammar.rules.begin(), grammar.rules.end(),
+                           [&](const Rule& rule) { return rule.lhs == name; });
+    };
+    if (call.start.size && !hasProduction(call.start.view())) {
         report(diagnostics, location, "lua-extension", "the Lua start symbol has no production");
         return;
+    }
+    for (std::size_t i = 0; i < call.symbolCount; ++i) {
+        const auto& edit = call.symbols[i];
+        const auto& symbol = grammar.rules[edit.rule].rhs[edit.symbol];
+        if (symbol.kind == SymbolKind::nonterminal && !hasProduction(edit.text.view())) {
+            report(diagnostics, symbol.location, "lua-extension", "the Lua replacement nonterminal has no production");
+            return;
+        }
     }
     if (call.disambiguator.size && !options.disambiguator.empty() &&
         options.disambiguator != call.disambiguator.view()) {
@@ -529,8 +554,8 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
     }
 
     if (call.start.size) grammar.start = call.start.view();
-    for (std::size_t i = 0; i < call.literalCount; ++i) {
-        const auto& edit = call.literals[i];
+    for (std::size_t i = 0; i < call.symbolCount; ++i) {
+        const auto& edit = call.symbols[i];
         grammar.rules[edit.rule].rhs[edit.symbol].text = edit.text.view();
     }
     if (call.disambiguator.size) options.disambiguator = call.disambiguator.view();
@@ -545,6 +570,15 @@ void applyExtensions(Grammar& grammar, Options& options, std::vector<Diagnostic>
         diagnostics.push_back({Severity::warning, location, "lua-warning", safeMessage(call.warnings[i].view())});
 }
 
+void validateFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics) {
+    for (const auto& directive : grammar.directives) {
+        if (directive.name != "fault") continue;
+        FaultParser parser(directive.value);
+        if (!parser.parse())
+            report(diagnostics, directive.location, "fault-syntax", parser.error());
+    }
+}
+
 void applyFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnostics) {
     namespace lr = firestone::lr;
     if (diagnostics.empty()) return;
@@ -552,7 +586,7 @@ void applyFaultPatterns(const Grammar& grammar, std::vector<Diagnostic>& diagnos
     for (const auto& directive : grammar.directives) {
         if (directive.name != "fault") continue;
         auto fault = FaultParser(directive.value).parse();
-        if (!fault) continue; // applyExtensions has already reported the declaration error.
+        if (!fault) continue; // The declaration error has already been reported.
         auto& engine = engines[fault->code];
         const auto match = fault->prefix ? lr::lexicalLiteral(std::move(*fault->prefix)) : lr::lexicalLiteral("");
         engine.addRule(std::move(match), [message = std::move(fault->replacement)](const lr::LRDiagState&) {

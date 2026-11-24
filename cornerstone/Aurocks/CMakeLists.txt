@@ -75,6 +75,8 @@ if(LIBSTONE_BUILD_TESTS)
     add_test(NAME aurocks.integration COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py" "$<TARGET_FILE:aurocks>"
       "${CMAKE_C_COMPILER}")
+    add_test(NAME aurocks.faults COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/faults.py" "$<TARGET_FILE:aurocks>")
     set(linked_case "${CMAKE_CURRENT_BINARY_DIR}/linked_generated.c")
     add_custom_command(OUTPUT "${linked_case}"
       COMMAND aurocks --backend libglr --entrypoint parse_linked

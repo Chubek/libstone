@@ -30,10 +30,10 @@ static size_t skip_trivia(const char *input, size_t length, size_t position, voi
     return position;
 }
 
-static int reduce(const glr_semantic_context_t *semantic, void **value, void *opaque) {
-    parse_context *context = semantic->user_data;
+static int reduce(parse_context *context, const glr_forest_node_t *node,
+                  const char *input, void **operands, void **value) {
     const aurocks_parser_spec *spec = context->spec;
-    const size_t index = *(const size_t *)opaque;
+    const size_t index = context->rule_indices[node->symbol_id];
     const aurocks_rule_spec *rule = &spec->rules[index];
     size_t child = 0;
     char *token = NULL;
@@ -43,20 +43,17 @@ static int reduce(const glr_semantic_context_t *semantic, void **value, void *op
         context->values[i] = NULL;
         if (symbol < 0)
             continue;
-        if (child >= semantic->selection.child_count)
-            goto failure;
         if (spec->symbols[symbol].kind == AUROCKS_NONTERMINAL) {
-            context->values[i] = semantic->selection.values[child];
+            context->values[i] = operands[child];
         } else if (spec->terminal_use) {
             const unsigned use = spec->terminal_use(index, i) & 3u;
             if (use) {
-                glr_selection_t terminal;
-                if (glr_select_position(&semantic->selection, child + 1, &terminal) != 0)
-                    goto failure;
-                char *text = malloc(terminal.length + 1);
+                const glr_forest_node_t *terminal = node->children[child];
+                const size_t length = terminal->end_position - terminal->position;
+                char *text = malloc(length + 1);
                 if (!text) goto failure;
-                memcpy(text, terminal.lexeme, terminal.length);
-                text[terminal.length] = '\0';
+                memcpy(text, input + terminal->position, length);
+                text[length] = '\0';
                 context->captures[i] = text;
                 if (use & 1u) context->values[i] = text;
                 if (use & 2u) token = text;
@@ -64,8 +61,6 @@ static int reduce(const glr_semantic_context_t *semantic, void **value, void *op
         }
         ++child;
     }
-    if (child != semantic->selection.child_count)
-        goto failure;
     *value = spec->action(index, context->values, token);
     return 0;
 
@@ -75,39 +70,145 @@ failure:
     return -1;
 }
 
-static size_t select_production(const glr_forest_node_t *node, void *opaque) {
-    const parse_context *context = opaque;
-    size_t best = SIZE_MAX;
-    int tied = 0;
-    for (size_t i = 0; i < node->child_count; ++i) {
-        const int id = node->children[i]->symbol_id;
-        if (id < 0 || (size_t)id >= context->spec->rule_count)
-            return SIZE_MAX;
-        const size_t index = context->rule_indices[id];
-        if (best != SIZE_MAX) {
-            const size_t old = context->rule_indices[node->children[best]->symbol_id];
-            const aurocks_rule_spec *candidate = &context->spec->rules[index];
-            const aurocks_rule_spec *previous = &context->spec->rules[old];
-            int rank = 0;
-            if (context->spec->policy == AUROCKS_PREFER &&
-                candidate->preference != previous->preference)
-                rank = candidate->preference > previous->preference ? 1 : -1;
-            else if (candidate->priority != previous->priority)
-                rank = candidate->priority > previous->priority ? 1 : -1;
-            else if (candidate->preference != previous->preference)
-                rank = candidate->preference > previous->preference ? 1 : -1;
-            if (rank < 0) continue;
-            if (rank == 0) {
-                tied = 1;
-                if (index >= old) continue;
-            } else {
-                tied = 0;
-            }
-        }
-        best = i;
+typedef struct production_choice {
+    const glr_forest_node_t *node;
+    size_t rule;
+    int tied;
+} production_choice;
+
+static void consider(const parse_context *context, production_choice *best,
+                     const glr_forest_node_t *node) {
+    const size_t index = context->rule_indices[node->symbol_id];
+    int rank = 1;
+    if (best->node) {
+        const aurocks_rule_spec *candidate = &context->spec->rules[index];
+        const aurocks_rule_spec *previous = &context->spec->rules[best->rule];
+        rank = 0;
+        if (context->spec->policy == AUROCKS_PREFER &&
+            candidate->preference != previous->preference)
+            rank = candidate->preference > previous->preference ? 1 : -1;
+        else if (candidate->priority != previous->priority)
+            rank = candidate->priority > previous->priority ? 1 : -1;
+        else if (candidate->preference != previous->preference)
+            rank = candidate->preference > previous->preference ? 1 : -1;
     }
-    if (context->spec->policy == AUROCKS_REJECT_AMBIGUOUS && tied) return SIZE_MAX;
-    return best;
+    if (rank < 0) return;
+    best->tied = rank == 0;
+    if (rank > 0 || index < best->rule ||
+        (index == best->rule && node->end_position > best->node->end_position)) {
+        best->node = node;
+        best->rule = index;
+    }
+}
+
+static int consider_symbol(const parse_context *context, production_choice *best,
+                           const glr_forest_node_t *node) {
+    if (!node || node->type != GLR_NODE_NONTERMINAL || !node->child_count) return -1;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const glr_forest_node_t *candidate = node->children[i];
+        if (candidate->type != GLR_NODE_CONSTRUCTOR || candidate->symbol_id < 0 ||
+            (size_t)candidate->symbol_id >= context->spec->rule_count)
+            return -1;
+        consider(context, best, candidate);
+    }
+    return 0;
+}
+
+static const glr_forest_node_t *select_root(const parse_context *context, const glr_parser_t *parser) {
+    production_choice best = {0};
+    /* Different amounts of terminal text may precede trailing %skip. LibGLR's
+     * forest->root is only the last accepted root, not all accepted spans. */
+    for (size_t i = 0; i < parser->stack_count; ++i) {
+        const glr_stack_t *stack = parser->stacks[i];
+        if (consider_symbol(context, &best,
+                            glr_stack_node_get_forest_node(stack->states[stack->height - 1])) != 0)
+            return NULL;
+    }
+    if (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS) return NULL;
+    return best.node;
+}
+
+typedef struct visit_frame {
+    const glr_forest_node_t *node;
+    size_t next;
+} visit_frame;
+
+/* Like the portable runtime, bound the number of expanded occurrences. A
+ * small forest can describe a much larger tree, even with no cycles. */
+#define AUROCKS_TREE_LIMIT 1048576UL
+
+static void *grow_stack(void *buffer, size_t *capacity, size_t used, size_t width) {
+    if (used < *capacity) return buffer;
+    if (*capacity > SIZE_MAX / 2) return NULL;
+    const size_t next = *capacity ? *capacity * 2 : 16;
+    if (next > SIZE_MAX / width) return NULL;
+    void *grown = realloc(buffer, next * width);
+    if (grown) *capacity = next;
+    return grown;
+}
+
+static int evaluate(parse_context *context, const glr_forest_node_t *node,
+                    const char *input, void **result) {
+    const glr_forest_node_t **order = NULL;
+    visit_frame *stack = NULL;
+    void **values = NULL;
+    size_t order_capacity = 0, count = 0, stack_capacity = 0, depth = 0, visited = 0;
+    int status = -1;
+
+    /* Resolve the whole selected tree before calling any actions. LibGLR's
+     * DAG evaluator memoizes by node, but Aurocks actions own their semantic
+     * values, so two occurrences of a nullable symbol need separate results. */
+    while (node || depth) {
+        if (node) {
+            if (visited++ == AUROCKS_TREE_LIMIT) goto done;
+            if (node->type == GLR_NODE_NONTERMINAL) {
+                production_choice best = {0};
+                if (consider_symbol(context, &best, node) != 0 ||
+                    (best.tied && context->spec->policy == AUROCKS_REJECT_AMBIGUOUS))
+                    goto done;
+                node = best.node;
+            }
+            visit_frame *grown = grow_stack(stack, &stack_capacity, depth, sizeof(*stack));
+            if (!grown) goto done;
+            stack = grown;
+            stack[depth++] = (visit_frame){node, 0};
+            node = NULL;
+        }
+        visit_frame *frame = &stack[depth - 1];
+        if (frame->next < frame->node->child_count) {
+            node = frame->node->children[frame->next++];
+        } else {
+            const glr_forest_node_t **grown = grow_stack(order, &order_capacity, count, sizeof(*order));
+            if (!grown) goto done;
+            order = grown;
+            order[count++] = frame->node;
+            --depth;
+        }
+    }
+
+    if (!count || count > SIZE_MAX / sizeof(*values)) goto done;
+    values = malloc(count * sizeof(*values));
+    if (!values) goto done;
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i) {
+        node = order[i];
+        if (node->type == GLR_NODE_TERMINAL) {
+            values[used++] = NULL;
+        } else {
+            void *value;
+            used -= node->child_count;
+            if (reduce(context, node, input, values + used, &value) != 0) goto done;
+            values[used++] = value;
+        }
+    }
+    *result = values[0];
+    status = 0;
+
+done:
+    free(values);
+    free(stack);
+    free(order);
+    return status;
 }
 
 void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, const char **error) {
@@ -177,8 +278,6 @@ void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, c
         const int id = glr_grammar_add_production(grammar, symbols[rule->lhs], body, count);
         if (id < 0 || (size_t)id >= spec->rule_count) goto done;
         indices[id] = i;
-        if (glr_production_set_semantic_action(grammar, id, reduce, &indices[id], NULL) != 0)
-            goto done;
     }
     parser = glr_parser_create(grammar);
     if (!parser || glr_parser_set_scannerless(parser, true) != 0) goto done;
@@ -187,12 +286,10 @@ void *aurocks_parse_glr_ex(const aurocks_parser_spec *spec, const char *input, c
         has_skip = 1;
         if (glr_parser_set_trivia_hook(parser, skip_trivia, &context) != 0) goto done;
     }
-    glr_parser_set_user_data(parser, &context);
-    glr_parser_set_semantic_resolver(parser, select_production);
     const glr_parse_result_t parsed = glr_parse(parser, input, length);
-    if (parsed.error == GLR_PARSE_SUCCESS) {
+    if (parsed.error == GLR_PARSE_SUCCESS &&
+        evaluate(&context, select_root(&context, parser), input, &result) == 0) {
         if (error) *error = NULL;
-        result = parsed.semantic_value;
     } else if (error && parsed.position <= length) {
         *error = input + parsed.position;
     }

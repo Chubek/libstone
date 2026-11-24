@@ -47,6 +47,60 @@ def test(binary, cc, cwd):
     require(not cli("-o", json, FIXTURES / "json.g").stdout, "-o leaked C onto stdout")
     compile_and_run(json)
 
+    # Each regex alternative has its own beginning and end assertions.
+    anchors = cwd / "anchors.g"
+    anchors.write_text(
+        "%start entry\n"
+        "entry: /a$|^b/ | /^a|^c/ '!';\n"
+        "%%\n"
+        "int main(void) {\n"
+        "    const char *bad = \"b!\";\n"
+        "    yyparse(\"a\"); if (yyparse_error()) return 1;\n"
+        "    yyparse(\"b\"); if (yyparse_error()) return 2;\n"
+        "    yyparse(\"c!\"); if (yyparse_error()) return 3;\n"
+        "    yyparse(bad); if (yyparse_error() != bad + 1) return 4;\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="ascii",
+    )
+    anchors_c = cwd / "anchors.c"
+    anchors_c.write_bytes(cli(anchors).stdout)
+    compile_and_run(anchors_c)
+
+    invalid_regex = cwd / "invalid-regex.g"
+    for body in ("entry: /a{1025}/;\n", "%skip /a{1025}/\nentry: 'a';\n"):
+        invalid_regex.write_text("%start entry\n" + body, encoding="ascii")
+        for backend in ("portable", "liblr"):
+            emit = cli("--backend", backend, invalid_regex, status=1)
+            check = cli("--backend", backend, "--check", invalid_regex, status=1)
+            require(b"[invalid-regex]" in emit.stderr and emit.stderr == check.stderr
+                    and not emit.stdout and not check.stdout,
+                    f"{backend} check and emission disagree on invalid regex")
+
+    cycle = cwd / "cycle.g"
+    cycle.write_text("%start entry\nentry: entry | 'a';\n", encoding="ascii")
+    for backend in ("portable", "liblr", "libglr"):
+        for flags in ((), ("--check",)):
+            failure = cli("--backend", backend, *flags, cycle, status=1)
+            require(b"[cyclic-forest]" in failure.stderr and not failure.stdout,
+                    f"{backend} accepted zero-input recursion: {failure.stderr!r}")
+    for name in ("aurocks_parse_glr_ex", "aurocks_parser_spec", "AUROCKS_REGEX"):
+        failure = cli("--backend", "libglr", "--check", "-e", name, fixture, status=1)
+        require(b"[invalid-entrypoint]" in failure.stderr,
+                f"linked runtime name {name} was accepted as an entry point")
+
+    signed = cwd / "signed.g"
+    signed.write_text(
+        "%start entry\n%expect +0\nentry: 'a' %priority +2;\n",
+        encoding="ascii",
+    )
+    for backend in ("portable", "liblr", "libglr"):
+        cli("--check", "--backend", backend, signed)
+        cli("--backend", backend, signed)
+    signed.write_text("%start entry\nentry: 'a' %priority +-2;\n", encoding="ascii")
+    require(b"[invalid-priority]" in cli("--check", signed, status=1).stderr,
+            "a priority with two signs was accepted")
+
     # Both entry-point forms must emit a callable symbol, not just accept the flag.
     named = cwd / "named.g"
     named.write_text(
@@ -148,12 +202,21 @@ def test(binary, cc, cwd):
     compile_and_run(rejected, "reject")
 
     scored = cwd / "scored.g"
-    scored.write_bytes(b"%disambiguator lua\n" + ambiguous.read_bytes())
+    scored.write_bytes(b"%disambiguator lua\n" + ambiguous.read_bytes().replace(
+        b"lhs { $$", b"lhs %dprec 5 { $$"))
     cli("--check", scored, status=1)
     score_script = cwd / "score.lua"
     score_script.write_text(
-        "assert(laurocks.production(2).lhs == 'entry')\n"
-        "laurocks.set_rule_priority(2, 50)\n"
+        "local rule = laurocks.production(1)\n"
+        "assert(rule.lhs == 'entry' and rule.rhs_count == 1 and rule.directive_count == 1)\n"
+        "local name, value = laurocks.production_directive(1, 1)\n"
+        "assert(name == 'dprec' and value == '5')\n"
+        "for i = 1, laurocks.production_count() do\n"
+        "  local kind, symbol = laurocks.symbol(i, 1)\n"
+        "  if kind == 'nonterminal' and symbol == 'rhs' then\n"
+        "    laurocks.set_rule_priority(i, value == '5' and 50 or 0)\n"
+        "  end\n"
+        "end\n"
         "laurocks.warn('applied production scores')\n",
         encoding="ascii",
     )
@@ -165,6 +228,23 @@ def test(binary, cc, cwd):
     scored_source.write_bytes(cli("--lua", score_script, scored).stdout)
     compile_and_run(scored_source, "scored")
 
+    for source, diagnostic in (
+        ("laurocks.set_rule_priority(1, 50)", b"explicit %dprec"),
+        ("laurocks.set_rule_priority(2, 1.5)", b"integer score expected"),
+        ("local rule = laurocks.production(2)", b"did not assign any production scores"),
+    ):
+        score_script.write_text(source, encoding="ascii")
+        failure = cli("--lua", score_script, scored, status=1)
+        require(not failure.stdout and b"[lua-extension]" in failure.stderr
+                and diagnostic in failure.stderr, f"bad scoring script accepted: {failure.stderr!r}")
+    score_script.write_text("laurocks.set_rule_priority(2, 50)", encoding="ascii")
+    failure = cli("--check", "--disambiguator", "first", "--lua", score_script, scored, status=1)
+    require(b"rule scores require %disambiguator lua" in failure.stderr,
+            "scoring script bypassed the explicit host policy")
+    require(b"disambiguator=priority " in cli("--check", "--disambiguator", "lua", "--lua",
+                                               score_script, ambiguous).stdout,
+            "explicit host Lua scoring opt-in did not select priority")
+
     rewriting = cwd / "rewriting.g"
     rewriting.write_text(
         "%rewriter lua\n"
@@ -172,6 +252,7 @@ def test(binary, cc, cwd):
         "%start unused\n"
         "unused: 'x';\n"
         "token: 'a' { $$ = &marker; };\n"
+        "entry: unused { $$ = $1; };\n"
         "%%\n"
         "int main(void) { return !yyparse(\"b\") || yyparse(\"a\"); }\n",
         encoding="ascii",
@@ -180,13 +261,30 @@ def test(binary, cc, cwd):
     script = cwd / "rewrite.lua"
     script.write_text(
         "assert(laurocks.get_start() == 'unused')\n"
-        "laurocks.set_start('token')\n"
-        "laurocks.replace_literal(2, 1, 'b')\n",
+        "laurocks.set_start('entry')\n"
+        "assert(laurocks.get_start() == 'entry')\n"
+        "laurocks.replace_literal(2, 1, 'b')\n"
+        "laurocks.replace_nonterminal(3, 1, 'token')\n"
+        "local kind, symbol = laurocks.symbol(3, 1)\n"
+        "assert(kind == 'nonterminal' and symbol == 'token')\n",
         encoding="ascii",
     )
     generated = cwd / "rewritten.c"
     generated.write_bytes(cli("--lua", script, rewriting).stdout)
     compile_and_run(generated)
+
+    for grammar, source, diagnostic in (
+        (rewriting, "laurocks.replace_nonterminal(1, 1, 'token')", b"expected a nonterminal"),
+        (rewriting, "laurocks.warn('staged warning'); laurocks.replace_nonterminal(3, 1, 'missing')",
+         b"has no production"),
+        (ambiguous, "laurocks.replace_nonterminal(1, 1, 'rhs')", b"require %rewriter lua"),
+    ):
+        script.write_text(source, encoding="ascii")
+        failure = cli("-o", preserved, "--lua", script, grammar, status=1)
+        require(not failure.stdout and b"[lua-extension]" in failure.stderr
+                and diagnostic in failure.stderr and b"lua-warning" not in failure.stderr,
+                f"bad rewrite accepted: {failure.stderr!r}")
+        require(preserved.read_bytes() == b"keep\n", "a failed rewrite changed the output file")
 
     sandbox = cwd / "sandbox.lua"
     sandbox.write_text(
@@ -205,6 +303,11 @@ def test(binary, cc, cwd):
         failure = cli("--check", "--lua", sandbox, fixture, status=1)
         require(b"[lua-extension]" in failure.stderr and diagnostic in failure.stderr,
                 f"sandbox did not stop its over-budget script: {failure.stderr!r}")
+    for source in (b"-- comment with an embedded NUL\x00", b" " * (64 * 1024 + 1)):
+        sandbox.write_bytes(source)
+        failure = cli("--check", "--lua", sandbox, fixture, status=1)
+        require(b"Lua source must be text of at most 64 KiB with no NUL bytes" in failure.stderr,
+                f"invalid Lua source passed validation: {failure.stderr!r}")
 
     invalid = cwd / "invalid.g"
     for bad_grammar in (

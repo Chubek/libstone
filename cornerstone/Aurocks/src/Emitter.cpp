@@ -37,15 +37,19 @@ bool validEntrypoint(std::string_view s) {
     static const std::set<std::string_view> internal{
         "my_strdup", "aurocks_action", "aurocks_ambiguity_error", "aurocks_arg", "aurocks_box_double",
         "aurocks_column", "aurocks_edge", "aurocks_error_position", "aurocks_evaluate", "aurocks_find", "aurocks_frame",
-        "aurocks_grow", "aurocks_has_skip", "aurocks_item", "aurocks_parse_glr", "aurocks_parse_input",
+        "aurocks_grow", "aurocks_has_skip", "aurocks_item", "aurocks_parse_glr", "aurocks_parse_glr_ex", "aurocks_parse_input",
         "aurocks_parser", "aurocks_predict", "aurocks_priority", "aurocks_production_ids", "aurocks_productions",
         "aurocks_recognize", "aurocks_record", "aurocks_rehash", "aurocks_resolve", "aurocks_rhs",
         "aurocks_rule", "aurocks_rules", "aurocks_rx_match", "aurocks_rx_push", "aurocks_rx_state",
         "aurocks_scan", "aurocks_sets", "aurocks_skip", "aurocks_skip_rx", "aurocks_slot",
         "aurocks_start", "aurocks_states", "aurocks_step", "aurocks_symbol", "aurocks_symbols",
         "aurocks_terminal_use", "aurocks_visit", "aurocks_word_byte", "yyparse_error",
+        "aurocks_symbol_kind", "aurocks_symbol_spec", "aurocks_rule_spec", "aurocks_forest_policy",
+        "aurocks_action_fn", "aurocks_terminal_use_fn", "aurocks_parser_spec",
         "AUROCKS_EDGE_LIMIT", "AUROCKS_INPUT_LIMIT",
         "AUROCKS_ITEM_LIMIT", "AUROCKS_MAX_RHS", "AUROCKS_RULES", "AUROCKS_RX_STATES", "AUROCKS_WORK_LIMIT",
+        "AUROCKS_NONTERMINAL", "AUROCKS_LITERAL", "AUROCKS_REGEX",
+        "AUROCKS_FIRST", "AUROCKS_REJECT_AMBIGUOUS", "AUROCKS_PRIORITY", "AUROCKS_PREFER",
         "AUROCKS_RUNTIME_FUNCTION_COUNT", "AUROCKS_THREAD_LOCAL", "aurocks_runtime_functions",
         "aurocks_alloc", "aurocks_calloc", "aurocks_realloc", "aurocks_free", "aurocks_strdup",
         "aurocks_strndup", "aurocks_memdup", "aurocks_strlen", "aurocks_strcmp", "aurocks_strncmp",
@@ -77,8 +81,11 @@ template <typename Integer>
 bool integer(std::string_view text, Integer& value) {
     if (text.empty())
         return false;
-    if (text.front() == '+')
+    if (text.front() == '+') {
         text.remove_prefix(1);
+        if (text.empty() || !digit(text.front()))
+            return false;
+    }
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
     return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
@@ -431,7 +438,6 @@ void emitPortable(std::ostream& out, const Grammar& grammar, const Analysis& ana
                   const std::vector<Action>& actions, std::string_view entrypoint,
                   Diagnostics& diagnostics) {
     const auto names = collectNames(grammar);
-    validateForest(grammar, names, diagnostics);
     portable::RegexProgram regex;
     std::unordered_map<std::string, int> patterns;
     auto addRegex = [&](const std::string& pattern, Location location) {
@@ -575,15 +581,14 @@ bool checkEntrypoint(const Grammar& grammar, std::string_view entrypoint, Diagno
 
 } // namespace
 
-void validateEmission(const Grammar& grammar, const Analysis& analysis, std::string_view entrypoint,
+void validateEmission(const Grammar& grammar, const Analysis&, std::string_view entrypoint,
                       Diagnostics& diagnostics) {
     checkEntrypoint(grammar, entrypoint, diagnostics);
     const bool legacySList = grammar.prologue.find("SList") != std::string::npos;
     for (const auto& rule : grammar.rules)
         transform(rule, legacySList, diagnostics);
     validateDirectives(grammar, diagnostics);
-    if (analysis.backend != "libglr")
-        validateForest(grammar, collectNames(grammar), diagnostics);
+    validateForest(grammar, collectNames(grammar), diagnostics);
 }
 
 std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_view entrypoint,
@@ -596,6 +601,7 @@ std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_v
     for (const auto& rule : grammar.rules)
         actions.push_back(transform(rule, legacySList, diagnostics));
     validateDirectives(grammar, diagnostics);
+    validateForest(grammar, collectNames(grammar), diagnostics);
     if (std::any_of(diagnostics.begin(), diagnostics.end(),
                     [](const auto& diagnostic) { return diagnostic.severity == Severity::error; }))
         return {};
