@@ -6,6 +6,7 @@
 #include "DFA2C99.hpp"
 #include "DFA2SIMD.hpp"
 #include "DFAMinimization.hpp"
+#include "DiagnosticsEngine.hpp"
 #include "EBNF.hpp"
 #include "GLL.hpp"
 #include "GLR.hpp"

@@ -62,7 +62,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/FirestoneConfig.cmake
 
 if(FIRESTONE_BUILD_TESTS)
   foreach(suite IN ITEMS ir representations rewrite trs eqsat memory types objects semantics cps algorithms extensions vm vm_compiler vm_binary vm_tiering bignum compute concurrency gfx intrin hardening isel isched regalloc
-      lr_automata lr_bottom_up lr_top_down lr_utf8 lr_generators lr_runtimes)
+      lr_automata lr_bottom_up lr_top_down lr_utf8 lr_generators lr_runtimes
+      lr_diagnostics lr_diagnostic_recovery)
     add_executable(firestone_${suite}_test tests/${suite}.cpp)
     if(suite MATCHES "^lr_")
       target_link_libraries(firestone_${suite}_test PRIVATE Firestone::lr)

@@ -22,6 +22,7 @@ target_link_libraries(my_frontend PRIVATE Firestone::lr)
 | Generate a bottom-up table or parse with one | `ParserGenerator.hpp`, `LALR.hpp`, `GLR.hpp` |
 | Predictive or generalized top-down parsing | `LLTableDriven.hpp`, `LLFunctionDriven.hpp`, `GLL.hpp`, `ATN.hpp` |
 | Write a parser directly instead of building a CFG | `RecursiveDescent.hpp`, `ParserCombinator.hpp`, `PEG.hpp` |
+| Diagnose and recover from recognized errors | `DiagnosticsEngine.hpp` |
 
 ## Grammar syntax
 
@@ -196,6 +197,62 @@ grammars or parser callbacks. Automata and table generation can grow large;
 ambiguous grammars can produce large forests. A materialized `ParseNode` owns
 its children recursively, so very deep trees may also need iterative teardown.
 Apply appropriate input and resource limits before processing untrusted grammars.
+
+## Rule-based diagnostics
+
+Include `<liblr/DiagnosticsEngine.hpp>` to use `LRDiagEngine`. Register rules
+in priority order with `addRule(pattern, action)`: the first matching pattern
+chooses the action. If none matches, the engine returns a fatal diagnostic.
+You can dispatch directly from a custom lexer or parser by passing an
+`LRDiagState` to `diagnose`. The state carries the current source and
+provenance, a half-open byte span, and, when available, the grammar, token
+stream, token position, actual symbol, and expected symbols. Syntactic
+diagnostics require the grammar and token stream. Views and pointers are
+borrowed for the call; copy anything you need to keep.
+
+Patterns can be callbacks or use the built-in adapters: `lexicalLiteral`
+matches fixed bytes, `lexicalRegex` matches a byte regex, and `lexicalPEG`
+and `syntacticPEG` match PEG prefixes. These adapters match at the error
+position, not at an arbitrary later position in the input. Empty matches
+count. `lexicalPEG` takes an `LRDiagByteMap` mapping bytes to the pattern
+grammar's terminals; an unmapped byte anywhere in the suffix prevents a match.
+`syntacticPEG` requires compatible terminal IDs and names. PEG `end()` tests
+the actual end of the byte or token input.
+
+An action can request an in-memory patch, report information or a warning,
+or mark the failure as fatal. Messages and fix suggestions are data: the
+library does not print, write the original source file, or terminate the
+process. A byte patch replaces a range in the current source; a token patch
+replaces a range in the current token stream. Empty ranges are insertions.
+Fatal actions never edit input. Invalid states or actions and exceptions from
+rule callbacks become fatal diagnostics. Register rules before dispatching;
+callbacks must not modify the engine's rule list during dispatch.
+
+For example, a lexer that rejects `@` can offer an in-memory replacement:
+
+```cpp
+using namespace firestone::lr;
+LRDiagEngine diagnostics;
+diagnostics.addRule(lexicalLiteral("@"), [](const LRDiagState& state) {
+    return LRDiagAction{LRDiagSeverity::warning, "unexpected '@'",
+        LRBytePatch{state.byteBegin, state.byteEnd, "+"}, "use '+' here"};
+});
+```
+
+Use `LRPatchLexer(lexer, diagnostics).lex(source, provenance)` to recover from
+lexical errors, or `LRPatchParser(lexer, diagnostics).parse(source, parser,
+provenance)` with an `LLTableDriven` parser. A custom parser can supply its
+grammar and a callback that returns an `LRParseAttempt` (`ParseNode` or
+`LLSyntaxError`). Byte edits restart lexing; token edits retry parsing without
+rewriting the source. Results retain the edited source, tokens, byte spans, and
+diagnostics. EOF and synthetic tokens have zero-width spans; each diagnostic
+records its coordinates before its edit.
+
+An informational or warning action without a patch can skip an invalid byte, but
+cannot advance a parser. No-op edits and exhausted patch budgets stop recovery.
+`LRRecoveryOptions` sets the shared patch budget and can carry a cleanup
+callback, called once on a fatal result. The caller decides whether and how to
+report diagnostics or exit.
 
 ## Testing liblr
 
