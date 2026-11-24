@@ -18,9 +18,23 @@ int main() { return test_main([] {
     CHECK((a * a).to_string() == "115792089237316195423570985008687907852589419931798687112530834793049593217025");
     CHECK((a * a) / a == a);
     CHECK((a * a + BigInt(7)) % a == BigInt(7));
-    CHECK((BigInt(-7) >> 1) == BigInt(-3));
+    CHECK((BigInt(-7) >> 1) == BigInt(-4));
+    CHECK((BigInt(-8) >> 1) == BigInt(-4));
+    CHECK((BigInt(-7) >> 3) == BigInt(-1));
+    CHECK((BigInt(-7) >> std::numeric_limits<std::size_t>::max()) == BigInt(-1));
+    CHECK((BigInt() >> std::numeric_limits<std::size_t>::max()).is_zero());
     CHECK((a << 65) >> 65 == a);
     CHECK((a >> 1000).is_zero());
+    auto shifted = -((BigInt(1) << 64) - BigInt(1));
+    CHECK((shifted >> 32) == -(BigInt(1) << 32));
+    for (std::size_t bits : {0, 1, 31, 32, 33, 63, 64, 65, 129}) {
+        const auto exact = -(BigInt(5) << bits);
+        auto inexact = exact - BigInt(1);
+        CHECK((exact >> bits) == BigInt(-5));
+        auto expected = inexact / (BigInt(1) << bits);
+        inexact >>= bits;
+        CHECK(inexact == expected && inexact == BigInt(-6));
+    }
     CHECK(gcd(BigInt(-48), BigInt(18)) == BigInt(6));
     CHECK(pow(BigInt(2), 256).bit_length() == 257);
     BigInt original(-7), moved(std::move(original));
@@ -33,16 +47,39 @@ int main() { return test_main([] {
         CHECK((bx + by).to_int64() == x + y);
         CHECK((bx - by).to_int64() == x - y);
         CHECK((bx * by).to_int64() == x * y);
-        if (y) { CHECK((bx / by).to_int64() == x / y); CHECK((bx % by).to_int64() == x % y); }
+        if (y) {
+            auto q = x / y, r = x % y;
+            if (r && ((r < 0) != (y < 0))) { --q; r += y; }
+            CHECK((bx / by).to_int64() == q);
+            CHECK((bx % by).to_int64() == r);
+        }
         auto wide = (bx << 128) + BigInt(static_cast<std::int64_t>(random() >> 1));
-        if (y) { auto qr = divmod(wide, by); CHECK(qr.first * by + qr.second == wide); CHECK(qr.second.abs() < by.abs()); }
+        if (y) {
+            auto qr = divmod(wide, by);
+            CHECK(qr.first * by + qr.second == wide);
+            CHECK(qr.second.abs() < by.abs());
+            CHECK(qr.second.is_zero() || qr.second.sign() == by.sign());
+        }
         CHECK(BigInt(wide.to_string(16), 16) == wide);
     }
     CHECK(BigFloat("0.1") + BigFloat("0.2") == BigFloat("0.3"));
-    auto word = BigInt("4294967295");
-    auto parts = divmod(-(word * BigInt(13) + BigInt(42)), -word);
-    CHECK(parts.first == BigInt(13) && parts.second == BigInt(-42));
-    CHECK(divmod(BigInt(-7), word) == std::make_pair(BigInt(), BigInt(-7)));
+    for (const auto& divisor : {BigInt("4294967295"), BigInt("4294967297")}) {
+        auto exact = divisor * BigInt(13);
+        auto inexact = exact + BigInt(42);
+        CHECK(divmod(inexact, divisor) == std::make_pair(BigInt(13), BigInt(42)));
+        CHECK(divmod(-inexact, -divisor) == std::make_pair(BigInt(13), BigInt(-42)));
+        CHECK(divmod(-inexact, divisor) == std::make_pair(BigInt(-14), divisor - BigInt(42)));
+        CHECK(divmod(inexact, -divisor) == std::make_pair(BigInt(-14), BigInt(42) - divisor));
+        CHECK(divmod(-exact, divisor) == std::make_pair(BigInt(-13), BigInt()));
+        CHECK(divmod(exact, -divisor) == std::make_pair(BigInt(-13), BigInt()));
+        CHECK(divmod(BigInt(-7), divisor) == std::make_pair(BigInt(-1), divisor - BigInt(7)));
+        CHECK(divmod(BigInt(7), -divisor) == std::make_pair(BigInt(-1), BigInt(7) - divisor));
+        CHECK(divmod(BigInt(), -divisor) == std::make_pair(BigInt(), BigInt()));
+        auto quotient = inexact, remainder = inexact;
+        quotient /= -divisor;
+        remainder %= -divisor;
+        CHECK(quotient == BigInt(-14) && remainder == BigInt(42) - divisor);
+    }
     CHECK(BigFloat("1e-100000") < BigFloat("1e100000"));
     CHECK(BigFloat("-1e-100000") < BigFloat());
     CHECK(BigFloat("12") < BigFloat("12.01"));

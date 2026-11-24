@@ -298,16 +298,23 @@ Setting a reference requires a live object. Removing an object referenced by
 another object is rejected; self-references do not prevent removal.
 
 `VTable` assigns stable method slots. Reinstalling a name overrides the target
-only when result and parameter types match exactly. `ClassHierarchy` supports
-single inheritance from an existing class, inherited fields, inherited vtables,
-and exact-signature overrides. A base is frozen when derived from, preserving
-inherited metadata; `freeze` can also finalize a class explicitly. Fields cannot
-duplicate inherited names or use the reserved `$vptr` name.
+only when result and parameter types match exactly. `ClassHierarchy::create`
+accepts one base or an ordered list of existing bases. Method lookup uses C3
+linearization; inconsistent base order and incompatible inherited signatures are
+rejected. The primary base's slots are retained, and new secondary methods
+receive slots in the derived class. `dispatch` resolves a dynamic class or
+object by method name and checks argument types.
 
-`object_layout` lays out an optional leading virtual-table pointer and
-base-to-derived fields using `LayoutPolicy`. `dispatch` resolves a dynamic class
-or object to a method slot/target after checking argument types. ObjectGraph
-itself is a general object graph and does not enforce class field schemas.
+`object_layout` uses `LayoutPolicy` to compute a flat layout with an optional
+leading virtual-table pointer. It visits direct bases in declaration order,
+includes each shared diamond field once, and rejects independent fields with
+the same name. A class is frozen for ordinary edits when used as a base or
+passed to `freeze`. `evolve_field` explicitly appends a field even to a frozen
+class, extending all existing descendants once without moving any existing
+field offsets. A name collision in any descendant rejects the entire edit.
+Use `layout_revision` and `object_layout_at` to retain and query previous
+layouts. The hierarchy does not resize or migrate raw storage; `ObjectGraph`
+stores fields by name and does not enforce class field schemas.
 `visit_reachable` visits each reachable object once in ID order; clients must not
 mutate the graph during visits. `clone_reachable` snapshots first, allocates all
 copies, then remaps fields, preserving sharing and cycles even when cloning
@@ -391,7 +398,8 @@ with the same module and environment. Calls may cross VM models. Runtime errors
 carry a diagnostic code and code position. Host callbacks implement native calls
 and optional compilation backends. Heap/global effects remain in `Environment`.
 
-`encode`/`decode` use bounded FSVM v1 binary serialization. `Loader` owns immutable
+`encode`/`decode` use bounded FSVM binary serialization (v2 for wide integer
+constants or dynamic-width scalar instructions). `Loader` owns immutable
 loaded modules and validates native bindings. `MethodJIT`, `TraceJIT`, and `AOT`
 expose backend lifecycle and interpreter fallback; machine-code generation is
 supplied by the embedding host. `Guard`, `OSRPlan`, and `deoptimize` make entry

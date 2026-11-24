@@ -119,28 +119,37 @@ public:
         }
         result.normalize(); return result;
     }
-    // Quotient truncates toward zero; remainder has the dividend's sign.
+    // Quotient rounds down; a nonzero remainder has the divisor's sign.
     friend std::pair<BigInt, BigInt> divmod(const BigInt& a, const BigInt& b) {
         if (b.is_zero()) throw std::domain_error("integer division by zero");
-        if (compare_magnitude(a, b) < 0) return {BigInt{}, a};
+        const bool opposite_signs = a.negative_ != b.negative_;
+        if (compare_magnitude(a, b) < 0) {
+            if (opposite_signs && !a.is_zero()) return {BigInt(-1), a + b};
+            return {BigInt{}, a};
+        }
+        BigInt quotient, remainder;
         if (b.limbs_.size() == 1) {
-            auto quotient = a;
-            auto remainder = quotient.divide_small(b.limbs_[0]);
-            quotient.negative_ = !quotient.is_zero() && a.negative_ != b.negative_;
-            auto signed_remainder = static_cast<std::int64_t>(remainder);
-            return {std::move(quotient), BigInt(a.negative_ ? -signed_remainder : signed_remainder)};
-        }
-        BigInt quotient, remainder; auto divisor = b.abs();
-        quotient.limbs_.resize(a.limbs_.size());
-        for (auto i = a.bit_length(); i > 0; --i) {
-            remainder.multiply_small(2); remainder.add_small(a.test_bit(i - 1));
-            if (compare_magnitude(remainder, divisor) >= 0) {
-                remainder = remainder - divisor;
-                quotient.limbs_[(i - 1) / 32] |= std::uint32_t(1) << ((i - 1) % 32);
+            quotient = a.abs();
+            remainder = BigInt(quotient.divide_small(b.limbs_[0]));
+        } else {
+            auto divisor = b.abs();
+            quotient.limbs_.resize(a.limbs_.size());
+            for (auto i = a.bit_length(); i > 0; --i) {
+                remainder.multiply_small(2); remainder.add_small(a.test_bit(i - 1));
+                if (compare_magnitude(remainder, divisor) >= 0) {
+                    remainder = remainder - divisor;
+                    quotient.limbs_[(i - 1) / 32] |= std::uint32_t(1) << ((i - 1) % 32);
+                }
             }
+            quotient.normalize();
         }
-        quotient.negative_ = a.negative_ != b.negative_; quotient.normalize();
         remainder.negative_ = a.negative_ && !remainder.is_zero();
+        if (opposite_signs && !remainder.is_zero()) {
+            // Decrement the signed quotient and compensate by adding the divisor.
+            quotient.add_small(1);
+            remainder += b;
+        }
+        quotient.negative_ = opposite_signs;
         return {std::move(quotient), std::move(remainder)};
     }
     friend BigInt operator/(const BigInt& a, const BigInt& b) { return divmod(a, b).first; }
@@ -158,15 +167,21 @@ public:
         }
         result.limbs_.back() = static_cast<std::uint32_t>(carry); result.normalize(); return result;
     }
-    // Magnitude shift: negative values truncate toward zero, like division.
+    // Arithmetic right shift: floor division by a power of two.
     friend BigInt operator>>(const BigInt& a, std::size_t bits) {
         auto words = bits / 32; auto shift = bits % 32;
-        if (words >= a.limbs_.size()) return {};
+        if (words >= a.limbs_.size()) return BigInt(a.negative_ ? -1 : 0);
         BigInt result; result.negative_ = a.negative_; result.limbs_.resize(a.limbs_.size() - words);
         for (std::size_t i = words; i < a.limbs_.size(); ++i) {
             std::uint64_t value = a.limbs_[i];
             if (shift && i + 1 < a.limbs_.size()) value |= std::uint64_t(a.limbs_[i + 1]) << 32;
             result.limbs_[i - words] = static_cast<std::uint32_t>(value >> shift);
+        }
+        if (a.negative_) {
+            auto mask = (std::uint32_t(1) << shift) - 1;
+            if ((a.limbs_[words] & mask) ||
+                std::any_of(a.limbs_.begin(), a.limbs_.begin() + words, [](auto limb) { return limb != 0; }))
+                result.add_small(1);
         }
         result.normalize(); return result;
     }

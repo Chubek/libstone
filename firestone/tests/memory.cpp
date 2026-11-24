@@ -1,7 +1,10 @@
 #include "Test.hpp"
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <memory_resource>
+#include <random>
+#include <vector>
 
 using namespace firestone::memory;
 
@@ -15,6 +18,89 @@ struct Traced {
     explicit Traced(int& destroyed) : destroyed(destroyed) {}
     ~Traced() { ++destroyed; }
 };
+
+static void generational_gc() {
+    int destroyed = 0;
+    GC<std::unique_ptr<Traced>> heap;
+    auto allocate = [&] { return heap.allocate(std::make_unique<Traced>(destroyed)); };
+    auto old = allocate();
+    auto old_peer = allocate();
+    heap.set_references(old, {old_peer});
+    heap.set_references(old_peer, {old});
+    CHECK(heap.collect({old}).retained == 2);
+
+    auto bridge = allocate();
+    auto leaf = allocate();
+    auto drop_edge = allocate();
+    auto dead_cycle = allocate();
+    auto pinned = allocate();
+    auto explicit_root = allocate();
+    heap.set_references(old_peer, {old, bridge, bridge});
+    heap.set_references(bridge, {leaf});
+    heap.set_references(leaf, {bridge, old});
+    heap.set_references(dead_cycle, {dead_cycle, bridge});
+    heap.set_references(old, {old_peer, drop_edge});
+    heap.set_references(old, {old_peer});
+    heap.pin(pinned);
+    auto result = heap.collect_young({explicit_root, explicit_root});
+    CHECK(result.retained == 6 && result.reclaimed == 2 && destroyed == 2);
+    CHECK(heap.contains(old) && heap.contains(old_peer) && heap.contains(bridge) && heap.contains(leaf));
+    CHECK(heap.contains(pinned) && heap.contains(explicit_root));
+    CHECK(!heap.contains(drop_edge) && !heap.contains(dead_cycle));
+
+    auto after_promotion = allocate();
+    CHECK(after_promotion > explicit_root);
+    heap.set_references(leaf, {after_promotion});
+    throws<std::out_of_range>([&] { heap.set_references(leaf, {dead_cycle}); });
+    throws<std::out_of_range>([&] { (void)heap.collect_young({dead_cycle}); });
+    CHECK(heap.size() == 7 && heap.references(leaf) == std::vector<Handle>{after_promotion});
+    heap.unpin(pinned);
+    result = heap.collect_young();
+    CHECK(result.retained == 7 && result.reclaimed == 0 && destroyed == 2);
+    result = heap.collect_young(); // Empty nursery; old entries are still live.
+    CHECK(result.retained == 7 && result.reclaimed == 0 && destroyed == 2);
+    result = heap.collect();
+    CHECK(result.retained == 0 && result.reclaimed == 7 && destroyed == 9 && heap.size() == 0);
+    result = heap.collect_young();
+    CHECK(result.retained == 0 && result.reclaimed == 0);
+}
+
+static void generational_gc_against_full() {
+    GC<int> heap;
+    std::mt19937 random(2026);
+    std::vector<Handle> alive;
+    for (int round = 0; round < 30; ++round) {
+        auto roots = alive; // A minor collection treats every old object as a root.
+        for (int i = 0; i < 20; ++i) alive.push_back(heap.allocate(i));
+        for (auto object : alive) {
+            std::vector<Handle> edges;
+            for (auto n = random() % 3; n != 0; --n) edges.push_back(alive[random() % alive.size()]);
+            heap.set_references(object, std::move(edges));
+        }
+        auto pinned = alive.back();
+        heap.pin(pinned);
+        auto young_root = alive[alive.size() - 2];
+        roots.push_back(young_root);
+
+        GC<int> reference = heap;
+        auto expected = reference.collect(roots);
+        // Both copying and moving must preserve the remembered set and roots.
+        GC<int> copy;
+        copy = heap;
+        GC<int> moved(std::move(copy));
+        CHECK(copy.size() == 0);
+        heap = std::move(moved);
+        CHECK(moved.size() == 0);
+        auto actual = heap.collect_young({young_root});
+        CHECK(actual.retained == expected.retained && actual.reclaimed == expected.reclaimed);
+        CHECK(heap.size() == actual.retained);
+        for (auto object : alive) CHECK(heap.contains(object) == reference.contains(object));
+        heap.unpin(pinned);
+
+        if (round % 5 == 0) (void)heap.collect({young_root});
+        alive.erase(std::remove_if(alive.begin(), alive.end(), [&](Handle object) { return !heap.contains(object); }), alive.end());
+    }
+}
 
 int main() { return test_main([] {
     Allocation aligned(100, 256);
@@ -83,4 +169,7 @@ int main() { return test_main([] {
     heap.unpin(a); collection = heap.collect();
     CHECK(collection.reclaimed == 2 && destroyed == 3);
     CHECK(heap.allocate(std::make_unique<Traced>(destroyed)) > garbage);
+
+    generational_gc();
+    generational_gc_against_full();
 }); }

@@ -23,6 +23,54 @@ int main() { return test_main([] {
     throws<std::invalid_argument>([&] { vm::decode(bytes, {bytes.size(), 2, 1024}); });
     throws<std::invalid_argument>([&] { vm::decode(bytes, {bytes.size(), 1000000, 1}); });
     throws<std::invalid_argument>([&] { module.constants.add(vm::Address{0}); });
+
+    const vm::BigInt large("1267650600228229401496703205376");
+    const vm::Value compact = vm::BigInt(INT64_MIN);
+    const vm::Value explicit_wide(std::in_place_type<vm::BigInt>, INT64_MIN);
+    const vm::Value wide_unsigned = UINT64_MAX;
+    CHECK(vm::representation(compact) == vm::ValueRepresentation::Int64);
+    CHECK(vm::representation(explicit_wide) == vm::ValueRepresentation::BigInt);
+    CHECK(vm::kind(compact) == vm::ValueKind::Integer && vm::kind(explicit_wide) == vm::kind(compact));
+    CHECK(compact == explicit_wide && explicit_wide == compact);
+    CHECK(vm::require_integer64(explicit_wide) == INT64_MIN);
+    CHECK(vm::representation(vm::BigInt(INT64_MAX)) == vm::ValueRepresentation::Int64);
+    CHECK(vm::representation(vm::BigInt(INT64_MAX) + vm::BigInt(1)) == vm::ValueRepresentation::BigInt);
+    CHECK(vm::representation(vm::BigInt(INT64_MIN) - vm::BigInt(1)) == vm::ValueRepresentation::BigInt);
+    CHECK(vm::require_integer(wide_unsigned).to_string() == "18446744073709551615");
+    vm_error("vm.overflow", [&] { vm::require_integer64(wide_unsigned); });
+    vm_error("vm.type", [] { vm::require_integer(true); });
+    vm::check_arguments({{vm::ValueKind::Integer}, vm::ValueKind::Integer}, {large});
+    vm::check_result({{}, vm::ValueKind::Integer}, -large);
+
+    auto wide_module = adder();
+    CHECK(wide_module.constants.add(compact) == wide_module.constants.add(explicit_wide));
+    CHECK(wide_module.constants.add(large) == 1);
+    CHECK(wide_module.constants.add(-large) == 2);
+    CHECK(wide_module.constants.add(large) == 1);
+    auto wide_bytes = vm::encode(wide_module);
+    CHECK(bytes[4] == 1 && wide_bytes[4] == 2);
+    auto wide_decoded = vm::decode(wide_bytes);
+    CHECK(vm::encode(wide_decoded) == wide_bytes);
+    CHECK(vm::require_integer(wide_decoded.constants.at(1)) == large);
+    CHECK(vm::require_integer(wide_decoded.constants.at(2)) == -large);
+    CHECK(vm::format_value(wide_decoded.constants.at(2)) == "-1267650600228229401496703205376");
+    bad = wide_bytes; bad[4] = 1; throws<std::invalid_argument>([&] { vm::decode(bad); });
+    const auto payload_start = 20 + 9 + 1 + 8; // header, compact constant, wide tag and length
+    bad = wide_bytes; bad[payload_start] = '0'; throws<std::invalid_argument>([&] { vm::decode(bad); });
+    bad = wide_bytes; bad[payload_start] = 'G'; throws<std::invalid_argument>([&] { vm::decode(bad); });
+    throws<std::invalid_argument>([&] { vm::decode(wide_bytes, {wide_bytes.size(), 1000000, 25}); });
+
+    auto dynamic_module = adder();
+    dynamic_module.function(0).code.at(0).bits = vm::dynamic_scalar_width;
+    auto dynamic_bytes = vm::encode(dynamic_module);
+    CHECK(dynamic_bytes[4] == 2);
+    auto dynamic_decoded = vm::decode(dynamic_bytes);
+    CHECK(vm::encode(dynamic_decoded) == dynamic_bytes);
+    auto dynamic_result = vm::execute(dynamic_decoded, 0, {large, 1}, env);
+    CHECK(dynamic_result.stop == vm::ExecutionStop::Returned && dynamic_result.state.result.has_value());
+    CHECK(vm::require_integer(*dynamic_result.state.result) == large + vm::BigInt(1));
+    bad = dynamic_bytes; bad[4] = 1; throws<std::invalid_argument>([&] { vm::decode(bad); });
+
     auto invalid = module; invalid.function(0).name.clear();
     CHECK(has_code(invalid.verify(), "vm.name")); throws<std::invalid_argument>([&] { vm::encode(invalid); });
 

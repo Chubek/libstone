@@ -349,16 +349,42 @@ void testPEG() {
     CHECK(!greedy.accepts({x, x}));
     const PEG repeatingEmpty(grammar, {{start, P::repeat(P::rule(rule))}, {rule, P::empty()}});
     expectError([&] { (void)repeatingEmpty.accepts({}); }, "without consuming");
-    const PEG recursion(grammar, {
-        {start, P::rule(rule)}, {rule, P::sequence({P::andPredicate(P::empty()), P::rule(start)})}
-    });
-    expectError([&] { (void)recursion.parse({x}); }, "left recursion in rule Start at token 0");
+    expectError([&] {
+        (void)PEG(grammar, {
+            {start, P::rule(rule)}, {rule, P::sequence({P::andPredicate(tx), P::rule(start)})}
+        });
+    }, "left recursion: Start -> Test -> Start");
+    expectError([&] {
+        (void)PEG(grammar, {{rule, P::notPredicate(P::rule(rule))}});
+    }, "left recursion: Test -> Test"); // even a rule unreachable from Start is checked
+    expectError([&] {
+        (void)PEG(grammar, {{start, P::choice({P::empty(), P::rule(start)})}, {rule, P::fail()}});
+    }, "left recursion: Start -> Start"); // ordered alternatives are checked conservatively
+    for (const auto& prefix : {P::optional(tx), P::repeat(tx), P::end()}) {
+        expectError([&] {
+            (void)PEG(grammar, {
+                {start, P::sequence({prefix, P::rule(start)})}, {rule, P::fail()}
+            });
+        }, "left recursion: Start -> Start");
+    }
+
+    auto nullable = grammar;
+    nullable.addProduction(rule, {});
+    nullable.addProduction(start, {rule, start});
+    expectError([&] { (void)PEG(nullable); }, "left recursion: Start -> Start");
+    const PEG overridden(nullable, {{start, tx}});
+    CHECK(overridden.accepts({x}));
 
     const PEG right(grammar, {
         {start, P::optional(P::sequence({tx, P::rule(start), ty}))}, {rule, P::fail()}
     });
     CHECK(right.accepts({x, x, y, y}) && right.accepts({}));
     CHECK(!right.accepts({x, y, y}));
+    const PEG consumingPrefix(grammar, {
+        {start, P::optional(P::sequence({P::rule(rule), P::rule(start)}))},
+        {rule, P::oneOrMore(tx)}
+    });
+    CHECK(consumingPrefix.accepts({x, x}));
     expectError([&] { (void)PEG(grammar); }, "no PEG expression for rule");
     expectError([&] {
         (void)PEG(grammar, {{rule, P::token(grammar.eof())}});

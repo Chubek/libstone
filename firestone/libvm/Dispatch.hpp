@@ -15,6 +15,25 @@ enum class ExecutionStop { Returned, Budget };
 struct ExecutionResult { ExecutionStop stop; ExecutionState state; };
 using Observer = std::function<void(CodeAddress, const Instruction&)>;
 
+// Object scalar operators are methods named by opcode_info (e.g. "Add", "Eq").
+// The first operand is the receiver; no reflected or implicit coercion is done.
+inline Value scalar(Opcode opcode, const std::vector<Value>& values, const Environment& environment, unsigned bits = 64) {
+    detail::check_scalar_operands(opcode, values, bits);
+    if (auto receiver = std::get_if<ObjectRef>(&values[0])) {
+        const auto& methods = environment.object(*receiver).meta.methods;
+        auto method = methods.find(opcode_info(opcode).name);
+        if (method != methods.end()) {
+            auto symbol = method->second;
+            auto signature = environment.native(symbol).signature;
+            if (signature.result == ValueKind::Null ||
+                (detail::scalar_comparison(opcode) && signature.result != ValueKind::Boolean))
+                throw VMError("vm.type", "invalid scalar method result kind");
+            return environment.call(symbol, signature, values);
+        }
+    }
+    return detail::builtin_scalar(opcode, values, bits);
+}
+
 inline Value read_slot(const std::vector<std::optional<Value>>& slots, Index index) {
     if (index >= slots.size() || !slots[index]) throw VMError("vm.uninitialized", "unavailable runtime slot");
     return *slots[index];
@@ -47,7 +66,7 @@ inline void step(const Module& module, Environment& environment, ExecutionState&
         else for (auto operand : i.operands) values.push_back(read_slot(frame.registers, operand));
         auto emit = [&](Value value) { write_result(frame, fn, i.destination, std::move(value), limits); };
         Index next = frame.pc + 1;
-        if (arithmetic(i.opcode)) emit(scalar(i.opcode, values, i.bits));
+        if (arithmetic(i.opcode)) emit(scalar(i.opcode, values, environment, i.bits));
         else switch (i.opcode) {
         case Opcode::Nop: break;
         case Opcode::Constant: emit(module.constants.at(i.index)); break;

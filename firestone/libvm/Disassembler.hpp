@@ -10,7 +10,10 @@ inline std::string format_value(const Value& value) {
     switch (kind(value)) {
     case ValueKind::Null: out << "null"; break;
     case ValueKind::Boolean: out << (require<bool>(value) ? "true" : "false"); break;
-    case ValueKind::Integer: out << require<std::int64_t>(value); break;
+    case ValueKind::Integer:
+        if (const auto* compact = std::get_if<std::int64_t>(&value)) out << *compact;
+        else out << require<BigInt>(value);
+        break;
     case ValueKind::Float: out << std::setprecision(17) << require<double>(value); break;
     case ValueKind::String: out << std::quoted(require<std::string>(value)); break;
     case ValueKind::Address: out << "address(" << require<Address>(value).slot << ')'; break;

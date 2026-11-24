@@ -11,7 +11,7 @@ struct Instruction {
     Index index = no_index; // constant, local, or callee index
     Index target = no_index, alternate = no_index;
     Index argument_count = 0; // Call, NativeCall, Return
-    unsigned bits = 64;
+    unsigned bits = 64; // dynamic_scalar_width opts scalar integer operations into unbounded arithmetic.
     std::string symbol;
 };
 class CodeTape {

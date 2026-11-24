@@ -4,8 +4,7 @@ component: CCINT
 version: 0.1.0
 language: C++20
 distribution: header-only
-requires:
-  - Boost.Multiprecision headers
+requires: []
 optional_backends_integrated: []
 files:
   - path: '.github/workflows/ci.yml'
@@ -253,4 +252,10 @@ files:
     status: implemented-or-documentation
   - path: 'tools/build_manual.py'
     purpose: 'Deterministically regenerate all forty manual chapters and YAML manifest'
+    status: implemented-or-documentation
+  - path: 'vendor/boost/LICENSE_1_0.txt'
+    purpose: 'Boost Software License for the bundled headers under vendor/boost/include'
+    status: implemented-or-documentation
+  - path: 'vendor/boost/README.md'
+    purpose: 'Provenance and scope of the bundled Boost.Multiprecision headers'
     status: implemented-or-documentation

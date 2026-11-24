@@ -66,8 +66,9 @@ private:
 // Token PEG. CFG alternatives become prioritized choice in insertion order;
 // optional overrides replace complete rules with PEG expressions. Rules may
 // be supplied entirely by overrides (Grammar provides the symbols and start).
-// An attempted left-recursive call or successful zero-width repetition body
-// is diagnosed at evaluation time; an unvisited branch need not be executable.
+// Construction rejects left-recursive rule cycles, conservatively considering
+// all ordered alternatives and treating lookahead as potentially zero-width.
+// Successful zero-width repetition bodies are diagnosed at evaluation time.
 class PEG {
 public:
     using Rules = std::map<Symbol, PEGExpression>;
@@ -92,6 +93,7 @@ public:
             if (isNonterminal(rule) && rules_.find(rule) == rules_.end())
                 throw std::invalid_argument("no PEG expression for rule: " + grammar_.symbols()[rule].name);
         validateRules();
+        rejectLeftRecursion();
     }
 
     const Grammar& grammar() const noexcept { return grammar_; }
@@ -260,6 +262,74 @@ private:
             if (node->kind == Kind::rule && rules_.find(node->symbol) == rules_.end())
                 throw std::invalid_argument("invalid PEG rule reference");
             for (const auto& child : node->children) work.push_back(child.node_.get());
+        }
+    }
+
+    void rejectLeftRecursion() const {
+        using Node = PEGExpression::Node;
+        struct Frame {
+            const Node* node;
+            std::size_t next = 0;
+            bool nullable;
+        };
+        const auto frameFor = [](const Node* node) {
+            const auto kind = node->kind;
+            return Frame{node, 0, kind == Kind::sequence || kind == Kind::end ||
+                kind == Kind::optional || kind == Kind::repeat ||
+                kind == Kind::andPredicate || kind == Kind::notPredicate};
+        };
+
+        // Visit expressions that can be entered without consuming input.
+        // Compute nullability as they finish so a sequence only visits its
+        // nullable prefix and the first non-nullable part. A cycle must
+        // include a rule reference: expression children alone form a DAG.
+        std::map<const Node*, std::optional<bool>> nullable;
+        std::vector<Frame> path;
+        for (const auto& entry : rules_) {
+            const auto* root = entry.second.node_.get();
+            if (!nullable.try_emplace(root).second) continue;
+            path.push_back(frameFor(root));
+            while (!path.empty()) {
+                auto& frame = path.back();
+                const auto& node = *frame.node;
+                const Node* child = nullptr;
+                if (node.kind == Kind::rule) {
+                    if (frame.next == 0) child = rules_.at(node.symbol).node_.get();
+                } else if (frame.next < node.children.size() &&
+                           (node.kind != Kind::sequence || frame.nullable)) {
+                    child = node.children[frame.next].node_.get();
+                }
+                if (child == nullptr) {
+                    nullable.at(frame.node) = frame.nullable;
+                    path.pop_back();
+                    continue;
+                }
+                const auto result = nullable.try_emplace(child);
+                if (result.second) {
+                    path.push_back(frameFor(child));
+                    continue;
+                }
+                const auto& childNullable = result.first->second;
+                if (!childNullable.has_value()) {
+                    std::vector<Symbol> cycle;
+                    bool inCycle = false;
+                    for (const auto& item : path) {
+                        if (item.node == child) inCycle = true;
+                        if (inCycle && item.node->kind == Kind::rule)
+                            cycle.push_back(item.node->symbol);
+                    }
+                    std::string error = "PEG does not support left recursion: " +
+                        grammar_.symbols()[cycle.back()].name;
+                    for (const auto rule : cycle) error += " -> " + grammar_.symbols()[rule].name;
+                    throw std::invalid_argument(error);
+                }
+                if (node.kind == Kind::rule || node.kind == Kind::sequence)
+                    frame.nullable = *childNullable;
+                else if (node.kind == Kind::choice)
+                    frame.nullable = frame.nullable || *childNullable;
+                // oneOrMore cannot succeed empty: a zero-width body throws.
+                ++frame.next;
+            }
         }
     }
 

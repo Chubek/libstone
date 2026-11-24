@@ -19,10 +19,12 @@ C++ exceptions. Resource release callbacks must not throw.
 - `to_string(base)`, checked `to_int64()`, stream output, `pow`, and `gcd`.
 
 String parsing accepts one optional sign, with no whitespace, separators, or
-implicit radix prefixes. Division truncates toward zero; the remainder has the
-dividend's sign. `divmod(a,b)` satisfies `a == q*b+r` and `abs(r) < abs(b)`.
-Right shift divides the magnitude by a power of two, truncating toward zero;
-it is not a sign-extending machine shift. Bit queries inspect the magnitude.
+implicit radix prefixes. Division rounds down (toward negative infinity); a
+nonzero remainder has the divisor's sign. `divmod(a,b)` returns the same
+quotient and remainder as `/` and `%`, satisfying `a == q*b+r` and
+`abs(r) < abs(b)`. Right shift is arithmetic: `a >> n` computes
+`floor(a / 2^n)`, so sufficiently large shifts of negative values yield `-1`.
+Bit queries still inspect the magnitude.
 Division by zero throws `domain_error`; narrowing overflow throws `overflow_error`.
 Moved-from integers become canonical zero.
 

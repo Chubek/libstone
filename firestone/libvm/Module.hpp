@@ -78,7 +78,8 @@ inline ir::Diagnostics Module::verify(Index evaluation_limit) const {
         for (Index pc = 0; pc < fn.code.size(); ++pc) {
             const auto& i = fn.code.at(pc);
             if (!valid_opcode(i.opcode)) { error("vm.opcode", "unknown opcode", pc); continue; }
-            if (!i.bits || i.bits > 64) error("vm.width", "invalid scalar width", pc);
+            if (i.bits > 64 || (i.bits == dynamic_scalar_width && !arithmetic(i.opcode)))
+                error("vm.width", "invalid scalar width", pc);
             if (i.opcode == Opcode::Constant && i.index >= constants.size()) error("vm.constant", "unknown constant", pc);
             if ((i.opcode == Opcode::LocalGet || i.opcode == Opcode::LocalSet) && i.index >= fn.local_count)
                 error("vm.local", "unknown local slot", pc);

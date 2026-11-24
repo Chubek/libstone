@@ -125,8 +125,9 @@ byte regex engine interprets patterns.
   or register layer.
 - `PEG` uses ordered choice by default and supports `PEGExpression`
   rule overrides for predicates, greedy repetition, and other operators.
-  It reports left recursion or successful zero-width repetition if
-  reached. `RecursiveDescent` and `ParserCombinator<T>` provide cursor
+  It rejects direct and indirect left recursion at construction, including
+  through nullable prefixes, and reports successful zero-width repetition
+  at parse time. `RecursiveDescent` and `ParserCombinator<T>` provide cursor
   and typed composition APIs for hand-written token parsers.
 
 ## Connecting lexing and parsing

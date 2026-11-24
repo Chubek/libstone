@@ -23,6 +23,90 @@ int main() { return test_main([] {
     vm_error("vm.divzero", [] { vm::scalar(vm::Opcode::Div, {std::int64_t{4}, std::int64_t{0}}); });
     vm_error("vm.overflow", [] { vm::scalar(vm::Opcode::Div, {INT64_MIN, std::int64_t{-1}}); });
     vm_error("vm.shift", [] { vm::scalar(vm::Opcode::Shl, {std::int64_t{1}, std::int64_t{64}}); });
+    CHECK(vm::scalar(vm::Opcode::Add, {"fire", "stone"}) == vm::Value{"firestone"});
+    CHECK(vm::scalar(vm::Opcode::Lt, {"a", "b"}) == vm::Value{true});
+    CHECK(vm::scalar(vm::Opcode::Eq, {vm::Value{}, vm::Value{}}) == vm::Value{true});
+    CHECK(vm::scalar(vm::Opcode::Ne, {vm::Address{1}, vm::Address{2}}) == vm::Value{true});
+    vm_error("vm.type", [] { vm::scalar(vm::Opcode::Sub, {"fire", "stone"}); });
+    vm_error("vm.type", [] { vm::scalar(vm::Opcode::Add, {true, std::int64_t{1}}); });
+    vm_error("vm.arity", [] { vm::scalar(vm::Opcode::Neg, {}); });
+    vm_error("vm.width", [] { vm::scalar(vm::Opcode::Neg, {std::int64_t{1}}, 65); });
+
+    constexpr auto dynamic = vm::dynamic_scalar_width;
+    const vm::BigInt beyond64{"9223372036854775808"};
+    const vm::Value wide{beyond64};
+    CHECK(vm::representation(wide) == vm::ValueRepresentation::BigInt);
+    CHECK(vm::scalar(vm::Opcode::Sub, {wide, std::int64_t{1}}, dynamic) == vm::Value{INT64_MAX});
+    CHECK(vm::representation(vm::scalar(vm::Opcode::Sub, {wide, std::int64_t{1}}, dynamic)) ==
+          vm::ValueRepresentation::Int64);
+    CHECK(vm::scalar(vm::Opcode::Gt, {wide, std::int64_t{INT64_MAX}}, dynamic) == vm::Value{true});
+    CHECK(vm::scalar(vm::Opcode::Or, {wide, std::int64_t{1}}, dynamic) == vm::Value{beyond64 + vm::BigInt{1}});
+    CHECK(vm::scalar(vm::Opcode::And, {wide, std::int64_t{-1}}, dynamic) == wide);
+    CHECK(vm::scalar(vm::Opcode::Xor, {wide, std::int64_t{-1}}, dynamic) ==
+          vm::scalar(vm::Opcode::Not, {wide}, dynamic));
+    for (auto code : {vm::Opcode::And, vm::Opcode::Or, vm::Opcode::Xor})
+        for (std::int64_t x : {std::int64_t{INT64_MIN}, std::int64_t{-37}, std::int64_t{89}})
+            for (std::int64_t y : {std::int64_t{-18}, std::int64_t{0}, std::int64_t{INT64_MAX}})
+                CHECK(vm::scalar(code, {x, y}, dynamic) == vm::scalar(code, {x, y}));
+    CHECK(vm::scalar(vm::Opcode::Shl, {std::int64_t{1}, std::int64_t{63}}, dynamic) == wide);
+    CHECK(vm::scalar(vm::Opcode::Shr, {-beyond64 - vm::BigInt{1}, std::int64_t{63}}, dynamic) == vm::Value{-2});
+    CHECK(vm::scalar(vm::Opcode::Shr, {-beyond64, wide}, dynamic) == vm::Value{-1});
+    CHECK(vm::scalar(vm::Opcode::Shr, {std::int64_t{1}, beyond64 * beyond64}, dynamic) == vm::Value{0});
+    CHECK(vm::scalar(vm::Opcode::Div, {std::int64_t{-5}, std::int64_t{2}}, dynamic) == vm::Value{-3});
+    CHECK(vm::scalar(vm::Opcode::Mod, {std::int64_t{-5}, std::int64_t{2}}, dynamic) == vm::Value{1});
+    vm_error("vm.divzero", [&] { vm::scalar(vm::Opcode::Mod, {wide, std::int64_t{0}}, dynamic); });
+    vm_error("vm.shift", [&] { vm::scalar(vm::Opcode::Shl, {std::int64_t{1}, wide}, dynamic); });
+    vm_error("vm.overflow", [&] { vm::scalar(vm::Opcode::Neg, {wide}); });
+    vm_error("vm.shift", [&] { vm::scalar(vm::Opcode::Shl, {std::int64_t{1}, wide}); });
+    for (auto model : {vm::VMModel::Register, vm::VMModel::Stack}) {
+        auto module = adder(model);
+        module.function(0).code.at(model == vm::VMModel::Register ? 0 : 2).bits = dynamic;
+        CHECK(module.verify().empty());
+        auto loaded = vm::decode(vm::encode(module));
+        auto result = vm::execute(loaded, 0, {std::int64_t{INT64_MAX}, std::int64_t{1}}, env);
+        CHECK(result.state.complete() && *result.state.result == wide);
+        result = vm::execute(loaded, 0, {wide, std::int64_t{-1}}, env);
+        CHECK(integer_result(result) == INT64_MAX);
+    }
+
+    // The same opcode and signature can select different methods on each receiver.
+    const auto first = env.create_object({"First", {}, {{"Add", "first-add"}, {"Eq", "first-eq"}, {"Neg", "first-neg"}}}, {});
+    const auto second = env.create_object({"Second", {}, {{"Add", "second-add"}}}, {});
+    const auto no_add = env.create_object({"NoAdd", {}, {}}, {});
+    const vm::Signature add_sig{{vm::ValueKind::Object, vm::ValueKind::Integer}, vm::ValueKind::Integer};
+    env.bind("first-add", add_sig, [&](const std::vector<vm::Value>& args) -> vm::Value {
+        CHECK(vm::require<vm::ObjectRef>(args[0]) == first);
+        return vm::require<std::int64_t>(args[1]) + 1;
+    });
+    env.bind("second-add", add_sig, [&](const std::vector<vm::Value>& args) -> vm::Value {
+        CHECK(vm::require<vm::ObjectRef>(args[0]) == second);
+        return vm::require<std::int64_t>(args[1]) + 2;
+    });
+    for (auto model : {vm::VMModel::Register, vm::VMModel::Stack}) {
+        auto module = adder(model);
+        module.function(0).signature = add_sig;
+        CHECK(integer_result(vm::execute(module, 0, {first, std::int64_t{40}}, env)) == 41);
+        CHECK(integer_result(vm::execute(module, 0, {second, std::int64_t{40}}, env)) == 42);
+        bool caught = false;
+        try { vm::execute(module, 0, {no_add, std::int64_t{40}}, env); }
+        catch (const vm::VMError& error) {
+            CHECK(error.code == "vm.type");
+            CHECK((error.position == vm::CodeAddress{0, model == vm::VMModel::Register ? 0u : 2u}));
+            caught = true;
+        }
+        CHECK(caught);
+    }
+    auto equal_sig = vm::Signature{{vm::ValueKind::Object, vm::ValueKind::Object}, vm::ValueKind::Boolean};
+    env.bind("first-eq", equal_sig, [](const auto&) { return vm::Value{true}; });
+    CHECK(vm::scalar(vm::Opcode::Eq, {first, second}, env) == vm::Value{true});
+    CHECK(vm::scalar(vm::Opcode::Eq, {second, first}, env) == vm::Value{false});
+    CHECK(vm::scalar(vm::Opcode::Eq, {first, second}) == vm::Value{false});
+    env.bind("first-neg", {{vm::ValueKind::Object}, vm::ValueKind::Integer}, [](const auto&) { return vm::Value{-1}; });
+    CHECK(vm::scalar(vm::Opcode::Neg, {first}, env) == vm::Value{-1});
+    equal_sig.result = vm::ValueKind::Integer;
+    env.bind("first-eq", equal_sig, [](const auto&) -> vm::Value { CHECK(false); return std::int64_t{0}; });
+    vm_error("vm.type", [&] { vm::scalar(vm::Opcode::Eq, {first, second}, env); });
+    vm_error("vm.type", [&] { vm::scalar(vm::Opcode::Add, {first, false}, env); });
 
     // Mixed-model call frames preserve left-to-right argument order and return destinations.
     auto mixed = adder(vm::VMModel::Stack);

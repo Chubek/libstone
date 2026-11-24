@@ -4,13 +4,13 @@
 
 ## Problem and model
 
-The installed artifacts are headers: no Weighstone object library needs linking. Boost.Multiprecision supplies the variable-size integer backend, so consumers must have Boost headers available.
+The installed artifacts are headers: no Weighstone object library needs linking. Weighstone ships Boost.Multiprecision’s cpp_int backend and its required Boost headers.
 
 At every compiler optimization boundary it is necessary to identify what is known about the input program, which arithmetic universe is being modeled, and whether the facts have been inferred conservatively. A result is useful only insofar as it remains true for every execution admitted by those assumptions. This chapter describes this issue in the context of **c++20 setup**.
 
 ## Method and API contract
 
-Compile a sample with -std=c++20 and -Iinclude -I. Add an INTERFACE CMake target to propagate requirements.
+Link the Weighstone::Weighstone CMake target to propagate include paths. For a direct build from the Weighstone directory use -std=c++20 -Ivendor/boost/include -Iinclude -I.
 
 When implementing or extending the API, document preconditions, output guarantees, exceptional situations, and complexity. Use exact integer values for mathematical reasoning; when the source language describes fixed-width behavior, perform arithmetic through `BitVector` or a formally specified adapter. A query should return an explicit `unknown` if it lacks enough evidence, rather than guessing from an example.
 
@@ -22,7 +22,7 @@ For a concrete experiment, begin by constructing a test case in `tests/test_ccin
 
 ## Failure modes and precision
 
-The current CMake install interface is a starting convention, not a full exported install/package implementation.
+The bundled Boost subset is not a general-purpose Boost distribution.
 
 There are two distinct outcomes when an optimizer cannot establish a result: the proposition may actually be false, or the chosen abstraction may simply be too weak to prove it. Reserve `disproven` for the former when a sound proof is available, and `unknown` for the latter. This distinction is especially important when eliminating safety checks.
 

@@ -16,7 +16,7 @@ int main() {
 
 Build/tests: `cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure`.
 
-**Dependencies:** C++20 and Boost.Multiprecision (header-only). GMP, ISL, Z3 and LLVM are *not* integrated. All Weighstone components are inline or defined inside classes. No compiled Weighstone binary is required.
+**Dependencies:** C++20. The [vendored Boost.Multiprecision headers](vendor/boost/README.md) provide `cpp_int`; no system Boost installation is needed. GMP, ISL, Z3 and LLVM are *not* integrated. All Weighstone components are inline or defined inside classes. No compiled Weighstone binary is required.
 
 ## Available today
 

@@ -68,9 +68,14 @@ integers, and non-binary64 floats are rejected. Named operands lower to globals.
 
 ## Values and object storage
 
-`Value` is a variant of null, boolean, signed 64-bit integer, double, string,
-`Address`, and `ObjectRef`. Use explicit `std::int64_t` for integer values.
-`kind` and `require<T>` inspect values; a mismatched access throws `VMError`.
+`Value` holds null, a boolean, an integer, a `double`, a string, an `Address`,
+or an `ObjectRef`. `kind` reports the runtime category used by signatures.
+Integers that fit `std::int64_t` normally use that representation; larger
+integers use `firestone::bignum::BigInt` under the same `ValueKind::Integer`.
+`representation` reports the active payload. `require_integer` accepts both
+integer representations and returns a `BigInt`; `require_integer64` narrows
+only if the value fits. `require<T>` accesses the exact payload type. A
+mismatched access (or narrowing overflow) throws `VMError`.
 
 `Signature::result == ValueKind::Null` denotes void. Void returns have zero
 operands and produce no caller operand/register value. Execution still completes
@@ -109,7 +114,7 @@ instruction indices, distinct from heap addresses and function indices.
 | `index` | Constant index, local slot, or bytecode callee index |
 | `target`, `alternate` | Jump/true target and branch false target |
 | `argument_count` | Dynamic input count for calls and returns |
-| `bits` | Checked signed arithmetic width, 1–64; default 64 |
+| `bits` | Checked signed arithmetic width, 1–64 (default 64); `dynamic_scalar_width` (0) selects unbounded integer semantics |
 | `symbol` | Global, field, or native symbol |
 
 `Constant` indexes the module pool. `Move` copies one value. Stack-only operations
@@ -142,13 +147,32 @@ Unreachable instructions receive structural checks, but no initial availability
 or stack-depth assumptions. Dynamic kinds remain runtime-checked. The verifier
 has a configurable resource/evaluation limit (default 1,000,000).
 
-Integer arithmetic traps on overflow, zero division, and invalid shifts using
-`sema::checked_integer`. Right shifts explicitly sign-extend. Left shifts require
-nonnegative values. Bitwise results are masked/sign-extended to the declared
-width without overflowing signed intermediates. Boolean bitwise operations use
-logical semantics; boolean arithmetic is rejected. Floating operations use host
-binary64 arithmetic/comparisons, including IEEE infinities, signed zero, and NaN.
-No implicit scalar conversions occur.
+Scalar operations dispatch on runtime kinds. Built-ins require matching kinds:
+strings support concatenation (`Add`) and lexicographic comparisons; null, heap
+addresses, and object references support equality and inequality. Boolean
+bitwise operations use logical semantics; boolean arithmetic is rejected.
+Floating operations use host binary64 arithmetic and comparisons, including IEEE
+infinities, signed zero, and NaN. No implicit conversions between kinds occur.
+
+Integer operations with a declared width use `sema::checked_integer` and trap
+on overflow, zero division, or invalid shifts. Right shifts sign-extend. Left
+shifts require nonnegative values. Bitwise results are masked and sign-extended
+to the declared width. Lowering typed SSA always specifies a width.
+With `dynamic_scalar_width`, integer arithmetic and comparisons accept either
+integer representation, widen exactly as necessary, and return compact integer
+results when they fit. Dynamic integer division rounds toward negative infinity,
+remainder follows the divisor's sign, right shifts sign-extend, and bitwise
+operations use two's-complement semantics with no fixed width.
+
+An object receiver can override a scalar opcode by putting its case-sensitive
+opcode name (e.g. `Add` or `Neg`) in `MetaObject::methods`. The method's bound
+native function receives the complete operand list, with the receiver first. Its
+signature must match those operands and declare a non-void result (a boolean for
+comparisons). The VM checks that the callback returns the declared kind. Only the
+first operand is consulted for an override; there is no reflected dispatch.
+Without a matching method, built-in scalar semantics apply, including identity
+equality for same-kind object operands. The `scalar` helper overload without an
+environment uses built-ins only.
 
 Runtime failures throw `VMError` with `code` and `CodeAddress position`; native
 callback exceptions propagate. Common codes include `vm.type`, `vm.arity`,
@@ -179,9 +203,9 @@ not mutate the module or execution state.
 
 ## Binary, loader, and cache
 
-FSVM v1 encoding is deterministic and uses:
+FSVM encoding is deterministic and uses:
 
-1. four magic bytes `FSVM`, then a little-endian u64 version (`1`);
+1. four magic bytes `FSVM`, then a little-endian u64 version (`1` or `2`);
 2. u64 constant count and tagged constants;
 3. u64 native declaration count and `(name, signature)` pairs;
 4. u64 function count and function records.
@@ -194,10 +218,16 @@ A function stores name, model, signature, register/local counts, and instruction
 Each instruction stores opcode, destination, operand count/indices, index, target,
 alternate, argument count, width, and symbol, in that order.
 
+Modules without wide integer constants or dynamic-width scalar instructions
+retain the v1 encoding. V2 permits a scalar width of `0` and adds
+constant tag `7`, followed by a length-prefixed, lowercase hexadecimal magnitude
+with a leading `-` for negative values and no leading zeroes. Only integers
+outside signed 64-bit range use this tag. Signature kinds do not change.
+
 `decode` rejects bad magic/version, truncation, invalid tags, host-index overflow,
 duplicate declarations/canonical constants, trailing input, and invalid modules.
 Default `BinaryLimits`: 64 MiB total bytes, 1,000,000 cumulative items, 1 MiB per
-string. Limits are configurable. Heap/object references cannot be constants.
+string or wide-integer payload. Limits are configurable. Heap/object references cannot be constants.
 Non-floating constants are interned by value; floats retain distinct entries to
 preserve signed zero and NaN encodings.
 

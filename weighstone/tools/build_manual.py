@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # title, capability, implementation status, header(s), specific explanation, technique, pitfall, exercise
 TOPICS = [
 ('Design Goals','architecture','implemented','include/Weighstone/CCINT.hpp','CCINT is a compiler-centered collection of numerical abstractions. It separates mathematical integers, fixed-width integers, abstract values and statements about values, because an optimizer must not silently substitute one semantics for another.','Design typed entry points and require every transformation to state its semantic domain. Prefer conservative unknowns to invented facts.','A numerical fact detached from its IR assumptions may cease to be true after a control-flow change.','Trace an SSA constant through the component boundary and record the preconditions used.'),
-('C++20 Setup','integration','implemented','CMakeLists.txt','The installed artifacts are headers: no Weighstone object library needs linking. Boost.Multiprecision supplies the variable-size integer backend, so consumers must have Boost headers available.','Compile a sample with -std=c++20 and -Iinclude -I. Add an INTERFACE CMake target to propagate requirements.','The current CMake install interface is a starting convention, not a full exported install/package implementation.','Compile examples/basic.cpp outside the CMake project using explicit include flags.'),
+ ('C++20 Setup','integration','implemented','CMakeLists.txt','The installed artifacts are headers: no Weighstone object library needs linking. Weighstone ships Boost.Multiprecision’s cpp_int backend and its required Boost headers.','Link the Weighstone::Weighstone CMake target to propagate include paths. For a direct build from the Weighstone directory use -std=c++20 -Ivendor/boost/include -Iinclude -I.','The bundled Boost subset is not a general-purpose Boost distribution.','Compile examples/basic.cpp outside the CMake project using explicit include flags.'),
 ('Mathematical vs Machine Integers','semantics','implemented','include/Weighstone/CCINT/BitVector.hpp','An unbounded integer is a point in Z; a bitvector is a residue in Z/(2^w). Reassociation and cancellation laws may agree, but overflow flags, division and comparison can differ.','Preserve width and interpretation in every IR adapter, and make checked or wrapping behavior explicit at the call site.','Poison, traps, saturating arithmetic and undef are target-IR concepts not encoded by plain mathematical expressions.','Compare x+1 at the maximum unsigned value for 8 and 17 bit widths.'),
 ('Big Integers','arithmetic','implemented','include/Weighstone/CCINT/BigInt.hpp','BigInt aliases boost::multiprecision::cpp_int. No machine-sized bound is imposed by CCINT, so coefficients and loop counts can exceed 64 bits.','Use exact values in proofs and cast to a host integer only after proving representability.','Large shifts and deliberately huge integers can exhaust resources; input validation is the compiler integrator’s responsibility.','Calculate 2^257-1, multiply it by a large prime and recover a factor.'),
 ('Division and Remainders','arithmetic','implemented','include/Weighstone/CCINT/BigInt.hpp','The host C++ division operator truncates toward zero. CCINT additionally supplies floor_div, ceil_div and euclidean_mod, because affine index reasoning often requires floors and nonnegative residues.','Define the quotient convention before algebraic simplification. For positive m, 0 <= euclidean_mod(a,m) < m.','Negative divisors are accepted by floor_div and ceil_div, but euclidean_mod requires a positive modulus.','Tabulate quotient and remainder for +/-7 divided by +/-3 and verify identities.'),
@@ -254,14 +254,16 @@ PURPOSE={
 'tests/test_analysis.cpp':'Core hardening regressions and independently enumerated integer-polyhedron proof checks',
 'tests/test_optimization.cpp':'Tensor layout, exhaustive small graph, signed tiling and memory dependence regressions',
 'manual/CCINT.md':'CCINT 40-chapter manual index, conventions and scope',
-'tools/build_manual.py':'Deterministically regenerate all forty manual chapters and YAML manifest',
+ 'tools/build_manual.py':'Deterministically regenerate all forty manual chapters and YAML manifest',
+ 'vendor/boost/README.md':'Provenance and scope of the bundled Boost.Multiprecision headers',
+ 'vendor/boost/LICENSE_1_0.txt':'Boost Software License for the bundled headers under vendor/boost/include',
 'MANIFEST.yaml':'File-by-file repository inventory, purpose and implementation status',
 'AGENTS.md':'Implementation and review instructions for automated and human contributors',
 }
 for i,title,file,status in chapters:
     PURPOSE[file]=f'Manual chapter {i}: {title}; capability {status}'
 
-lines=['schema: weighstone.manifest.v1','project: Weighstone','component: CCINT','version: 0.1.0','language: C++20','distribution: header-only','requires:','  - Boost.Multiprecision headers','optional_backends_integrated: []','files:']
+lines=['schema: weighstone.manifest.v1','project: Weighstone','component: CCINT','version: 0.1.0','language: C++20','distribution: header-only','requires: []','optional_backends_integrated: []','files:']
 for path in sorted(PURPOSE):
     descr=PURPOSE[path].replace("'","''")
     status='planned-design' if path in [c[2] for c in chapters if c[3]=='planned'] else 'implemented-or-documentation'

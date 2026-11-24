@@ -88,7 +88,7 @@ such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
 | `libmemory/Alloc.hpp`, `Pool.hpp`, `GC.hpp` | Move-only aligned storage, fixed-block allocation, explicit tracing mark/sweep with stable handles |
 | `libmemory/Arena.hpp`, `Buffer.hpp`, `IntrusivePtr.hpp`, `Resource.hpp` | Monotonic allocation, owning byte buffers, atomic intrusive reference counting, PMR adapters |
 | `libobject/ObjectGraph.hpp`, `VTable.hpp` | Named fields/references, cyclic object graphs, stable virtual slots and checked overrides |
-| `libobject/ClassHierarchy.hpp`, `ObjectLayout.hpp`, `Dispatch.hpp`, `ObjectVisitor.hpp` | Single inheritance, deterministic layouts, checked dynamic dispatch, cycle-preserving deep cloning |
+| `libobject/ClassHierarchy.hpp`, `ObjectLayout.hpp`, `Dispatch.hpp`, `ObjectVisitor.hpp` | Multiple inheritance, versioned layouts, checked dynamic dispatch, cycle-preserving deep cloning |
 | `libsema/TypeCheck.hpp`, `BlockCheck.hpp`, `SymCheck.hpp`, `OverflowCheck.hpp` | Representation/type checks, return signatures, symbol resolution, UB-free signed arithmetic checks |
 | `libsema/SymbolTable.hpp`, `CallCheck.hpp`, `DefiniteAssignment.hpp`, `EffectCheck.hpp` | Lexical scopes, callee signatures, must-assignment dataflow, configurable effect summaries |
 | `libtype/Atomic.hpp`, `Imperative.hpp`, `SystemF.hpp` | Shared scalar types, structural imperative types, polymorphic lambda terms and explicit System F type checking |
