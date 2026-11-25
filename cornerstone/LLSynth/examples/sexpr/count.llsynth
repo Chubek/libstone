@@ -1,0 +1,18 @@
+.language "CountSExpressionAtoms"
+.import std.SExpr as S
+.token OPEN = /\(/
+.token CLOSE = /\)/
+.token ATOM = /[^ \t\r\n()]+/
+.skip /[ \t\r\n]+/
+
+.function atoms(value: %S->Expr) -> Int
+if %S->Expr.is_Atom(value) { return 1; }
+let total = 0;
+for child in value.List { total = total + atoms(child); }
+return total;
+.end
+
+.rule Start
+'syntax: tokens:(OPEN | CLOSE | ATOM)* EOF
+'semantics: return atoms(S:parse($tokens));
+.end

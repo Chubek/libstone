@@ -25,8 +25,8 @@ return a + b;
 .rule Start
 'syntax: numbers:N+ EOF
 'semantics:
-let squares = F__map($numbers, &square);
-return F__fold(squares, 0, &add);
+let squares = F:map($numbers, &square);
+return F:fold(squares, 0, &add);
 .end
 ```
 
@@ -42,7 +42,9 @@ printf '2 3\n' | python3 example.py
 ## Library reference
 
 Use the ordinary names below after an open import (`.import "std.Functional"`),
-or qualify them when using an alias (`.import "std.Functional" as F`, `F__map`).
+or qualify them when using an alias (`.import "std.Functional" as F`, `F:map(...)`).
+Use `&F->map` to pass a function reference and `%P->Parser` to refer to an
+exported type. Legacy `F__map(...)` calls remain supported.
 The links point to the full typed signatures. Unless stated otherwise, vectors
 contain `Int`. Functions producing vectors return new vectors; the algorithms
 do not mutate their inputs. Integer operations use LLSynth's checked signed
@@ -54,7 +56,8 @@ action budget.
 | [ISel](isel.md) | Adds `.isel` blocks to select concrete ArchML instruction forms and emit Sandstone `.insn` assembly from legalized IR. |
 | [Functional](../stdlib/Functional.llsynth) | `map(items, transform)` applies an `Int -> Int` callback in order. `filter(items, keep)` retains values passing an `Int -> Bool` predicate. `fold(items, seed, combine)` visits left to right as `combine(acc, value)`; empty input returns `seed`. |
 | [Collections](../stdlib/Collections.llsynth) | `slice(items, start, stop)` copies the half-open range within bounds; negative indices clip at zero, and reversed bounds give `[]`. `concat(a, b)` joins two vectors; `flatten(rows)` concatenates all rows in order. |
-| [Parsec](../stdlib/Parsec.llsynth) | `%Parser`, `token`, `satisfy`, `then`, `choice`, `many`, `complete`. Token-stream recognizers; see below. Requires the Python tool target for lexical closures. |
+| [Parsec](../stdlib/Parsec.llsynth) | Composable token-stream recognizers with ordered choice, lookahead, and repetition. Requires the Python tool target for lexical closures. |
+| [SExpr](../stdlib/SExpr.llsynth) | `%Expr`, `parse(tokens)`, `parseAll(tokens)`, `toTokens(expr)`, and `!Syntax`. Reads and writes proper S-expressions over string tokens. |
 | [Sorting](../stdlib/Sorting.llsynth) | `sorted(items)` returns an ascending stable insertion sort. `merge(left, right)` merges **already sorted** vectors in linear time, keeping duplicates. |
 | [Search](../stdlib/Search.llsynth) | On ascending input, `lowerBound(items, key)` returns the first index with value ≥ key; `upperBound` uses > instead. Both return the length if none qualifies. `equalRange(items, key)` gives `[lower, upper]`, the half-open span of duplicates. |
 | [Sets](../stdlib/Sets.llsynth) | `unique(items)`, `union(left, right)`, `intersection(left, right)` return one copy per value. The first encounter determines order; the intersection follows the left input's order. |
@@ -69,7 +72,7 @@ action budget.
 
 The libraries other than Parsec use portable action-language operations. On
 native tool targets, pass named function references to higher-order functions
-(as in `F__map($numbers, &square)`); Python tools can also pass closures.
+(as in `F:map($numbers, &square)`); Python tools can also pass closures.
 
 ## Recognizing token sequences with Parsec
 
@@ -84,22 +87,51 @@ is valid.
 * `then(a, b)` runs `b` at the next cursor from `a`. `choice(a, b)` takes the
   first success, retrying `b` at the **original cursor** on failure. Retrying
   rolls back the cursor only; keep custom recognizers free of side effects.
+* `optional(p)` returns the original cursor if `p` fails. `ahead(p)` and
+  `notAhead(p)` succeed without consuming input when `p` succeeds or fails,
+  respectively.
 * `many(p)` consumes zero or more consecutive matches, stopping on failure or
-  no progress. `complete(p, tokens)` starts at zero and requires full
-  consumption.
+  no progress. `some(p)` requires at least one consuming match. `eof` succeeds
+  only at the end; pass `&P->eof` as a recognizer. `complete(p, tokens)` starts
+  at zero and requires full consumption.
 
 For example, with `.import "std.Parsec" as P` and `words:WORD* EOF` in a rule,
 this action accepts one `begin`, any number of `item`s, then one `end`:
 
 ```text
 'semantics:
-let body = P__many(P__token("item"));
-let clause = P__then(P__token("begin"), P__then(body, P__token("end")));
-return P__complete(clause, $words);
+let body = P:many(P:token("item"));
+let clause = P:then(P:token("begin"), P:then(body, P:token("end")));
+return P:complete(clause, $words);
 ```
 
 These recognizers run in actions over tokens captured by your grammar. Their
-return values describe recognition, not a parse tree.
+return values describe recognition, not a parse tree. Aurocks `%fault`
+rules belong to Aurocks `.g` grammars; LLSynth libraries report malformed
+input through action-language exceptions instead.
+
+## Reading S-expressions
+
+Import `.import std.SExpr as S` and capture a `Vec<String>` with your own
+lexer. The tokens `"("` and `")"` delimit lists; each other nonempty token
+is an atom. The library leaves whitespace, comments, quoting, and escaping
+to the caller's lexer. It does not interpret numbers, quote shorthand, or
+dotted pairs.
+
+* `S:parse(tokens)` reads one complete expression and rejects trailing tokens.
+  `S:parseAll(tokens)` reads zero or more complete expressions.
+* `%S->Expr` is a nominal sum with `Atom: String` and `List: Vec<%S->Expr>`.
+  Use `%S->Expr.is_Atom(value)` or `%S->Expr.is_List(value)` to test the tag,
+  then `value.Atom` or `value.List` to read its payload.
+* `S:toTokens(value)` emits a new token vector, without whitespace. Constructed
+  atoms that are empty or equal to a delimiter are rejected. Reading and
+  writing both allow up to 64 nested lists.
+* Malformed data raises `!S->Syntax`; error messages give a zero-based token
+  index, with EOF at `len(tokens)`.
+
+The [atom-counting example](../examples/sexpr/count.llsynth) reads `(a (b) ())`
+and returns `2`. It works with both Python and native generated tools.
 
 Run `python3 cornerstone/LLSynth/tests/stdlib/test_stdlib.py` for end-to-end
-Python and C examples, including malformed input and backtracking.
+Python and C examples, including S-expression round trips, malformed input,
+and recognizer backtracking.

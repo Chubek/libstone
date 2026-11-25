@@ -36,7 +36,7 @@ PORTABLE = r'''.language "LibraryIntegration"
 return x * 2;
 .end
 .function odd(x: Int) -> Bool
-return I__modulo(x, 2) == 1;
+return I:modulo(x, 2) == 1;
 .end
 .function difference(a: Int, b: Int) -> Int
 return a - b;
@@ -46,10 +46,10 @@ return a - b;
 'syntax: ns:INT+ EOF
 'semantics:
 let xs = $ns;
-let ordered = O__sorted(xs);
+let ordered = O:sorted(xs);
 require ordered == [1, 2, 3, 3] && xs == [3, 1, 3, 2] else Throw(!Mismatch, "sort");
 require S__equalRange(ordered, 3) == [2, 4] && S__lowerBound(ordered, 4) == 4 else Throw(!Mismatch, "bounds");
-let mapped = F__map(F__filter(xs, &odd), &double);
+let mapped = F:map(&F->filter(xs, &odd), &double);
 require mapped == [6, 2, 6] && F__fold(mapped, 30, &difference) == 16 else Throw(!Mismatch, "higher-order calls");
 let part = C__slice(xs, -2, 2);
 require C__concat(part, [9]) == [3, 1, 9] && C__slice(xs, 3, 1) == [] else Throw(!Mismatch, "slice");
@@ -78,15 +78,38 @@ PARSEC = r'''.language "Recognize"
 .rule Start
 'syntax: words:WORD* EOF
 'semantics:
-let a = P__token("a");
-let ab = P__then(a, P__token("b"));
-let ac = P__then(a, P__satisfy(fn(word: String) -> Bool { return word == "c"; }));
-let pair: %P__Parser = P__choice(ab, ac);
+let a = P:token("a");
+let ab = P:then(a, P:token("b"));
+let ac = P:then(a, P:satisfy(fn(word: String) -> Bool { return word == "c"; }));
+let pair: %P->Parser = P:choice(ab, ac);
 let pairs = P__many(pair);
 let more = P__many(pairs);
 let parser = P__then(more, P__token("z"));
 if P__complete(parser, $words) { return 1; }
 return 0;
+.end
+'''
+
+SEXPR = r'''.language "SExpressions"
+.import std.SExpr as S
+.token OPEN = /\(/
+.token CLOSE = /\)/
+.token ATOM = /[^ \t\r\n()]+/
+.skip /[ \t\r\n]+/
+.exception !Mismatch "S-expression round trip changed the tree"
+.function count(value: %S->Expr) -> Int
+if %S->Expr.is_Atom(value) { return 1; }
+let total = 0;
+for child in value.List { total = total + count(child); }
+return total;
+.end
+.rule Start
+'syntax: words:(OPEN | CLOSE | ATOM)* EOF
+'semantics:
+let root = S:parse($words);
+require S:toTokens(root) == $words else Throw(!Mismatch);
+require S:parse(S:toTokens(root)) == root else Throw(!Mismatch);
+return count(root);
 .end
 '''
 
@@ -125,6 +148,71 @@ class LibraryTests(unittest.TestCase):
         self.run_cmd(*compiler, "-std=c11", "tool.c", "-lm", "-o", "tool")
         result = self.run_cmd(self.work / "tool", text="3 1 3 2")
         self.assertEqual(result.stdout.strip(), "4")
+
+    def test_sexpr_reader_writer_on_python_and_c(self):
+        compiler = shlex.split(os.environ.get("CC", "cc"))
+        targets = ["python3"]
+        if compiler and shutil.which(compiler[0]):
+            targets.append("c11")
+        for target in targets:
+            with self.subTest(target=target):
+                self.generate(SEXPR, target)
+                command = [sys.executable, "tool.py"]
+                if target == "c11":
+                    self.run_cmd(*compiler, "-std=c11", "tool.c", "-lm", "-o", "tool")
+                    command = [self.work / "tool"]
+                for text, count in [("atom", "1"), ("()", "0"), ("(a (b ()) c)", "3"),
+                                    ("(" * 64 + "x" + ")" * 64, "1")]:
+                    self.assertEqual(self.run_cmd(*command, text=text).stdout.strip(), count)
+                for text, message in [("", "token 0: expected an expression"),
+                                      (")", "token 0: unexpected ')'"),
+                                      ("(x", "token 2: expected ')'"),
+                                      ("a b", "token 1: trailing tokens"),
+                                      ("(" * 65 + ")" * 65, "token 64: list nesting limit exceeded")]:
+                    result = self.run_cmd(*command, text=text, success=False)
+                    self.assertIn(message, result.stderr)
+
+    def test_sexpr_multiple_forms_and_invalid_atoms(self):
+        self.generate('''.import std.SExpr as S
+.rule Start
+'syntax: EOF
+'semantics:
+let forms = S:parseAll(["a", "(", ")", "b"]);
+return forms == [%S->Expr.Atom("a"), %S->Expr.List([]), %S->Expr.Atom("b")]
+    && len(S:parseAll([])) == 0;
+.end
+''')
+        self.assertEqual(self.run_cmd(sys.executable, "tool.py").stdout.strip(), "true")
+        self.generate('''.import std.SExpr as S
+.rule Start
+'syntax: EOF
+'semantics: return S:toTokens(%S->Expr.Atom("("));
+.end
+''')
+        result = self.run_cmd(sys.executable, "tool.py", success=False)
+        self.assertIn("atom cannot be represented as a token", result.stderr)
+
+    def test_parsec_peg_combinators(self):
+        self.generate('''.import std.Parsec as P
+.rule Start
+'syntax: EOF
+'semantics:
+let a = P:token("a");
+let positive = P:ahead(a);
+let negative = P:notAhead(a);
+let opt = P:optional(a);
+let some = P:some(a);
+let zero = P:some(positive);
+let bad = fn(tokens: Vec<String>, at: Int) -> Int { return len(tokens) + 1; };
+let grammar = P:then(some, &P->eof);
+return positive(["a"], 0) == 0 && negative(["b"], 0) == 0
+    && negative(["a"], 0) == -1 && positive([], -1) == -1
+    && opt([], 0) == 0 && opt(["a"], 0) == 1 && zero(["a"], 0) == -1
+    && P:complete(grammar, ["a", "a"]) && !(P:complete(grammar, ["a", "b"]))
+    && !(P:complete(grammar, [])) && P:many(bad)(["a"], 0) == 0;
+.end
+''')
+        self.assertEqual(self.run_cmd(sys.executable, "tool.py").stdout.strip(), "true")
 
     def test_parsec_choice_backtracks_many_checks_progress(self):
         self.generate(PARSEC)

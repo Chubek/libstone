@@ -1,6 +1,6 @@
 .library "std.Parsec"
 .summary "Composable recognizers over a vector of string tokens"
-.export %Parser, token, satisfy, then, choice, many, complete
+.export %Parser, token, satisfy, then, choice, many, complete, optional, ahead, notAhead, some, eof
 
 # Success returns the next cursor; failure is -1. Parsers do not own a cursor.
 .type %Parser = Fn(Vec<String>,Int)->Int
@@ -21,17 +21,23 @@ return fn(tokens: Vec<String>, at: Int) -> Int {
 
 .function then(first: %Parser, second: %Parser) -> %Parser
 return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at > len(tokens) { return -1; }
     let next = first(tokens, at);
-    if next < 0 { return -1; }
-    return second(tokens, next);
+    if next < at || next > len(tokens) { return -1; }
+    let end = second(tokens, next);
+    if end < next || end > len(tokens) { return -1; }
+    return end;
 };
 .end
 
 .function choice(first: %Parser, second: %Parser) -> %Parser
 return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at > len(tokens) { return -1; }
     let next = first(tokens, at);
-    if next >= 0 { return next; }
-    return second(tokens, at);
+    if next >= at && next <= len(tokens) { return next; }
+    next = second(tokens, at);
+    if next >= at && next <= len(tokens) { return next; }
+    return -1;
 };
 .end
 
@@ -40,7 +46,7 @@ return fn(tokens: Vec<String>, at: Int) -> Int {
     if at < 0 || at > len(tokens) { return -1; }
     while at < len(tokens) {
         let next = parser(tokens, at);
-        if next <= at { return at; }
+        if next <= at || next > len(tokens) { return at; }
         at = next;
     }
     return at;
@@ -49,4 +55,44 @@ return fn(tokens: Vec<String>, at: Int) -> Int {
 
 .function complete(parser: %Parser, tokens: Vec<String>) -> Bool
 return parser(tokens, 0) == len(tokens);
+.end
+
+.function optional(parser: %Parser) -> %Parser
+return choice(parser, fn(tokens: Vec<String>, at: Int) -> Int {
+    if at >= 0 && at <= len(tokens) { return at; }
+    return -1;
+});
+.end
+
+.function ahead(parser: %Parser) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at > len(tokens) { return -1; }
+    let next = parser(tokens, at);
+    if next >= at && next <= len(tokens) { return at; }
+    return -1;
+};
+.end
+
+.function notAhead(parser: %Parser) -> %Parser
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at > len(tokens) { return -1; }
+    let next = parser(tokens, at);
+    if next < at || next > len(tokens) { return at; }
+    return -1;
+};
+.end
+
+.function some(parser: %Parser) -> %Parser
+let rest = many(parser);
+return fn(tokens: Vec<String>, at: Int) -> Int {
+    if at < 0 || at >= len(tokens) { return -1; }
+    let next = parser(tokens, at);
+    if next <= at || next > len(tokens) { return -1; }
+    return rest(tokens, next);
+};
+.end
+
+.function eof(tokens: Vec<String>, at: Int) -> Int
+if at == len(tokens) { return at; }
+return -1;
 .end

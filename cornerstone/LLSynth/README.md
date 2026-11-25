@@ -61,7 +61,8 @@ using `..` to close the rule or `'end` to finish a facet are still accepted.
 * [Generator extensions](docs/extensions.md): emit Vim support files and
   typeset specifications with Perl extensions.
 * [Bundled standard libraries](docs/stdlib.md): import `std.Functional`,
-  `std.Collections`, `std.Parsec`, and other libraries from your specification.
+  `std.Collections`, `std.Parsec`, `std.SExpr`, and other libraries from your
+  specification.
 * [Instruction selection](docs/isel.md): import `std.ISel` to select Sandstone
   ArchML instruction forms and emit `.insn` assembly for a legalized IR.
 * [Tables, closures, and concurrency](docs/execution.md): hybrid tables,

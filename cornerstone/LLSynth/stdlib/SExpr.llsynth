@@ -1,0 +1,70 @@
+.library "std.SExpr"
+.summary "Read and write proper S-expressions over a vector of tokens"
+.export %Expr, parse, parseAll, toTokens, !Syntax
+
+.sumtype %Expr
+Atom: String
+List: Vec<%Expr>
+.end
+
+.exception !Syntax(at: Int, reason: String) "S-expression token {at}: {reason}"
+
+.prodtype %Read
+Value: %Expr
+Next: Int
+.end
+
+.function read(tokens: Vec<String>, at: Int, depth: Int) -> %Read
+require at < len(tokens) else Throw(!Syntax, at, "expected an expression");
+let token = tokens[at];
+require token != ")" else Throw(!Syntax, at, "unexpected ')'");
+require token != "" else Throw(!Syntax, at, "empty atom token");
+if token != "(" { return %Read(%Expr.Atom(token), at + 1); }
+require depth < 64 else Throw(!Syntax, at, "list nesting limit exceeded");
+let cursor = at + 1;
+let values: Vec<%Expr> = [];
+while cursor < len(tokens) {
+    if tokens[cursor] == ")" { return %Read(%Expr.List(values), cursor + 1); }
+    let child = read(tokens, cursor, depth + 1);
+    push(values, child.Value);
+    cursor = child.Next;
+}
+Throw(!Syntax, cursor, "expected ')'");
+.end
+
+.function parse(tokens: Vec<String>) -> %Expr
+let result = read(tokens, 0, 0);
+require result.Next == len(tokens) else Throw(!Syntax, result.Next, "trailing tokens");
+return result.Value;
+.end
+
+.function parseAll(tokens: Vec<String>) -> Vec<%Expr>
+let result: Vec<%Expr> = [];
+let cursor = 0;
+while cursor < len(tokens) {
+    let item = read(tokens, cursor, 0);
+    push(result, item.Value);
+    cursor = item.Next;
+}
+return result;
+.end
+
+.function write(value: %Expr, tokens: Vec<String>, depth: Int) -> Void
+if %Expr.is_Atom(value) {
+    let atom = value.Atom;
+    require atom != "" && atom != "(" && atom != ")"
+        else Throw(!Syntax, len(tokens), "atom cannot be represented as a token");
+    push(tokens, atom);
+    return;
+}
+require depth < 64 else Throw(!Syntax, len(tokens), "list nesting limit exceeded");
+push(tokens, "(");
+for child in value.List { write(child, tokens, depth + 1); }
+push(tokens, ")");
+.end
+
+.function toTokens(value: %Expr) -> Vec<String>
+let result: Vec<String> = [];
+write(value, result, 0);
+return result;
+.end
