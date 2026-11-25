@@ -76,7 +76,8 @@ productions to attach a C epilogue.
 
 Actions are C fragments in braces. `$$` is the result, `$1`, `$2`, …
 are values of symbols in the production, and `$TOKEN` refers to the
-matched token text. Semantic values use `void *`; an action that
+matched token text. On the portable backend `$OFFSET` is the production's
+starting byte offset, after leading layout. Semantic values use `void *`; an action that
 captures a terminal receives a NUL-terminated allocation and can
 release it with `aurocks_free` when no longer needed. `$TOKEN` and
 the corresponding `$N` share the same allocation. A generated parser

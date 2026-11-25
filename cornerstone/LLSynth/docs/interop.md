@@ -59,10 +59,18 @@ python3 example.py
 ```
 
 The generated tool uses standard-library `ctypes.CDLL` lazily on first call.
-`from` is passed unchanged to the platform dynamic loader: `./` paths are
-relative to the **runtime working directory**, not the specification or
-generated file. Use an absolute path or the normal loader search path when
-appropriate. Missing libraries and symbols produce `INTEROP` diagnostics;
+For a bare filename such as `libexample.so` or `libexample.so.1`, it searches
+the colon-separated `LLSYNTH_LIBRARY_PATH` directories left to right, ignoring
+empty entries. Relative entries are relative to the **runtime working
+directory**. The first existing regular file with exactly that filename is
+passed to the loader by absolute path. If that file cannot be loaded, the
+call fails without trying another directory. If no file matches, the original
+name is passed unchanged to the normal platform dynamic loader.
+
+Explicit paths in `from`, such as `./libexample.so` or an absolute path, do
+not search `LLSYNTH_LIBRARY_PATH` and are passed unchanged to the loader. `./`
+is relative to the runtime working directory, not the specification or
+generated file. Missing libraries and symbols produce `INTEROP` diagnostics;
 an unused import does not load anything. Native handles remain loaded for
 the lifetime of the generated Python module.
 
@@ -77,6 +85,7 @@ cc -std=c11 example.c example-native.c -lm -o example
 C output emits typed `extern` declarations and direct native calls. Link the
 implementation object files or libraries explicitly. **`from` describes the
 Python dynamic-library binding; it is not an automatic linker option in C.**
+`LLSYNTH_LIBRARY_PATH` does not affect C linker resolution.
 The C linker, not a runtime loader, resolves the symbol. Missing symbols
 therefore fail the build. Declarations of a single symbol must agree on both
 its normalized signature and library, even when assigned multiple action

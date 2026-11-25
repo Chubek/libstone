@@ -240,6 +240,12 @@ public:
         if (!node) {
             return failure(ErrorCode::invalid_graph, "null IR node");
         }
+        if (exit_requested_) {
+            ExecutionReport report;
+            report.status = exit_status(exit_code_);
+            report.signal = ControlSignal::exit_;
+            return report;
+        }
         auto report = std::visit(
             [&](const auto& node_value) -> Result<ExecutionReport> {
                 using T = std::decay_t<decltype(node_value)>;
@@ -275,13 +281,19 @@ public:
             },
             node->value);
         if (report) {
+            // `exit` is a builtin, possibly reached through a function, eval,
+            // or command. The request survives those status-only boundaries.
+            if (exit_requested_) {
+                report.value().status = exit_status(exit_code_);
+                report.value().signal = ControlSignal::exit_;
+            }
             commit_status(report.value().status, report.value().signal);
         }
         return report;
     }
 
     void commit_status(const ExitStatus& status, ControlSignal signal) {
-        if (signal == ControlSignal::none) {
+        if (signal == ControlSignal::none || signal == ControlSignal::exit_) {
             last_status_ = status;
         }
         if (signal == ControlSignal::return_) {
@@ -684,7 +696,7 @@ public:
                 clear_signal();
                 continue;
             }
-            if (body.value().signal == ControlSignal::return_) {
+            if (body.value().signal == ControlSignal::return_ || body.value().signal == ControlSignal::exit_) {
                 return body;
             }
         }
@@ -732,7 +744,7 @@ public:
                 clear_signal();
                 continue;
             }
-            if (body.value().signal == ControlSignal::return_) {
+            if (body.value().signal == ControlSignal::return_ || body.value().signal == ControlSignal::exit_) {
                 return body;
             }
         }
@@ -781,7 +793,7 @@ public:
                 return body.error();
             }
             report = std::move(body).value();
-            if (!clause.items[index].fallthrough) {
+            if (!clause.items[index].fallthrough || report.signal != ControlSignal::none) {
                 break;
             }
         }
@@ -847,6 +859,12 @@ public:
         auto result = run_with_redirections(subshell.body, subshell.redirections);
         environment_ = std::move(saved);
         tilde_ = std::move(saved_tilde);
+        if (exit_requested_) {
+            cancel_exit();
+            if (result && result.value().signal == ControlSignal::exit_) {
+                result.value().signal = ControlSignal::none;
+            }
+        }
         return result;
     }
 
@@ -949,7 +967,12 @@ public:
         exit_requested_ = true;
         exit_code_ = code;
     }
-    void cancel_exit() noexcept { exit_requested_ = false; }
+    void cancel_exit() noexcept {
+        exit_requested_ = false;
+        if (pending_signal_ == ControlSignal::exit_) {
+            clear_signal();
+        }
+    }
 
     // Applies a function definition on behalf of the `set -f`-style builtins and
     // the CLI's shell-function surface.
@@ -1042,6 +1065,10 @@ inline Result<std::string> ShellScriptingBackend::eval_command(std::string_view 
     redirected.redirections.push_back(std::move(redirect));
 
     auto report = shell_->run(ir::node(std::move(redirected), "cmdsubst-capture"));
+    // An exit in $(...) terminates its command list, not the caller.
+    if (shell_->exit_requested()) {
+        shell_->cancel_exit();
+    }
     if (!report) {
         return report.error();
     }

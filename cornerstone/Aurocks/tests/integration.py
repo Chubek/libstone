@@ -67,6 +67,25 @@ def test(binary, cc, cwd):
     anchors_c.write_bytes(cli(anchors).stdout)
     compile_and_run(anchors_c)
 
+    offsets = cwd / "offsets.g"
+    offsets.write_text(
+        "%{\nstatic size_t seen[2];\n%}\n"
+        "%start entry\n%skip /[ ]+/\n"
+        "entry: 'x' child { seen[0] = $OFFSET; };\n"
+        "child: 'y' { seen[1] = $OFFSET; };\n"
+        "%%\n"
+        "int main(void) { parse_entry(\"  x   y\");\n"
+        "    return parse_entry_error() || seen[0] != 2 || seen[1] != 6;\n"
+        "}\n",
+        encoding="ascii",
+    )
+    offsets_c = cwd / "offsets.c"
+    offsets_c.write_bytes(cli(offsets).stdout)
+    compile_and_run(offsets_c)
+    require(b"$OFFSET requires the portable backend" in
+            cli("--backend", "libglr", "--check", offsets, status=1).stderr,
+            "linked backend accepted an action depending on an unavailable offset")
+
     invalid_regex = cwd / "invalid-regex.g"
     for body in ("entry: /a{1025}/;\n", "%skip /a{1025}/\nentry: 'a';\n"):
         invalid_regex.write_text("%start entry\n" + body, encoding="ascii")

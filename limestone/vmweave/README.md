@@ -13,8 +13,8 @@ Lua description -> VM model -> STK-00 -> C components
 ## Build and generate
 
 VMWeave uses the Lua and Kaguya sources in Limestone's build and a compatibility
-adapter for Lua 5.5. Perl runs `scripts/aurocks.pl` and `scripts/asdl.pl` to generate
-the abstract-semantics grammar and syntax tree in the build tree.
+adapter for Lua 5.5. Native Aurocks and `scripts/asdl.pl` generate the
+abstract-semantics parser and syntax tree in the build tree.
 
 ```sh
 cmake -S . -B build
@@ -30,6 +30,15 @@ unit. `--generate` produces a common header, component-assembly `.c`, `.stk00`,
 and **only the selected canonical component files**. Output is deterministic.
 Generate into a fresh directory when changing component selections: older
 artifacts from other invocations are not deleted.
+
+`--emit-c-bundle` combines the same translation unit (`c_source`) with the
+validated module's `name`, `execution`, `cell`, `stack_capacity`, `components`,
+and `words` in a single JSON object (`schema: "limestone.vmweave.c-bundle"`,
+`version: 1`). Each word gives its `name`, `opcode`, `operands`, `pop`, `push`,
+and `flow`. This is useful for clients that generate decoded tapes, such as
+[LLSynth `.vmgen`](../../cornerstone/LLSynth/docs/vmgen.md). When loading Lua in
+this mode, `--source-name FILE` assigns provenance independently of the
+physical input path. Lua specifications using this mode must not write to stdout.
 
 ## Lua API
 

@@ -134,7 +134,7 @@ struct ExitStatus {
 // Non-local control transfer produced by return/break/continue. Carried in the
 // execution report instead of hidden state so loops can be reasoned about and
 // inspected like any other value.
-enum class ControlSignal : std::uint8_t { none, return_, break_, continue_ };
+enum class ControlSignal : std::uint8_t { none, return_, break_, continue_, exit_ };
 
 // ---- time and resources ---------------------------------------------------
 

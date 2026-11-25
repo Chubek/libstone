@@ -18,7 +18,8 @@ sub ends_spec_block {
  return $line eq '.end' || ($block eq 'rule' && $line eq '..');
 }
 sub read_spec_lines {
- my($file,$active,$deps)=@_;my $path=canonical_path($file);
+ my($file,$active,$deps,$block)=@_;my $path=canonical_path($file);
+ my $initial='';$block//=\$initial;
  $active->{$path} and fail("include cycle involving $file",$file,1);
  $active->{$path}=1;
  my $bytes=slurp($file);$deps->{$path}=sha256_hex($bytes);
@@ -28,11 +29,16 @@ sub read_spec_lines {
  $src=~s/\r\n?/\n/g;
  my @out;my @lines=split /\n/,$src,-1;
  for my $i(0..$#lines){my $line=$lines[$i];
-  if($line =~ /^\s*\.include\s+"([^"\n]+)"\s*$/){my $name=$1;my @roots=(dirname($file),@include_paths);my $found;
+   if($$block ne 'vmgen' && $line =~ /^\s*\.include\s+"([^"\n]+)"\s*$/){my $name=$1;my @roots=(dirname($file),@include_paths);my $found;
    for my $root(@roots){my $candidate=File::Spec->file_name_is_absolute($name)?$name:File::Spec->catfile($root,$name);if(-f $candidate){$found=$candidate;last}}
    defined $found or fail("include '$name' not found",$file,$i+1);
-   push @out,read_spec_lines($found,$active,$deps);
-  }else{push @out,[$line,$file,$i+1]}
+    push @out,read_spec_lines($found,$active,$deps,$block);
+   }else{
+    push @out,[$line,$file,$i+1];
+    my $l=strip_ws($line);
+    if(!$$block){$$block=module_block($l)}
+    elsif(ends_spec_block($$block,$l)){$$block=''}
+   }
  }
  delete $active->{$path};return @out;
 }
@@ -43,14 +49,30 @@ sub parse_spec {
  $s->{module_receivers}=\%receivers if %receivers;
  my $block='';my $cur;my $facet='';my $body='';
  for(my $n=0;$n<@lines;$n++){
-  my($raw,$origin,$ln)=@{$lines[$n]};$file=$origin;my $l=strip_ws($raw);
+   my($raw,$origin,$ln)=@{$lines[$n]};$file=$origin;my $l=strip_ws($raw);
+   if($block eq 'vmgen'){
+    $file eq $s->{vmgen_decl}{file}
+     or fail('.vmgen block cannot cross a file boundary',@{$s->{vmgen_decl}}{qw(file line)});
+    if(ends_spec_block($block,$l)){$block=''}
+    else{$s->{vmgen_decl}{body}.="$raw\n"}
+    next;
+   }
   next if $l eq '' && !$block;
-  next if $l =~ /^#(?:\s|$)/;
-  if($block eq 'rule') {
-    if(ends_spec_block($block,$l)) {push @{$s->{rules}},$cur; $block='';$facet='';next}
-   if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/) {$facet=$1;$cur->{facets}{$facet} .= "$2\n";next}
-   if($l eq "'end"){$facet='';next}
-   $facet or fail("rule content without facet",$file,$ln);
+  next if $l =~ /^#(?:\s|$)/ && !($block eq 'rule' && $facet eq 'action_semantics');
+   if($block eq 'rule') {
+     if(ends_spec_block($block,$l)) {push @{$s->{rules}},$cur; $block='';$facet='';next}
+    if(LLSynthActionSemantics::is_header($l)){
+     LLSynthActionSemantics::parse_header($cur,$raw,$file,$ln);$facet='action_semantics';next;
+    }
+    if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/) {
+     ($facet,my $text)=($1,$2);
+     $facet eq 'semantics' && $cur->{action_semantics}
+      and fail("cannot combine ordinary and ActionSemantics 'semantics facets",$file,$ln);
+     $cur->{facets}{$facet} .= "$text\n";next;
+    }
+    if($l eq "'end"){$facet='';next}
+    if($facet eq 'action_semantics'){push @{$cur->{action_semantics}{body}},[$raw,$file,$ln];next}
+    $facet or fail("rule content without facet",$file,$ln);
    $cur->{facets}{$facet}.="$raw\n";
    next;
   }
@@ -118,17 +140,38 @@ sub parse_spec {
   if($l =~ /^\.extern\s+c\s+(\w+)\s*\((.*?)\)\s*->\s*(\S+)\s+from\s+"([^"]+)"(?:\s+symbol\s+"([A-Za-z_]\w*)")?\s*$/){
    push @{$s->{functions}},{name=>$1,args=>$2,returns=>$3,library=>$4,symbol=>$5||$1,foreign=>'c',line=>$ln};next;
   }
+  if($l =~ /^\.extern\s+ipc\s+(\w+)\s*\((.*?)\)\s*->\s*(\S+)\s+symbol\s+"([A-Za-z_]\w*)"\s*$/){
+   my($name,$args,$returns,$symbol)=($1,$2,$3,$4);
+   canonical_path($file) eq canonical_path(File::Spec->catfile(dirname(__FILE__),'..','stdlib','ipc.llsynth'))
+    or fail('.extern ipc is reserved for the bundled std.ipc library',$file,$ln);
+   push @{$s->{functions}},{name=>$name,args=>$args,returns=>$returns,symbol=>$symbol,foreign=>'ipc',line=>$ln};next;
+  }
   if($l =~ /^\.sandstone\s+(\w+)\s+bank\s+"([^"]+)"(?:\s+syntax\s+"([^"]*)")?(?:\s+cli\s+"([^"]+)")?\s*$/){
    push @{$s->{functions}},{name=>$1,args=>'source: String',returns=>'Vec<Int>',bank=>$2,syntax=>$3||'',cli=>$4||'sandstone-as',foreign=>'sandstone',line=>$ln};next;
   }
-  if($l eq '.init'){$block='init';$body='';next}
+  if($l =~ /^\.sandstone\s+(\w+)\s+sdk\s+(bank|target)\s*$/){
+   push @{$s->{functions}},{name=>$1,args=>'source: String, selector: String, syntax: String',
+    returns=>'Vec<Int>',assembler_selector=>$2,foreign=>'sandstone_sdk',line=>$ln};next;
+  }
+   if($l eq '.init'){$block='init';$body='';next}
+   if($l =~ /^\.vmgen\b/){
+    $l =~ /^\.vmgen\s+for\s+([A-Za-z_]\w*)$/ or fail('expected .vmgen for IR',$file,$ln);
+    $s->{vmgen_decl} and fail('only one .vmgen block is supported',$file,$ln);
+    $s->{vmgen_decl}={ir=>$1,file=>$file,line=>$ln,body=>''};$block='vmgen';next;
+   }
   if($l =~ /^\.ir\s+(\w+)/){$block='ir';$cur={name=>$1,ops=>[]};next}
   if($l =~ /^\.(rewrite|analysis|backend|pipeline)\s+(.+)$/){$block=$1;$cur={name=>$2,body=>''};next}
   fail("unknown directive or unexpected text: '$l'",$file,$ln);
  }
- $block and fail("unterminated '$block' block",$file,scalar @lines);
-  $s->{language} ||= 'Language'; $s->{start} ||= ($s->{rules}[0]||{})->{name};
-  prepare_data_types($s);
+ if($block eq 'vmgen'){fail('unterminated .vmgen block',@{$s->{vmgen_decl}}{qw(file line)})}
+  $block and fail("unterminated '$block' block",$file,scalar @lines);
+   $s->{language} ||= 'Language'; $s->{start} ||= ($s->{rules}[0]||{})->{name};
+   if(has_ipc($s)){
+    my $path=canonical_path(ipc_runtime_path($opt{T}));
+    $deps{$path}=sha256_hex(slurp($path));
+    $s->{dependencies}=[map {{path=>$_,sha256=>$deps{$_}}} sort keys %deps];
+   }
+   prepare_data_types($s);
  return $s;
 }
 sub validate_declarations {
@@ -154,7 +197,8 @@ sub validate_declarations {
  my($start)=grep {$_->{name} eq ($s->{start}||'')} @{$s->{rules}};
  if($start){
   for my $facet($opt{mode} eq 'both'?qw(semantics lower):$opt{mode} eq 'interpret'?'semantics':$opt{mode} =~ /^(compile|rewrite)$/?'lower':()){
-   defined $start->{facets}{$facet} or fail("start rule requires '$facet facet for mode $opt{mode}",$s->{file},$start->{line});
+    defined $start->{facets}{$facet} || ($facet eq 'semantics' && $start->{action_semantics})
+     or fail("start rule requires '$facet facet for mode $opt{mode}",$s->{file},$start->{line});
   }
  }
 }
@@ -906,7 +950,9 @@ sub validate_program_backend {
   $type eq $want or fail("backend operand $op.$name requires $want, got $type",$s->{file},1);
  }
  return unless $opt{mode} =~ /^(both|compile|rewrite)$/;
- my $target=$opt{program_target};return if grep {$_->{target} eq $target} @{$s->{backends_compiled}};
+ my $target=$opt{program_target};
+ return if $target eq 'vmweave' && $s->{vmgen};
+ return if grep {$_->{target} eq $target} @{$s->{backends_compiled}};
  $target =~ /^(c99|c11|cpp17|cpp20|python3|bytecode)$/ or fail("no backend defined for program target '$target'",$s->{file},1);
  return if $target eq 'bytecode';
  my %shape=(PUSH_F64=>[0,1,1],ADD=>[2,1,0],SUB=>[2,1,0],MUL=>[2,1,0],DIV=>[2,1,0],NEG=>[1,1,0],DUP=>[1,2,0],SWAP=>[2,2,0],DROP=>[1,0,0],PRINT=>[1,1,0]);
@@ -1255,14 +1301,17 @@ sub validate_types {
   my $returns=$block->($f->{code},\%env,{},$sig->{returns});
   $returns || $sig->{returns} eq 'Void' or fail("function $f->{name} may finish without returning $sig->{returns}",$s->{file},$f->{line});
  }
- my(%ruletypes,$active_facet);my $symtype;$symtype=sub{my($name)=@_;return $tokens{$name} if $tokens{$name};
+  my(%ruletypes,$active_facet);my $symtype;$symtype=sub{my($name)=@_;return $tokens{$name} if $tokens{$name};
   if(my $kind=$s->{internal}{$name}){
    my($p)=grep {$_->{lhs} eq $name && @{$_->{rhs}}>0 && $_->{rhs}[-1] ne $name} @{$s->{productions}};
    return 'Any' unless $p;
    my $inner=$symtype->($p->{rhs}[-1]);return "Vec<$inner>" if $kind =~ /^(\*|\+|sep)$/;return $inner;
   }
-  return $ruletypes{$active_facet}{$name}||'Any';
- };
+   return $ruletypes{$active_facet}{$name}||'Any';
+  };
+  for my $r(grep {$_->{action_semantics}} @{$s->{rules}}){
+   $ruletypes{semantics}{$r->{name}}=$r->{return_types}{semantics}=$r->{action_semantics}{returns};
+  }
  for my $iteration(0..scalar @{$s->{rules}}){my $changed=0;
   for my $r(@{$s->{rules}}){for my $facet(sort keys %{$r->{code}}){$active_facet=$facet;my %caps;
    for my $p(grep {$_->{lhs} eq $r->{name}} @{$s->{productions}}){for my $i(0..$#{$p->{labels}}){
@@ -1275,8 +1324,9 @@ sub validate_types {
    if(($ruletypes{$facet}{$r->{name}}||'') ne $t){$ruletypes{$facet}{$r->{name}}=$t;$changed=1;}
    $r->{return_types}{$facet}=$t;
   }}
-  last unless $changed;
- }
+   last unless $changed;
+  }
+  LLSynthActionSemantics::validate_captures($s,\%tokens,$ruletypes{semantics}||{});
 
  for my $r(@{$s->{rewrites_compiled}}){my %env=(fp_mode=>'String');
   for my $op(@{$r->{match}}){my @params=map {(split /\s*:\s*/,$_,2)[1]} comma_parts($ops{$op->{op}}{params});

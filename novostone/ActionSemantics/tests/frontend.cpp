@@ -163,7 +163,14 @@ int main(int argc, char** argv) {
     rejected("language L { start E; syntax E = N() | M(x: E); rule N = complete; rule M = give x; }", "evaluate(field)");
     rejected(std::string(65537, ' '), "64 KiB");
     rejected(spec("complete") + std::string(1, '\0'), "NUL");
-    rejected(spec(std::string(600, '(') + "complete" + std::string(600, ')')), "syntax");
+    auto grouped = [](std::size_t depth) {
+      return spec(std::string(depth, '(') + "complete" + std::string(depth, ')'));
+    };
+    check(parse(grouped(253)).name() == "Test", "valid grouping near parser depth limit");
+    rejected(grouped(254), "syntax");
+    rejected(grouped(600), "syntax");
+    check(parse("# " + std::string(600, '(') + "\n" + spec("complete")).name() == "Test",
+          "parentheses in layout must not count toward syntax nesting");
     auto bad = "language L {\n start E;\n syntax E = N();\n rule N = give missing;\n}";
     try { (void)parse(bad); check(false, "accepted missing field"); }
     catch (const ParseError& e) { check(e.line == 4 && e.column == 16, "semantic source span"); }

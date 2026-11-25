@@ -1,0 +1,22 @@
+.language "AnalyzeTerm"
+.import std.egraph as E
+.import std.flowgraph as F
+
+.token TERM = /[^\r\n]+/
+.skip /[\r\n]+/
+.exception !BadGraph "unexpected facts for the term evaluation graph"
+
+.rule Start
+'syntax: expression:TERM EOF
+'analyze:
+// Model a parameter definition (variable 0) followed by evaluation and return.
+// Conservatively count the parameter as used even if the term is constant.
+let cfg: Vec<%F->Block> = [
+    %F->Block([1], [%F->Step([], [0])]),
+    %F->Block([], [%F->Step([0], [])])
+];
+let live = F:liveness(cfg, 0, 100);
+let defs = F:reachingDefinitions(cfg, 0, 100);
+require live[0].Out == [0] && defs[1].In == [%F->Definition(0, 0, 0)] else Throw(!BadGraph);
+print(E:analyze($expression, "(=> (add ?x 0) ?x)"));
+.end

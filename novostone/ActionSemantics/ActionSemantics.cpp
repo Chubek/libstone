@@ -619,6 +619,30 @@ Language parse(std::string_view text, std::string source) {
   if (text.size() > 65536) throw ParseError(source, text, 0, "specification exceeds 64 KiB");
   auto nul = text.find('\0');
   if (nul != std::string_view::npos) throw ParseError(source, text, nul, "embedded NUL");
+  // Native Aurocks no longer gives us the old parser's production-depth
+  // limit. Bound parenthesized source separately: redundant grouping
+  // disappears before the ASDL visitor can apply its own depth limit.
+  constexpr std::size_t max_group_depth = 253;
+  std::size_t groups = 0;
+  bool quoted = false;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char ch = text[i];
+    if (quoted) {
+      if (ch == '\\' && i + 1 < text.size()) ++i;
+      else if (ch == '"') quoted = false;
+    } else if (ch == '"') {
+      quoted = true;
+    } else if (ch == '#' || (ch == '/' && i + 1 < text.size() && text[i + 1] == '/')) {
+      const auto end = text.find_first_of("\r\n", i + 1);
+      if (end == std::string_view::npos) break;
+      i = end;
+    } else if (ch == '(') {
+      if (++groups > max_group_depth)
+        throw ParseError(source, text, i, "invalid .acsem syntax: parenthesis nesting limit exceeded");
+    } else if (ch == ')' && groups) {
+      --groups;
+    }
+  }
   std::string input(text);
   std::unique_ptr<novo_as_syntax, decltype(&novo_as_syntax_free)> syntax(nullptr, novo_as_syntax_free);
   std::size_t offset = 0;

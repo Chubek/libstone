@@ -79,6 +79,52 @@ int main() {
         }
     }
 
+    {
+        ExecResult r = run_cmd(R"(./libsh -c 'echo first
+true &&
+echo second |
+cat
+echo third')");
+        if (r.status != 0 || r.out != "first\nsecond\nthird\n") {
+            std::cerr << "FAIL: newline lists and continuation: " << r.out;
+            ++failures;
+        }
+    }
+
+    {
+        ExecResult r = run_cmd(R"(./libsh -c 'VALUE="a  b"
+COPY=$VALUE
+printf "<%s>\n" "$COPY"')");
+        if (r.status != 0 || r.out != "<a  b>\n") {
+            std::cerr << "FAIL: quoted assignment: " << r.out;
+            ++failures;
+        }
+    }
+
+    {
+        ExecResult r = run_cmd(R"sh(./libsh -c '(exit 4; echo unreachable)
+echo "subshell=$?"
+echo "capture=$(echo before; exit 3; echo unreachable)"
+exit 2 | cat
+while true; do
+    echo exiting; exit 7; echo unreachable
+done
+echo unreachable')sh");
+        if (r.status != 7 || r.out != "subshell=4\ncapture=before\nexiting\n") {
+            std::cerr << "FAIL: scoped exit: status " << r.status << ": " << r.out;
+            ++failures;
+        }
+    }
+
+    {
+        ExecResult r = run_cmd(R"(./libsh -c 'f() { exit 9; echo unreachable; }
+f || echo unreachable')");
+        if (r.status != 9 || !r.out.empty()) {
+            std::cerr << "FAIL: exit from function: status " << r.status << ": " << r.out;
+            ++failures;
+        }
+    }
+
     if (failures != 0) {
         std::cerr << "test_cli failures=" << failures << '\n';
         return 1;

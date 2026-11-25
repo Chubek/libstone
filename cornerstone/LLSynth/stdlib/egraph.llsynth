@@ -1,0 +1,21 @@
+.library "std.egraph"
+.summary "Bounded equality-saturation analysis of pure S-expressions using EquinoxNG"
+.export analyze, analyzeWithLimits, equivalent, equivalentWithLimits
+
+.extern c egraphRun(term: String, other: String, rules: String, compare: Bool, iterations: Int, nodes: Int) -> String from "libllsynth_egraph.so" symbol "llsynth_egraph_run"
+
+.function analyze(term: String, rules: String) -> String
+return analyzeWithLimits(term, rules, 12, 1024);
+.end
+
+.function analyzeWithLimits(term: String, rules: String, iterations: Int, nodes: Int) -> String
+return egraphRun(term, "", rules, false, iterations, nodes);
+.end
+
+.function equivalent(lhs: String, rhs: String, rules: String) -> String
+return equivalentWithLimits(lhs, rhs, rules, 12, 1024);
+.end
+
+.function equivalentWithLimits(lhs: String, rhs: String, rules: String, iterations: Int, nodes: Int) -> String
+return egraphRun(lhs, rhs, rules, true, iterations, nodes);
+.end

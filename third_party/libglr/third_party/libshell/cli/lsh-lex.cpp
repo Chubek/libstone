@@ -650,6 +650,7 @@ void Lexer::lex_word(bool word_start) {
     const std::size_t start = position_;
     bool quoted = false;
     bool io_candidate = true;
+    bool assignment_word = false;
     // Tilde expansion is armed at the start of a word and re-armed after each
     // ':' (so PATH=~/bin:$PATH expands both). Any other literal or expansion
     // disarms it.
@@ -662,6 +663,7 @@ void Lexer::lex_word(bool word_start) {
         token.kind = TokenKind::word;
         token.fragments = std::move(fragments_);
         token.quoted = quoted;
+        token.assignment_word = assignment_word;
         token.offset = start;
         // The literal spelling of the word, used for reserved-word recognition
         // and case patterns. Every fragment contributes exactly once.
@@ -686,21 +688,21 @@ void Lexer::lex_word(bool word_start) {
         const char ch = text_[position_];
 
         if (ch == '\\') {
-            quoted = true;
-            tilde_armed = false;
-            flush_tilde();
             if (position_ + 1 < text_.size()) {
                 if (text_[position_ + 1] == '\n') {
                     // Line continuation: the backslash-newline pair disappears.
                     position_ += 2;
-                    literal_kind_ = ExpansionKind::raw;
                     continue;
                 }
                 if (text_[position_ + 1] == '\r' && position_ + 2 < text_.size() && text_[position_ + 2] == '\n') {
                     position_ += 3;
-                    literal_kind_ = ExpansionKind::raw;
                     continue;
                 }
+            }
+            quoted = true;
+            tilde_armed = false;
+            flush_tilde();
+            if (position_ + 1 < text_.size()) {
                 append_literal(text_[position_ + 1], false);
             }
             position_ = std::min(position_ + 2, text_.size());
@@ -795,6 +797,9 @@ void Lexer::lex_word(bool word_start) {
         // it must stay in the same fragment as the name: the parser recognises
         // an assignment by finding '=' inside the head fragment.
         if (ch == '=' && !quoted) {
+            if (fragments_.empty() && !tilde_pending_ && valid_variable_name(literal_)) {
+                assignment_word = true;
+            }
             append_literal(ch, false);
             flush_literal();
             tilde_armed = true;

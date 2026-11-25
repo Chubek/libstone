@@ -1,0 +1,27 @@
+.language "Pairs"
+.skip /[ \t\n]+/
+.token NUMBER: Int = /-?[0-9]+/
+
+.ir Tape
+  .op PUSH(value: Int): () -> (Int)
+  .op MIX: (Int, Int) -> (Int)
+.end
+
+.vmgen for Tape
+local v = require("vmweave")
+return v.vm {
+  name = "PairsVM",
+  stack = { cell = "int64_t", capacity = 64 },
+  components = { "insncode", "dispatch" },
+  instructions = {
+    { name = "PUSH", opcode = 7, operands = { "cell" }, abstract = "operand 0;" },
+    { name = "MIX", opcode = 29, abstract = "add; const 2; mul;" },
+  },
+}
+.end
+
+.rule Start
+'syntax: a:NUMBER b:NUMBER EOF
+'semantics: return ($a + $b) * 2;
+'lower: return [Tape.PUSH($a), Tape.PUSH($b), Tape.MIX];
+.end

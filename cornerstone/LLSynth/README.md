@@ -62,9 +62,16 @@ using `..` to close the rule or `'end` to finish a facet are still accepted.
   typeset specifications with Perl extensions.
 * [Bundled standard libraries](docs/stdlib.md): import `std.Functional`,
   `std.Collections`, `std.Parsec`, `std.SExpr`, and other libraries from your
-  specification.
+  specification. Optional libraries expose host IPC, libshell, Equinox NG,
+  Sandstone assembly and ISA descriptions, and Wetstone data-flow analysis.
 * [Instruction selection](docs/isel.md): import `std.ISel` to select Sandstone
   ArchML instruction forms and emit `.insn` assembly for a legalized IR.
+* [Embedded VMs](docs/vmgen.md): opt in to a VMWeave program target with
+  `.vmgen for IR`.
+* [ActionSemantics](docs/action-semantics.md): implement a rule facet with
+  NovoStone action notation using `'semantics actionsemantics`.
+* [ActionSemantics facets](docs/action-semantics.md): opt in to NovoStone's
+  executable action notation for a rule's `'semantics` facet.
 * [Tables, closures, and concurrency](docs/execution.md): hybrid tables,
   dynamic and lexical method calls, and lazy tasks with isolated snapshots.
   These execution features currently require the Python tool target.
@@ -92,7 +99,11 @@ loading C through Perl FFI. Generated files do not need the generator's Perl
 modules. Split C/C++ output does need its generated companion files.
 Specifications opting into native imports or assembly also require their
 declared libraries or Sandstone installation at build/runtime, as documented
-above.
+above. See the [native standard-library build](docs/stdlib.md#native-build)
+for the bundled bridges.
+Set [`LLSYNTH_LIBRARY_PATH`](docs/modules.md#identity-search-paths-and-import-once)
+to a colon-separated list of directories to search before the default import
+locations.
 
 ## Tests
 

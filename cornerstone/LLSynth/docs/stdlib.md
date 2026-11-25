@@ -4,7 +4,8 @@ Import `std.Name` in a specification to use declarations from
 [`stdlib/Name.llsynth`](../stdlib/). The generator finds the bundled directory
 relative to itself; there is no need to pass `--module-path`. The generated
 tool contains the linked declarations and can run without the `.llsynth`
-files. None of these libraries installs tokens, skip rules, or global state.
+files. Libraries that call a native dependency may still need its runtime or
+link library. None of the bundled libraries adds lexer rules.
 
 For example, save the following as `sum-squares.llsynth`:
 
@@ -70,9 +71,64 @@ action budget.
 | [Polynomial](../stdlib/Polynomial.llsynth) | Coefficients are in ascending degree order. `evaluate(coefficients, x)` uses Horner's method; `derivative(coefficients)` gives formal derivative coefficients. An empty vector represents zero. |
 | [LinearAlgebra](../stdlib/LinearAlgebra.llsynth) | `dot(a, b)` requires equal lengths. `matvec(rows, vector)` takes one dot product per row. `transpose(rows)` swaps rows and columns, rejecting ragged input. An empty matrix or matrix with zero columns transposes to `[]`. |
 
-The libraries other than Parsec use portable action-language operations. On
-native tool targets, pass named function references to higher-order functions
-(as in `F:map($numbers, &square)`); Python tools can also pass closures.
+The algorithm libraries in the table use portable action-language operations
+except for Parsec's use of closures and ISel's generator-time integration.
+On native tool targets, pass named function references to higher-order
+functions (as in `F:map($numbers, &square)`); Python tools can also pass
+closures.
+
+### Host services and code analysis
+
+These libraries are explicit imports. They make host operations and analysis
+available to specification actions and passes; importing them does not
+automatically change the generated language or enable optimization passes.
+
+| Import | Purpose |
+| --- | --- |
+| [`std.ipc`](ipc.md) | Use pipes, FIFOs, local socket pairs, POSIX message queues, shared memory, and named semaphores. |
+| [`std.shell`](shell.md) | Run shell source through the vendored libshell. |
+| [`std.egraph`](egraph.md) | Analyze and rewrite equivalent terms with Equinox NG. |
+| [`std.assembler`](assembler.md) | Assemble instruction text with the Sandstone embedding API. |
+| [`std.isa`](isa.md) | Inspect instruction-set descriptions with Sandstone ArchML. |
+| [`std.flowgraph`](flowgraph.md) | Analyze control-flow graphs with Wetstone data-flow facilities. |
+
+#### Native build
+
+Build the optional native bridges from the repository root:
+
+```sh
+cmake -S cornerstone/LLSynth -B build/llsynth-native
+cmake --build build/llsynth-native --parallel
+```
+
+Each component can be disabled at configure time with `-DLLSYNTH_BUILD_<NAME>=OFF`,
+where `<NAME>` is the uppercase suffix of its import. The generator itself
+does not need CMake. For Python tools, put `build/llsynth-native/lib` on
+[`LLSYNTH_LIBRARY_PATH`](interop.md#python-3-tools) when running an action
+that calls a bridge, and put `build/llsynth-native/bin` on `PATH` for
+`std.shell` to find `libsh`. `std.ipc` is embedded in the generated tool and
+does not use a shared bridge. For C tools,
+link the shared libraries for the imported bridges and make those libraries
+available to the platform loader at runtime. See
+[native C interoperability](interop.md#c11-tools-and-split-embedding).
+
+#### Running an analysis pass
+
+The [term analysis example](../examples/analysis/simplify.llsynth) uses an
+`'analyze` facet to check liveness and reaching definitions for its evaluation
+graph and to simplify a pure input term by equality saturation:
+
+```sh
+perl cornerstone/LLSynth/scripts/llsynth.pl --mode=analyze \
+  -o simplify.py cornerstone/LLSynth/examples/analysis/simplify.llsynth
+printf '(add (add value 0) 0)\n' |
+  LLSYNTH_LIBRARY_PATH="$PWD/build/llsynth-native/lib${LLSYNTH_LIBRARY_PATH:+:$LLSYNTH_LIBRARY_PATH}" \
+  python3 simplify.py --analyze
+```
+
+The report contains the extracted term `value`. The example supplies its
+control-flow graph and rewrite rule explicitly; neither library guesses
+semantics from operation names.
 
 ## Recognizing token sequences with Parsec
 

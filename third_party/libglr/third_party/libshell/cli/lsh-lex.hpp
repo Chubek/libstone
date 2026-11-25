@@ -68,6 +68,8 @@ struct Token {
     // word and its literal characters are not metacharacters.
     bool quoted {false};
     bool reserved {false};
+    // The name and first '=' were unquoted; the value can be quoted.
+    bool assignment_word {false};
     Operator op {Operator::and_if};
     // Here-document body, attached to the delimiter word token.
     std::string heredoc;

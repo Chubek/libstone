@@ -1,0 +1,6 @@
+.library "std.assembler"
+.summary "Assemble Sandstone source into an in-memory flat byte vector"
+.export assemble, assembleTarget
+
+.sandstone assemble sdk bank
+.sandstone assembleTarget sdk target

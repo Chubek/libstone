@@ -1,0 +1,16 @@
+.language "ActionExample"
+.token Number: Int = /-?[0-9]+/
+.skip /[ \t\r\n]+/
+.start Start
+
+.rule Start
+'syntax: "double" operand:Operand EOF
+'semantics: return $operand * 2;
+.end
+
+.rule Operand
+'syntax: value:Number
+'semantics actionsemantics(value: Int) -> Int:
+  (allocate cell then
+    (store value in given(1) and then give contents(given(1))))
+.end

@@ -20,6 +20,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS vmweave.lua)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vmweave.lua" VMWEAVE_LUA_SOURCE)
 configure_file(lua_source.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/lua_source.hpp" @ONLY)
 set(vmweave_scripts "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts")
+libstone_aurocks_command(vmweave_aurocks vmweave_aurocks_dep)
 set(vmweave_generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 add_custom_command(
   OUTPUT "${vmweave_generated}/AbstractAST.h" "${vmweave_generated}/AbstractAST.c"
@@ -31,10 +32,10 @@ add_custom_command(
 add_custom_command(
   OUTPUT "${vmweave_generated}/AbstractParser.c"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${vmweave_generated}"
-  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
-          "-DGENERATOR=${vmweave_scripts}/aurocks.pl" "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/Abstract.g"
+  COMMAND "${CMAKE_COMMAND}" "-DGENERATOR_COMMAND=${vmweave_aurocks}"
+          "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/Abstract.g"
           "-DOUTPUT=${vmweave_generated}/AbstractParser.c" -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateParser.cmake"
-  DEPENDS Abstract.g GenerateParser.cmake "${vmweave_scripts}/aurocks.pl" VERBATIM)
+  DEPENDS Abstract.g GenerateParser.cmake "${vmweave_aurocks_dep}" VERBATIM)
 add_library(vmweave STATIC model.cpp frontend.cpp stk.cpp abstract.cpp abstract_c.cpp
   c_backend.cpp machineir.cpp native.cpp native_c_api.cpp
   "${vmweave_generated}/AbstractAST.h" "${vmweave_generated}/AbstractAST.c"
@@ -46,7 +47,7 @@ target_include_directories(vmweave SYSTEM PRIVATE "${MLVM_KAGUYA_SOURCE_DIR}/inc
 target_include_directories(vmweave PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 if(LIMESTONE_BUILD_TOOLS OR LIMESTONE_BUILD_TESTS)
   add_executable(vmweave-cli main.cpp)
-  target_link_libraries(vmweave-cli PRIVATE vmweave)
+  target_link_libraries(vmweave-cli PRIVATE vmweave metacode)
 endif()
 if(LIMESTONE_BUILD_TESTS)
   add_executable(limestone-lua "${MLVM_LUA_SOURCE_DIR}/lua.c")

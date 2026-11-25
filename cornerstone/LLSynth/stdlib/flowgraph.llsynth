@@ -1,0 +1,144 @@
+.library "std.flowgraph"
+.summary "Wetstone data-flow analyses over explicit control-flow graphs"
+.export %Step, %Block, %Live, %Definition, %Reaching, !InvalidGraph, !Incomplete, liveness, reachingDefinitions
+
+.prodtype %Step
+    Uses: Vec<Int>
+    Defines: Vec<Int>
+.end
+
+.prodtype %Block
+    Successors: Vec<Int>
+    Steps: Vec<%Step>
+.end
+
+.prodtype %Live
+    Reachable: Bool
+    In: Vec<Int>
+    Out: Vec<Int>
+.end
+
+.prodtype %Definition
+    Block: Int
+    Step: Int
+    Value: Int
+.end
+
+.prodtype %Reaching
+    Reachable: Bool
+    In: Vec<%Definition>
+    Out: Vec<%Definition>
+.end
+
+.exception !InvalidGraph(reason: String) "invalid flowgraph: {reason}"
+.exception !Incomplete(reason: String) "incomplete flowgraph analysis: {reason}"
+
+.extern c packWord(word: Int) -> String from "libllsynth_flowgraph.so" symbol "llsynth_flowgraph_v1_word"
+.extern c concatWords(left: String, right: String) -> String from "libllsynth_flowgraph.so" symbol "llsynth_flowgraph_v1_concat"
+.extern c readWord(raw: String, at: Int) -> Int from "libllsynth_flowgraph.so" symbol "llsynth_flowgraph_v1_read"
+.extern c analyzeGraph(raw: String, kind: Int, limit: Int) -> String from "libllsynth_flowgraph.so" symbol "llsynth_flowgraph_v1_analyze"
+
+.function appendWord(words: Vec<String>, item: Int) -> Void
+require len(words) < 8192 else Throw(!InvalidGraph, "flowgraph request is too large");
+require item >= 0 && item <= 4294967294 else Throw(!InvalidGraph, "IDs must be in 0..4294967294");
+let packed = packWord(item);
+require len(packed) == 8 else Throw(!Incomplete, "could not encode flowgraph request");
+push(words, packed);
+.end
+
+.function appendList(words: Vec<String>, items: Vec<Int>) -> Void
+appendWord(words, len(items));
+for item in items {
+    appendWord(words, item);
+}
+.end
+
+// Balanced concatenation avoids rebuilding the entire request for each field.
+.function packRequest(words: Vec<String>, lo: Int, hi: Int) -> String
+if hi - lo == 1 { return words[lo]; }
+let mid = (lo + hi) / 2;
+let packed = concatWords(packRequest(words, lo, mid), packRequest(words, mid, hi));
+require len(packed) == (hi - lo) * 8 else Throw(!Incomplete, "could not encode flowgraph request");
+return packed;
+.end
+
+.function runAnalysis(blocks: Vec<%Block>, entry: Int, limit: Int, kind: Int) -> String
+require len(blocks) >= 1 && len(blocks) <= 512 else Throw(!InvalidGraph, "expected 1 to 512 blocks");
+require entry >= 0 && entry < len(blocks) else Throw(!InvalidGraph, "entry block is outside the flowgraph");
+require limit >= 0 && limit <= 100000 else Throw(!InvalidGraph, "evaluation limit must be in 0..100000");
+let words: Vec<String> = [];
+appendWord(words, len(blocks));
+appendWord(words, entry);
+for node in blocks {
+    appendList(words, node.Successors);
+    appendWord(words, len(node.Steps));
+    for instruction in node.Steps {
+        appendList(words, instruction.Uses);
+        appendList(words, instruction.Defines);
+    }
+}
+let raw = analyzeGraph(packRequest(words, 0, len(words)), kind, limit);
+if raw == "fixed-point evaluation limit exhausted" || raw == "flowgraph result is too large" || raw == "flowgraph analysis failed" {
+    Throw(!Incomplete, raw);
+}
+let first = readWord(raw, 0);
+require first == 0 || first == 1 else Throw(!InvalidGraph, raw);
+return raw;
+.end
+
+.function readLiveSet(raw: String, at: Int, count: Int) -> Vec<Int>
+let result: Vec<Int> = [];
+let i = 0;
+while i < count {
+    push(result, readWord(raw, at + i));
+    i = i + 1;
+}
+return result;
+.end
+
+.function readDefinitionSet(raw: String, at: Int, count: Int) -> Vec<%Definition>
+let result: Vec<%Definition> = [];
+let i = 0;
+while i < count {
+    let p = at + 3 * i;
+    push(result, %Definition(readWord(raw, p), readWord(raw, p + 1), readWord(raw, p + 2)));
+    i = i + 1;
+}
+return result;
+.end
+
+.function liveness(blocks: Vec<%Block>, entry: Int, limit: Int) -> Vec<%Live>
+let raw = runAnalysis(blocks, entry, limit, 0);
+let result: Vec<%Live> = [];
+let cursor = 0;
+let i = 0;
+while i < len(blocks) {
+    let isReachable = readWord(raw, cursor) == 1;
+    let before = readWord(raw, cursor + 1);
+    let after = readWord(raw, cursor + 2);
+    let ins = readLiveSet(raw, cursor + 3, before);
+    let outs = readLiveSet(raw, cursor + 3 + before, after);
+    push(result, %Live(isReachable, ins, outs));
+    cursor = cursor + 3 + before + after;
+    i = i + 1;
+}
+return result;
+.end
+
+.function reachingDefinitions(blocks: Vec<%Block>, entry: Int, limit: Int) -> Vec<%Reaching>
+let raw = runAnalysis(blocks, entry, limit, 1);
+let result: Vec<%Reaching> = [];
+let cursor = 0;
+let i = 0;
+while i < len(blocks) {
+    let isReachable = readWord(raw, cursor) == 1;
+    let before = readWord(raw, cursor + 1);
+    let after = readWord(raw, cursor + 2);
+    let ins = readDefinitionSet(raw, cursor + 3, before);
+    let outs = readDefinitionSet(raw, cursor + 3 + 3 * before, after);
+    push(result, %Reaching(isReachable, ins, outs));
+    cursor = cursor + 3 + 3 * (before + after);
+    i = i + 1;
+}
+return result;
+.end

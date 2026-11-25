@@ -1,0 +1,29 @@
+.library "std.isa"
+.summary "Inspect Sandstone ArchML profiles and analyze flat machine code"
+.export profileName, metadata, record, analyze, !Analysis
+
+.extern c isaQuery(operation: Int, profile: String, first: String, second: String) -> String from "libllsynth_isa.so" symbol "llsynth_isa_query"
+.extern c isaError() -> String from "libllsynth_isa.so" symbol "llsynth_isa_error"
+
+.exception !Analysis(message: String) "ArchML: {message}"
+
+.function checkedResult(value: String) -> String
+require value != "" else Throw(!Analysis, isaError());
+return value;
+.end
+
+.function profileName(profile: String) -> String
+return checkedResult(isaQuery(0, profile, "", ""));
+.end
+
+.function metadata(profile: String) -> String
+return checkedResult(isaQuery(1, profile, "", ""));
+.end
+
+.function record(profile: String, kind: String, name: String) -> String
+return checkedResult(isaQuery(2, profile, kind, name));
+.end
+
+.function analyze(profile: String, hexBytes: String) -> String
+return checkedResult(isaQuery(3, profile, hexBytes, ""));
+.end

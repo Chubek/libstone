@@ -3,6 +3,16 @@
 **Current status:** see the data and patterns checkpoint at the end. Earlier sections
 record previous deliveries and do not describe the current feature boundary.
 
+## Native Aurocks and LLSynth integration
+
+The specification parser now uses native Aurocks and its public parse/error
+entry points with `$OFFSET` source locations. The LLSynth facet uses the real
+`acsem` generator and embeds its Python runtime or links a generated C
+companion; no second action interpreter is used. The focused LLSynth
+integration suite exercises the five Python, C, and C++ tool targets.
+The Novostone CTest suite passed 49/49 in GCC Debug, GCC Release, and
+Clang ASan/UBSan builds with the native generator.
+
 Baseline LibStone revision: `55755485acaded7c4ed804c0946bc8c7363f6763`.
 `novostone/ActionSemantics` was empty. Before implementation, the standalone
 GCC Debug Novostone baseline passed **30/30** tests.
@@ -385,3 +395,15 @@ The reference `scripts/acsem/acsem.t` passes. Its combined
 `prove acsem.t backends.t` invocation cannot complete in this environment:
 the backend harness attempts an empty Java compiler command when `javac` is
 unavailable, after eight passing backend subtests.
+
+## Native Aurocks frontend bootstrap
+
+ActionSemantics and Datalog use native Aurocks' public parser, error accessor
+and `$OFFSET` action reference. ASDL generation and the runtime backends are
+unchanged. A fresh standalone `novostone` CMake build can build the host
+Aurocks tool and the `acsem` target without the removed Perl generator.
+
+All 35 artifacts generated from the seven checked-in examples (C, Python,
+Rust, Pascal and LaTeX) matched the previous parser's artifacts byte for byte.
+An additional 350 seeded mutations of those inputs had identical acceptance
+and, where accepted, identical emitted C.

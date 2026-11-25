@@ -66,13 +66,15 @@ cc -std=c11 expressions.c -o expressions
 The aggregate build enables Novostone through `LIBSTONE_BUILD_NOVOSTONE`.
 Standalone options are `NOVOSTONE_BUILD_TESTS` and `NOVOSTONE_BUILD_TOOLS`,
 defaulting to the shared Libstone options. C11, C++20, CMake 3.20 and Perl 5.14+
-are required to build. `scripts/aurocks.pl` generates the parser from
+are required to build. Native Aurocks generates the parser from
 `Datalog/Datalog.g`; `scripts/asdl.pl` generates its owned syntax tree from
 `Datalog/Datalog.asdl`. Generated files live in the build directory. Installed
 libraries need neither Perl nor the source tree; no string-pool file is used.
 ActionSemantics uses the same generators for its separate grammar, AST and
-elaboration visitor. Its CLI backend tests require Python and discover optional
-Rust, Free Pascal, and LaTeX toolchains.
+elaboration visitor. CMake builds the host Aurocks tool automatically unless
+`LIBSTONE_AUROCKS_EXECUTABLE` points to a prebuilt native tool with `$OFFSET`
+support. CLI backend tests require Python and discover optional Rust, Free
+Pascal, and LaTeX toolchains.
 `BUILD_SHARED_LIBS=ON` builds shared libraries; Unix installations use relative
 runtime paths so the CLI and transitive libraries resolve within the prefix.
 

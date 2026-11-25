@@ -1,20 +1,45 @@
-#include "vmweave.hpp"
+#include "internal.hpp"
 #include "native.hpp"
+#include "metacode/json.hpp"
 #include "metacode/machine-ir/native_c.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 using namespace limestone::vmweave;
+namespace {
+limestone::Result<std::string> emit_c_bundle(const Module& module) {
+  using V=limestone::metacode::Value;
+  auto c=emit_c(module);
+  if(!c) return c;
+  V::Array words,components;
+  for(const auto& component:module.configuration.components) components.emplace_back(component);
+  for(const auto& word:module.words) {
+    V::Array operands;
+    for(const auto& operand:word.operands) operands.emplace_back(operand);
+    auto [pop,push]=effect_counts(word.effect);
+    words.emplace_back(V::Object{{"name",V(word.name)},{"opcode",V(uint64_t(word.opcode))},
+      {"operands",V(std::move(operands))},{"pop",V(uint64_t(pop))},{"push",V(uint64_t(push))},{"flow",V(word.flow)}});
+  }
+  const auto& config=module.configuration;
+  return limestone::metacode::print_json(V(V::Object{
+    {"schema",V(std::string("limestone.vmweave.c-bundle"))},{"version",V(uint64_t(1))},
+    {"name",V(config.name)},{"execution",V(config.execution)},{"cell",V(config.cell)},
+    {"stack_capacity",V(uint64_t(config.stack_capacity))},{"components",V(std::move(components))},
+    {"words",V(std::move(words))},{"c_source",V(std::move(c.value()))}
+  }));
+}
+}
 int main(int argc,char** argv) {
   try {
-    std::string mode="--generate",file,out=".",program;
+    std::string mode="--generate",file,out=".",program,source_name;
     NativeOptions native_options;
     for(int i=1;i<argc;++i) {
       std::string arg=argv[i];
-      if(arg=="--help") {std::cout<<"VMWeave: Lua -> STK-00 -> C / MachineIR -> native code\nUsage: vmweave-cli [--emit-c|--emit-stk|--check|--generate|--emit-machineir|--emit-assembly|--native]\n  [-o DIRECTORY] [--program TAPE.txt] [--cc COMPILER] [--cflag ARG] [--ldflag ARG]\n  SPEC.lua|MODULE.stk00|MODULE.machineir.json\nNative output: shared image, assembly, MachineIR envelope, STK-00 and ABI header.\nWithout --program, native output still contains all VM handlers/runtime components.\n"; return 0;}
-      if(arg=="--emit-c" || arg=="--emit-stk" || arg=="--check" || arg=="--generate" || arg=="--emit-machineir" || arg=="--emit-assembly" || arg=="--native") mode=arg;
+      if(arg=="--help") {std::cout<<"VMWeave: Lua -> STK-00 -> C / MachineIR -> native code\nUsage: vmweave-cli [--emit-c|--emit-c-bundle|--emit-stk|--check|--generate|--emit-machineir|--emit-assembly|--native]\n  [-o DIRECTORY] [--program TAPE.txt] [--cc COMPILER] [--cflag ARG] [--ldflag ARG]\n  [--source-name FILE] SPEC.lua|MODULE.stk00|MODULE.machineir.json\n--source-name overrides Lua chunk provenance when using --emit-c-bundle.\nNative output: shared image, assembly, MachineIR envelope, STK-00 and ABI header.\nWithout --program, native output still contains all VM handlers/runtime components.\n"; return 0;}
+      if(arg=="--emit-c" || arg=="--emit-c-bundle" || arg=="--emit-stk" || arg=="--check" || arg=="--generate" || arg=="--emit-machineir" || arg=="--emit-assembly" || arg=="--native") mode=arg;
       else if(arg=="-o" && i+1<argc) out=argv[++i];
+      else if(arg=="--source-name" && i+1<argc) source_name=argv[++i];
       else if(arg=="--program" && i+1<argc) program=argv[++i];
       else if(arg=="--cc" && i+1<argc) native_options.compiler=argv[++i];
       else if(arg=="--cflag" && i+1<argc) native_options.compile_arguments.push_back(argv[++i]);
@@ -23,6 +48,8 @@ int main(int argc,char** argv) {
       else file=arg;
     }
     if(file.empty()) throw std::runtime_error("a Lua specification or STK-00 module is required (see --help)");
+    if(!source_name.empty() && (mode!="--emit-c-bundle" || file.ends_with(".stk00") || file.ends_with(".machineir.json")))
+      throw std::runtime_error("--source-name requires --emit-c-bundle and a Lua specification");
     auto read_file=[](const std::string& path) {
       std::ifstream in(path,std::ios::binary); if(!in) throw std::runtime_error("cannot read "+path);
       std::ostringstream text; text<<in.rdbuf(); return text.str();
@@ -51,7 +78,9 @@ int main(int argc,char** argv) {
         std::ifstream in(file,std::ios::binary); if(!in) throw std::runtime_error("cannot read "+file);
         std::ostringstream text; text<<in.rdbuf(); return parse_stk(text.str(),file);
       }
-      auto spec=load_file(file); if(!spec) return limestone::Result<Module>::err(spec.error()); return lower(spec.value());
+      auto spec=source_name.empty()?load_file(file):load_lua(read_file(file),source_name);
+      if(!spec) return limestone::Result<Module>::err(spec.error());
+      return lower(spec.value());
     }();
     if(!module) throw std::runtime_error(module.error().message);
     if(!native_mode && (!program.empty() || !native_options.compiler.empty() || !native_options.compile_arguments.empty() || !native_options.link_arguments.empty())) throw std::runtime_error("native options require a native output mode");
@@ -79,8 +108,9 @@ int main(int argc,char** argv) {
       auto image=native.value().image(); write(".so",std::string_view(reinterpret_cast<const char*>(image.data()),image.size()));
       return 0;
     }
-    if(mode=="--emit-c" || mode=="--emit-stk") {
-      auto text=mode=="--emit-c"?emit_c(module.value()):print_stk(module.value());
+    if(mode=="--emit-c" || mode=="--emit-c-bundle" || mode=="--emit-stk") {
+      auto text=mode=="--emit-c"?emit_c(module.value()):
+          mode=="--emit-c-bundle"?emit_c_bundle(module.value()):print_stk(module.value());
       if(!text) throw std::runtime_error(text.error().message);
       std::cout<<text.value();
     } else {

@@ -420,7 +420,8 @@ static void *aurocks_evaluate(aurocks_parser *p, size_t root) {
                         if (s->use & 2) token = text;
                     }
                 }
-                value = aurocks_action(rule_id, values, token);
+                value = aurocks_action(rule_id, values, token,
+                                       aurocks_skip(p, p->items[f->production].origin));
                 used = f->base;
                 --depth;
                 if (depth) {

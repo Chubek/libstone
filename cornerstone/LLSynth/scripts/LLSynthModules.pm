@@ -20,8 +20,10 @@ sub module_prefix {
 sub module_find {
  my($name,$named,$file,$line)=@_;
  my $relative=$named ? join('/',split /\./,$name).'.llsynth' : $name;
+ my @roots=(dirname($file),@module_paths);
+ unshift @roots,grep {length} split /:/,($ENV{LLSYNTH_LIBRARY_PATH}//'') if $named;
  my @tried;
- for my $root(dirname($file),@module_paths){
+ for my $root(@roots){
   my $path=File::Spec->file_name_is_absolute($relative)?$relative:File::Spec->catfile($root,$relative);
   push @tried,$path;
   return canonical_path($path) if -f $path;
@@ -37,8 +39,8 @@ sub module_find {
 sub module_header {
  my($line)=@_;
  return ('grammar',$1) if $line =~ /^\.(?:rule|token|literal)\s+(\w+)/;
- return ('function',$1) if $line =~ /^\.(?:function|async\s+function|extern\s+c)\s+(\w+)\s*\(/;
- return ('function',$1) if $line =~ /^\.sandstone\s+(\w+)\s+bank\b/;
+ return ('function',$1) if $line =~ /^\.(?:function|async\s+function|extern\s+(?:c|ipc))\s+(\w+)\s*\(/;
+ return ('function',$1) if $line =~ /^\.sandstone\s+(\w+)\s+(?:bank|sdk)\b/;
  return ('@',$1) if $line =~ /^\.state\s+\@(\w+)/;
  return ('#',$1) if $line =~ /^\.symtbl\s+\#(\w+)/;
  return ('!',$1) if $line =~ /^\.exception\s+\!(\w+)/;
@@ -52,7 +54,7 @@ sub module_block {
  my($line)=@_;
  return 'rule' if $line =~ /^\.rule\b/;
  return 'function' if $line =~ /^\.(?:function|async\s+function)\b/;
- return $1 if $line =~ /^\.(init|ir|rewrite|backend|analysis|pipeline|macro|sumtype|prodtype)\b/;
+ return $1 if $line =~ /^\.(init|ir|rewrite|backend|analysis|pipeline|macro|sumtype|prodtype|vmgen)\b/;
  return '';
 }
 
@@ -159,11 +161,12 @@ sub read_module_spec_lines {
     $unit->{summary}=$1;
     next;
    }
-   if(!$unit->{root} && !$block && $l =~ /^\.(language|version|summary|start|option|pipeline)\b/){
-    fail(".$1 is entry-specification configuration, not a module declaration",$origin,$ln);
-   }
+    if(!$unit->{root} && !$block && $l =~ /^\.(language|version|summary|start|option|pipeline|vmgen)\b/){
+     fail(".$1 is entry-specification configuration, not a module declaration",$origin,$ln);
+    }
+    my $opaque=$block eq 'vmgen' && !ends_spec_block($block,$l);
    if(!$block){
-    if($l =~ /^\.(\w+)\b/ && (my $provider=$unit->{blocks}{$1})){
+     if($l =~ /^\.(\w+)\b/ && $1 ne 'vmgen' && (my $provider=$unit->{blocks}{$1})){
      my @generated=LLSynthCompanions::expand_block($provider,\@lines,\$i,$deps);
      splice @lines,$i+1,0,@generated;
      next;
@@ -189,7 +192,7 @@ sub read_module_spec_lines {
      my $member=$1;$member_owner->{members}{$member}=1;
      if($block eq 'sumtype'){$member_owner->{members}{'is_'.$member}=$member_owner->{members}{'get_'.$member}=1}
    }
-   my $tagged=[$raw,$origin,$ln,$unit];
+    my $tagged=[$raw,$origin,$ln,$unit,$opaque];
    push @{$unit->{lines}},$tagged;push @out,$tagged;
   }
   if(!$unit->{root} && !$unit->{name}){
@@ -224,14 +227,14 @@ sub read_module_spec_lines {
   my $root=$load->($file);
  # Preserve the old frontend byte-for-byte when there are no module directives.
   if(keys(%units)==1 && !$root->{name} && !keys %{$root->{imports}} && !keys %{$root->{aliases}||{}} &&
-     !grep {index($_->[0],'LLSMod_colon_')>=0} @out){
+      !grep {!$_->[4] && index($_->[0],'LLSMod_colon_')>=0} @out){
   return map {[@$_[0..2]]} @out;
  }
  # A default entry rule must belong to the entry specification, not whichever
  # imported module happened to be visited first.
- my($start)=grep {$_->[0] =~ /^\s*\.start\b/ && $_->[3] == $root} @out;
+  my($start)=grep {!$_->[4] && $_->[0] =~ /^\s*\.start\b/ && $_->[3] == $root} @out;
  if(!$start){
-  my($rule)=grep {$_->[0] =~ /^\s*\.rule\s+(\w+)\s*$/ && $_->[3] == $root} @out;
+   my($rule)=grep {!$_->[4] && $_->[0] =~ /^\s*\.rule\s+(\w+)\s*$/ && $_->[3] == $root} @out;
   if($rule){$rule->[0]=~/^\s*\.rule\s+(\w+)/;push @out,[".start $1",$rule->[1],$rule->[2],$root]}
  }
  for my $unit(sort {$a->{file} cmp $b->{file}} values %units){
@@ -591,9 +594,10 @@ sub module_rewrite_unit {
  my($unit)=@_;
  # Callable declaration names are reserved within module action scopes. This
  # avoids confusing a local variable with a bare function reference.
- my %locals;
- for my $entry(@{$unit->{lines}}){
-  my $l=strip_ws($entry->[0]);
+  my %locals;
+  for my $entry(@{$unit->{lines}}){
+   next if $entry->[4];
+   my $l=strip_ws($entry->[0]);
   if($l =~ /^\.(?:function|async\s+function)\s+\w+\s*\((.*?)\)/){
    for my $arg(split /,/,$1){$locals{$1}=1 if $arg =~ /^\s*(\w+)\s*:/}
   }elsif($l =~ /^\.(?:macro|template)\s+\w+\s*\((.*?)\)/){
@@ -606,8 +610,13 @@ sub module_rewrite_unit {
   my $l=strip_ws($entry->[0]);
   if(!$block){$block=module_block($l);next}
   if(ends_spec_block($block,$l)){$block='';$facet='';next}
-  if($block eq 'rule' && $l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:/){$facet=$1}
-  if($block eq 'function'||$block eq 'init'||$block eq 'macro'||($block eq 'rule' && $facet ne 'syntax')){
+   if($block eq 'rule'){
+    if(LLSynthActionSemantics::is_header($l)){$facet='action_semantics';$quote='';next}
+    if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:/){$facet=$1}
+    if($l eq "'end"){$facet='';next}
+    next if $facet eq 'action_semantics';
+   }
+   if($block eq 'function'||$block eq 'init'||$block eq 'macro'||($block eq 'rule' && $facet ne 'syntax')){
    (my $action=$entry->[0]) =~ s/^\s*'\w+\s*:\s*//;
     %action_locals=(%action_locals,module_action_locals($action,\$quote,$unit));
   }
@@ -657,7 +666,7 @@ sub module_rewrite_unit {
      if($l =~ /^\.extern\s+c\b/ && $d->{linked} ne $name && $raw !~ /\bsymbol\s+"[A-Za-z_]\w*"\s*$/){
       $raw.=' symbol "'.$name.'"';
      }
-    $raw =~ s/^(\s*\.(?:async\s+function|extern\s+c|\w+)\s+[\@#!%]?)\Q$name\E\b/$1$d->{linked}/;
+    $raw =~ s/^(\s*\.(?:async\s+function|extern\s+(?:c|ipc)|\w+)\s+[\@#!%]?)\Q$name\E\b/$1$d->{linked}/;
     }elsif($l =~ /^\.start\s+(?:"($module_ref)"|($module_ref))\s*$/){
     my $name=module_normalize_name($unit,$1//$2);
     $raw='.start '.(module_resolve($unit,'grammar',$name,$file,$line)//$name);
@@ -667,18 +676,22 @@ sub module_rewrite_unit {
     my($name,$ir)=($1,module_normalize_name($unit,$2));
     $name=module_prefix($unit).$name unless $unit->{root};
     $raw=".rewrite $name: ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
-    }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+($module_ref)\s*$/){
-    my($target,$ir)=($1,module_normalize_name($unit,$2));
-    $raw=".backend $target for ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
+     }elsif($l =~ /^\.backend\s+(\w+)\s+for\s+($module_ref)\s*$/){
+     my($target,$ir)=($1,module_normalize_name($unit,$2));
+     $raw=".backend $target for ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
+    }elsif($l =~ /^\.vmgen\s+for\s+($module_ref)\s*$/){
+     my $ir=module_normalize_name($unit,$1);
+     $raw=".vmgen for ".(module_resolve($unit,'ir',$ir,$file,$line)//$ir);
    }
    $block=module_block($l);
    }elsif(ends_spec_block($block,$l)){
    $block='';$facet='';
-  }elsif($block eq 'rule'){
-   if($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/){
-    $facet=$1;$raw="'$facet: ".module_rewrite_text($2,$unit,$facet eq 'syntax'?'grammar':'action',$file,$line);
-   }elsif($l eq "'end"){$facet=''}
-   elsif($facet){$raw=module_rewrite_text($raw,$unit,$facet eq 'syntax'?'grammar':'action',$file,$line)}
+   }elsif($block eq 'rule'){
+    if(LLSynthActionSemantics::is_header($l)){$facet='action_semantics'}
+    elsif($l =~ /^'(syntax|semantics|lower|analyze|emit)\s*:\s*(.*)$/){
+     $facet=$1;$raw="'$facet: ".module_rewrite_text($2,$unit,$facet eq 'syntax'?'grammar':'action',$file,$line);
+    }elsif($l eq "'end"){$facet=''}
+    elsif($facet && $facet ne 'action_semantics'){$raw=module_rewrite_text($raw,$unit,$facet eq 'syntax'?'grammar':'action',$file,$line)}
    }elsif($block eq 'function' || $block eq 'init' || $block eq 'macro'){
    $raw=module_rewrite_text($raw,$unit,'action',$file,$line);
    }elsif($block eq 'ir' || $block eq 'sumtype' || $block eq 'prodtype'){

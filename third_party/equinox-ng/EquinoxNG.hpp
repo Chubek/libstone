@@ -48,7 +48,7 @@
 #include <variant>
 #include <vector>
 
-#if __has_include("DSLUtils.hpp")
+#if !defined(EQUINOXNG_DISABLE_DSLUTILS) && __has_include("DSLUtils.hpp")
 #  include "DSLUtils.hpp"
 #  define EQUINOXNG_HAS_DSLUTILS 1
 #else
@@ -159,11 +159,11 @@ struct Literal {
 template <>
 struct std::hash<equinoxng::Literal> {
     std::size_t operator()(equinoxng::Literal const& lit) const noexcept {
-        return std::visit([](auto const& v) {
+        return std::visit([index = lit.value.index()](auto const& v) {
             using T = std::decay_t<decltype(v)>;
             std::size_t seed = 0;
-            detail::hash_combine_inplace(seed, static_cast<std::size_t>(lit.value.index()));
-            detail::hash_combine_inplace(seed, std::hash<T>{}(v));
+            equinoxng::detail::hash_combine_inplace(seed, index);
+            equinoxng::detail::hash_combine_inplace(seed, std::hash<T>{}(v));
             return seed;
         }, lit.value);
     }
@@ -264,14 +264,14 @@ struct std::hash<equinoxng::ENode> {
     std::size_t operator()(equinoxng::ENode const& n) const noexcept {
         std::size_t seed = 0;
         if (n.is_symbol()) {
-            detail::hash_combine_inplace(seed, 1u);
-            detail::hash_combine_inplace(seed, n.symbol());
+            equinoxng::detail::hash_combine_inplace(seed, 1u);
+            equinoxng::detail::hash_combine_inplace(seed, n.symbol());
         } else {
-            detail::hash_combine_inplace(seed, 2u);
-            detail::hash_combine_inplace(seed, n.literal());
+            equinoxng::detail::hash_combine_inplace(seed, 2u);
+            equinoxng::detail::hash_combine_inplace(seed, n.literal());
         }
         for (auto const& c : n.children) {
-            detail::hash_combine_inplace(seed, c.value);
+            equinoxng::detail::hash_combine_inplace(seed, c.value);
         }
         return seed;
     }
@@ -409,6 +409,14 @@ struct RunnerConfig {
     bool stop_if_no_change = true;
 };
 
+struct NodeLimitExceeded : std::runtime_error {
+    NodeLimitExceeded() : std::runtime_error("e-graph node limit exceeded") {}
+};
+
+struct MatchLimitExceeded : std::runtime_error {
+    MatchLimitExceeded() : std::runtime_error("e-graph match work limit exceeded") {}
+};
+
 // ============================================================
 // Main EGraph
 // ============================================================
@@ -506,10 +514,10 @@ public:
     // Pattern matching
     // ----------------------------
 
-    std::vector<Subst> match(Term const& pattern, EClassId root) {
+    std::vector<Subst> match(Term const& pattern, EClassId root, std::size_t* work = nullptr) {
         std::vector<Subst> out;
         Subst s;
-        match_in_class(pattern, find(root), s, out);
+        match_in_class(pattern, find(root), s, out, work);
         return out;
     }
 
@@ -517,25 +525,28 @@ public:
     // Rewrite application
     // ----------------------------
 
-    std::size_t apply_rule(RewriteRule const& rule) {
+    std::size_t apply_rule(RewriteRule const& rule,
+                           std::size_t node_limit = std::numeric_limits<std::size_t>::max(),
+                           std::size_t* match_work = nullptr) {
         std::size_t applied = 0;
 
         // Match rule over all current representative classes.
         std::unordered_set<std::uint32_t> reps_seen;
         for (std::uint32_t i = 0; i < classes_.size(); ++i) {
+            charge_match_work(match_work);
             EClassId eid{i};
             auto rep = find(eid);
             if (!reps_seen.insert(rep.value).second) continue;
 
-            auto matches = match(rule.lhs, rep);
+            auto matches = match(rule.lhs, rep, match_work);
             for (auto const& subst : matches) {
+                charge_match_work(match_work);
                 if (rule.condition && !rule.condition(subst)) {
                     continue;
                 }
 
-                auto lhs_id = instantiate_into_eclass(rule.lhs, subst);
-                auto rhs_id = instantiate_into_eclass(rule.rhs, subst);
-                auto lrep = find(lhs_id);
+                auto rhs_id = instantiate_into_eclass(rule.rhs, subst, node_limit);
+                auto lrep = find(rep);
                 auto rrep = find(rhs_id);
                 if (lrep != rrep) {
                     merge(lrep, rrep);
@@ -600,6 +611,23 @@ public:
 
     template <class CostModel = AstSizeCost>
     Extracted extract(EClassId root, CostModel cost_model = {}) {
+        return extract_impl<false>(root, cost_model,
+                                   std::numeric_limits<typename CostModel::cost_type>::max());
+    }
+
+    // Bounded extraction is for nonnegative, additive, integral costs.
+    // Keep custom cost types on the existing unbounded API.
+    template <class CostModel>
+    Extracted extract(EClassId root, CostModel cost_model, typename CostModel::cost_type max_cost) {
+        using Cost = typename CostModel::cost_type;
+        static_assert(std::is_integral_v<Cost> && std::is_unsigned_v<Cost>);
+        return extract_impl<true>(root, cost_model, max_cost);
+    }
+
+private:
+    template <bool Bounded, class CostModel>
+    Extracted extract_impl(EClassId root, CostModel& cost_model,
+                           typename CostModel::cost_type max_cost) {
         root = find(root);
 
         using Cost = typename CostModel::cost_type;
@@ -630,6 +658,9 @@ public:
 
                     if (n.is_literal()) {
                         Cost c = cost_model.literal_cost(n.literal());
+                        if constexpr (Bounded) {
+                            if (c > max_cost) continue;
+                        }
                         if (!cand_best.term || c < cand_best.cost) {
                             cand_best.cost = c;
                             cand_best.term = Term::lit(n.literal());
@@ -641,6 +672,9 @@ public:
                     args.reserve(n.children.size());
                     bool ok = true;
                     Cost total = cost_model.symbol_cost(n.symbol(), n.children.size());
+                    if constexpr (Bounded) {
+                        if (total > max_cost) continue;
+                    }
 
                     for (auto child : n.children) {
                         child = find(child);
@@ -648,6 +682,12 @@ public:
                         if (it == best.end() || !it->second.term.has_value()) {
                             ok = false;
                             break;
+                        }
+                        if constexpr (Bounded) {
+                            if (it->second.cost > max_cost - total) {
+                                ok = false;
+                                break;
+                            }
                         }
                         total += it->second.cost;
                         args.push_back(*it->second.term);
@@ -678,6 +718,7 @@ public:
         };
     }
 
+public:
     // ----------------------------
     // Debug / inspection
     // ----------------------------
@@ -738,7 +779,8 @@ private:
     // Canonicalized add
     // ----------------------------
 
-    EClassId add_enode(ENode n) {
+    EClassId add_enode(ENode n,
+                       std::size_t node_limit = std::numeric_limits<std::size_t>::max()) {
         for (auto& c : n.children) {
             c = find(c);
         }
@@ -748,6 +790,7 @@ private:
             return find(owner_.at(it->second.value));
         }
 
+        if (enodes_.size() >= node_limit) throw NodeLimitExceeded{};
         auto eid = fresh_class();
         auto nid = fresh_enode(std::move(n), eid);
         memo_.emplace(enodes_.at(nid.value), nid);
@@ -784,7 +827,15 @@ private:
     // Matching
     // ----------------------------
 
-    void match_in_class(Term const& pat, EClassId eid, Subst subst, std::vector<Subst>& out) {
+    static void charge_match_work(std::size_t* work) {
+        if (!work) return;
+        if (*work == 0) throw MatchLimitExceeded{};
+        --*work;
+    }
+
+    void match_in_class(Term const& pat, EClassId eid, Subst subst, std::vector<Subst>& out,
+                        std::size_t* work) {
+        charge_match_work(work);
         eid = find(eid);
 
         if (pat.is_var()) {
@@ -802,6 +853,7 @@ private:
         auto const& ec = classes_.at(eid.value);
 
         for (auto nid : ec.nodes) {
+            charge_match_work(work);
             auto const& n = enodes_.at(nid.value);
 
             if (pat.is_lit()) {
@@ -820,7 +872,7 @@ private:
             for (std::size_t i = 0; i < pn.children.size(); ++i) {
                 std::vector<Subst> next;
                 for (auto const& s : frontier) {
-                    match_in_class(pn.children[i], find(n.children[i]), s, next);
+                    match_in_class(pn.children[i], find(n.children[i]), s, next, work);
                 }
                 frontier = std::move(next);
                 if (frontier.empty()) break;
@@ -836,7 +888,7 @@ private:
     // Instantiation
     // ----------------------------
 
-    EClassId instantiate_into_eclass(Term const& t, Subst const& subst) {
+    EClassId instantiate_into_eclass(Term const& t, Subst const& subst, std::size_t node_limit) {
         if (t.is_var()) {
             auto it = subst.find(t.as_var().name);
             if (it == subst.end()) {
@@ -845,16 +897,16 @@ private:
             return find(it->second);
         }
         if (t.is_lit()) {
-            return add_enode(ENode{t.as_lit()});
+            return add_enode(ENode{t.as_lit()}, node_limit);
         }
 
         auto const& n = t.as_node();
         std::vector<EClassId> child_ids;
         child_ids.reserve(n.children.size());
         for (auto const& c : n.children) {
-            child_ids.push_back(instantiate_into_eclass(c, subst));
+            child_ids.push_back(instantiate_into_eclass(c, subst, node_limit));
         }
-        return add_enode(ENode{n.op, std::move(child_ids)});
+        return add_enode(ENode{n.op, std::move(child_ids)}, node_limit);
     }
 
     // ----------------------------
@@ -1021,10 +1073,10 @@ inline std::vector<RewriteRule> arithmetic_ring_basic() {
         rule("mul-comm",  mul(x, y), mul(y, x)),
         rule("mul-assoc", mul(mul(x, y), z), mul(x, mul(y, z))),
         rule("distrib",   mul(x, add(y, z)), add(mul(x, y), mul(x, z))),
-        rule("add-zero",  add(x, lit(0)), x),
-        rule("mul-one",   mul(x, lit(1)), x),
-        rule("mul-zero",  mul(x, lit(0)), lit(0)),
-        rule("sub-self",  sub(x, x), lit(0)),
+        rule("add-zero",  add(x, lit(std::int64_t{0})), x),
+        rule("mul-one",   mul(x, lit(std::int64_t{1})), x),
+        rule("mul-zero",  mul(x, lit(std::int64_t{0})), lit(std::int64_t{0})),
+        rule("sub-self",  sub(x, x), lit(std::int64_t{0})),
         rule("double-neg", neg(neg(x)), x)
     };
 }

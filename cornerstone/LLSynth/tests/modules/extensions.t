@@ -10,6 +10,7 @@ use Test::More ();
 # feature workers' frontends, not the baseline compiler in this worktree.
 require "$Bin/../../scripts/LLSynthCompiler.pm";
 require "$Bin/../../scripts/LLSynthModules.pm";
+require "$Bin/../../scripts/LLSynthActionSemantics.pm";
 
 sub canonical_path { return abs_path($_[0]) }
 sub slurp {

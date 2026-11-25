@@ -587,6 +587,11 @@ private:
                 spec.redirections.push_back(std::move(handoff_redirect));
             }
             auto sub = run_single(spec);
+            // Buffered stages share the executor, but a stage's exit is local
+            // to that stage, just as for stages running in child processes.
+            if (shell_ && shell_->exit_requested()) {
+                shell_->cancel_exit();
+            }
             if (!sub) {
                 return sub.error();
             }

@@ -40,6 +40,7 @@ foreach(component IN ITEMS Datalog CCDB DatabaseBasedIR QueryBasedIR Speculative
 endforeach()
 set(novostone_generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(novostone_scripts "${CMAKE_CURRENT_SOURCE_DIR}/../scripts")
+libstone_aurocks_command(novostone_aurocks novostone_aurocks_dep)
 file(MAKE_DIRECTORY "${novostone_generated}")
 add_custom_command(
   OUTPUT "${novostone_generated}/DatalogAST.h" "${novostone_generated}/DatalogAST.c"
@@ -49,10 +50,10 @@ add_custom_command(
   DEPENDS Datalog/Datalog.asdl "${novostone_scripts}/asdl.pl" VERBATIM)
 add_custom_command(
   OUTPUT "${novostone_generated}/DatalogParser.c"
-  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
-    "-DGENERATOR=${novostone_scripts}/aurocks.pl" "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/Datalog/Datalog.g"
+  COMMAND "${CMAKE_COMMAND}" "-DGENERATOR_COMMAND=${novostone_aurocks}"
+    "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/Datalog/Datalog.g"
     "-DOUTPUT=${novostone_generated}/DatalogParser.c" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateParser.cmake"
-  DEPENDS Datalog/Datalog.g Datalog/Syntax.h cmake/GenerateParser.cmake "${novostone_scripts}/aurocks.pl" VERBATIM)
+  DEPENDS Datalog/Datalog.g Datalog/Syntax.h cmake/GenerateParser.cmake "${novostone_aurocks_dep}" VERBATIM)
 target_sources(novostone_Datalog PRIVATE Datalog/Parse.cpp
   "${novostone_generated}/DatalogAST.h" "${novostone_generated}/DatalogAST.c" "${novostone_generated}/DatalogParser.c")
 target_compile_features(novostone_Datalog PRIVATE c_std_11)

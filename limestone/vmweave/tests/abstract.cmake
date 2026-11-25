@@ -15,6 +15,20 @@ foreach(ext IN ITEMS stk00 c h insncode dispatch)
   checked("${CMAKE_COMMAND}" -E compare_files
     "${out}/AbstractCalculator.${ext}" "${out}/reload/AbstractCalculator.${ext}")
 endforeach()
+execute_process(COMMAND "${CLI}" --emit-c-bundle "${out}/AbstractCalculator.stk00"
+  RESULT_VARIABLE status OUTPUT_VARIABLE bundle ERROR_VARIABLE diagnostic)
+if(NOT status STREQUAL "0")
+  message(FATAL_ERROR "VMWeave C bundle failed: ${diagnostic}")
+endif()
+execute_process(COMMAND "${CLI}" --emit-c "${out}/AbstractCalculator.stk00"
+  RESULT_VARIABLE status OUTPUT_VARIABLE expected)
+string(JSON schema GET "${bundle}" schema)
+string(JSON version GET "${bundle}" version)
+string(JSON c_source GET "${bundle}" c_source)
+if(NOT status STREQUAL "0" OR NOT c_source STREQUAL expected OR
+    NOT schema STREQUAL "limestone.vmweave.c-bundle" OR NOT version STREQUAL "1")
+  message(FATAL_ERROR "VMWeave C bundle header or source does not match")
+endif()
 checked("${CC}" ${flags} -std=c99 -Wall -Wextra -Werror -pedantic -I "${out}"
   "${out}/AbstractCalculator.c" "${SOURCE}/tests/abstract.c" -o "${out}/abstract")
 checked("${out}/abstract")

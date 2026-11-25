@@ -12,11 +12,15 @@
 ```
 
 `ActionSemantics.g` owns the specification grammar. Every node that can produce
-a semantic diagnostic carries its source offset. Persistent parse lists and
-abandoned parser alternatives share one ASDL arena. The internal C syntax
-wrapper owns that arena and frees it on either outcome. The C++ entry point
-serializes parser state, then elaborates outside the lock. Generated external
-Aurocks helpers are prefixed `novo_as_` so Datalog and other parsers can coexist.
+a semantic diagnostic carries its source offset, supplied by the native
+Aurocks `$OFFSET` action reference. The internal C syntax wrapper owns the
+ASDL arena, calls Aurocks' public `parse_novo_as_document` and error accessor,
+and frees the arena on failure. Before parsing, the C++ entry point bounds
+source parenthesis nesting to 253 levels, excluding comments and quoted
+tokens. This protects redundant grouping that leaves no AST node for the
+visitor's separate depth bound. It serializes parser state, then elaborates
+outside the lock. Generated external Aurocks helpers are
+prefixed `novo_as_` so Datalog and other parsers can coexist.
 
 `ActionSemantics.asdl` is authoritative for the source AST. Its generated visitor
 calls `leave_expr` and `leave_action` on leave, so operands precede uses in

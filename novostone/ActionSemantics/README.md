@@ -12,7 +12,7 @@ abstract syntax and compositional semantic equations. The synthesizer emits:
 | `pascal` | Standalone Free Pascal/ObjFPC interpreter |
 | `latex` | Complete LaTeX document with syntax and semantic equations |
 
-`scripts/aurocks.pl` generates the specification parser from
+The native Aurocks tool generates the specification parser from
 `ActionSemantics.g`. `scripts/asdl.pl` generates the arena-owned AST **and the
 visitor used by semantic elaboration** from `ActionSemantics.asdl`. All generated
 host files stay in the build directory. Target interpreters contain their own
@@ -34,6 +34,11 @@ cc -std=c11 -Wall -Wextra -pedantic expressions.c -o expressions
 ./expressions < novostone/ActionSemantics/examples/store.term
 # completed 42
 ```
+
+To build just the CLI, use `cmake --build build-novostone --target acsem`
+with `NOVOSTONE_BUILD_TOOLS=ON`. CMake builds the native Aurocks generator
+as a dependency, or you can pass `-DLIBSTONE_AUROCKS_EXECUTABLE=/path/to/aurocks`
+to use an already built host tool with `$OFFSET` support.
 
 The other executable targets run the same input:
 

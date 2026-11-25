@@ -9,6 +9,9 @@ use File::Spec ();
 use MIME::Base64 qw(encode_base64);
 use Encode ();
 
+sub has_ipc {scalar grep {($_->{foreign}||'') eq 'ipc'} @{$_[0]->{functions}}}
+sub ipc_runtime_path {File::Spec->catfile(dirname(__FILE__),'..','stdlib','ipc',$_[0] eq 'python3'?'runtime.py':'runtime.c')}
+
 sub generate_python {
  my($s,$o,$json)=@_;
  for my $flag(qw(header runtime semant rewriter table lexer parser_out ast ir driver)){
@@ -17,8 +20,10 @@ sub generate_python {
  $o->{split} =~ /^(none|explicit)$/ or fail('Python output supports split none or explicit',$s->{file},1);
  my $file=outpath($o->{output} || lc($s->{language}).'.py');
  my $encoded=encode_base64($json->encode($s),'');
- my $runtime=template('python');
- $runtime =~ s/\@\@INTEROP_PYTHON\@\@/python_interop()/ge;
+  my $runtime=template('python');
+  $runtime =~ s/\@\@INTEROP_PYTHON\@\@/python_interop($s)/ge;
+  my $action_semantics=$o->{action_semantics_artifact}?${$o->{action_semantics_artifact}}:'';
+  $runtime =~ s/\@\@ACTION_SEMANTICS_PYTHON\@\@/$action_semantics/g;
  $runtime =~ s/\@\@SPEC_BASE64\@\@/$encoded/g;
  $runtime =~ s/\@\@MODE\@\@/$o->{mode}/g;
  $runtime =~ s/\@\@TARGET\@\@/$o->{program_target}/g;
@@ -217,8 +222,12 @@ sub generate_c {
   $o->{table}||="${base}Tables.i";
   if($o->{split} eq 'all'){$o->{$_}||=$base.'_'.$_.$suffix for qw(json values memory numeric io api)}
  }
- my $main=outpath($o->{output}||"$base$suffix");
- my %paths=(output=>$main);
+  my $main=outpath($o->{output}||"$base$suffix");
+  my %paths=(output=>$main);
+  if($o->{action_semantics_artifact}){
+   (my $stem=$main)=~s/\Q$suffix\E$//;
+   $paths{action_semantics}=$stem.'.actionsemantics.c';
+  }
  for my $facet(qw(header runtime semant rewriter table lexer parser_out ast ir driver json values memory numeric io api manifest depfile)){
   next unless defined $o->{$facet};
   next if $o->{split} eq 'none' && $facet !~ /^(header|manifest|depfile)$/;
@@ -231,7 +240,7 @@ sub generate_c {
   die "output path collision: $paths{$facet} ($facet and $seen{$abs})\n" if $seen{$abs};
   $seen{$abs}=$facet;
   $abs eq $spec_path and die "output would overwrite specification: $paths{$facet}\n";
-  if($facet !~ /^(header|table|manifest|depfile)$/){
+   if($facet !~ /^(header|table|manifest|depfile|action_semantics)$/){
    $paths{$facet} =~ /\Q$suffix\E$/ or die "incompatible $o->{T} output suffix: $paths{$facet}\n";
   }
  }
@@ -240,8 +249,19 @@ sub generate_c {
  # Non-ASCII UTF-8 bytes otherwise narrow when char is signed in C++.
  while(@byte){my @row=splice(@byte,0,32);$constant.='  '.join(', ',map {$_<128?$_:"(char)$_"} @row).",\n"}
  $constant.="  0\n};\n";
- my $code=template('c');
- $code =~ s/\@\@INTEROP_C\@\@/c_interop($s)/ge;
+  my $code=template('c');
+  $code =~ s/\@\@INTEROP_C\@\@/c_interop($s)/ge;
+  my $action_entry="${base}_impl_action_semantics_entry";
+  my $action_adapter=$paths{action_semantics}?LLSynthActionSemantics::c_adapter($action_entry):'';
+  my $ordinary_call='exec_block(c,jo(jo(rule,"code"),facet),env,caps,&r);';
+  my $action_call=$paths{action_semantics}?<<'C':$ordinary_call;
+Json *action=jo(rule,"action_semantics");
+     if(action && !strcmp(facet,"semantics"))r=acsem_eval(c,action,caps);
+     else exec_block(c,jo(jo(rule,"code"),facet),env,caps,&r);
+C
+  $action_call.='     ' if $paths{action_semantics};
+  $code =~ s/\@\@ACTION_SEMANTICS_C\@\@/$action_adapter/g;
+  $code =~ s/\@\@ACTION_SEMANTICS_CALL_C\@\@/$action_call/g;
  $code =~ s/\@\@MODE\@\@/$o->{mode}/g;
  $code =~ s/\@\@TARGET\@\@/$o->{program_target}/g;
  my($start_rule)=grep {$_->{name} eq $s->{start}} @{$s->{rules}};
@@ -258,7 +278,7 @@ sub generate_c {
   my $facet=$name =~ /^(lex|valid_utf8)$/?'lexer':$name eq 'parse'?'parser_out':
    $name =~ /^(eval|eval_call|exec_block|walk|walk_node|run|reset)$/?'semant':
    $name =~ /^(rewrite_ops|same_ops|is_identifier|op_effect)$/?'rewriter':
-   $name =~ /^(compile_output|render_template|verify_ops|bytecode_id|encode_bytecode|execute_bytecode)$/?'ir':
+    $name =~ /^(compile_output|compile_vmgen|render_template|verify_ops|bytecode_id|encode_bytecode|execute_bytecode)$/?'ir':
    $name =~ /^(new_node|first_tok)$/?'ast':
    $name eq 'llsynth_generated_main'?'driver':'runtime';
   if($o->{split} eq 'all' && $facet eq 'runtime'){
@@ -268,13 +288,15 @@ sub generate_c {
     $name =~ /^(build|read_source)$/?'io':
     $name =~ /^(api_|\Q${base}_\E)/?'api':'values';
   }
+  $chunks{$facet}.=slurp(ipc_runtime_path('c11')) if $name eq 'interop_call' && has_ipc($s);
   $chunks{$facet}.=$body;
  }
  my %files;
  my $split=grep {exists $paths{$_}} qw(runtime semant rewriter lexer parser_out ir driver ast);
  my $private=File::Spec->catfile(dirname($main),$base.'_internal.h');
  die "output path collision: $private\n" if $split && $seen{canonical_path($private)};
- my $preamble=$header.$declarations;
+ my $pre_ipc=has_ipc($s)?"#ifndef LLS_IPC_DISABLE\n#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n#ifndef _POSIX_C_SOURCE\n#define _POSIX_C_SOURCE 200809L\n#endif\n#endif\n":'';
+ my $preamble=$pre_ipc.$header.$declarations;
  if($split){$files{$private}=$preamble;}
  my $prefix=sub {my($owner)=@_;return $split?'#include '.relative_include($private,$owner)."\n":$preamble};
  $files{$main}=$prefix->($main);
@@ -308,15 +330,22 @@ sub generate_c {
   my $public=index($files{$path},$header)==0?substr($files{$path},0,length($header),''):'';
   $files{$path}=~s{(/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b[A-Za-z_]\w*\b)}{exists $renames{$1}?$renames{$1}:$1}gse;
   $files{$path}=$public.$files{$path};
-  $files{$path}=~s/\b(__lls_native_symbol_\d+)\b/exists $native_symbols{$1}?$native_symbols{$1}:$1/ge;
- }
- return write_outputs(\%files,$main);
+   $files{$path}=~s/\b(__lls_native_symbol_\d+)\b/exists $native_symbols{$1}?$native_symbols{$1}:$1/ge;
+  }
+  if($paths{action_semantics}){
+   my $source=${$o->{action_semantics_artifact}};
+   $source =~ s/^int LLS_ACTION_SEMANTICS_ENTRY\(/int $action_entry(/m;
+   $files{$paths{action_semantics}}=$source;
+  }
+  return write_outputs(\%files,$main);
 }
 
 # Interop stays opt-in: Python imports ctypes/subprocess only on first use;
 # C emits native references and the Sandstone SDK include only when declared.
 sub python_interop {
- return <<'PY';
+ my($s)=@_;
+ my $sdk=grep {($_->{foreign}||'') eq 'sandstone_sdk'} @{$s->{functions}};
+ my $runtime=<<'PY';
 _interop_libraries = {}
 _interop_functions = {}
 
@@ -327,6 +356,16 @@ def interop_value(kind, value):
              (kind == 'String' and type(value) is str and '\0' not in value))
     if not valid: raise LanguageError('INTEROP', f'expected native {kind}, got {type(value).__name__}')
     return value.encode('utf-8') if kind == 'String' else value
+
+def interop_library_path(name):
+    import os
+    if not os.path.dirname(name):
+        for directory in os.environ.get('LLSYNTH_LIBRARY_PATH', '').split(':'):
+            if directory:
+                path = os.path.abspath(os.path.join(directory, name))
+                if os.path.isfile(path):
+                    return path
+    return name
 
 def interop_call(f, args):
     if f['foreign'] == 'sandstone':
@@ -360,7 +399,7 @@ def interop_call(f, args):
     try:
         if key not in _interop_functions:
             if f['library'] not in _interop_libraries:
-                _interop_libraries[f['library']] = ctypes.CDLL(f['library'])
+                _interop_libraries[f['library']] = ctypes.CDLL(interop_library_path(f['library']))
             # Attribute access caches ctypes objects; indexing gives each signature
             # its own object without mutating another declaration's argtypes.
             fn = _interop_libraries[f['library']][f['symbol']]
@@ -375,11 +414,19 @@ def interop_call(f, args):
     except (OSError, AttributeError, TypeError, ValueError, OverflowError, UnicodeError, ctypes.ArgumentError) as exc:
         raise LanguageError('INTEROP', f'{f["name"]}: {exc}') from None
 PY
+ my $dispatch='';
+ $dispatch.="    if f['foreign'] == 'sandstone_sdk': return assembler_sdk_call(f, args)\n" if $sdk;
+ $dispatch.="    if f['foreign'] == 'ipc': return ipc_call(f, args)\n" if has_ipc($s);
+ $runtime =~ s/(def interop_call\(f, args\):\n)/$1$dispatch/;
+ $runtime=python_assembler_interop().$runtime if $sdk;
+ $runtime.=slurp(ipc_runtime_path('python3')) if has_ipc($s);
+ return $runtime;
 }
 
 sub c_interop {
  my($s)=@_;my $code='';
  my @foreign=grep {$_->{foreign}} @{$s->{functions}};
+ $code.=c_assembler_interop() if grep {$_->{foreign} eq 'sandstone_sdk'} @foreign;
  if(grep {$_->{foreign} eq 'sandstone'} @foreign){$code.=<<'C';
 #include <assembler.h>
 static Val interop_assemble(Context *c,const char *source,const char *bank,const char *syntax){
@@ -412,11 +459,14 @@ C
  for my $i(0..$#{$s->{functions}}){my $f=$s->{functions}[$i];next unless ($f->{foreign}||'') eq 'c';
   $code.='extern '.$ct{$f->{native_return}}." __lls_native_symbol_$i(".join(', ',map {$ct{$_}} @{$f->{native_params}}).(@{$f->{native_params}}?'':'void').");\n";
  }
- $code.="static Val interop_call(Context *c,Json *f,Vec *args){Val nil=LLS_ZERO;const char *name=jg(f,\"name\");(void)args;(void)name;\n";
+  $code.="static Val interop_call(Context *c,Json *f,Vec *args){Val nil=LLS_ZERO;const char *name=jg(f,\"name\");(void)args;(void)name;\n";
+  $code.=' if(!strcmp(jg(f,"foreign"),"ipc"))return lls_ipc_call(c,jg(f,"symbol"),args);'."\n" if has_ipc($s);
  my %valid=(Int=>'v.tag==VINT',Float64=>'(v.tag==VINT||v.tag==VNUM)',Bool=>'v.tag==VBOOL',String=>'v.tag==VSTR');
  my %get=(Int=>'args->a[INDEX].i',Float64=>'number(args->a[INDEX])',Bool=>'truth(args->a[INDEX])',String=>'args->a[INDEX].s');
- for my $i(0..$#{$s->{functions}}){my $f=$s->{functions}[$i];next unless $f->{foreign};
-  my @params=$f->{foreign} eq 'c'?@{$f->{native_params}}:('String');
+  for my $i(0..$#{$s->{functions}}){my $f=$s->{functions}[$i];next unless $f->{foreign};
+   next if $f->{foreign} eq 'ipc';
+  my @params=$f->{foreign} eq 'c'?@{$f->{native_params}}:
+             $f->{foreign} eq 'sandstone_sdk'?('String') x 3:('String');
   $code.=' if(!strcmp(name,"'.$f->{name}.'")){'."\n";
   $code.='  if(args->n!='.scalar(@params).'){error(c,"INTEROP: '.$f->{name}.' argument count mismatch");return nil;}'."\n";
   for my $j(0..$#params){my $test=$valid{$params[$j]};$test=~s/\bv\b/args->a[$j]/g;
@@ -425,6 +475,9 @@ C
   if($f->{foreign} eq 'sandstone'){
    my($bank,$syntax)=map {c_interop_string($_)} ($f->{bank},$f->{syntax});
    $code.="  return interop_assemble(c,args->a[0].s,$bank,$syntax);\n";
+  }elsif($f->{foreign} eq 'sandstone_sdk'){
+   my $use_target=$f->{assembler_selector} eq 'target'?1:0;
+   $code.="  return interop_assembler_sdk(c,args->a[0].s,args->a[1].s,args->a[2].s,$use_target);\n";
   }else{
    my @args;for my $j(0..$#params){my $value=$get{$params[$j]};$value=~s/INDEX/$j/g;push @args,$value;}
    my $call="__lls_native_symbol_$i(".join(',',@args).')';my $ret=$f->{native_return};

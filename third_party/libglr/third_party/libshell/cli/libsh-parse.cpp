@@ -33,10 +33,10 @@ using TokenList = std::deque<Token>;
 
 // `NAME=value` as a single token. The lexer coalesces adjacent literal
 // characters, so `FOO=bar` arrives as one raw fragment while `FOO=$x` arrives as
-// a raw head followed by expansions. Both forms are accepted; anything quoted
-// is an ordinary word.
+// a raw head followed by expansions. Quotes in the value do not change its
+// classification, unlike quoting the name or the delimiter.
 [[nodiscard]] std::optional<std::size_t> assignment_split(const Token& token) {
-    if (token.quoted || token.fragments.empty()) {
+    if (!token.assignment_word || token.fragments.empty()) {
         return std::nullopt;
     }
     const Expansion& head = token.fragments.front();
@@ -74,6 +74,10 @@ using TokenList = std::deque<Token>;
     }
     if (assignment.value.fragments.empty()) {
         assignment.value.fragments.push_back(make_expansion(ExpansionKind::raw));
+    }
+    for (auto& fragment : assignment.value.fragments) {
+        fragment.field_splitting = false;
+        fragment.globbable = false;
     }
     return assignment;
 }
@@ -198,16 +202,7 @@ private:
         if (!left) {
             return left.error();
         }
-        for (;;) {
-            const std::size_t saved = current_;
-            if (peek().kind == TokenKind::newline) {
-                skip_newlines();
-            }
-            if (!at_operator(Operator::semicolon)) {
-                current_ = saved;
-                break;
-            }
-            advance();
+        while (match_operator(Operator::semicolon) || match_newlines()) {
             skip_newlines();
             if (at_list_end()) {
                 break;
@@ -231,7 +226,6 @@ private:
             return left.error();
         }
         for (;;) {
-            skip_newlines();
             if (!at_operator(Operator::and_if) && !at_operator(Operator::or_if)) {
                 return left;
             }

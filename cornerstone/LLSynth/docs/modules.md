@@ -80,16 +80,24 @@ For ready-to-use libraries see the [stdlib reference](stdlib.md).
   name is an error, even if their contents match.
 * `.import "relative/path.llsynth" [as Alias]` resolves a literal filesystem
   path. Absolute paths are also accepted. A quoted identifier such as `"Numbers"`
-  or `"Library.Words"` first tries the literal path, then named lookup. Unquoted
-  identifiers always use named lookup.
+  or `"Library.Words"` retains legacy literal-file lookup in the importing
+  directory and `--module-path` directories before being treated as a named
+  import. Unquoted identifiers always use named lookup.
 * `.import Library.Words [as Alias]` searches for `Library/Words.llsynth`.
   Its declared name must be `Library.Words`.
-* Search order is the directory of the file **containing the import**, followed
-  by each repeatable `--module-path DIR`, in command-line order. The first
-  existing regular file wins. Paths in included fragments are relative to the
-  fragment. `--include-path` is deliberately separate from `--module-path`.
-  For `std.Foo` the final fallback is `stdlib/Foo.llsynth` beside the generator's
-  `scripts/` directory. Copy that directory when installing the generator.
+* Named imports first search `LLSYNTH_LIBRARY_PATH`, a colon-separated list of
+  directories searched left to right. Empty entries are ignored, and relative
+  entries are relative to the generator's working directory. Each directory
+  uses the ordinary named layout (for example, `std/Foo.llsynth` for `std.Foo`).
+* The remaining search order is the directory of the file **containing the
+  import**, followed by each repeatable `--module-path DIR`, in command-line
+  order. The first existing regular file wins. Paths in included fragments
+  are relative to the fragment. `--include-path` is deliberately separate
+  from `--module-path`. For a named `std.Foo` import the final fallback is
+  `stdlib/Foo.llsynth` beside the generator's `scripts/` directory. Copy that
+  directory when installing the generator.
+* Literal filesystem paths do not search `LLSYNTH_LIBRARY_PATH`. Use
+  `.import "./Words.llsynth"` or an absolute path to select a file explicitly.
 * The default alias is the final module-name component (`Words` above).
   An explicit alias is one identifier and cannot contain `__`. One alias may
   be repeated for the same module, but cannot denote different modules.

@@ -163,7 +163,7 @@ struct Action {
 
 bool terminal(SymbolKind kind) { return kind == SymbolKind::literal || kind == SymbolKind::regex; }
 
-Action transform(const Rule& rule, bool legacySList, Diagnostics& diagnostics) {
+Action transform(const Rule& rule, bool legacySList, bool linked, Diagnostics& diagnostics) {
     Action action;
     action.terminalUse.resize(rule.rhs.size());
     auto tokens = tokenize(rule.action);
@@ -185,6 +185,11 @@ Action transform(const Rule& rule, bool legacySList, Diagnostics& diagnostics) {
             } else if (tok.text == "$TOKEN" || tok.text == "${TOKEN}" || tok.text == "token") {
                 tok.replacement = "token";
                 usesToken = true;
+            } else if (tok.text == "$OFFSET") {
+                if (linked)
+                    error(diagnostics, locationAt(rule.location, rule.action.substr(0, tok.offset)),
+                          "unsupported-action", "$OFFSET requires the portable backend");
+                tok.replacement = "aurocks_action_offset";
             } else if (tok.text == "my_strdup") {
                 action.strdup = true;
             } else if (tok.kind == Token::reference ||
@@ -279,7 +284,8 @@ Action transform(const Rule& rule, bool legacySList, Diagnostics& diagnostics) {
     return action;
 }
 
-void emitActions(std::ostream& out, const Grammar& grammar, const std::vector<Action>& actions) {
+void emitActions(std::ostream& out, const Grammar& grammar, const std::vector<Action>& actions,
+                 bool linked) {
     if (std::any_of(actions.begin(), actions.end(), [](const auto& action) { return action.strdup; })) {
         out << "static char *my_strdup(const char *value) {\n"
                "    const size_t n = strlen(value) + 1;\n"
@@ -288,11 +294,14 @@ void emitActions(std::ostream& out, const Grammar& grammar, const std::vector<Ac
                "    return copy;\n"
                "}\n\n";
     }
-    out << "static void *aurocks_action(size_t rule, void **values, char *token) {\n"
+    out << "static void *aurocks_action(size_t rule, void **values, char *token";
+    if (!linked) out << ", size_t aurocks_action_offset";
+    out << ") {\n"
            "    void *result = NULL;\n"
            "    (void)values;\n"
-           "    (void)token;\n"
-           "    switch (rule) {\n";
+           "    (void)token;\n";
+    if (!linked) out << "    (void)aurocks_action_offset;\n";
+    out << "    switch (rule) {\n";
     for (std::size_t i = 0; i < actions.size(); ++i) {
         const auto& action = actions[i];
         const auto& rule = grammar.rules[i];
@@ -626,13 +635,13 @@ bool checkEntrypoint(const Grammar& grammar, std::string_view entrypoint, Diagno
 
 } // namespace
 
-void validateEmission(const Grammar& grammar, const Analysis&, std::string_view entrypoint,
+void validateEmission(const Grammar& grammar, const Analysis& analysis, std::string_view entrypoint,
                       Diagnostics& diagnostics) {
     checkEntrypoint(grammar, entrypoint, diagnostics);
     checkFaultHandlers(grammar, entrypoint, diagnostics);
     const bool legacySList = grammar.prologue.find("SList") != std::string::npos;
     for (const auto& rule : grammar.rules)
-        transform(rule, legacySList, diagnostics);
+        transform(rule, legacySList, analysis.backend == "libglr", diagnostics);
     validateDirectives(grammar, diagnostics);
     validateForest(grammar, collectNames(grammar), diagnostics);
 }
@@ -646,7 +655,7 @@ std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_v
     actions.reserve(grammar.rules.size());
     const bool legacySList = grammar.prologue.find("SList") != std::string::npos;
     for (const auto& rule : grammar.rules)
-        actions.push_back(transform(rule, legacySList, diagnostics));
+        actions.push_back(transform(rule, legacySList, analysis.backend == "libglr", diagnostics));
     validateDirectives(grammar, diagnostics);
     validateForest(grammar, collectNames(grammar), diagnostics);
     if (std::any_of(diagnostics.begin(), diagnostics.end(),
@@ -658,7 +667,7 @@ std::string emit(const Grammar& grammar, const Analysis& analysis, std::string_v
     if (!grammar.faults.empty()) out << "#include <aurocks/Fault.h>\n";
     out << grammar.prologue << '\n';
     if (!grammar.faults.empty()) emitFaultRules(out, grammar);
-    emitActions(out, grammar, actions);
+    emitActions(out, grammar, actions, analysis.backend == "libglr");
     if (analysis.backend == "libglr") {
         emitTerminalUse(out, actions);
         emitLinkedParser(out, grammar, analysis, entrypoint, diagnostics);

@@ -1,0 +1,24 @@
+.library "std.shell"
+.summary "Run a LibShell script and capture its status, stdout, and stderr"
+.export run, %Result, !ShellError
+
+.prodtype %Result
+Status: Int
+Stdout: String
+Stderr: String
+.end
+
+.exception !ShellError(reason: String) "shell bridge: {reason}"
+
+.extern c runPacket(source: String) -> String from "libllsynth_shell.so" symbol "llsynth_shell_run_v1"
+.extern c packetStatus(packet: String) -> Int from "libllsynth_shell.so" symbol "llsynth_shell_status_v1"
+.extern c packetOut(packet: String) -> String from "libllsynth_shell.so" symbol "llsynth_shell_stdout_v1"
+.extern c packetErr(packet: String) -> String from "libllsynth_shell.so" symbol "llsynth_shell_stderr_v1"
+
+.function run(source: String) -> %Result
+let packet = runPacket(source);
+let status = packetStatus(packet);
+let err = packetErr(packet);
+require status >= 0 else Throw(!ShellError, err);
+return %Result(status, packetOut(packet), err);
+.end

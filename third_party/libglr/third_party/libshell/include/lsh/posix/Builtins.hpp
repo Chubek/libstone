@@ -1050,8 +1050,8 @@ struct PrintfSpec {
 }
 
 [[nodiscard]] inline Result<ExitStatus> exit_builtin(BuiltinContext& context) {
-    // `exit` records the request; the front end observes it after the current
-    // line completes so buffered output is not lost.
+    // `exit` records a request for the current shell, without terminating the
+    // executor or bypassing stream cleanup.
     const std::vector<std::string>& argv = *context.argv;
     int code = 0;
     if (argv.size() > 1) {

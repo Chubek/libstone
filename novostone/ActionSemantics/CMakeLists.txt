@@ -9,10 +9,10 @@ add_custom_command(
   DEPENDS ActionSemantics.asdl "${novostone_scripts}/asdl.pl" VERBATIM)
 add_custom_command(
   OUTPUT "${action_generated}/ActionSemanticsParser.c"
-  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}" "-DGENERATOR=${novostone_scripts}/aurocks.pl"
+  COMMAND "${CMAKE_COMMAND}" "-DGENERATOR_COMMAND=${novostone_aurocks}"
     "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/ActionSemantics.g" "-DOUTPUT=${action_generated}/ActionSemanticsParser.c"
     -DPREFIX=novo_as -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/GenerateParser.cmake"
-  DEPENDS ActionSemantics.g Syntax.h ../cmake/GenerateParser.cmake "${novostone_scripts}/aurocks.pl" VERBATIM)
+  DEPENDS ActionSemantics.g Syntax.h ../cmake/GenerateParser.cmake "${novostone_aurocks_dep}" VERBATIM)
 add_custom_target(novostone-action-generated DEPENDS
   "${action_generated}/ActionSemanticsAST.h" "${action_generated}/ActionSemanticsAST.c"
   "${action_generated}/ActionSemanticsVisitor.h" "${action_generated}/ActionSemanticsParser.c")

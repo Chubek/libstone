@@ -18,7 +18,7 @@ our $VERSION = '0.7.0';
 our %opt=(T=>'python3', split=>'explicit', diagnostics=>'text', parser=>'', program_target=>'c99', out_dir=>'.', driver_mode=>'cli');
 our @include_paths;
 our @module_paths;
-my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm LLSynthMeta.pm LLSynthModules.pm LLSynthCompanions.pm);
+my @generator_modules=map {"$RealBin/$_"} qw(LLSynthCompiler.pm LLSynthEmit.pm LLSynthMeta.pm LLSynthModules.pm LLSynthCompanions.pm LLSynthActionSemantics.pm);
 require $_ for @generator_modules;
 my (@extensions, @extension_paths);
 
@@ -31,6 +31,7 @@ GetOptions('T|tool-target=s'=>\$opt{T},'o|output=s'=>\$opt{output},'h|header=s'=
   'check'=>\$opt{check},'help'=>\$opt{help},'version'=>\$opt{version},'diagnostics=s'=>\$opt{diagnostics},
   'dump-grammar:s'=>\$opt{dump_grammar},'dump-tables:s'=>\$opt{dump_tables},
   'warnings-as-errors'=>\$opt{warnings_as_errors}, 'include-path=s@'=>\@include_paths, 'module-path=s@'=>\@module_paths,
+  'acsem=s'=>\$opt{acsem},
   'module-prefix=s'=>\$opt{module_prefix},'driver-mode=s'=>\$opt{driver_mode},'deterministic'=>\$opt{deterministic},
   'trace-parser'=>\$opt{trace_parser},'max-errors=i'=>\$opt{max_errors},
   'list-extensions'=>\$opt{list_extensions},'extension=s@'=>\@extensions,'extension-path=s@'=>\@extension_paths,
@@ -89,8 +90,20 @@ $opt{table_format} && $opt{table_format} ne 'source' && die "E011 custom table f
   validate($spec);
   validate_actions($spec,$opt{mode});
   validate_rewrites($spec);
-  validate_types($spec);
-  validate_program_backend($spec);
+   validate_types($spec);
+    if($spec->{vmgen_decl}){
+      my $helper="$RealBin/LLSynthVMGen.pm";
+      require $helper;
+      push @generator_modules,$helper;
+      prepare_vmgen($spec);
+    }
+    if(grep {($_->{foreign}||'') eq 'sandstone_sdk'} @{$spec->{functions}}){
+      my $helper=canonical_path("$RealBin/../stdlib/assembler/LLSynthAssembler.pm");
+      require $helper;
+      push @generator_modules,$helper;
+    }
+    validate_program_backend($spec);
+    $opt{action_semantics_artifact}=LLSynthActionSemantics::compile($spec,\%opt);
 if(defined $opt{dump_grammar}){
  my $val=join('',map {$_->{id}.': '.$_->{lhs}.' -> '.join(' ',@{$_->{rhs}})."\n"} @{$spec->{productions}});
  if(length $opt{dump_grammar}){write_file($opt{dump_grammar},$val)} else {print $val}
@@ -147,10 +160,11 @@ Usage: llsynth.pl [options] FILE.llsynth
   -o, --output FILE          generated implementation
   -h, --header FILE          generated C/C++ public header (NOT --help)
   --mode MODE                interpret, compile, both, analyze, rewrite
-  --program-target LANG      c99, c11, cpp17, cpp20, python3, bytecode
+  --program-target LANG      c99, c11, cpp17, cpp20, python3, bytecode, vmweave
   --parser ALG               lr1 or lalr1
   --runtime FILE             optional generated C runtime source
   --semant FILE              optional generated C semantics source
+   --acsem PATH               NovoStone ActionSemantics generator (default: acsem on PATH)
   --table FILE               optional C includable parser tables
   --rewriter FILE            optional rewrite implementation
   --split none|explicit|facets|all layout of generated C/C++ outputs
@@ -649,6 +663,7 @@ def parse(source: str) -> Node:
             raise LanguageError('PARSE', 'invalid generated parse action')
 
 @@INTEROP_PYTHON@@
+@@ACTION_SEMANTICS_PYTHON@@
 
 class Context:
     @property
@@ -1044,9 +1059,12 @@ class Context:
                 caps = {}
                 for label, ch in zip(prod['labels'], node.children):
                     if label: caps[label] = ch.value
-                actions = definition.get('code', {}).get(facet, [])
-                _, val = self.exec_block(actions, {}, caps)
-                node.value = val
+                if facet == 'semantics' and 'action_semantics' in definition:
+                    node.value = _lls_action_semantics(definition['action_semantics'], caps)
+                else:
+                    actions = definition.get('code', {}).get(facet, [])
+                    _, val = self.exec_block(actions, {}, caps)
+                    node.value = val
         self.node = old
     def analyze(self, source: str):
         self.reset()
@@ -1250,8 +1268,26 @@ def backend_value(value, target):
     if isinstance(value, float): return number_literal(value, target)
     return str(value)
 
+def compile_vmgen(ops, vmgen, height):
+    if height != 1: raise LanguageError('VMGEN', 'expected one final Int result')
+    pieces, depth = [vmgen['prologue']], 0
+    for op in ops:
+        if op.name not in vmgen['opcodes']:
+            raise LanguageError('VMGEN', f'no VMWeave mapping for {op.name}')
+        info = SPEC['op_by_name'][op.name]
+        depth += info['push'] - info['pop']
+        if depth > vmgen['stack_capacity']:
+            raise LanguageError('VMGEN', f'VM stack capacity exceeded at {op.name}')
+        values = ', '.join('INT64_MIN' if v == -(1 << 63) else
+                           f'-INT64_C({-v})' if v < 0 else f'INT64_C({v})' for v in op.args)
+        pieces.append(f"    {{{vmgen['opcodes'][op.name]}u, {len(op.args)}, {{{values or '0'}}}}},\n")
+    pieces.append(vmgen['epilogue'])
+    return ''.join(pieces)
+
 def compile_program(ops, target):
-    verify_ops(ops)
+    height = verify_ops(ops)
+    if target == 'vmweave' and 'vmgen' in SPEC:
+        return compile_vmgen(ops, SPEC['vmgen'], height)
     for backend in SPEC.get('backends_compiled', []):
         if backend['target'] == target:
             pieces = [backend['prologue']]
@@ -1628,6 +1664,7 @@ static int eq_val(Val a,Val b){if((a.tag==VINT||a.tag==VBOOL)&&(b.tag==VINT||b.t
  return a.tag==b.tag&&strcmp(a.s?a.s:"",b.s?b.s:"")==0;}
 static double number(Val v){return v.tag==VNUM?v.n:(v.tag==VINT||v.tag==VBOOL)?(double)v.i:0;}
 @@INTEROP_C@@
+@@ACTION_SEMANTICS_C@@
 
 static Val eval_call(Context *c,Val callee,Vec *args){Val nil=LLS_ZERO;const char *name=callee.s?callee.s:"";
  if(callee.tag==VOP){Op *p=(Op*)ca(c,sizeof(Op));p->name=callee.op->name;p->args=args;return vop(p);}
@@ -1769,7 +1806,7 @@ static void walk_node(Context *c,Node *node,const char *facet){if(!node||c->erro
   for(int i=0;i<jlen(rules);i++){Json *rule=ji(rules,i);if(strcmp(jg(rule,"name"),jg(prod,"lhs")))continue;
     Map *caps=new_map(c),*env=new_map(c);Json *labels=jo(prod,"labels");
     for(int j=0;j<node->n;j++){const char *label=js(ji(labels,j));if(*label)map_put(c,caps,label,node->children[j]->val);}
-    Val r=LLS_ZERO;exec_block(c,jo(jo(rule,"code"),facet),env,caps,&r);node->val=r;break;
+     Val r=LLS_ZERO;@@ACTION_SEMANTICS_CALL_C@@node->val=r;break;
   }
   Json *kind=jo(jo(spec,"internal"),jg(prod,"lhs"));
   if(kind){const char *k=js(kind);
@@ -1988,8 +2025,36 @@ static Val execute_bytecode(Context *c,const unsigned char *data,size_t size){
  return vnum(stack[0]);
 }
 
+static void compile_vmgen(Context *c,Builder *b,Vec *ops,Json *vmgen,int height){
+ if(height!=1){error(c,"VMGEN: expected one final Int result");return;}
+ Json *opcodes=jo(vmgen,"opcodes"),*declarations=jo(lls_spec(c),"op_by_name");
+ int depth=0,capacity=(int)jnumber(jo(vmgen,"stack_capacity"));
+ build(b,"%s",jg(vmgen,"prologue"));
+ for(int i=0;i<ops->n;i++){
+  Op *op=ops->a[i].op;Json *opcode=jo(opcodes,op->name);
+  if(!opcode){error(c,"VMGEN: no VMWeave mapping for %s",op->name);return;}
+  Json *info=jo(declarations,op->name);
+  depth+=(int)jnumber(jo(info,"push"))-(int)jnumber(jo(info,"pop"));
+  if(depth>capacity){error(c,"VMGEN: VM stack capacity exceeded at %s",op->name);return;}
+  build(b,"    {%uu, %d, {",(unsigned)jnumber(opcode),op->args->n);
+  if(!op->args->n)build(b,"0");
+  for(int k=0;k<op->args->n;k++){
+   int64_t v=op->args->a[k].i;
+   if(k)build(b,", ");
+   if(v==INT64_MIN)build(b,"INT64_MIN");
+   else if(v<0)build(b,"-INT64_C(%" PRId64 ")",-v);
+   else build(b,"INT64_C(%" PRId64 ")",v);
+  }
+  build(b,"}},\n");
+ }
+ build(b,"%s",jg(vmgen,"epilogue"));
+}
 static void compile_output(Context *c,Builder *b,const char *target,Vec *ops){
- if(verify_ops(c,ops)<0)return;
+ int height=verify_ops(c,ops);if(height<0)return;
+ if(!strcmp(target,"vmweave")){
+  Json *vmgen=jo(lls_spec(c),"vmgen");
+  if(vmgen){compile_vmgen(c,b,ops,vmgen,height);return;}
+ }
  Json *backends=jo(lls_spec(c),"backends_compiled");
  for(int i=0;i<jlen(backends);i++){
   Json *backend=ji(backends,i);if(strcmp(jg(backend,"target"),target))continue;
@@ -2059,7 +2124,7 @@ int llsynth_generated_main(int argc,char **argv){const char *file="-",*output=NU
   else if(strcmp(argv[i],"--parse")==0)action=3;
   else if(strcmp(argv[i],"--target")==0&&i+1<argc)target=argv[++i];
   else if((strcmp(argv[i],"-o")==0||strcmp(argv[i],"--output")==0)&&i+1<argc)output=argv[++i];
-  else if(strcmp(argv[i],"--help")==0){puts("--interpret | --compile | --analyze | --rewrite | --run-bytecode | --tokens | --parse [--target c99|python3|bytecode] [-o output] [file|-]");return 0;}
+  else if(strcmp(argv[i],"--help")==0){puts("--interpret | --compile | --analyze | --rewrite | --run-bytecode | --tokens | --parse [--target TARGET] [-o output] [file|-]");return 0;}
   else if(argv[i][0]!='-'||strcmp(argv[i],"-")==0)file=argv[i];
   else {fprintf(stderr,"unknown argument: %s\n",argv[i]);return 2;}
  }
