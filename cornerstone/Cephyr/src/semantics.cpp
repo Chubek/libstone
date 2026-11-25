@@ -31,7 +31,7 @@ constexpr unsigned int_rank = 3;
 constexpr unsigned long_rank = 4;
 constexpr unsigned long_long_rank = 5;
 
-constexpr unsigned qualifier_mask = TQ_CONST | TQ_VOLATILE | TQ_RESTRICT;
+constexpr unsigned qualifier_mask = DS_QUALIFIER_MASK;
 
 std::uint64_t bit_mask(unsigned bits) {
     if (bits == 0 || bits > 64)
@@ -76,6 +76,7 @@ CType qualify(CType type, unsigned qualifiers) {
     type.is_const = (qualifiers & TQ_CONST) != 0;
     type.is_volatile = (qualifiers & TQ_VOLATILE) != 0;
     type.is_restrict = (qualifiers & TQ_RESTRICT) != 0;
+    type.is_atomic = (qualifiers & TQ_ATOMIC) != 0;
     return type;
 }
 
@@ -1305,12 +1306,14 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
                    "an array element type cannot contain a flexible array member");
         return {};
     }
-    if (element.kind == CType::Kind::void_ || element.kind == CType::Kind::function) {
+    if (element.kind == CType::Kind::void_ || element.kind == CType::Kind::function ||
+        (element.kind == CType::Kind::array && !element.count && !element.runtime_array())) {
         type_error(array, source, diagnostics, "array element type must be a complete object type");
         return {};
     }
 
     std::uint64_t count = 0;
+    Node *runtime_bound = nullptr;
     if (Node *bound = array->getExpr(); present(bound)) {
         const auto saved = context.unit.array_bounds.find(bound);
         if (saved != context.unit.array_bounds.end()) {
@@ -1340,9 +1343,9 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
                     type_error(bound, source, diagnostics, "array bound must be positive");
                     return {};
                 }
-                if (parameter == ArrayParameter::no) {
+                if (parameter == ArrayParameter::no && !context.allow_vla) {
                     remember(std::nullopt);
-                    type_error(bound, source, diagnostics, "variable-length arrays are not supported");
+                    type_error(bound, source, diagnostics, "variable-length arrays are not supported in this declarator");
                     return {};
                 }
                 const auto type = expression_type(bound, context);
@@ -1352,9 +1355,13 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
                         type_error(bound, source, diagnostics, "array bound must be a valid integer expression");
                     return {};
                 }
-                // Adjustment erases this bound from the type in both contexts.
-                // Only a definition evaluates the expression on function entry.
-                remember(std::uint64_t{0});
+                if (parameter == ArrayParameter::no) {
+                    runtime_bound = bound;
+                } else {
+                    // Adjustment erases this bound. Only a definition evaluates
+                    // the expression on function entry.
+                    remember(std::uint64_t{0});
+                }
             }
         }
     } else if (!allow_incomplete) {
@@ -1366,6 +1373,7 @@ static CType read_array_type(cparser::ArrayTypeASTNode *array, const TypeContext
     result.kind = CType::Kind::array;
     result.element = std::make_shared<const CType>(std::move(element));
     result.count = count;
+    result.vla_bound = runtime_bound;
     return qualify(std::move(result), array->getFlags() & qualifier_mask);
 }
 
@@ -1399,7 +1407,19 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
     }
 
     const auto qualifiers = node->getFlags() & qualifier_mask;
-    auto qualify_node = [qualifiers](CType type) {
+    if ((qualifiers & TQ_ATOMIC) && !source.native_atomics) {
+        type_error(node, source, diagnostics,
+                   "_Atomic types require the bundled Linux AMD64 or AArch64 backend");
+        return {};
+    }
+    auto qualify_node = [&, qualifiers](CType type) {
+        if ((qualifiers & TQ_ATOMIC) &&
+            (!(type.integer() || (type.pointer() && !type.function_pointer())) || type.is_restrict ||
+             (qualifiers & TQ_RESTRICT))) {
+            type_error(node, source, diagnostics,
+                       "_Atomic supports integer and object-pointer types without restrict");
+            return CType{};
+        }
         return qualify(std::move(type), qualifiers);
     };
 
@@ -1443,14 +1463,18 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
     }
     case cparser::NK_POINTER_TYPE: {
         auto *pointer = static_cast<cparser::PointerTypeASTNode *>(node);
+        auto pointee_context = context;
+        pointee_context.allow_vla = false; // VM pointer declarators are not supported.
         CType pointee =
-            read_type(pointer->getBaseType(), context, true);
+            read_type(pointer->getBaseType(), pointee_context, true);
         CType result = pointer_type(pointee);
         if (!result.valid())
             return {};
         return qualify_node(std::move(result));
     }
     case cparser::NK_ARRAY_TYPE:
+        if (qualifiers & TQ_ATOMIC)
+            return qualify_node(CType{});
         return read_array_type(static_cast<cparser::ArrayTypeASTNode *>(node), context,
                                allow_incomplete, ArrayParameter::no);
     case cparser::NK_FUNCTION_TYPE: {
@@ -1459,6 +1483,10 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
             read_type(function->getType(), context, true);
         if (!result_type.valid())
             return {};
+        if (result_type.is_atomic) {
+            type_error(node, source, diagnostics, "atomic function return types are not supported");
+            return {};
+        }
         if (result_type.kind == CType::Kind::array ||
             result_type.kind == CType::Kind::function) {
             type_error(node, source, diagnostics,
@@ -1493,6 +1521,10 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
             CType type = read_parameter_type(type_node, parameter_context, function_definition);
             if (!type.valid())
                 return {};
+            if (type.is_atomic) {
+                type_error(parameter, source, diagnostics, "atomic parameters by value are not supported");
+                return {};
+            }
             if (type.kind == CType::Kind::void_) {
                 if (parameters.size() != 1 || result.variadic || present(name) ||
                     type.is_const || type.is_volatile || type.is_restrict) {
@@ -1516,7 +1548,9 @@ CType read_type(Node *node, const TypeContext &context, bool allow_incomplete,
     }
     case cparser::NK_STRUCT_TYPE:
     case cparser::NK_UNION_TYPE: {
-        auto record = read_record_type(node, context);
+        auto member_context = context;
+        member_context.allow_vla = false;
+        auto record = read_record_type(node, member_context);
         if (record.valid() && !allow_incomplete && !size_of(record)) {
             type_error(node, source, diagnostics, "incomplete structure or union type");
             return {};
@@ -1646,7 +1680,7 @@ CType common_arithmetic(const CType &lhs, const CType &rhs) {
 }
 
 bool compatible(const CType &left, const CType &right) {
-    if (left.kind != right.kind || left.is_const != right.is_const ||
+    if (left.kind != right.kind || left.is_atomic != right.is_atomic || left.is_const != right.is_const ||
         left.is_volatile != right.is_volatile || left.is_restrict != right.is_restrict)
         return false;
     switch (left.kind) {
@@ -1704,8 +1738,15 @@ bool compatible(const CType &left, const CType &right) {
 CType composite_type(const CType &prior, CType next) {
     if (!next.enum_identity)
         next.enum_identity = prior.enum_identity;
-    if (next.kind == CType::Kind::array && !next.count)
-        next.count = prior.count;
+    if (next.kind == CType::Kind::array && !next.count) {
+        if (prior.count) {
+            next.count = prior.count;
+            next.vla_bound = nullptr;
+        } else if (!next.vla_bound) {
+            next.vla_bound = prior.vla_bound;
+            next.vla_size = prior.vla_size;
+        }
+    }
     if (next.kind == CType::Kind::function && prior.prototype) {
         if (!next.prototype) {
             next.prototype = true;
@@ -1966,37 +2007,43 @@ static std::optional<Constant> member_offset(Node *node, const TypeContext &cont
     return Constant{integer_type(64, false, long_rank), bytes};
 }
 
-std::optional<Constant> layout_constant(Node *node, const TypeContext &context) {
+CType layout_operand_type(Node *node, const TypeContext &context) {
     const AnalysisDepth depth(semantic_depth);
-    if (node->getKind() == cparser::NK_OFFSETOF_EXPR)
-        return member_offset(node, context);
     const bool alignment = node->getKind() == cparser::NK_ALIGNOF_EXPR;
     Node *operand = alignment ? static_cast<cparser::AlignOfExprASTNode *>(node)->getExpr()
                               : static_cast<cparser::SizeOfExprASTNode *>(node)->getExpr();
     const auto errors = context.diagnostics.error_count();
     CType type;
-    if (present(operand) && operand->isType())
-        type = read_type(operand, context, true);
-    else if (!alignment)
+    if (present(operand) && operand->isType()) {
+        auto operand_context = context;
+        operand_context.allow_vla = context.function != nullptr;
+        type = read_type(operand, operand_context, true);
+    } else if (!alignment) {
         type = expression_type(operand, context);
+    }
     if (type.denotes_bit_field) {
         constant_error(node, context.source, context.diagnostics, "sizeof cannot be applied to a bit-field");
-        return std::nullopt;
+        return {};
     }
-
-    // Use completeness for both operators; an incomplete array still reports
-    // its element alignment through align_of(), but is not a valid operand.
-    const auto size = size_of(type);
-    if (size) {
-        if (!alignment)
-            return Constant{integer_type(64, false, long_rank), *size};
-        if (const unsigned align = align_of(type))
-            return Constant{integer_type(64, false, long_rank), align};
-    }
+    if ((type.runtime_array() || size_of(type)) && (!alignment || align_of(type)))
+        return type;
     if (context.diagnostics.error_count() == errors)
         constant_error(node, context.source, context.diagnostics,
                        alignment ? "_Alignof requires a complete object type"
                                  : "sizeof requires a complete object type and a valid operand");
+    return {};
+}
+
+std::optional<Constant> layout_constant(Node *node, const TypeContext &context) {
+    if (node->getKind() == cparser::NK_OFFSETOF_EXPR)
+        return member_offset(node, context);
+    const auto type = layout_operand_type(node, context);
+    if (type.valid()) {
+        if (node->getKind() == cparser::NK_ALIGNOF_EXPR)
+            return Constant{integer_type(64, false, long_rank), align_of(type)};
+        if (const auto size = size_of(type))
+            return Constant{integer_type(64, false, long_rank), *size};
+    }
     return std::nullopt;
 }
 

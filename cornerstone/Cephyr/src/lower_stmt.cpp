@@ -1,4 +1,5 @@
 #include <cephyr/lower.hpp>
+#include <cephyr/preprocess.hpp>
 
 #include <AbstractSyntaxTree.h>
 
@@ -20,9 +21,16 @@ struct SwitchCases {
     CType type; // Promoted type of the controlling expression.
     std::map<std::uint64_t, Id> values;
     Id otherwise = no_value;
+    std::size_t vla_depth = 0;
 };
 
 void lower_statement(Function &, Node *, SwitchCases *);
+
+void release_vlas(Function &function, const std::vector<Id> &active, std::size_t remaining) {
+    if (function.open())
+        for (auto i = active.size(); i > remaining; --i)
+            function.emit_void("stack_free", std::to_string(active[i - 1]));
+}
 
 CType function_result(const Function &function) {
     const CType *type = &function.symbol.type;
@@ -241,7 +249,9 @@ void lower_local_declaration(Function &function, Node *node) {
     const unsigned flags =
         node->getFlags() | (present(type_node) ? type_node->getFlags() : 0);
     const std::string name = identifier(name_node);
-    CType type = read_type(type_node, context, true);
+    auto object_context = context;
+    object_context.allow_vla = true;
+    CType type = read_type(type_node, object_context, true);
     if (!type.valid()) {
         if (!name.empty())
             function.declare_local(name, {}, at);
@@ -264,6 +274,33 @@ void lower_local_declaration(Function &function, Node *node) {
         return;
 
     Node *initializer = declaration->getInit();
+    if (type.runtime_array()) {
+        if (flags & (SCS_EXTERN | SCS_STATIC)) {
+            function.error(at, "variable-length arrays require automatic storage duration and no linkage");
+            return;
+        }
+        if (present(initializer)) {
+            function.error(at, "variable-length arrays cannot have an initializer");
+            return;
+        }
+        if (!function.unit.source.native_vla) {
+            function.error(at, "variable-length arrays are not supported by this native target");
+            return;
+        }
+        // Evaluate bounds before the identifier's scope begins. The captured
+        // type carries each byte stride independently of later assignments
+        // to the variables used in the declarator.
+        type = capture_vla_sizes(function, std::move(type), at);
+        if (!type.valid())
+            return;
+        const auto count = type.vla_size;
+        const auto address = function.emit(pointer_type(type), "stack_alloc",
+                                           std::to_string(count), at);
+        const bool register_object = (flags & SCS_REGISTER) != 0;
+        if (function.declare_local(name, {std::move(type), address, {}, register_object}, at))
+            function.active_vlas.push_back(count);
+        return;
+    }
     if (flags & SCS_EXTERN) {
         if (present(initializer))
             function.error(at, "block-scope declaration with linkage cannot have an initializer");
@@ -343,11 +380,14 @@ void lower_sequence(Function &function, Node *sequence, SwitchCases *cases) {
 
 void lower_compound(Function &function, cparser::CompoundStmtASTNode *compound,
                     bool nested_scope, SwitchCases *cases) {
+    const auto vla_depth = function.active_vlas.size();
     if (nested_scope)
         function.scopes.emplace_back();
 
     lower_sequence(function, compound->getItems(), cases);
 
+    release_vlas(function, function.active_vlas, vla_depth);
+    function.active_vlas.resize(vla_depth);
     if (nested_scope)
         function.scopes.pop_back();
 }
@@ -384,7 +424,7 @@ void lower_while(Function &function, cparser::WhileStmtASTNode *statement,
     function.select(condition_block);
     branch_on(function, statement->getCondition(), body_block, exit_block);
 
-    function.loops.emplace_back(exit_block, condition_block);
+    function.loops.push_back({exit_block, condition_block, function.active_vlas.size()});
     function.select(body_block);
     lower_statement(function, statement->getBody(), cases);
     function.jump(condition_block);
@@ -400,7 +440,7 @@ void lower_do(Function &function, cparser::DoStmtASTNode *statement,
     const Id exit_block = function.block();
     function.jump(body_block);
 
-    function.loops.emplace_back(exit_block, condition_block);
+    function.loops.push_back({exit_block, condition_block, function.active_vlas.size()});
     function.select(body_block);
     lower_statement(function, statement->getBody(), cases);
     function.jump(condition_block);
@@ -440,6 +480,7 @@ void lower_for_init(Function &function, Node *node) {
 
 void lower_for(Function &function, cparser::ForStmtASTNode *statement,
                SwitchCases *cases) {
+    const auto vla_depth = function.active_vlas.size();
     function.scopes.emplace_back();
     lower_for_init(function, statement->getInit());
 
@@ -462,13 +503,15 @@ void lower_for(Function &function, cparser::ForStmtASTNode *statement,
         (void)lower_expr(function, statement->getStep());
     function.jump(condition_block);
 
-    function.loops.emplace_back(exit_block, step_block);
+    function.loops.push_back({exit_block, step_block, function.active_vlas.size()});
     function.select(body_block);
     lower_statement(function, statement->getBody(), cases);
     function.jump(step_block);
     function.loops.pop_back();
 
     function.select(exit_block);
+    release_vlas(function, function.active_vlas, vla_depth);
+    function.active_vlas.resize(vla_depth);
     function.scopes.pop_back();
 }
 
@@ -480,6 +523,9 @@ void lower_case(Function &function, cparser::CaseLabelASTNode *label,
         lower_statement(function, label->getStmt(), nullptr);
         return;
     }
+    if (function.active_vlas.size() > cases->vla_depth)
+        function.error(label, "switch label enters the scope of a variable-length array",
+                       "cephyr.statement.case");
 
     const Id target = function.block();
     if (Node *expression = label->getExpr(); present(expression)) {
@@ -517,6 +563,7 @@ void lower_switch(Function &function, cparser::SwitchStmtASTNode *statement) {
         function.error(expression, "switch condition requires an integer expression",
                        "cephyr.statement.switch");
     SwitchCases cases;
+    cases.vla_depth = function.active_vlas.size();
     cases.type = controlling.type.integer() ? promote(controlling.type) : integer_type();
     controlling = controlling.type.integer()
         ? convert(function, std::move(controlling), cases.type, expression)
@@ -524,7 +571,7 @@ void lower_switch(Function &function, cparser::SwitchStmtASTNode *statement) {
 
     const Id dispatch = function.current;
     const Id exit = function.block();
-    function.loops.emplace_back(exit, no_value);
+    function.loops.push_back({exit, no_value, function.active_vlas.size()});
     // A switch starts execution at a matching label, not at the start of its
     // body. The initial disconnected block accumulates code before any label.
     function.select(function.block());
@@ -615,12 +662,15 @@ void lower_return(Function &function, cparser::ReturnStmtASTNode *statement) {
 
 void lower_goto(Function &function, cparser::GotoStmtASTNode *statement) {
     Node *name = statement->getLabel();
-    auto &label = function.labels[identifier(name)];
+    const auto key = identifier(name);
+    auto &label = function.labels[key];
     if (label.target == no_value)
         label.target = function.block();
     if (!label.first_reference)
         label.first_reference = name;
-    function.jump(label.target);
+    const auto edge = function.active_vlas.empty() ? no_value : function.block();
+    function.gotos.push_back({key, name, edge, function.active_vlas});
+    function.jump(edge != no_value ? edge : label.target);
 }
 
 void lower_label(Function &function, cparser::LabelStmtASTNode *statement,
@@ -634,13 +684,34 @@ void lower_label(Function &function, cparser::LabelStmtASTNode *statement,
         if (label.target == no_value)
             label.target = function.block();
         label.definition = name;
-        // An edge to a fixed-size automatic object's scope does not run any
-        // initializer preceding the label. Its frame address already dominates
-        // every block. Variably modified declarations are rejected by read_type.
+        label.active_vlas = function.active_vlas;
         function.jump(label.target);
         function.select(label.target);
     }
     lower_statement(function, statement->getStmt(), cases);
+}
+
+void finish_gotos(Function &function) {
+    const auto end = function.current;
+    for (const auto &entry : function.gotos) {
+        const auto &label = function.labels.at(entry.name);
+        const bool enters_scope = label.definition &&
+            (label.active_vlas.size() > entry.active_vlas.size() ||
+             !std::equal(label.active_vlas.begin(), label.active_vlas.end(), entry.active_vlas.begin()));
+        if (enters_scope)
+            function.error(entry.reference, "goto enters the scope of a variable-length array",
+                           "cephyr.statement.goto");
+        if (entry.edge != no_value) {
+            function.select(entry.edge);
+            if (enters_scope || !label.definition) {
+                function.trap();
+            } else {
+                release_vlas(function, entry.active_vlas, label.active_vlas.size());
+                function.jump(label.target);
+            }
+        }
+    }
+    function.select(end);
 }
 
 void lower_parameter_slots(Function &function, Node *parameters) {
@@ -798,18 +869,21 @@ void lower_statement(Function &function, Node *statement, SwitchCases *cases) {
                            "cephyr.statement.break");
             function.trap();
         } else {
-            function.jump(function.loops.back().first);
+            const auto &loop = function.loops.back();
+            release_vlas(function, function.active_vlas, loop.vla_depth);
+            function.jump(loop.break_target);
         }
         return;
     case cparser::NK_CONTINUE_STMT: {
         const auto loop = std::find_if(function.loops.rbegin(), function.loops.rend(),
-                                       [](auto targets) { return targets.second != no_value; });
+                                       [](const auto &targets) { return targets.continue_target != no_value; });
         if (loop == function.loops.rend()) {
             function.error(statement, "continue statement is not within a loop",
                            "cephyr.statement.continue");
             function.trap();
         } else {
-            function.jump(loop->second);
+            release_vlas(function, function.active_vlas, loop->vla_depth);
+            function.jump(loop->continue_target);
         }
         return;
     }
@@ -916,6 +990,7 @@ void lower_function_body(Function &function, Node *parameters, Node *body) {
         if (!label.definition)
             function.error(label.first_reference, "goto references undefined label '" + name + "'",
                            "cephyr.statement.goto");
+    finish_gotos(function);
 
     const auto reachable = reachable_blocks(function.blocks);
     if (function.open()) {

@@ -268,6 +268,7 @@ static int inst(Parser *p, ArchonMIRInst *ins)
         {"f128_pack", ARCHON_MIR_F128_PACK},
         {"f128_low", ARCHON_MIR_F128_LOW},
         {"f128_high", ARCHON_MIR_F128_HIGH},
+        {"stack_alloc", ARCHON_MIR_STACK_ALLOC}, {"stack_free", ARCHON_MIR_STACK_FREE},
         {"amd64_x87_pack", ARCHON_MIR_AMD64_X87_PACK},
         {"amd64_x87_low", ARCHON_MIR_AMD64_X87_LOW},
         {"amd64_x87_high", ARCHON_MIR_AMD64_X87_HIGH},

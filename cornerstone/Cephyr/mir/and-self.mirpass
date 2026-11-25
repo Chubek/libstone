@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "and-self",
+  "summary": "Remove a bitwise AND of a value with itself.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "and", "match": "SameOperands", "replace": "Lhs"}
+  ]
+}

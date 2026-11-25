@@ -97,6 +97,11 @@ int main()
         interface_text.output().find("\"cephyr_cpp_sdk\"") == std::string_view::npos ||
         interface_text.output() != expected.output())
         return 1;
+    auto mir = cephyr::emit_mir({"--target=x86_64-linux-gnu", "-"},
+                               "int cpp_mir(void) { return 42; }\n");
+    if (!mir || !mir.output().starts_with("archon-mir 1\n") ||
+        mir.output().find("\nfunction cpp_mir ") == std::string_view::npos)
+        return 1;
     hook.callback = throwing_callback;
     auto thrown = cephyr::compile({"-E", "-"}, "int untouched;\n", options);
     if (thrown.status() != CEPHYR_COMPILE_ERROR ||

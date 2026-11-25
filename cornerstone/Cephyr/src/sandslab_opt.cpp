@@ -1,5 +1,6 @@
 #include "sandslab_opt.hpp"
 #include "sandslab_catalog.hpp"
+#include "rewrite_passes.hpp"
 #include <SandSLAB.hpp>
 
 #include <bit>
@@ -8,7 +9,7 @@
 #include <string_view>
 
 namespace cephyr {
-void shorten_amd64_constants(std::string &assembly)
+void shorten_amd64_constants(std::string &assembly, std::uint64_t passes)
 {
     constexpr std::string_view prefix = "\tmovabsq $0x", suffix = ", %rax\n";
     const std::string_view input = assembly;
@@ -27,6 +28,9 @@ void shorten_amd64_constants(std::string &assembly)
 
             const bool zero_extend = value <= UINT32_MAX;
             if (!zero_extend && value < UINT64_C(0xffffffff80000000))
+                continue;
+            if (!pass_enabled(passes, zero_extend ? SandSLABPass::zero_extend_imm32 :
+                                                    SandSLABPass::sign_extend_imm32))
                 continue;
             // The ISA encoder takes the signed spelling of the imm32 bit pattern.
             static const sandslab::Program model(sandslab::isa::parse(sandslab_x86_isa));

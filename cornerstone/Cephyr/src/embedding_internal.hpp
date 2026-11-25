@@ -27,10 +27,11 @@ struct HostSymbol {
     cephyr_host_symbol_kind kind;
 };
 using HostSymbols = std::map<std::string, HostSymbol>;
+enum class TextOutput { driver, interface_, mir };
 int compile_units(const cephyr_request *request,
                   std::span<const std::shared_ptr<const TranslationUnit>> units,
                   const HostSymbols *symbols, cephyr_result **result,
-                  cephyr_ast_format ast_format = {}, bool emit_interface = false);
+                  cephyr_ast_format ast_format = {}, TextOutput text_output = TextOutput::driver);
 }
 
 #endif

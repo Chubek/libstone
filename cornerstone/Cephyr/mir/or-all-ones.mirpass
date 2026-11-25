@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "or-all-ones",
+  "summary": "Replace a bitwise OR with the full mask by the all-ones word.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "or", "match": "RhsAllOnes", "replace": "AllOnes"},
+    {"opcode": "or", "match": "LhsAllOnes", "replace": "AllOnes"}
+  ]
+}

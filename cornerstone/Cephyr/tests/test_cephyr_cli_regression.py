@@ -717,6 +717,16 @@ int target_characters_ok;
             self.assertRegex(text, rf"(?m)^{operation}\s")
         self.assertFalse(marker.exists(), "Cephyr delegated user C to a host compiler")
 
+    def test_31_emit_mir_default_file_and_stdout(self) -> None:
+        source = self.work / "mir_output.c"
+        source.write_text("int cli_mir(void) { return 42; }\n", encoding="ascii")
+        result = self.invoke("--emit-mir", source)
+        self.assertEqual(result.stdout, b"")
+        text = (self.work / "mir_output.mir").read_bytes()
+        self.assertTrue(text.startswith(b"archon-mir 1\n"))
+        self.assertIn(b"\nfunction cli_mir ", text)
+        self.assertEqual(self.invoke("--emit-mir", "-o", "-", source).stdout, text)
+
     def test_40_packaged_tools_cold_cache(self) -> None:
         source = self.work / "packaged.c"
         source.write_text('#include <stdio.h>\nint main(void) { puts("packaged"); return 0; }\n')
@@ -987,7 +997,7 @@ int target_characters_ok;
              b"undefined label 'there'"),
             (b"int f(void) { here: ; { here: return 0; } }\n", b"duplicate label 'here'"),
             (b"int f(int n) { goto there; { int a[n]; there: return 0; } }\n",
-             b"variable-length arrays are not supported"),
+             b"goto enters the scope of a variable-length array"),
         ):
             with self.subTest(source=source):
                 failure = self.invoke(
@@ -1216,8 +1226,8 @@ int target_characters_ok;
              rb"sizeof requires a complete object type"),
             (b'int f(void) { static int a[] = { sizeof a }; return 0; }',
              rb"sizeof requires a complete object type"),
-            (b'int f(unsigned n) { char a[n]; return sizeof a; }',
-             rb"variable-length arrays are not supported"),
+            (b'int f(unsigned n) { char a[n] = "x"; return sizeof a; }',
+             rb"variable-length arrays cannot have an initializer"),
         ):
             with self.subTest(source=source):
                 failure = self.invoke(

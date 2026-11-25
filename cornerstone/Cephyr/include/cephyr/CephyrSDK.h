@@ -146,8 +146,8 @@ typedef struct cephyr_sdk_directive {
  * and user state must remain valid for the compile call. Do not modify
  * registration data during that call. Invocation
  * is synchronous in array order within each hook stage, and in preprocessing
- * order for directives. Do not reenter cephyr_compile, cephyr_parse_c11, or
- * cephyr_emit_interface on the callback's thread. Different concurrent
+ * order for directives. Do not reenter the compiler (including its parse
+ * and emit entry points) on the callback's thread. Different concurrent
  * calls may invoke the same hooks concurrently; synchronize mutable client
  * state accordingly. For explicitly configured native plugins, see
  * CephyrPlugin.h. */

@@ -2,6 +2,7 @@
 #define CEPHYR_FACT_IR_HPP
 
 #include "src/mir_verify.h"
+#include "src/rewrite_passes.hpp"
 
 #include <cephyr/diagnostics.hpp>
 #include <cephyr/target.hpp>
@@ -252,7 +253,7 @@ struct Edit {
 };
 
 struct Scan {
-    bool find_rewrites;
+    std::uint64_t passes;
     std::vector<Edit> edits;
     dl::Facts facts;
     std::exception_ptr error;
@@ -260,7 +261,7 @@ struct Scan {
     bool over_budget = false;
     std::vector<KnownBitsRow> known_bits;
 
-    explicit Scan(bool rewrites) : find_rewrites(rewrites) {}
+    explicit Scan(std::uint64_t rewrite_passes) : passes(rewrite_passes) {}
 
     void insert(const char *relation, dl::Tuple row)
     {
@@ -285,8 +286,9 @@ struct Scan {
                     if (bits[v].zero || bits[v].one)
                         known_bits.push_back({f, v, bits[v]});
             }
-            std::vector<std::size_t> zero_in_block(find_rewrites ? fn.value_count : 0);
-            std::vector<ArchonValue> negated(find_rewrites ? bits.size() : 0, ARCHON_MIR_NONE);
+            std::vector<std::size_t> zero_in_block(passes ? fn.value_count : 0);
+            std::vector<ArchonValue> negated(
+                pass_enabled(passes, FactIRPass::boolize) ? bits.size() : 0, ARCHON_MIR_NONE);
             for (std::size_t b = 0; b < fn.block_count; ++b) {
                 const auto &block = fn.blocks[b];
                 const auto sink = [&](ArchonValue v) {
@@ -303,7 +305,7 @@ struct Scan {
                 };
                 for (std::size_t i = 0; i < block.inst_count; ++i, ++span) {
                     const auto &ins = block.insts[i];
-                    if (find_rewrites) {
+                    if (passes) {
                         const auto known_zero = [&](ArchonValue v) {
                             return v < zero_in_block.size() && zero_in_block[v] == b + 1;
                         };
@@ -315,12 +317,13 @@ struct Scan {
                               ins.op == ARCHON_MIR_ZEXT || ins.op == ARCHON_MIR_SEXT) &&
                              known_zero(ins.a))) {
                             zero_in_block[ins.dst] = b + 1;
-                        } else if (ins.op == ARCHON_MIR_ADD && fn.types[ins.dst] == ARCHON_MIR_I64 &&
+                        } else if (pass_enabled(passes, FactIRPass::add_zero) &&
+                                   ins.op == ARCHON_MIR_ADD && fn.types[ins.dst] == ARCHON_MIR_I64 &&
                                    fn.types[ins.a] == ARCHON_MIR_I64 && fn.types[ins.b] == ARCHON_MIR_I64 &&
                                    (known_zero(ins.a) || known_zero(ins.b))) {
                             edits.push_back({starts[span], ends[span], ins.dst,
                                              known_zero(ins.b) ? ins.a : ins.b, Identity::add_zero});
-                        } else if (ins.op == ARCHON_MIR_EQ && !bits.empty() &&
+                        } else if (ins.op == ARCHON_MIR_EQ && !negated.empty() &&
                                    fn.types[ins.a] == ARCHON_MIR_I64 && fn.types[ins.b] == ARCHON_MIR_I64 &&
                                    (known_zero(ins.a) || known_zero(ins.b))) {
                             const auto v = known_zero(ins.b) ? ins.a : ins.b;
@@ -387,10 +390,10 @@ inline bool scan(std::string_view input, Scan &scan, Diagnostics &diag, const st
 }
 
 inline std::optional<Result> run(std::string &mir, const Target &target, const std::string &name,
-                                 Diagnostics &diag)
+                                  Diagnostics &diag, std::uint64_t passes = ~std::uint64_t{0})
 {
     Result result;
-    Scan candidates{true};
+    Scan candidates{passes};
     if (!scan(mir, candidates, diag, name))
         return std::nullopt;
     result.smtlib = "(set-logic QF_BV)\n";
@@ -431,11 +434,13 @@ inline std::optional<Result> run(std::string &mir, const Target &target, const s
         }
         if (result.rewrites)
             transformed.append(mir, previous);
-    } else {
+    } else if (passes) {
         result.smtlib += "; Cephyr FactIR: no applicable candidate\n";
+    } else {
+        result.smtlib += "; Cephyr FactIR: rewrite passes disabled\n";
     }
     result.smtlib += "(exit)\n";
-    Scan post_rewrite{false};
+    Scan post_rewrite{0};
     const auto &verified_input = result.rewrites ? transformed : mir;
     if (result.rewrites) {
         candidates.facts.clear();

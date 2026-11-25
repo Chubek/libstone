@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "fold-bitwise",
+  "summary": "Evaluate bitwise operations on two literal words.",
+  "min_opt": 2,
+  "rules": [
+    {"opcode": "and", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "or", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "xor", "match": "BothConstants", "replace": "Fold"}
+  ]
+}

@@ -52,30 +52,35 @@ def count_mir(mir: bytes) -> dict:
                 counted_ops=sum(histogram.values()))
 
 
-def measure_mir(prefix, path, mode_dir, args, extra, env):
-    times=[]
-    last=None
+def measure_mir(compilers, path, base_dir, args, modes, env):
+    times={mode: [] for mode in modes}
+    last={}
+    order=list(modes)
+    for mode in modes:
+        (base_dir/mode).mkdir()
     for i in range(args.warmup + args.repeat):
         stem = 'warmup' if i < args.warmup else 'sample'
-        output=mode_dir/f'{stem}-{i}.mir'
-        command=[prefix, f'--target={args.target}', f'--config={args.config_path}',
-                 '--no-cache', *([] if args.with_factir else ['--no-factir']),
-                 *extra, '--emit-mir', str(path), '-o', str(output)]
-        _, ms = check_command(command, args.timeout, env)
-        payload=output.read_bytes()
-        if last is not None and payload != last:
-            raise RuntimeError(f'non-deterministic MIR for {path.name} in {mode_dir.name}')
-        last=payload
-        if i >= args.warmup:
-            times.append(ms)
-        if not args.keep_samples and i != args.warmup + args.repeat - 1:
-            output.unlink()
-    assert last is not None
-    final=mode_dir/'final.mir'
-    final.write_bytes(last)
-    return dict(mir_ms_median=statistics.median(times),
-                mir_ms_min=min(times), mir_ms_max=max(times),
-                mir=count_mir(last)), last
+        for mode in (order if i % 2 == 0 else reversed(order)):
+            output=base_dir/mode/f'{stem}-{i}.mir'
+            command=[compilers[mode], f'--target={args.target}', f'--config={args.config_path}',
+                     '--no-cache', *([] if args.with_factir else ['--no-factir']),
+                     *modes[mode], '--emit-mir', str(path), '-o', str(output)]
+            _, ms = check_command(command, args.timeout, env)
+            payload=output.read_bytes()
+            if mode in last and payload != last[mode]:
+                raise RuntimeError(f'non-deterministic MIR for {path.name} in {mode}')
+            last[mode]=payload
+            if i >= args.warmup:
+                times[mode].append(ms)
+            if not args.keep_samples and i != args.warmup + args.repeat - 1:
+                output.unlink()
+    report={}
+    for mode, samples in times.items():
+        (base_dir/mode/'final.mir').write_bytes(last[mode])
+        report[mode]=dict(mir_ms_median=statistics.median(samples),
+                          mir_ms_min=min(samples), mir_ms_max=max(samples),
+                          mir=count_mir(last[mode]))
+    return report, last
 
 
 def text_section_size(objdump: str|None, obj: Path, timeout: int, env: dict):
@@ -97,6 +102,8 @@ def native_target_matches(target: str) -> bool:
 def main():
     parser=argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--compiler', required=True, type=Path, help='Cephyr CLI executable')
+    parser.add_argument('--baseline-compiler', type=Path,
+                        help='use a separate Cephyr executable for the baseline')
     parser.add_argument('--output', required=True, type=Path, help='new results directory')
     parser.add_argument('--target', default='x86_64-linux-gnu',
                         choices=('x86_64-linux-gnu','aarch64-linux-gnu','riscv64-linux-gnu'))
@@ -110,6 +117,8 @@ def main():
                         help='extra CLI option for baseline; repeat as needed')
     parser.add_argument('--with-factir', action='store_true',
                         help='enable default FactIR (off for both modes otherwise)')
+    parser.add_argument('--no-blackstone', action='store_true',
+                        help='disable Blackstone in both modes to isolate other passes')
     parser.add_argument('--runner', default=None,
                         help='emulator executable, e.g. qemu-riscv64-static')
     parser.add_argument('--runner-arg', action='append', default=[])
@@ -127,6 +136,10 @@ def main():
     args.compiler=args.compiler.resolve()
     if not args.compiler.is_file():
         parser.error(f'Cephyr executable does not exist: {args.compiler}')
+    baseline=(args.baseline_compiler or args.compiler).resolve()
+    if not baseline.is_file():
+        parser.error(f'baseline Cephyr executable does not exist: {baseline}')
+    compilers={'baseline':str(baseline), 'candidate':str(args.compiler)}
     # The fixtures directory is shared with run.py, which also has kernels
     # requiring a separate driver. Only the manifest programs are standalone.
     root=Path(__file__).resolve().parent
@@ -138,15 +151,18 @@ def main():
     args.output=args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     args.config_path=args.output/'Cephyr.toml'
-    args.config_path.write_text('[paths]\ncache_path = ".cache"\n',encoding='ascii')
+    config='[paths]\ncache_path = ".cache"\n'
+    if args.no_blackstone:
+        config+='[blackstone]\nenabled = false\n'
+    args.config_path.write_text(config,encoding='ascii')
     modes={'baseline':args.baseline_arg,
            'candidate':args.candidate_arg if args.candidate_arg is not None else ['--qml-pass=canonicalize']}
     env=os.environ.copy()
     env.pop('CEPHYR_CONFIG',None)
     result={'schema':'cephyr.blackstone.c11.benchmark.v1',
             'date_utc':datetime.now(timezone.utc).isoformat(),
-            'compiler':str(args.compiler),'target':args.target,
-            'modes':modes,'factir_enabled':args.with_factir,
+             'compiler':str(args.compiler),'baseline_compiler':str(baseline),'target':args.target,
+             'modes':modes,'factir_enabled':args.with_factir,'blackstone_enabled':not args.no_blackstone,
             'repeat':args.repeat,'warmup':args.warmup,
             'runner':args.runner,'host':platform.platform(),
             'fixtures':{}}
@@ -154,16 +170,11 @@ def main():
     for source in fixtures:
         base_dir=args.output/source.stem
         base_dir.mkdir()
-        item={}
-        mirs={}
+        item,mirs=measure_mir(compilers, source, base_dir, args, modes, env)
         for mode,flags in modes.items():
             mode_dir=base_dir/mode
-            mode_dir.mkdir()
-            mir_data,mir=measure_mir(str(args.compiler), source, mode_dir, args, flags,env)
-            item[mode]=mir_data
-            mirs[mode]=mir
             obj=mode_dir/(source.stem+'.o')
-            check_command([str(args.compiler), f'--target={args.target}',
+            check_command([compilers[mode], f'--target={args.target}',
                            f'--config={args.config_path}',
                            *([] if args.with_factir else ['--no-factir']),
                            *flags, '-c', str(source), '-o', str(obj)],args.timeout,env)
@@ -171,7 +182,7 @@ def main():
             item[mode]['text_bytes']=text_section_size(args.objdump,obj,args.timeout,env)
             if not args.skip_run:
                 exe=mode_dir/(source.stem+'.exe')
-                check_command([str(args.compiler), f'--target={args.target}',
+                check_command([compilers[mode], f'--target={args.target}',
                                f'--config={args.config_path}',
                                *([] if args.with_factir else ['--no-factir']),
                                *flags, str(source), '-o', str(exe)], args.timeout,env)

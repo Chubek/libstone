@@ -305,6 +305,7 @@ struct stack_context *report_context(void);
 extern int no_special_macros, system_macros,
 	emit_dependencies, emit_defines, emit_assertions;
 extern int c99_compliant, c99_hosted;
+extern int ucpp_c11_atomics;
 extern FILE *emit_output;
 extern char *current_filename, *current_long_filename;
 extern char *operators_name[];

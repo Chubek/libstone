@@ -46,8 +46,7 @@ into the destroyed storage.
 ```cpp
 #include <cephyr/Cephyr.hpp>
 
-auto result = cephyr::compile({"--emit-mir", "-o", "-", "-"},
-                              "int answer(void) { return 42; }\n");
+auto result = cephyr::emit_mir({"-"}, "int answer(void) { return 42; }\n");
 // result.status(), result.output(), result.diagnostics()
 ```
 
@@ -225,8 +224,7 @@ for a CMake installation, or to `cornerstone/Cephyr/python` in a source tree.
 import cephyr
 
 compiler = cephyr.Compiler()
-result = compiler.compile(["--emit-mir", "-o", "-", "-"],
-                          "int answer(void) { return 42; }\n")
+result = compiler.emit_mir(["-"], "int answer(void) { return 42; }\n")
 if not result.ok:
     raise RuntimeError(result.diagnostics.decode("utf-8", errors="replace"))
 print(result.output.decode("utf-8"))
@@ -248,6 +246,21 @@ threads can overlap; Cephyr releases the caller's GIL for native compilation
 and Python SDK callbacks acquire it when entered.
 Pass `sdk=` with an iterable of trusted Python hooks to either compile function.
 See [the Python SDK](SDK.md#python) for supported stages and callback results.
+
+## Emit MIR
+
+Use `cephyr_emit_mir(&request, &result)`, `cephyr::emit_mir(args, source)`,
+`Compiler.emit_mir(args, source)`, or `cephyr.emit_mir(args, source)`. Pass
+one C, preprocessed C, or serialized C11 AST input. Use `"-"` as the input
+argument if supplying source bytes directly. All four entry points return
+Archon MachineIR v1 text in the result by default. Pass `-o FILE` to write to
+a file instead.
+
+This is the same text as `cephyr --emit-mir -o - input.c`, with the selected
+target, compiler profile, and MIR rewrites applied. The stage stops before
+machine-code generation. Contexts and the generic compile APIs accept
+`--emit-mir -o -` to capture the same output.
+
 ## Parse-only C11 and AST input
 
 Call `cephyr_parse_c11(request, CEPHYR_AST_JSON, &result)` or

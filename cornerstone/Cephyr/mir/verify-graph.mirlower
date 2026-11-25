@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "verify-graph",
+  "kind": "VerifyGraph",
+  "input": "cephyr-mir",
+  "output": "verified-graph",
+  "summary": "Check graph structure, op layouts, value references and CFG edge shape before accepting it for projection."
+}

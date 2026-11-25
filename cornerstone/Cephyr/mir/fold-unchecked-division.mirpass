@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": "fold-unchecked-division",
+  "summary": "Evaluate literal quotient and remainder with MachineIR's defined zero and overflow results.",
+  "min_opt": 2,
+  "rules": [
+    {"opcode": "div_s", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "div_u", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "rem_s", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "rem_u", "match": "BothConstants", "replace": "Fold"}
+  ]
+}

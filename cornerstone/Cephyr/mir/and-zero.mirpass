@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "and-zero",
+  "summary": "Replace a bitwise AND with the empty mask by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "and", "match": "RhsZero", "replace": "Zero"},
+    {"opcode": "and", "match": "LhsZero", "replace": "Zero"}
+  ]
+}

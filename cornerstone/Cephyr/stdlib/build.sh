@@ -58,6 +58,16 @@ if [ "$suffix" != -amd64 ]; then
     done
 fi
 
+# Baseline Armv8-A uses in-line exclusive instructions, not libgcc's
+# optional LSE dispatch routines. RV64IM has no atomic extension.
+if [ -n "$suffix" ]; then
+    atomic_flags=
+    if [ "$suffix" = -aarch64 ]; then atomic_flags=-mno-outline-atomics; fi
+    compile -std=c11 -O2 -fno-lto -fvisibility=hidden $atomic_flags \
+        -c "$root/src/atomic.c" -o "$build/atomic.o"
+    set -- "$@" "$build/atomic.o"
+fi
+
 compile -c "$root/src/syscall$suffix.S" -o "$build/syscall.o"
 compile -c "$root/src/setjmp$suffix.S" -o "$build/setjmp.o"
 compile -c "$root/src/start$suffix.S" -o "$build/crt0.o"

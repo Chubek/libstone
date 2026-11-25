@@ -25,8 +25,7 @@ function(cephyr_package arch abi spec triple)
   add_custom_command(OUTPUT ${paths} "${dir}/provider.archdb" "${dir}/sources.sha256"
     COMMAND "${Python3_EXECUTABLE}" -I -B "${CMAKE_CURRENT_SOURCE_DIR}/cmake/package_backend.py"
       "${cephyr_archon}" "${spec}" "${arch}" "${abi}" "${dir}" ${sources}
-    DEPENDS cmake/package_backend.py ${cephyr_generator_inputs}
-      "${cephyr_repo}/cornerstone/ASDL/scripts/asdl.pl" "${cephyr_repo}/cornerstone/Aurocks/scripts/aurocks.pl" "${cephyr_repo}/LICENSE"
+     DEPENDS cmake/package_backend.py ${cephyr_generator_inputs}
     VERBATIM)
   add_library(cephyr_backend_${arch} MODULE ${paths})
   set_target_properties(cephyr_backend_${arch} PROPERTIES C_STANDARD 99

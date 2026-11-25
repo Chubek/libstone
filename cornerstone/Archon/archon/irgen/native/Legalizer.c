@@ -19,6 +19,7 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_CALL: /* Optional destination, depending on the signature. */
         return HAS_DST;
     case ARCHON_MIR_COPY:
+    case ARCHON_MIR_STACK_ALLOC:
     case ARCHON_MIR_FLOAD:
     case ARCHON_MIR_FNEG:
     case ARCHON_MIR_FCAST:
@@ -54,6 +55,7 @@ unsigned an_shape(ArchonMIROpcode op)
     case ARCHON_MIR_AMD64_VA_START:
     case ARCHON_MIR_AARCH64_VA_START:
     case ARCHON_MIR_RV64_VA_START:
+    case ARCHON_MIR_STACK_FREE:
         return HAS_A;
     case ARCHON_MIR_STORE:
     case ARCHON_MIR_FSTORE:
@@ -271,6 +273,14 @@ int an_legal(ANContext *ctx, const ArchonMIRFunction *fn, const ArchonMIRInst *i
     b = (shape & HAS_B) != 0 ? value_type(fn, inst->b) : ARCHON_MIR_VOID;
 
     switch (op) {
+    case ARCHON_MIR_STACK_ALLOC:
+    case ARCHON_MIR_STACK_FREE:
+#if defined(AN_GENERIC_MIR_VERIFY) || defined(AN_SYSV_AMD64) || defined(AN_AAPCS64) || defined(AN_RV64_HAS_M)
+        return (a == ARCHON_MIR_I64 && (op != ARCHON_MIR_STACK_ALLOC || dst == ARCHON_MIR_PTR)) ||
+            an_error(ctx, ARCHON_BACKEND_INVALID, "dynamic stack operations require an i64 byte count and stack_alloc returns ptr");
+#else
+        return an_error(ctx, ARCHON_BACKEND_UNSUPPORTED, "dynamic stack allocation is not available for this native provider");
+#endif
     case ARCHON_MIR_F128_PACK:
         return (a == ARCHON_MIR_I64 && b == ARCHON_MIR_I64 && dst == ARCHON_MIR_F128) ||
             an_error(ctx, ARCHON_BACKEND_INVALID, "f128_pack requires two i64 words and an f128 result");

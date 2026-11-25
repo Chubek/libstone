@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "lshr-zero-count",
+  "summary": "Remove a logical right shift by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "lshr", "match": "RhsZero", "replace": "Lhs"}
+  ]
+}

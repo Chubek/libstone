@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "linearize-blocks",
+  "kind": "LinearizeBlocks",
+  "input": "wire-types",
+  "output": "ordered-blocks",
+  "summary": "Collect reachable blocks in entry-first source order and preserve each block's instruction and effect order."
+}

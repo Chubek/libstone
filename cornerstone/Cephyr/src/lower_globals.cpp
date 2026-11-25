@@ -223,6 +223,8 @@ bool pointer_compatible(const CType &destination, const CType &source) {
     if (destination.element->kind == CType::Kind::void_ ||
         source.element->kind == CType::Kind::void_)
         return true;
+    if (destination.element->is_atomic != source.element->is_atomic)
+        return false;
     auto destination_element = *destination.element;
     auto source_element = *source.element;
     destination_element.clear_qualifiers();

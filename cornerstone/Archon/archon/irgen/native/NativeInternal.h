@@ -16,6 +16,7 @@
 #define AN_T0 5u
 #define AN_T1 6u
 #define AN_T2 7u
+#define AN_S0 8u
 #define AN_A0 10u
 #define AN_A7 17u
 #define AN_T3 28u
@@ -79,6 +80,11 @@ extern const ANABI an_abi;
 static inline int an_is_call(ArchonMIROpcode opcode)
 {
     return opcode == ARCHON_MIR_CALL || opcode == ARCHON_MIR_CALL_INDIRECT;
+}
+
+static inline int an_is_dynamic_stack(ArchonMIROpcode opcode)
+{
+    return opcode == ARCHON_MIR_STACK_ALLOC || opcode == ARCHON_MIR_STACK_FREE;
 }
 
 static inline int an_is_float(ArchonMIRType type)
@@ -155,11 +161,17 @@ int an_schedule_block(ANContext *, const ArchonMIRBlock *, ArchonMIRInst *);
 int an_verify_schedule(ANContext *, const ArchonMIRBlock *, const size_t *order, size_t count);
 typedef struct {
     int frame_size, slots_base, phi_base, return_offset;
-    int va_start_offset; /* -1 if unused, otherwise relative to adjusted SP. */
+    int va_start_offset; /* -1 if unused, otherwise relative to fixed frame base. */
+    int base_save; /* saved s0 offset, or -1 if SP is fixed */
     int local_offsets[AN_MAX_VALUE];
     const ArchonMIRType *types;
     int high_offsets[AN_MAX_VALUE]; /* Private high words of f128 values. */
 } ANFrame;
+
+static inline unsigned an_frame_base(const ANFrame *frame)
+{
+    return frame->base_save < 0 ? an_abi.stack_pointer : AN_S0;
+}
 
 /* Fixed-prototype LP64 argument cursor, in XLEN slots. A quad can split
  * across a7 and the stack; only an entirely stacked quad needs alignment. */

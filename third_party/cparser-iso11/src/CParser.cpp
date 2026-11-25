@@ -1107,6 +1107,22 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments, boo
                 parsingError("storage class is not allowed in a type name");
             StorageClassSpecifier(flags);
         }
+        else if (_sym == TK__ATOMIC && getLATok(2) == TK_LPAR)
+        {
+            if (sawScalar || declSpec != NULL_AST_NODE || (flags & TQ_ATOMIC))
+                parsingError("conflicting _Atomic type specifier");
+            const int line = getLookahead().line;
+            getTok();
+            check(TK_LPAR);
+            declSpec = TypeName();
+            check(TK_RPAR);
+            if ((declSpec->getFlags() & DS_QUALIFIER_MASK) ||
+                declSpec->getKind() == NK_ARRAY_TYPE ||
+                declSpec->getKind() == NK_FUNCTION_TYPE)
+                parsingError("_Atomic(type) requires an unqualified, non-atomic, non-array and non-function type");
+            declSpec->setFlags(declSpec->getFlags() | TQ_ATOMIC);
+            declSpec->setLineNum(line);
+        }
         else if (isTypeQualifier(_sym))
         {
             TypeQualifier(flags);
@@ -1251,6 +1267,8 @@ ASTNode *CParser::DeclarationSpecifiers(bool typeOnly, ASTNode **alignments, boo
         if (flags & SCS_REGISTER)
             parsingError("_Alignas is not allowed on a register object");
     }
+    if ((flags & TQ_ATOMIC) && declSpec->getKind() == NK_ARRAY_TYPE)
+        parsingError("an array type cannot be _Atomic qualified");
     // Qualifying an array typedef qualifies its element type (6.7.3).
     auto *qualifiedType = declSpec;
     while (qualifiedType->getKind() == NK_ARRAY_TYPE)
@@ -1853,7 +1871,8 @@ void CParser::TypeQualifier(unsigned &flags)
     }
     else if (_sym == TK__ATOMIC)
     {
-        parsingError("_Atomic types are unsupported");
+        getTok();
+        flags |= TQ_ATOMIC;
     }
     else if (_sym == TK__NULLABLE)
     {
@@ -1998,6 +2017,8 @@ ASTNode *CParser::DeclaratorParts(std::vector<DeclaratorPart> &parts,
             }
             while (isTypeQualifier(_sym))
                 TypeQualifier(part.qualifiers);
+            if (part.qualifiers & TQ_ATOMIC)
+                parsingError("_Atomic types are unsupported in array bracket qualifiers");
             if (!part.staticBound && _sym == TK_STATIC)
             {
                 getTok();

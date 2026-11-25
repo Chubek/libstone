@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "add-zero",
+  "summary": "Remove a wrapping addition with zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "add", "match": "RhsZero", "replace": "Lhs"},
+    {"opcode": "add", "match": "LhsZero", "replace": "Rhs"}
+  ]
+}

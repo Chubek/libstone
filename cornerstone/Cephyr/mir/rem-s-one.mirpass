@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "rem-s-one",
+  "summary": "Replace signed word remainder modulo positive one by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "rem_s", "match": "RhsOne", "replace": "Zero"}
+  ]
+}

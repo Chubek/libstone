@@ -171,6 +171,9 @@ static int reserved_macro_name(char *name)
 
 int c99_compliant = 1;
 int c99_hosted = 1;
+#ifdef UCPP_C11_MINIMAL_FEATURES
+int ucpp_c11_atomics = 0;
+#endif
 
 #ifndef UCPP_STDC_VERSION
 #define UCPP_STDC_VERSION "199901L"
@@ -216,8 +219,11 @@ static void add_special_macros(void)
 #ifdef UCPP_C11_MINIMAL_FEATURES
 	{
 		size_t i;
-		for (i = 0; i < sizeof c11_unavailable / sizeof *c11_unavailable; i++)
+		for (i = 0; i < sizeof c11_unavailable / sizeof *c11_unavailable; i++) {
+			if (ucpp_c11_atomics && !strcmp(c11_unavailable[i], "__STDC_NO_ATOMICS__"))
+				continue;
 			add_predefined_number(c11_unavailable[i], "1");
+		}
 		add_predefined_number("__STDC_UTF_16__", "1");
 		add_predefined_number("__STDC_UTF_32__", "1");
 	}

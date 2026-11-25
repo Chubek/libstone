@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "xor-self",
+  "summary": "Replace a bitwise XOR of a value with itself by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "xor", "match": "SameOperands", "replace": "Zero"}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "assign-wire-ids",
+  "kind": "AssignWireIds",
+  "input": "ordered-blocks",
+  "output": "numbered-blocks",
+  "summary": "Assign dense block and SSA identifiers with function parameters first; leave immediates and symbols unchanged."
+}

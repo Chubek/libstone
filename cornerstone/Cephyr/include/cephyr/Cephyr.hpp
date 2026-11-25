@@ -49,6 +49,8 @@ private:
     friend CompileResult emit_interface(const cephyr_request &) noexcept;
     friend CompileResult emit_interface(const std::vector<std::string> &, std::string_view,
                                         CompileOptions);
+    friend CompileResult emit_mir(const cephyr_request &) noexcept;
+    friend CompileResult emit_mir(const std::vector<std::string> &, std::string_view, CompileOptions);
 
     CompileResult(int status, cephyr_result *result) noexcept
         : status_(static_cast<cephyr_status>(status)), result_(result, cephyr_result_destroy) {}
@@ -131,6 +133,25 @@ inline CompileResult emit_interface(std::initializer_list<std::string> args,
                                     std::string_view stdin_data = {},
                                     CompileOptions options = {}) {
     return emit_interface(std::vector<std::string>(args), stdin_data, options);
+}
+
+inline CompileResult emit_mir(const cephyr_request &request) noexcept {
+    cephyr_result *result = nullptr;
+    const int status = cephyr_emit_mir(&request, &result);
+    return CompileResult(status, result);
+}
+
+inline CompileResult emit_mir(const std::vector<std::string> &args,
+                              std::string_view stdin_data = {},
+                              CompileOptions options = {}) {
+    return CompileResult::from_args(args, stdin_data, options,
+                                    [](const cephyr_request &request) { return emit_mir(request); });
+}
+
+inline CompileResult emit_mir(std::initializer_list<std::string> args,
+                              std::string_view stdin_data = {},
+                              CompileOptions options = {}) {
+    return emit_mir(std::vector<std::string>(args), stdin_data, options);
 }
 
 } // namespace cephyr

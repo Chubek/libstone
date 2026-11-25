@@ -18,6 +18,8 @@ def _source_literal(name: str, source: bytes) -> str:
 
 def emit(context: dict) -> dict[str, str]:
     """Embed both canonical Perl tools; the result needs no Archon checkout."""
+    if context.get("options", {}).get("translate_tool") is False:
+        return {}
     here = Path(__file__).resolve().parent
     cornerstone = here.parents[2]
     try:

@@ -25,12 +25,13 @@
 #define TQ_CONST 0x20
 #define TQ_VOLATILE 0x40
 #define TQ_RESTRICT 0x80
+#define TQ_ATOMIC 0x4000
 #define FS_INLINE 0x100
 #define FS_NORETURN 0x200
 #define DS_HIDES_NONLINKAGE 0x400 // block declarator hides a typedef or enumerator
 
 #define DS_STORAGE_MASK (SCS_TYPEDEF | SCS_EXTERN | SCS_STATIC | SCS_AUTO | SCS_REGISTER)
-#define DS_QUALIFIER_MASK (TQ_CONST | TQ_VOLATILE | TQ_RESTRICT)
+#define DS_QUALIFIER_MASK (TQ_CONST | TQ_VOLATILE | TQ_RESTRICT | TQ_ATOMIC)
 
 #define UNLESS(x) if (!(x))
 #define TYPE(x) x->type

@@ -1,6 +1,7 @@
 #include <cephyr/lower.hpp>
 
 #include "declarations.hpp"
+#include "mir_bridge.hpp"
 
 #ifdef CEPHYR_WITH_MOONSTONE_ANALYSIS
 #include "moonstone_analysis.hpp"
@@ -14,7 +15,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <charconv>
 #include <locale>
 #include <set>
 #include <sstream>
@@ -33,14 +33,8 @@ const std::vector<std::uint64_t> *find_member_path(const CType &type, std::strin
 
 constexpr std::size_t max_blocks = ARCHON_MIR_MAX_BLOCKS, max_values = 4096;
 constexpr std::size_t max_symbols = 256;
-constexpr std::size_t max_function_instructions = 16384, max_module_instructions = 65536;
 constexpr std::size_t max_mir = 4u * 1024u * 1024u;
 constexpr std::string_view reserved_prefix = "__cephyr_tu_";
-
-std::string number(Id id)
-{
-    return id == no_value ? "-" : std::to_string(id);
-}
 
 bool symbol_name(std::string_view name, bool extended = false)
 {
@@ -217,148 +211,6 @@ bool check_linkage_alignment(Unit &unit, const Symbol &symbol) {
 }
 
 namespace {
-
-void write_edge(std::ostream &out, const Edge &edge, const std::vector<Id> &blocks,
-                const std::vector<Id> &values)
-{
-    out << ' ' << number(blocks.at(edge.target)) << ' ' << edge.args.size();
-    for (Id arg : edge.args)
-        out << ' ' << number(values.at(arg));
-}
-
-Id read_id(std::string_view text)
-{
-    Id result = no_value;
-    auto status = std::from_chars(text.data(), text.data() + text.size(), result);
-    if (status.ec != std::errc{} || status.ptr != text.data() + text.size())
-        throw std::logic_error("invalid native operand from the C frontend");
-    return result;
-}
-
-// Record SSA definitions independently of their formatting. After Wetstone
-// pruning, remap SSA operands only (never immediates, counts or symbols).
-void write_instruction(std::ostream &out, const Instruction &inst, const std::vector<Id> &values)
-{
-    out << inst.opcode;
-    if (inst.result != no_value)
-        out << ' ' << number(values.at(inst.result));
-
-    const std::string_view op = inst.opcode;
-    const bool call = op == "call" || op == "call_indirect";
-    const bool indirect = op == "call_indirect";
-    const std::size_t void_dst = call && inst.result == no_value ? 1 : 0;
-    const unsigned fixed =
-        op == "const" || op == "fconst" ||
-        op == "frame_addr" || op == "global_addr" || op == "func_addr" ? 0 :
-        op == "copy" || op == "sext" || op == "zext" || op == "trunc" ||
-        op == "amd64_va_start" || op == "aarch64_va_start" || op == "rv64_va_start" ||
-        op == "fload" || op == "fneg" || op == "fcast" || op == "sitofp" ||
-        op == "uitofp" || op == "fptosi" || op == "fptoui" ||
-        op.starts_with("amd64_x87_to_") ||
-        op.ends_with("_to_int") || op.starts_with("int_to_") || op.starts_with("load") ? 1 : 2;
-
-    std::string_view operands = inst.operands;
-    for (std::size_t i = 0; !operands.empty();) {
-        auto start = operands.find_first_not_of(' ');
-        if (start == std::string_view::npos)
-            break;
-        operands.remove_prefix(start);
-        const auto end = operands.find(' ');
-        const auto token = operands.substr(0, end);
-        const bool id = call ? ((indirect && i == void_dst) || i >= void_dst + (indirect ? 3 : 2))
-                             : i < fixed;
-        if (id)
-            out << ' ' << number(values.at(read_id(token)));
-        else
-            out << ' ' << token;
-        ++i;
-        if (end == std::string_view::npos)
-            break;
-        operands.remove_prefix(end);
-    }
-    out << '\n';
-}
-
-std::string write_function(const Function &f, std::string_view name, std::size_t &module_instructions)
-{
-    const auto reachable = reachable_blocks(f.blocks);
-    std::vector<Id> block_ids(f.blocks.size(), no_value), value_ids(f.values.size(), no_value);
-    Id block_count = 0, value_count = 0;
-    const auto params = abi_parameter_types(f.symbol.type, true).size();
-    for (std::size_t i = 0; i < params; ++i)
-        value_ids.at(i) = value_count++;
-    for (const auto &inst : f.entry_addresses)
-        value_ids.at(inst.result) = value_count++;
-    std::size_t instructions = f.entry_addresses.size();
-    for (std::size_t i = 0; i < f.blocks.size(); ++i) {
-        if (!reachable[i])
-            continue;
-        block_ids[i] = block_count++;
-        for (Id id : f.blocks[i].params)
-            value_ids.at(id) = value_count++;
-        for (const auto &inst : f.blocks[i].instructions) {
-            ++instructions;
-            if (inst.result != no_value)
-                value_ids.at(inst.result) = value_count++;
-        }
-    }
-    if (instructions > max_function_instructions ||
-        instructions > max_module_instructions - module_instructions)
-        throw std::length_error("native backend instruction limit exceeded");
-    module_instructions += instructions;
-
-    std::vector<std::string_view> types(value_count);
-    for (std::size_t i = 0; i < f.values.size(); ++i)
-        if (value_ids[i] != no_value)
-            types[value_ids[i]] = mir_type(f.values[i]);
-
-    std::ostringstream out;
-    out.imbue(std::locale::classic());
-    out << "function " << name << ' ' << mir_type(abi_result_type(*f.symbol.type.element)) << ' '
-        << params << ' ' << value_count << ' ' << block_count << ' ' << f.locals.size() << "\ntypes";
-    for (auto type : types)
-        out << ' ' << type;
-    out << '\n';
-    for (const auto &[size, alignment] : f.locals)
-        out << "local " << size << ' ' << alignment << '\n';
-    for (std::size_t i = 0; i < f.blocks.size(); ++i) {
-        if (!reachable[i])
-            continue;
-        const auto &block = f.blocks[i];
-        out << "block " << block.params.size() << ' '
-            << block.instructions.size() + (i == 0 ? f.entry_addresses.size() : 0) << "\nparams";
-        for (Id id : block.params)
-            out << ' ' << number(value_ids.at(id));
-        out << '\n';
-        if (i == 0)
-            for (const auto &inst : f.entry_addresses)
-                write_instruction(out, inst, value_ids);
-        for (const auto &inst : block.instructions)
-            write_instruction(out, inst, value_ids);
-        const auto &term = block.term;
-        switch (term.kind) {
-        case Term::Kind::ret:
-            out << "ret " << (term.value == no_value ? "-" : number(value_ids.at(term.value)));
-            break;
-        case Term::Kind::jump:
-            out << "br";
-            write_edge(out, term.yes, block_ids, value_ids);
-            break;
-        case Term::Kind::branch:
-            out << "cbr " << number(value_ids.at(term.value));
-            write_edge(out, term.yes, block_ids, value_ids);
-            write_edge(out, term.no, block_ids, value_ids);
-            break;
-        case Term::Kind::trap:
-            out << "trap";
-            break;
-        case Term::Kind::open:
-            throw std::logic_error("unterminated reachable block from the C frontend");
-        }
-        out << '\n';
-    }
-    return out.str();
-}
 
 void write_import(std::ostream &out, const std::string &name, const CType &type)
 {
@@ -1060,6 +912,8 @@ CType read_record_type(Node *node, const TypeContext &context)
         auto member_type = read_type(field->getType(), context, true);
         if (!member_type.valid())
             return {};
+        if (object_has_qualifier(member_type, &CType::is_atomic))
+            return error(where, "atomic structure or union members are not supported");
         const auto add_path = [&](const std::string &visible, const std::vector<std::uint64_t> &suffix) {
             auto [it, inserted] = paths.try_emplace(visible);
             if (inserted) {
@@ -1271,7 +1125,7 @@ bool object_has_qualifier(const CType &type, bool CType::*qualifier)
     if (type.kind != CType::Kind::record || !type.record)
         return false;
     return qualifier == &CType::is_const ? type.record->has_const_member :
-        type.record->has_volatile_member;
+        qualifier == &CType::is_volatile && type.record->has_volatile_member;
 }
 
 void Unit::error(Node *at, std::string_view message, std::string_view code)
@@ -1290,7 +1144,7 @@ TypeContext::TypeContext(Unit &u, const Function *f)
 
 TypeContext TypeContext::with_probe(Diagnostics &probe) const
 {
-    return {unit, source, probe, function, prototype, true};
+    return {unit, source, probe, function, prototype, true, allow_vla};
 }
 
 Symbol *Unit::find_file_symbol(std::string_view name)
@@ -2088,7 +1942,8 @@ void LoweredUnit::apply_elf_names(std::string &assembly) const
 }
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
-                                 Diagnostics &diagnostics, bool hosted, detail::MoonstoneAnalysis *analysis)
+                                 Diagnostics &diagnostics, bool hosted, detail::MoonstoneAnalysis *analysis,
+                                 bool optimize_mir, std::uint64_t mir_passes)
 {
     using namespace detail;
     using namespace cparser;
@@ -2099,6 +1954,7 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
     Unit unit(source, diagnostics, hosted);
     std::vector<std::string> functions;
     std::size_t instruction_count = 0;
+    bool mir_rewritten = false;
     const auto before = diagnostics.error_count();
     Node *at = root;
     try {
@@ -2152,7 +2008,8 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
 #endif
                     const bool pair = record_abi(*symbol->type.element) == RecordABI::pair;
                     const auto name = pair ? unit.add_record_pair_definition(*symbol) : symbol->name;
-                    functions.push_back(write_function(f, name, instruction_count));
+                    functions.push_back(lower_mir_function(f, name, instruction_count,
+                                                          optimize_mir, mir_rewritten, mir_passes));
                     if (symbol->internal || pair)
                         unit.locals.push_back(name);
                 }
@@ -2164,6 +2021,12 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
         });
 
         std::vector<std::pair<std::string, CType>> imports = unit.signatures;
+        for (const auto &[name, type] : unit.atomic_helpers) {
+            if (const auto found = unit.symbols.find(name);
+                found != unit.symbols.end() && !found->second.internal)
+                unit.error(found->second.declaration, "'" + name + "' is reserved for the atomic runtime");
+            imports.emplace_back(name, type);
+        }
         for (const auto &[name, type] : unit.soft_fp_helpers) {
             // Compiler-runtime names occupy the implementation namespace.
             // Do not let a source declaration or definition change this ABI.
@@ -2227,10 +2090,11 @@ std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &sou
             }
         }
         out << "end\n";
-        auto mir = out.str();
+        auto mir = std::move(out).str();
         if (mir.size() > max_mir)
             throw std::length_error("native MachineIR text limit exceeded");
-        LoweredUnit lowered{std::move(mir), std::move(unit.locals), std::move(unit.data_assembly), {}};
+        LoweredUnit lowered{std::move(mir), std::move(unit.locals), std::move(unit.data_assembly),
+                            {}, mir_rewritten};
         for (const auto &[source_name, symbol] : unit.symbols)
             if (!symbol.internal && source_name != symbol.name)
                 lowered.elf_names.emplace(symbol.name, source_name);

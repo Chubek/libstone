@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "mul-one",
+  "summary": "Remove wrapping multiplication by one.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "mul", "match": "RhsOne", "replace": "Lhs"},
+    {"opcode": "mul", "match": "LhsOne", "replace": "Rhs"}
+  ]
+}

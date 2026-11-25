@@ -932,6 +932,7 @@ std::optional<Preprocessed> preprocess(const std::string &source,
     no_special_macros = 0;
     c99_compliant = 1;
     c99_hosted = options.hosted ? 1 : 0;
+    ucpp_c11_atomics = options.native_atomics;
     emit_dependencies = 0;
     emit_defines = 0;
     emit_assertions = 0;

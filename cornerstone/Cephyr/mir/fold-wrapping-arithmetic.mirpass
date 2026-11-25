@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "fold-wrapping-arithmetic",
+  "summary": "Evaluate literal arithmetic modulo 2 to the power of 64.",
+  "min_opt": 2,
+  "rules": [
+    {"opcode": "add", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "sub", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "mul", "match": "BothConstants", "replace": "Fold"}
+  ]
+}

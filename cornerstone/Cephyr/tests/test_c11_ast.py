@@ -110,5 +110,7 @@ with tempfile.TemporaryDirectory(prefix="cephyr-ast-") as directory:
 
     vla = b'#line 12 "vla.c"\nint f(int n) { int a[n]; return sizeof(a); }\n'
     parsed = run("--emit-ast=json", "-x", "cpp-output", "-", data=vla)
+    run("-fsyntax-only", "-x", "c11-ast-json", "-", data=parsed)
+    parsed = run("--emit-ast=json", "-x", "cpp-output", "-", data=vla.replace(b"a[n]", b"a[n] = { 1 }"))
     run("-fsyntax-only", "-x", "c11-ast-json", "-", data=parsed,
-        error=b"vla.c:12: error[cephyr.type]: variable-length arrays")
+        error=b"vla.c:12: error[cephyr.semantic]: variable-length arrays cannot have an initializer")

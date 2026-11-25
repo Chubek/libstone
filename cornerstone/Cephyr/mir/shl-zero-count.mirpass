@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "shl-zero-count",
+  "summary": "Remove a left shift by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "shl", "match": "RhsZero", "replace": "Lhs"}
+  ]
+}

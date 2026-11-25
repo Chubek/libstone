@@ -29,12 +29,15 @@ struct LoweredUnit {
     std::string data_assembly;
     // External C identifiers that cannot be represented in MIR v1.
     std::map<std::string, std::string, std::less<>> elf_names;
+    bool mir_rewritten = false;
     void apply_elf_names(std::string &assembly) const;
 };
 
 std::optional<LoweredUnit> lower(cparser::ASTNode *root, const Preprocessed &source,
-                                 Diagnostics &diagnostics, bool hosted = true,
-                                 detail::MoonstoneAnalysis *analysis = nullptr);
+                                  Diagnostics &diagnostics, bool hosted = true,
+                                  detail::MoonstoneAnalysis *analysis = nullptr,
+                                  bool optimize_mir = false,
+                                  std::uint64_t mir_passes = ~std::uint64_t{0});
 
 namespace detail {
 
@@ -66,6 +69,7 @@ struct CType {
     bool is_signed = false, is_plain_char = false, is_const = false, is_volatile = false;
     // Retain the type qualifier without assuming no-alias (§6.7.3.1p6).
     bool is_restrict = false;
+    bool is_atomic = false;
     std::shared_ptr<const CType> element; // pointee, array element, or function result
     std::uint64_t count = 0;             // 0 for incomplete arrays
     std::vector<CType> params;           // adjusted function parameter types
@@ -76,8 +80,13 @@ struct CType {
     // compatibility. The restricted range changes integer promotions.
     unsigned bit_field_width = 0;
     bool denotes_bit_field = false;
+    Node *vla_bound = nullptr; // a non-ICE array bound, not an incomplete dimension
+    Id vla_size = no_value;    // captured byte size of this dimension at runtime
 
     bool valid() const { return kind != Kind::invalid; }
+    bool runtime_array() const {
+        return kind == Kind::array && (vla_bound || (count && element && element->runtime_array()));
+    }
     bool integer() const { return kind == Kind::integer; }
     bool real() const { return kind == Kind::real; }
     bool extended_real() const { return real() && (bits == 80 || bits == 128); }
@@ -86,7 +95,7 @@ struct CType {
     bool aggregate() const { return kind == Kind::record || kind == Kind::array; }
     bool function_pointer() const { return pointer() && element && element->kind == Kind::function; }
     bool scalar() const { return arithmetic() || pointer(); }
-    void clear_qualifiers() { is_const = is_volatile = is_restrict = false; }
+    void clear_qualifiers() { is_const = is_volatile = is_restrict = is_atomic = false; }
 };
 
 struct BitField {
@@ -161,6 +170,7 @@ struct TypeContext {
     const Function *function;
     const PrototypeScope *prototype = nullptr;
     bool speculative = false;
+    bool allow_vla = false; // only direct automatic array declarators and sizeof type names
 
     TypeContext(Unit &, const Function * = nullptr);
     TypeContext with_probe(Diagnostics &) const;
@@ -168,8 +178,9 @@ struct TypeContext {
 
 private:
     TypeContext(Unit &u, const Preprocessed &s, Diagnostics &d, const Function *f,
-                const PrototypeScope *p, bool probe)
-        : unit(u), source(s), diagnostics(d), function(f), prototype(p), speculative(probe) {}
+                const PrototypeScope *p, bool probe, bool vla)
+        : unit(u), source(s), diagnostics(d), function(f), prototype(p), speculative(probe),
+          allow_vla(vla) {}
 };
 
 bool present(Node *);
@@ -211,6 +222,7 @@ std::optional<Constant> integer_constant(Node *, const TypeContext &);
 std::optional<Constant> arithmetic_initializer_constant(Node *, const CType &, const TypeContext &);
 std::optional<Constant> real_constant(Node *, const TypeContext &, bool require_native = true);
 std::optional<Constant> layout_constant(Node *, const TypeContext &);
+CType layout_operand_type(Node *, const TypeContext &);
 CType string_constant_type(Node *, const Preprocessed &);
 std::string string_constant_bytes(Node *); // target representation, including terminator
 
@@ -291,6 +303,7 @@ struct Unit {
     std::map<std::string, Symbol> symbols;
     std::vector<std::pair<std::string, CType>> signatures;
     std::map<std::string, CType> soft_fp_helpers;
+    std::map<std::string, CType> atomic_helpers;
     std::map<std::size_t, std::string> record_pair_calls;
     std::map<std::string, std::vector<std::size_t>> variadic_signatures;
     std::vector<Global> globals;
@@ -363,6 +376,17 @@ struct Function {
         Id target = no_value;
         Node *definition = nullptr;
         Node *first_reference = nullptr;
+        std::vector<Id> active_vlas;
+    };
+    struct Goto {
+        std::string name;
+        Node *reference;
+        Id edge;
+        std::vector<Id> active_vlas;
+    };
+    struct LoopTargets {
+        Id break_target, continue_target;
+        std::size_t vla_depth;
     };
 
     Unit &unit;
@@ -375,7 +399,9 @@ struct Function {
     std::vector<Instruction> entry_addresses;
     std::vector<std::map<std::string, LValue>> scopes{{}};
     std::map<const Node *, LValue> compound_literal_slots;
-    std::vector<std::pair<Id, Id>> loops; // break, continue (no_value if unavailable)
+    std::vector<LoopTargets> loops; // continue target is no_value for a switch
+    std::vector<Id> active_vlas; // byte sizes in declaration order
+    std::vector<Goto> gotos;
     // Labels have their own function-wide namespace (C11 6.2.1, 6.2.3).
     std::map<std::string, Label> labels;
     Id current = 0;
@@ -421,6 +447,7 @@ void zero_object(Function &, Id, std::uint64_t size, unsigned alignment);
 void zero_initialized_subobject(Function &, Id, const CType &);
 void copy_initialized_subobject(Function &, Id dest, Id src, const CType &);
 Expr convert(Function &, Expr, const CType &, Node *, bool explicit_cast = false);
+CType capture_vla_sizes(Function &, CType, Node *);
 Id truth(Function &, Expr, Node *);
 // Canonical scalar argument word; includes the RV64 psABI's required extension.
 Id abi_value(Function &, Expr);

@@ -3,6 +3,7 @@
 
 #include <cephyr/preprocess.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -18,6 +19,25 @@ struct QmlProfile {
     std::vector<std::filesystem::path> files;
     std::optional<unsigned> fuel;
     std::map<std::string, unsigned, std::less<>> phase_fuel;
+};
+
+struct PassSelection {
+    static constexpr std::uint64_t all = ~std::uint64_t{0};
+    bool enabled;
+    std::uint64_t passes = all;
+
+    bool rewrites() const { return enabled && passes != 0; }
+};
+
+struct CompileProfile {
+    std::optional<std::string> target;
+    std::optional<bool> moonstone;
+    std::optional<PassSelection> factir, mir, blackstone, sandslab;
+    QmlProfile qml;
+
+    bool compilation_settings() const {
+        return target || moonstone || factir || mir || blackstone || sandslab;
+    }
 };
 
 struct ExtensionConfig {
@@ -52,13 +72,13 @@ struct Config {
 
     PreprocessOptions preprocess;
     ExtensionConfig extensions;
+    std::optional<std::string> profile;
     std::optional<std::string> qml_profile;
-    std::map<std::string, QmlProfile, std::less<>> qml_profiles;
+    std::map<std::string, CompileProfile, std::less<>> profiles;
 
     bool cache_enabled = true;
-    bool blackstone_enabled = true;
-    bool sandslab_enabled = false;
-    bool factir_enabled = true;
+    bool moonstone = false;
+    PassSelection factir{true}, mir{false}, blackstone{true}, sandslab{false};
     bool static_link = true;
     // Driver-only CLI state; intentionally not accepted from Cephyr.toml.
     bool verbose = false;

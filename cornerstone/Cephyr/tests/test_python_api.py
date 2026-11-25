@@ -166,6 +166,44 @@ class CephyrPythonAPITests(unittest.TestCase):
             for diagnostic in invalid.sarif()["runs"][0]["results"]
         ), invalid.diagnostics)
 
+    def test_emit_mir(self) -> None:
+        events = []
+
+        def analyze(data):
+            events.append(data.stage)
+            return None
+
+        args = (*self.config_args, "--mir-opt", "-")
+        source = "unsigned long python_mir(unsigned long x) { return x * 1UL; }\n"
+        mir = self.compiler.emit_mir(
+            iter(args), source, sdk=(cephyr.Hook(cephyr.Stage.ANALYZE, "mir-analyze", analyze),)
+        )
+        self.assertTrue(mir.ok, mir.diagnostics)
+        self.assertEqual(events, [cephyr.Stage.ANALYZE])
+        self.assertTrue(mir.output.startswith(b"archon-mir 1\n"))
+        self.assertIn(b"\nfunction python_mir ", mir.output)
+        self.assertNotIn(b"\nmul ", mir.output)
+        cli_options = self.compiler.compile(("--emit-mir", "-o", "-", *args), source)
+        self.assertTrue(cli_options.ok, cli_options.diagnostics)
+        self.assertEqual(cli_options.output, mir.output)
+
+        path = self.root / "python-output.mir"
+        written = cephyr.emit_mir((*args, "-o", path), source.encode())
+        self.assertTrue(written.ok, written.diagnostics)
+        self.assertEqual(written.output, b"")
+        self.assertEqual(path.read_bytes(), mir.output)
+
+        ast = self.compiler.parse_c11(args, source)
+        self.assertTrue(ast.ok, ast.diagnostics)
+        imported = self.compiler.emit_mir((*args[:-1], "-x", "c11-ast-json", "-"), ast.output)
+        self.assertTrue(imported.ok, imported.diagnostics)
+        self.assertEqual(imported.output, mir.output)
+
+        invalid = self.compiler.emit_mir((*args, "another.c"), source)
+        self.assertEqual(invalid.status, cephyr.Status.COMPILE_ERROR)
+        self.assertIn(b"exactly one", invalid.diagnostics)
+        self.assertEqual(invalid.output, b"")
+
     def test_native_artifact_capture(self) -> None:
         result = self.compiler.compile(
             (*self.config_args, "-c", "-o", "-", "-"),

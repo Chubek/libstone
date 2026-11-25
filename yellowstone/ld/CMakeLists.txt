@@ -7,15 +7,18 @@
 
 find_package(Perl REQUIRED)
 find_package(Threads REQUIRED)
+get_filename_component(_qld_scripts "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" ABSOLUTE)
+set(YELLOWSTONE_LDSCRIPT_AUROCKS "${_qld_scripts}/aurocks.pl" CACHE FILEPATH
+  "Legacy Aurocks Perl generator used by the qobjld expression grammar")
 set(_qld_generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 add_custom_command(
   OUTPUT "${_qld_generated}/ldscript_expression.c" "${_qld_generated}/ldscript_ast.h"
   COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
-    "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/../../scripts"
+    "-DASDL=${_qld_scripts}/asdl.pl" "-DAUROCKS=${YELLOWSTONE_LDSCRIPT_AUROCKS}"
     "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUT=${_qld_generated}"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateFrontend.cmake"
   DEPENDS ldscript.g ldscript.asdl GenerateFrontend.cmake
-    ../../scripts/aurocks.pl ../../scripts/asdl.pl VERBATIM)
+    "${YELLOWSTONE_LDSCRIPT_AUROCKS}" "${_qld_scripts}/asdl.pl" VERBATIM)
 add_custom_target(qld-frontend DEPENDS "${_qld_generated}/ldscript_expression.c"
   "${_qld_generated}/ldscript_ast.h")
 

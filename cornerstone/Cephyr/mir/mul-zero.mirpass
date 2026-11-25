@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "mul-zero",
+  "summary": "Replace wrapping multiplication by zero with the zero word.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "mul", "match": "RhsZero", "replace": "Zero"},
+    {"opcode": "mul", "match": "LhsZero", "replace": "Zero"}
+  ]
+}

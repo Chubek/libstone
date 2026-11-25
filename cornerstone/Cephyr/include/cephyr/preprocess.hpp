@@ -23,6 +23,7 @@ struct PreprocessOptions {
     bool line_markers = true;
     // Controls the built-in __STDC_HOSTED__ value (1 hosted, 0 freestanding).
     bool hosted = true;
+    bool native_atomics = false;
     // Allow hash-prefixed assembler comments in addition to CPP directives.
     bool assembler = false;
     // Target properties for C character constants in #if and #elif.
@@ -53,6 +54,8 @@ struct Preprocessed {
     bool plain_char_signed = false;
     // Set by the driver only for reviewed hardware floating-point ABI routes.
     bool native_scalar_fp = false;
+    bool native_vla = false; // native provider supports dynamic stack frames
+    bool native_atomics = false;
     // RV64IM LP64 binary32/binary64, with runtime calls for arithmetic and casts.
     bool native_rv64_soft_fp = false;
     bool native_fp_types() const { return native_scalar_fp || native_rv64_soft_fp; }

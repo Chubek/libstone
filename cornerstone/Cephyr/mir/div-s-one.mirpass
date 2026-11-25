@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "div-s-one",
+  "summary": "Remove unchecked signed word division by positive one.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "div_s", "match": "RhsOne", "replace": "Lhs"}
+  ]
+}

@@ -14,11 +14,12 @@ typedef struct { GasArgKind kind; unsigned index; } GasArg;
 typedef struct { unsigned gp, fp, stack; } GasArgState;
 
 /* Values occupy one word, or two for an extended floating payload. Offsets are
- * nonnegative from the adjusted stack pointer, which remains fixed throughout
- * the body (including during call setup). */
+ * nonnegative from the fixed frame base. With dynamic allocation, SP moves
+ * independently and continues to address the outgoing argument area. */
 typedef struct {
     unsigned size, homes[AN_MAX_VALUE], copies, locals[AN_MAX_VALUE];
-    int record;
+    unsigned outgoing;
+    int record, base_save;
 #if defined(AN_SYSV_AMD64) || defined(AN_AAPCS64)
     int varargs;
     GasArgState named;
@@ -110,7 +111,7 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
     const unsigned entry = an_gas_abi.stack_entry_remainder;
     unsigned outgoing = 0, phis = 0, size;
     size_t b, i;
-    int calls = 0;
+    int calls = 0, dynamic = 0;
 #if defined(AN_SYSV_AMD64) || defined(AN_AAPCS64)
     int variadic = 0;
 #endif
@@ -123,6 +124,7 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
             phis = phi_words;
         for (i = 0; i < block->inst_count; ++i) {
             const ArchonMIRInst *ins = &block->insts[i];
+            dynamic |= ins->op == ARCHON_MIR_STACK_ALLOC || ins->op == ARCHON_MIR_STACK_FREE;
 #ifdef AN_SYSV_AMD64
             variadic |= ins->op == ARCHON_MIR_AMD64_VA_START;
 #elif defined(AN_AAPCS64)
@@ -140,6 +142,9 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
         }
     }
     size = outgoing * word;
+    if (dynamic)
+        size = align_up(size, align);
+    frame->outgoing = size;
     for (i = 0; i < fn->value_count; ++i) {
         if (fn->types[i] == ARCHON_MIR_F128)
             size = align_up(size, 16);
@@ -180,6 +185,12 @@ static int make_frame(ANContext *ctx, const ArchonMIRFunction *fn, GasFrame *fra
         frame->record = (int)size;
         size += 2 * word;
     }
+    frame->base_save = -1;
+    if (dynamic) {
+        size = align_up(size, word);
+        frame->base_save = (int)size;
+        size += word;
+    }
     /* Downward adjustment leaves SP aligned at every call. On AMD64 the
      * incoming return PC already accounts for entry % 16 == 8. */
     frame->size = size + ((entry - size) & (align - 1u));
@@ -196,19 +207,28 @@ static unsigned home(const GasFrame *frame, ArchonValue v)
 
 /* Copy an ABI value between stack slots using only the non-argument scratch.
  * Do not evaluate FP values or read the unspecified six x87 padding bytes. */
-static unsigned copy_slot(ANGas *gas, unsigned dst, unsigned src, ArchonMIRType type)
+static void save_slot(ANGas *gas, unsigned dst, int outgoing)
+{
+    const char *base = gas->frame_base;
+    if (outgoing)
+        gas->frame_base = an_gas_abi.sp;
+    an_gas_stack_store(gas, an_gas_a, dst);
+    gas->frame_base = base;
+}
+
+static unsigned copy_slot(ANGas *gas, unsigned dst, unsigned src, ArchonMIRType type, int outgoing)
 {
     an_gas_stack_load(gas, an_gas_a, src);
-    an_gas_stack_store(gas, an_gas_a, dst);
+    save_slot(gas, dst, outgoing);
     if (type == ARCHON_MIR_F128) {
         an_gas_stack_load(gas, an_gas_a, src + 8);
-        an_gas_stack_store(gas, an_gas_a, dst + 8);
+        save_slot(gas, dst + 8, outgoing);
         return 16;
     }
 #ifdef AN_SYSV_AMD64
     if (type == ARCHON_MIR_F80) {
-        an_gas_print(gas, "\tmovzwq %u(%%rsp), %%rax\n", src + 8);
-        an_gas_stack_store(gas, an_gas_a, dst + 8);
+        an_gas_print(gas, "\tmovzwq %u(%s), %%rax\n", src + 8, gas->frame_base);
+        save_slot(gas, dst + 8, outgoing);
         return 16;
     }
 #else
@@ -240,7 +260,7 @@ static void parameters(ANGas *gas, const GasFrame *frame, const ArchonMIRFunctio
                 an_gas_convert(gas, ARCHON_MIR_TRUNC, 32);
                 an_gas_stack_store(gas, an_gas_a, dst);
             } else
-                copy_slot(gas, dst, src, type);
+                copy_slot(gas, dst, src, type, 0);
             break;
         }
         }
@@ -268,7 +288,7 @@ static void call(ANGas *gas, const GasFrame *frame, const ArchonMIRFunction *fn,
             an_gas_fp_load(gas, type, loc.index, src);
             break;
         case GAS_STACK:
-            copy_slot(gas, loc.index * abi->stack_slot_bytes, src, type);
+            copy_slot(gas, loc.index * abi->stack_slot_bytes, src, type, 1);
             break;
         }
     }
@@ -283,7 +303,7 @@ static void call(ANGas *gas, const GasFrame *frame, const ArchonMIRFunction *fn,
 #ifdef AN_SYSV_AMD64
         if (type == ARCHON_MIR_F80) {
             /* Always pop ST(0), including when C discards the result. */
-            an_gas_print(gas, "\tfstpt %u(%%rsp)\n", home(frame, ins->dst));
+            an_gas_print(gas, "\tfstpt %u(%s)\n", home(frame, ins->dst), gas->frame_base);
             return;
         }
 #endif
@@ -347,7 +367,7 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
         }
     }
     if (op == ARCHON_MIR_COPY && wide_slot(fn->types[ins->dst])) {
-        copy_slot(gas, home(frame, ins->dst), home(frame, ins->a), fn->types[ins->dst]);
+        copy_slot(gas, home(frame, ins->dst), home(frame, ins->a), fn->types[ins->dst], 0);
         return 1;
     }
     if ((shape & 2u) && op != ARCHON_MIR_AMD64_X87_HIGH && op != ARCHON_MIR_F128_HIGH && !forward_lhs(ctx, fn, prev, ins))
@@ -416,14 +436,20 @@ static int instruction(ANContext *ctx, ANGas *gas, const GasFrame *frame,
     case ARCHON_MIR_FRAME_ADDR:
         an_gas_local_addr(gas, frame->locals[ins->imm]);
         break;
+    case ARCHON_MIR_STACK_ALLOC:
+        an_gas_stack_alloc(gas, frame->outgoing);
+        break;
+    case ARCHON_MIR_STACK_FREE:
+        an_gas_stack_free(gas);
+        break;
 #ifdef AN_SYSV_AMD64
     case ARCHON_MIR_AMD64_X87_PACK:
-        an_gas_print(gas, "\tmovw %%cx, %u(%%rsp)\n", home(frame, ins->dst) + 8);
+        an_gas_print(gas, "\tmovw %%cx, %u(%s)\n", home(frame, ins->dst) + 8, gas->frame_base);
         break; /* Generic result store writes the low 64 bits. */
     case ARCHON_MIR_AMD64_X87_LOW:
         break;
     case ARCHON_MIR_AMD64_X87_HIGH:
-        an_gas_print(gas, "\tmovzwq %u(%%rsp), %%rax\n", home(frame, ins->a) + 8);
+        an_gas_print(gas, "\tmovzwq %u(%s), %%rax\n", home(frame, ins->a) + 8, gas->frame_base);
         break;
     case ARCHON_MIR_AMD64_X87_ADD:
     case ARCHON_MIR_AMD64_X87_SUB:
@@ -483,11 +509,11 @@ static void edge(ANGas *gas, const ArchonMIRFunction *fn, const GasFrame *frame,
     const ArchonMIRBlock *dst = &fn->blocks[e->target];
     unsigned i, offset = frame->copies;
     for (i = 0; i < e->arg_count; ++i) {
-        offset += copy_slot(gas, offset, home(frame, e->args[i]), fn->types[e->args[i]]);
+        offset += copy_slot(gas, offset, home(frame, e->args[i]), fn->types[e->args[i]], 0);
     }
     offset = frame->copies;
     for (i = 0; i < e->arg_count; ++i) {
-        offset += copy_slot(gas, home(frame, dst->params[i]), offset, fn->types[dst->params[i]]);
+        offset += copy_slot(gas, home(frame, dst->params[i]), offset, fn->types[dst->params[i]], 0);
     }
     if (!fallthrough)
         an_gas_jump(gas, e->target);
@@ -509,7 +535,7 @@ static void terminator(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn,
             unsigned offset = home(frame, term->value);
 #ifdef AN_SYSV_AMD64
             if (fn->result == ARCHON_MIR_F80)
-                an_gas_print(gas, "\tfldt %u(%%rsp)\n", offset);
+                an_gas_print(gas, "\tfldt %u(%s)\n", offset, gas->frame_base);
             else
 #endif
             if (an_is_float(fn->result) || fn->result == ARCHON_MIR_F128)
@@ -559,6 +585,8 @@ static int function(ANContext *ctx, ANGas *gas, const ArchonMIRFunction *fn)
     if (!make_frame(ctx, fn, &frame))
         return 0;
     gas->next_label = (unsigned)fn->block_count;
+    gas->frame_base = an_gas_abi.sp;
+    gas->base_save = frame.base_save;
     an_gas_print(gas, "\t.p2align 4\n\t.globl %s\n\t.type %s, %%function\n%s:\n",
         fn->name, fn->name, fn->name);
     an_gas_enter(gas, frame.size, frame.record);

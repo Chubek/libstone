@@ -18,10 +18,10 @@ static void constant(ANGas *gas, const char *dst, uint64_t value)
 static void stack_address(ANGas *gas, const char *dst, unsigned offset)
 {
     if (offset < 4096u) {
-        an_gas_print(gas, "\tadd %s, %s, #%u\n", dst, an_gas_abi.sp, offset);
+        an_gas_print(gas, "\tadd %s, %s, #%u\n", dst, gas->frame_base, offset);
     } else {
         constant(gas, dst, offset);
-        an_gas_print(gas, "\tadd %s, %s, %s, uxtx\n", dst, an_gas_abi.sp, dst);
+        an_gas_print(gas, "\tadd %s, %s, %s, uxtx\n", dst, gas->frame_base, dst);
     }
 }
 
@@ -29,7 +29,7 @@ static void stack_move(ANGas *gas, const char *op, const char *reg, unsigned off
     unsigned access_bytes)
 {
     if (offset <= 4095u * access_bytes) {
-        an_gas_print(gas, "\t%s %s, [%s, #%u]\n", op, reg, an_gas_abi.sp, offset);
+        an_gas_print(gas, "\t%s %s, [%s, #%u]\n", op, reg, gas->frame_base, offset);
     } else {
         stack_address(gas, "x12", offset);
         an_gas_print(gas, "\t%s %s, [x12]\n", op, reg);
@@ -108,6 +108,11 @@ void an_gas_enter(ANGas *gas, unsigned size, int frame_record)
         an_gas_stack_store(gas, an_gas_abi.link, off + an_gas_abi.stack_slot_bytes);
         stack_address(gas, "x29", off);
     }
+    if (gas->base_save >= 0) {
+        an_gas_stack_store(gas, "x19", (unsigned)gas->base_save);
+        an_gas_print(gas, "\tadd x19, sp, #0\n");
+        gas->frame_base = "x19";
+    }
 }
 
 void an_gas_leave(ANGas *gas, unsigned size, int frame_record)
@@ -117,11 +122,52 @@ void an_gas_leave(ANGas *gas, unsigned size, int frame_record)
         an_gas_stack_load(gas, "x29", off);
         an_gas_stack_load(gas, an_gas_abi.link, off + an_gas_abi.stack_slot_bytes);
     }
+    if (gas->base_save >= 0) {
+        an_gas_print(gas, "\tadd sp, x19, #0\n");
+        an_gas_stack_load(gas, "x19", (unsigned)gas->base_save);
+    }
     if (size >= 4096u)
         an_gas_print(gas, "\tadd sp, sp, #%u, lsl #12\n", size / 4096u);
     if (size % 4096u)
         an_gas_print(gas, "\tadd sp, sp, #%u\n", size % 4096u);
     an_gas_print(gas, "\tret %s\n", an_gas_abi.link);
+}
+
+void an_gas_stack_alloc(ANGas *gas, unsigned outgoing)
+{
+    unsigned loop = gas->next_label++, tail = gas->next_label++, invalid = gas->next_label++;
+    unsigned done = gas->next_label++;
+    an_gas_print(gas, "\tcbz x9, .Larchon_%zu_%u\n\tmovz x10, #15\n\tadds x9, x9, x10\n"
+        "\tcset x11, hs\n\tcbnz x11, .Larchon_%zu_%u\n\tlsr x9, x9, #4\n\tlsl x9, x9, #4\n"
+        "\tmovz x10, #4096\n",
+        gas->function, invalid, gas->function, invalid);
+    an_gas_label(gas, loop);
+    an_gas_print(gas, "\tcmp x9, x10\n\tcset x11, hi\n\tcbz x11, .Larchon_%zu_%u\n"
+        "\tsub sp, sp, #1, lsl #12\n\tstr xzr, [sp]\n\tsub x9, x9, #1, lsl #12\n",
+        gas->function, tail);
+    an_gas_jump(gas, loop);
+    an_gas_label(gas, tail);
+    an_gas_print(gas, "\tadd x11, sp, #0\n\tsub x11, x11, x9\n\tadd sp, x11, #0\n"
+        "\tstr xzr, [sp]\n\tadd x9, sp, #%u\n", outgoing);
+    an_gas_jump(gas, done);
+    an_gas_label(gas, invalid);
+    an_gas_trap(gas);
+    an_gas_label(gas, done);
+}
+
+void an_gas_stack_free(ANGas *gas)
+{
+    unsigned invalid = gas->next_label++, done = gas->next_label++;
+    an_gas_print(gas, "\tmovz x10, #15\n\tadds x9, x9, x10\n"
+        "\tcset x11, hs\n\tcbnz x11, .Larchon_%zu_%u\n"
+        "\tlsr x9, x9, #4\n\tlsl x9, x9, #4\n\tadd x10, sp, #0\n\tadds x9, x10, x9\n"
+        "\tcset x11, hs\n\tcbnz x11, .Larchon_%zu_%u\n"
+        "\tcmp x9, x19\n\tcset x11, hi\n\tcbnz x11, .Larchon_%zu_%u\n\tadd sp, x9, #0\n",
+        gas->function, invalid, gas->function, invalid, gas->function, invalid);
+    an_gas_jump(gas, done);
+    an_gas_label(gas, invalid);
+    an_gas_trap(gas);
+    an_gas_label(gas, done);
 }
 
 void an_gas_local_addr(ANGas *gas, unsigned offset)

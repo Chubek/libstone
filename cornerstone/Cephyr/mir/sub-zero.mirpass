@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "sub-zero",
+  "summary": "Remove a wrapping subtraction of zero from a value.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "sub", "match": "RhsZero", "replace": "Lhs"}
+  ]
+}

@@ -4,6 +4,7 @@
 # Archon, and XDG/HOME cache defaults are used when their entries are omitted.
 
 target = "x86_64-linux-gnu" # Or "auto" to require a supported native host/ABI.
+# profile = "rv64-checked"  # Optional default; --profile NAME overrides it.
 representation = "gated"
 assembler_style = "driver"  # Explicit replacement: "driver" (e.g. GCC) or "as" (raw).
 stdlib = "cephyr"            # "cephyr", "system", or "none"
@@ -75,12 +76,29 @@ hosted = true
 # [factir]
 # enabled = false
 
-# Optional QML optimization profile; select with --profile NAME or uncomment [qml].
-# [qml]
-# profile = "optimizing"
-#
-# [profiles.optimizing]
-# passes = ["canonicalize", "strength_reduce"]
-# files = [] # Relative to this file; add trusted QML rule fragments here.
-# fuel = 4096
-# parameters = { canonicalize = { fuel = 2048 } }
+# Compilation profiles. Omitting a stage inherits its global setting. Supplying
+# a list selects exactly those passes; explicit CLI stage switches win.
+# `passes`, `files`, `fuel`, and `parameters` directly under a profile still
+# describe QML. The legacy [qml].profile selector still selects QML only.
+[profiles.rv64-checked]
+target = "riscv64-linux-gnu"
+passes = ["strength_reduce"]
+# files = ["rules/project.qpass"] # Additional trusted QML rules, relative to this file.
+
+[profiles.rv64-checked.mir]
+passes = ["add-zero", "fold-bitwise"]
+
+[profiles.rv64-checked.blackstone]
+passes = ["coalesce-copies", "remove-dead-constants"]
+
+[profiles.rv64-checked.factir]
+passes = [] # Keep FactIR analysis, but do not run proof-backed MIR rewrites.
+
+# [profiles.rv64-checked.moonstone]
+# enabled = true # Requires a Cephyr build with Moonstone analysis.
+
+[profiles.amd64-compact]
+target = "x86_64-linux-gnu"
+
+[profiles.amd64-compact.sandslab]
+passes = ["zero-extend-imm32", "sign-extend-imm32"]

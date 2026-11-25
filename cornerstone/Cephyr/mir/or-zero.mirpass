@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "or-zero",
+  "summary": "Remove a bitwise OR with zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "or", "match": "RhsZero", "replace": "Lhs"},
+    {"opcode": "or", "match": "LhsZero", "replace": "Rhs"}
+  ]
+}

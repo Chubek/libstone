@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "or-self",
+  "summary": "Remove a bitwise OR of a value with itself.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "or", "match": "SameOperands", "replace": "Lhs"}
+  ]
+}

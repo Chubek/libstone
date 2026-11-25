@@ -2,6 +2,7 @@
 
 #include "cephyr/diagnostics.hpp"
 #include "mir_verify.h"
+#include "rewrite_passes.hpp"
 #include <firestone-interop/match.hpp>
 
 #include <cstdint>
@@ -68,6 +69,7 @@ struct Replacement {
 // and equality via a repeated variable. No pattern inspects an SSA ID or any
 // other literal. Memoize the *rule*, never a binding or a folded result.
 struct Matcher {
+    std::uint64_t passes;
     Result decisions[ARCHON_MIR_XOR + 1][4][4][2]{};
 
     static unsigned kind(const Word *k)
@@ -90,7 +92,9 @@ struct Matcher {
             const Term expr{binary.name, {operand(i.a, a), operand(i.b, b)}};
             result = Result::none;
             for (const auto &[pattern, action] : binary.rules) {
-                if (::blackstone::match(pattern, expr)) {
+                const auto pass = action == Result::fold ? BlackstonePass::constant_fold :
+                                                          BlackstonePass::identities;
+                if (pass_enabled(passes, pass) && ::blackstone::match(pattern, expr)) {
                     result = action;
                     break;
                 }
@@ -171,6 +175,7 @@ struct Block {
 
 struct Rewriter {
     const std::string &source;
+    std::uint64_t passes;
     std::string output;
     std::size_t cursor = 0;
     std::exception_ptr error;
@@ -203,7 +208,9 @@ struct Rewriter {
 
     void run(const ArchonMIRModule &m, const size_t *starts, const size_t *ends)
     {
-        Matcher matcher;
+        Matcher matcher{passes};
+        const bool coalesce = pass_enabled(passes, BlackstonePass::coalesce_copies);
+        const bool prune = pass_enabled(passes, BlackstonePass::remove_dead_constants);
         for (int n = 0; n < 6; ++n)
             token(); // archon-mir version module functions imports globals
         std::size_t span = 0;
@@ -231,9 +238,9 @@ struct Rewriter {
                     i.a = root(i.a);
                     i.b = root(i.b);
                     auto r = block.visit(i);
-                    if (i.op == ARCHON_MIR_COPY || (i.imm == 64 &&
+                    if (coalesce && (i.op == ARCHON_MIR_COPY || (i.imm == 64 &&
                         (i.op == ARCHON_MIR_ZEXT || i.op == ARCHON_MIR_SEXT ||
-                         i.op == ARCHON_MIR_TRUNC)))
+                         i.op == ARCHON_MIR_TRUNC))))
                         r = Replacement{false, i.a};
                     if (r && !r->literal) {
                         // Every link is a verified, dominating i64 SSA def.
@@ -246,32 +253,35 @@ struct Rewriter {
             // Discard unused word literals (including newly folded ones).
             // MIR doesn't distinguish volatile loads; even a dead load must
             // remain. Count uses from all blocks, both edges and call args.
-            std::vector<bool> used(fn.value_count), dead(fn.value_count);
-            auto use = [&](ArchonValue v) {
-                if (v != ARCHON_MIR_NONE)
-                    used[root(v)] = true;
-            };
-            for (std::size_t b = 0; b < fn.block_count; ++b) {
-                const auto &bb = fn.blocks[b];
-                for (std::size_t n = 0; n < bb.inst_count; ++n) {
-                    const auto &i = bb.insts[n];
-                    if (i.dst != ARCHON_MIR_NONE && rewrites[i.dst])
-                        continue;
-                    use(i.a); use(i.b);
-                    for (std::size_t j = 0; j < i.arg_count; ++j) use(i.args[j]);
+            std::vector<bool> dead(fn.value_count);
+            if (prune) {
+                std::vector<bool> used(fn.value_count);
+                auto use = [&](ArchonValue v) {
+                    if (v != ARCHON_MIR_NONE)
+                        used[root(v)] = true;
+                };
+                for (std::size_t b = 0; b < fn.block_count; ++b) {
+                    const auto &bb = fn.blocks[b];
+                    for (std::size_t n = 0; n < bb.inst_count; ++n) {
+                        const auto &i = bb.insts[n];
+                        if (i.dst != ARCHON_MIR_NONE && rewrites[i.dst])
+                            continue;
+                        use(i.a); use(i.b);
+                        for (std::size_t j = 0; j < i.arg_count; ++j) use(i.args[j]);
+                    }
+                    use(bb.term.value);
+                    for (auto e : {bb.term.yes, bb.term.no})
+                        for (std::size_t j = 0; j < e.arg_count; ++j) use(e.args[j]);
                 }
-                use(bb.term.value);
-                for (auto e : {bb.term.yes, bb.term.no})
-                    for (std::size_t j = 0; j < e.arg_count; ++j) use(e.args[j]);
-            }
-            for (std::size_t b = 0; b < fn.block_count; ++b) {
-                const auto &bb = fn.blocks[b];
-                for (std::size_t n = 0; n < bb.inst_count; ++n) {
-                    const auto &i = bb.insts[n];
-                    if (i.dst != ARCHON_MIR_NONE && !used[i.dst] &&
-                        (i.op == ARCHON_MIR_CONST || (rewrites[i.dst] && rewrites[i.dst]->literal))) {
-                        dead[i.dst] = true;
-                        ++removed[b];
+                for (std::size_t b = 0; b < fn.block_count; ++b) {
+                    const auto &bb = fn.blocks[b];
+                    for (std::size_t n = 0; n < bb.inst_count; ++n) {
+                        const auto &i = bb.insts[n];
+                        if (i.dst != ARCHON_MIR_NONE && !used[i.dst] &&
+                            (i.op == ARCHON_MIR_CONST || (rewrites[i.dst] && rewrites[i.dst]->literal))) {
+                            dead[i.dst] = true;
+                            ++removed[b];
+                        }
                     }
                 }
             }
@@ -363,11 +373,12 @@ void visit(void *user, const ArchonMIRModule *module, const size_t *starts,
 
 } // namespace
 
-bool rewrite(std::string &mir, Diagnostics &diag, std::string_view input, bool &changed)
+bool rewrite(std::string &mir, Diagnostics &diag, std::string_view input, bool &changed,
+             std::uint64_t passes)
 {
     changed = false;
     ArchonBackendDiagnostic native{};
-    Rewriter rewriter{mir, {}, 0, {}};
+    Rewriter rewriter{mir, passes, {}, 0, {}};
     if (cephyr_visit_mir(mir.data(), mir.size(), visit, &rewriter, &native) != ARCHON_BACKEND_OK) {
         diag.error("cephyr.blackstone.input", native.message, {std::string(input)});
         return false;

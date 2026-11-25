@@ -14,11 +14,18 @@ void an_gas_enter(ANGas *gas, unsigned size, int frame_record)
     }
     if (size)
         an_gas_print(gas, "\tsubq $%u, %%rsp\n", size);
+    if (gas->base_save >= 0) {
+        an_gas_stack_store(gas, "%rbp", (unsigned)gas->base_save);
+        an_gas_print(gas, "\tmovq %%rsp, %%rbp\n");
+        gas->frame_base = "%rbp";
+    }
 }
 
 void an_gas_leave(ANGas *gas, unsigned size, int frame_record)
 {
     (void)frame_record;
+    if (gas->base_save >= 0)
+        an_gas_print(gas, "\tmovq %%rbp, %%rsp\n\tmovq %d(%%rsp), %%rbp\n", gas->base_save);
     if (size)
         an_gas_print(gas, "\taddq $%u, %%rsp\n", size);
     an_gas_print(gas, "\tret\n");
@@ -26,18 +33,52 @@ void an_gas_leave(ANGas *gas, unsigned size, int frame_record)
 
 void an_gas_stack_load(ANGas *gas, const char *dst, unsigned offset)
 {
-    an_gas_print(gas, "\tmovq %u(%s), %s\n", offset, an_gas_abi.sp, dst);
+    an_gas_print(gas, "\tmovq %u(%s), %s\n", offset, gas->frame_base, dst);
 }
 
 void an_gas_stack_store(ANGas *gas, const char *src, unsigned offset)
 {
-    an_gas_print(gas, "\tmovq %s, %u(%s)\n", src, offset, an_gas_abi.sp);
+    an_gas_print(gas, "\tmovq %s, %u(%s)\n", src, offset, gas->frame_base);
+}
+
+void an_gas_stack_alloc(ANGas *gas, unsigned outgoing)
+{
+    unsigned loop = gas->next_label++, tail = gas->next_label++, invalid = gas->next_label++;
+    unsigned done = gas->next_label++;
+    an_gas_print(gas, "\ttestq %%rax, %%rax\n\tjz .Larchon_%zu_%u\n"
+        "\taddq $15, %%rax\n\tjb .Larchon_%zu_%u\n\tandq $-16, %%rax\n",
+        gas->function, invalid, gas->function, invalid);
+    an_gas_label(gas, loop);
+    an_gas_print(gas, "\tcmpq $4097, %%rax\n\tjb .Larchon_%zu_%u\n"
+        "\tsubq $4096, %%rsp\n\tmovq $0, (%%rsp)\n\tsubq $4096, %%rax\n",
+        gas->function, tail);
+    an_gas_jump(gas, loop);
+    an_gas_label(gas, tail);
+    an_gas_print(gas, "\tsubq %%rax, %%rsp\n\tmovq $0, (%%rsp)\n"
+        "\tleaq %u(%%rsp), %%rax\n", outgoing);
+    an_gas_jump(gas, done);
+    an_gas_label(gas, invalid);
+    an_gas_trap(gas);
+    an_gas_label(gas, done);
+}
+
+void an_gas_stack_free(ANGas *gas)
+{
+    unsigned invalid = gas->next_label++, done = gas->next_label++;
+    an_gas_print(gas, "\taddq $15, %%rax\n\tjb .Larchon_%zu_%u\n"
+        "\tandq $-16, %%rax\n\taddq %%rsp, %%rax\n\tjb .Larchon_%zu_%u\n"
+        "\tcmpq %%rax, %%rbp\n\tjb .Larchon_%zu_%u\n\tmovq %%rax, %%rsp\n",
+        gas->function, invalid, gas->function, invalid, gas->function, invalid);
+    an_gas_jump(gas, done);
+    an_gas_label(gas, invalid);
+    an_gas_trap(gas);
+    an_gas_label(gas, done);
 }
 
 void an_gas_fp_load(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
 {
-    an_gas_print(gas, "\tmovs%c %u(%%rsp), %%xmm%u\n",
-        type == ARCHON_MIR_F32 ? 's' : 'd', offset, reg);
+    an_gas_print(gas, "\tmovs%c %u(%s), %%xmm%u\n",
+        type == ARCHON_MIR_F32 ? 's' : 'd', offset, gas->frame_base, reg);
 }
 
 void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offset)
@@ -50,7 +91,7 @@ void an_gas_fp_store(ANGas *gas, ArchonMIRType type, unsigned reg, unsigned offs
 
 void an_gas_local_addr(ANGas *gas, unsigned offset)
 {
-    an_gas_print(gas, "\tleaq %u(%s), %%rax\n", offset, an_gas_abi.sp);
+    an_gas_print(gas, "\tleaq %u(%s), %%rax\n", offset, gas->frame_base);
 }
 
 void an_amd64_save_varargs(ANGas *gas, unsigned save, unsigned gp, unsigned fp)
@@ -64,7 +105,7 @@ void an_amd64_save_varargs(ANGas *gas, unsigned save, unsigned gp, unsigned fp)
     skip = gas->next_label++;
     an_gas_print(gas, "\ttestb %%al, %%al\n\tjz .Larchon_%zu_%u\n", gas->function, skip);
     for (i = fp; i < an_gas_abi.fp_argc; ++i)
-        an_gas_print(gas, "\tmovaps %%xmm%u, %u(%%rsp)\n", i, save + 48 + i * 16);
+        an_gas_print(gas, "\tmovaps %%xmm%u, %u(%s)\n", i, save + 48 + i * 16, gas->frame_base);
     an_gas_label(gas, skip);
 }
 
@@ -73,9 +114,9 @@ void an_amd64_va_start(ANGas *gas, unsigned save, unsigned overflow, unsigned gp
     /* RAX contains the destination va_list address. Its pointers refer to
      * the initial caller stack and to our entry-time register save area. */
     an_gas_print(gas, "\tmovl $%u, 0(%%rax)\n\tmovl $%u, 4(%%rax)\n"
-        "\tleaq %u(%%rsp), %%rcx\n\tmovq %%rcx, 8(%%rax)\n"
-        "\tleaq %u(%%rsp), %%rcx\n\tmovq %%rcx, 16(%%rax)\n",
-        gp * 8, 48 + fp * 16, overflow, save);
+        "\tleaq %u(%s), %%rcx\n\tmovq %%rcx, 8(%%rax)\n"
+        "\tleaq %u(%s), %%rcx\n\tmovq %%rcx, 16(%%rax)\n",
+        gp * 8, 48 + fp * 16, overflow, gas->frame_base, save, gas->frame_base);
 }
 
 void an_gas_symbol_addr(ANGas *gas, const char *symbol)

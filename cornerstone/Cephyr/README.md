@@ -2,6 +2,8 @@
 
 See [FactIR](docs/FactIR.md) for the verified MIR rewrite, RV64 scheduler hints,
 and the CLI/TOML controls.
+Cephyr lowers via its [Sea-of-Nodes MIR](docs/MIRModel.md) before emitting
+Archon MachineIR. Use `--mir-opt` to enable its local integer optimizations.
 
 Cephyr is a Unix-style C compiler driver for Archon. It currently implements a
 subset of ISO C11 for **AMD64 / SysV LP64**, **AArch64 / AAPCS64 LP64**, and
@@ -14,7 +16,7 @@ See [the libc inventory](stdlib/README.md) and
 ## Build and use
 
 Building the compiler requires CMake 3.20+, a C/C++20 toolchain, Python 3.10+
-(Archon and build-time generators), and Perl (QML frontend generation).
+(Archon and build-time generators), and Perl (MIR and QML generation).
 The AST reader/writer uses libyaml (development headers and `pkg-config`),
 Valijson, and nlohmann/json. Use `scripts/get-deps.sh valijson nlohmann-json`
 to fetch the JSON dependencies if they are missing.
@@ -26,6 +28,9 @@ Set `CEPHYR_PACKAGE_CC_AMD64`, `CEPHYR_PACKAGE_CC_AArch64`, or
 Cephyr's uncompressed SymAS banks are generated with the in-tree Lua and
 Sandstone assembler-record compiler. No LLVM is required. The default target
 is `x86_64-linux-gnu`.
+The bundled qobjld expression frontend still needs the legacy Aurocks Perl
+generator; if the repository's `scripts/aurocks.pl` is unavailable, set
+`YELLOWSTONE_LDSCRIPT_AUROCKS` to a compatible copy.
 
 ```sh
 cmake -S cornerstone/Cephyr -B build-cephyr
@@ -126,9 +131,13 @@ the same compile arguments and an optional `library=...` path. Both accept
 
 ## Configuration and compilation
 
-Settings are applied in this order: built-in defaults, `./Cephyr.toml` (or
-`CEPHYR_CONFIG`, or `--config FILE`), then CLI overrides. The
-[sample configuration](Cephyr.toml) documents the strict TOML schema, path
+Run `cephyr` from your project directory to use its `Cephyr.toml` without
+`--config`. The driver uses the actual working directory, not the source
+file's directory or the `$PWD` environment variable, and does not search
+parents. `--config FILE` takes precedence over `CEPHYR_CONFIG`, which takes
+precedence over `./Cephyr.toml`. If none is supplied or found, the driver
+uses built-in defaults. Explicit CLI settings override the selected file.
+The [sample configuration](Cephyr.toml) documents the strict TOML schema, path
 resolution, and tool argv arrays. A triple selects a Lua table; a custom
 table can point to an explicit Archon specification and set assembler,
 linker, and archiver commands. Lua tables run with memory and instruction
@@ -194,7 +203,10 @@ need an explicit compatible linker. `--stdlib=system` requests an explicitly
 configured system compiler-driver linker and matching sysroot/libraries.
 Neither a failed assembly nor a failed native link triggers a fallback.
 
-`--emit-mir` is a debugging view; data which cannot be represented by native
+`cephyr --emit-mir input.c` writes `input.mir` in the working directory. Use
+`-o -` to print the Archon MachineIR v1 text instead. The
+[embedding APIs](EMBEDDING.md#emit-mir) capture the same text in memory by
+default. This is a debugging view; data that cannot be represented by native
 MachineIR's word-only globals is emitted separately in `-S` output.
 
 ### Blackstone MIR optimization
@@ -215,7 +227,59 @@ enabled = false
 
 This switch is independent of FactIR and QML.
 
-### QML optimization profiles
+### Compilation profiles
+
+`--profile NAME` selects a `[profiles.NAME]` entry in `Cephyr.toml`. A
+top-level `profile = "NAME"` selects a default for the same invocation-wide
+settings. Explicit CLI options win over the selected profile, which wins over
+global settings. Choosing another profile does not inherit from the default
+profile. A `target` in the profile also applies to preprocessing and interface
+projection, not just native code generation.
+
+```toml
+profile = "rv64"
+
+[profiles.rv64]
+target = "riscv64-linux-gnu"
+passes = ["strength_reduce"] # QML phases
+
+[profiles.rv64.mir]
+passes = ["add-zero", "fold-bitwise"]
+
+[profiles.rv64.blackstone]
+passes = ["coalesce-copies", "remove-dead-constants"]
+
+[profiles.rv64.factir]
+passes = [] # Analyze and export facts without FactIR rewriting.
+```
+
+| Table (global or under `[profiles.NAME]`) | Supported selection |
+| --- | --- |
+| `mir` | Named graph rewrite passes by [catalog ID](mir/README.md). Required graph verification and lowering stages cannot be disabled. |
+| `blackstone` | `constant-fold`, `identities`, `coalesce-copies` (including full-width conversions), `remove-dead-constants`. |
+| `factir` | Analysis plus independently selectable verified rewrites `add-zero` and `boolize`. `enabled = false` disables both analysis and rewrites. |
+| `sandslab` | `zero-extend-imm32`, `sign-extend-imm32`. Selecting these passes for C code generation requires the native AMD64 backend. |
+| `moonstone` | `enabled = true` enables advisory analysis. Requires a Moonstone-enabled Cephyr build; does not select the Prolific timing profiler. |
+
+Leaving a table unspecified inherits its global setting. For rewrite tables,
+`enabled = true` selects the normal full bundle, `enabled = false` disables it,
+and `passes = [...]` enables exactly the listed passes in the engine's normal
+order. An empty list disables rewrites; for FactIR it still runs analysis.
+Unknown or duplicate named passes are errors. FactIR can run with
+`--emit-mir` but not before custom SDK code generation. SandSLAB runs only
+when emitting native assembly from C; it does not run for `--emit-mir` or
+assembly inputs. For compatibility, the legacy global `enabled` settings
+and CLI toggles still skip backend-specific stages where they do not apply.
+The native pipeline keeps its stage order: graph rewrites during lowering, QML,
+SDK rewrite hooks, Blackstone, FactIR, native code generation, then SandSLAB.
+Profiles do not change which SDK hooks are registered.
+
+`--[no-]mir-opt`, `--[no-]blackstone`, `--[no-]factir`,
+`--[no-]sandslab`, and `--[no-]moonstone-analyze` override the corresponding
+profile selections. Positive rewrite switches select the full bundle rather
+than reusing a narrower pass list. Mandatory C checking is never disabled.
+
+#### QML phases
 
 QML rewrites Cephyr's typed Archon MachineIR after lowering. No QML pass runs
 by default. Enable a built-in pass directly or select a profile:
@@ -226,8 +290,7 @@ cephyr --config project/Cephyr.toml --profile=fast -c example.c
 ```
 
 ```toml
-[qml]
-profile = "fast" # Optional default; --profile overrides it.
+profile = "fast" # Optional invocation-wide default; --profile overrides it.
 
 [profiles.fast]
 passes = ["canonicalize", "strength_reduce", "project_optimizations"]
@@ -236,7 +299,10 @@ fuel = 4096
 parameters = { project_optimizations = { fuel = 256 } }
 ```
 
-`passes` lists QML phase names in execution order. The built-in `canonicalize`
+The legacy `[qml] profile = "fast"` spelling remains a QML-only default when
+neither a top-level `profile` nor `--profile` is used. Existing profiles with
+only QML settings require no changes. `passes` immediately under
+`[profiles.NAME]` lists QML phase names in execution order. The built-in `canonicalize`
 pass applies identities such as `x + 0 → x` to native integer MIR.
 `strength_reduce` rewrites wrapping multiplication by two to addition.
 The separate `integer_reduce` pass lowers unsigned remainder by a proven
@@ -258,7 +324,7 @@ The repeatable `--qml-param PHASE.fuel=N` overrides phase-local fuel; only `fuel
 is supported and the named phase must be selected. Fuel settings accept
 integers from 1 to 1,000,000. The global limit counts changes across the
 translation unit, and a phase-local limit caps changes within that pass.
-Unknown profiles, phases and parameter keys are errors.
+Unknown phases and parameter keys are errors when configuring QML.
 
 QML operates on C and preprocessed C inputs for `--emit-mir`, `-S`, `-c`,
 and linking from source. QML is not run for `-E`, `-fsyntax-only`, assembler,
@@ -308,8 +374,10 @@ they emit instructions (`CQO`/`IDIV`) that it does not support.
   by-value parameters and returns for prototyped functions. RV64IM supports
   software floating point and fixed-prototype
   passing and returning of supported integer/pointer records. Bit-fields,
-  including volatile accesses, are supported outside by-value ABI boundaries. Atomics and VLAs
-  remain unsupported. See [C11 status](C11.md) for details.
+  including volatile accesses, are supported outside by-value ABI boundaries.
+  [Automatic VLAs](docs/C11_VLA.md) are supported on all three bundled targets;
+  [scalar atomics](docs/C11_ATOMICS.md) are supported on AMD64 and AArch64.
+  See [C11 status](C11.md) for the limits of each feature.
   `-fsyntax-only` checks the implemented frontend subset, not all of ISO C11.
 - The default `stdlib = "cephyr"` builds a self-contained **static** Linux
   executable with Cephyr's CRT and libc. Use `-nostdlib` or `stdlib = "none"`

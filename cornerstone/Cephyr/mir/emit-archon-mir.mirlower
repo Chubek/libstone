@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "emit-archon-mir",
+  "kind": "EmitArchonMir",
+  "input": "numbered-blocks",
+  "output": "archon-mir-v1",
+  "summary": "Serialize typed instructions, terminators and simultaneous edge arguments as Archon MachineIR v1 records."
+}

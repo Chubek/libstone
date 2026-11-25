@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "fold-shifts",
+  "summary": "Evaluate shifts of a literal word by the low six bits of a literal count.",
+  "min_opt": 2,
+  "rules": [
+    {"opcode": "shl", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "lshr", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "ashr", "match": "BothConstants", "replace": "Fold"}
+  ]
+}

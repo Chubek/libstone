@@ -101,13 +101,13 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
 #ifdef AN_RV64_SOFT_FP_TRANSPORT
     case ARCHON_MIR_F128_PACK:
         an_read(out, frame, homes, ins->b, AN_T1);
-        an_store(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->dst]);
+        an_store(out, AN_T1, an_frame_base(frame), frame->high_offsets[ins->dst]);
         /* fall through */
     case ARCHON_MIR_F128_LOW:
         an_read(out, frame, homes, ins->a, AN_T2);
         break;
     case ARCHON_MIR_F128_HIGH:
-        an_load(out, AN_T2, an_abi.stack_pointer, frame->high_offsets[ins->a]);
+        an_load(out, AN_T2, an_frame_base(frame), frame->high_offsets[ins->a]);
         break;
     case ARCHON_MIR_FCONST:
 #endif
@@ -132,8 +132,8 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
 #endif
     case ARCHON_MIR_COPY:
         if (fn->types[ins->a] == ARCHON_MIR_F128) {
-            an_load(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->a]);
-            an_store(out, AN_T1, an_abi.stack_pointer, frame->high_offsets[ins->dst]);
+            an_load(out, AN_T1, an_frame_base(frame), frame->high_offsets[ins->a]);
+            an_store(out, AN_T1, an_frame_base(frame), frame->high_offsets[ins->dst]);
         }
         /* fall through */
     case ARCHON_MIR_PTR_TO_INT:
@@ -190,11 +190,63 @@ static int lower_inst(ANContext *ctx, ANOut *out, const ArchonMIRFunction *fn, c
         }
         break;
     case ARCHON_MIR_FRAME_ADDR:
-        an_addr(out, AN_T2, an_abi.stack_pointer, frame->local_offsets[ins->imm]);
+        an_addr(out, AN_T2, an_frame_base(frame), frame->local_offsets[ins->imm]);
         break;
+    case ARCHON_MIR_STACK_ALLOC: {
+        const unsigned loop = (*next_label)++, tail = (*next_label)++;
+        const unsigned invalid = (*next_label)++, done = (*next_label)++;
+        const unsigned sp = an_abi.stack_pointer;
+        const size_t f = ctx->function;
+        an_read(out, frame, homes, ins->a, AN_T0);
+        an_branch(out, 0, AN_T0, AN_ZERO, f, invalid);
+        an_emit(out, AN_ADDI, AN_T1, AN_T0, 0, 15);
+        an_emit(out, AN_SLTU, AN_T2, AN_T1, AN_T0, 0);
+        an_branch(out, 1, AN_T2, AN_ZERO, f, invalid);
+        an_li(out, AN_T0, UINT64_MAX - 15);
+        an_emit(out, AN_AND, AN_T0, AN_T1, AN_T0, 0);
+        an_li(out, AN_T1, 4096);
+        an_label(out, f, loop);
+        an_emit(out, AN_SLTU, AN_T2, AN_T1, AN_T0, 0);
+        an_branch(out, 0, AN_T2, AN_ZERO, f, tail);
+        an_emit(out, AN_SUB, sp, sp, AN_T1, 0);
+        an_store(out, AN_ZERO, sp, 0);
+        an_emit(out, AN_SUB, AN_T0, AN_T0, AN_T1, 0);
+        an_jump(out, f, loop);
+        an_label(out, f, tail);
+        an_emit(out, AN_SUB, sp, sp, AN_T0, 0);
+        an_store(out, AN_ZERO, sp, 0);
+        an_addr(out, AN_T2, sp, frame->slots_base);
+        an_jump(out, f, done);
+        an_label(out, f, invalid);
+        an_emit(out, AN_EBREAK, 0, 0, 0, 0);
+        an_label(out, f, done);
+        break;
+    }
+    case ARCHON_MIR_STACK_FREE: {
+        const unsigned invalid = (*next_label)++, done = (*next_label)++;
+        const unsigned sp = an_abi.stack_pointer;
+        const size_t f = ctx->function;
+        an_read(out, frame, homes, ins->a, AN_T0);
+        an_emit(out, AN_ADDI, AN_T1, AN_T0, 0, 15);
+        an_emit(out, AN_SLTU, AN_T2, AN_T1, AN_T0, 0);
+        an_branch(out, 1, AN_T2, AN_ZERO, f, invalid);
+        an_li(out, AN_T0, UINT64_MAX - 15);
+        an_emit(out, AN_AND, AN_T1, AN_T1, AN_T0, 0);
+        an_emit(out, AN_ADD, AN_T1, sp, AN_T1, 0);
+        an_emit(out, AN_SLTU, AN_T2, AN_T1, sp, 0);
+        an_branch(out, 1, AN_T2, AN_ZERO, f, invalid);
+        an_emit(out, AN_SLTU, AN_T2, an_frame_base(frame), AN_T1, 0);
+        an_branch(out, 1, AN_T2, AN_ZERO, f, invalid);
+        an_addr(out, sp, AN_T1, 0);
+        an_jump(out, f, done);
+        an_label(out, f, invalid);
+        an_emit(out, AN_EBREAK, 0, 0, 0, 0);
+        an_label(out, f, done);
+        break;
+    }
     case ARCHON_MIR_RV64_VA_START:
         an_read(out, frame, homes, ins->a, AN_T0);
-        an_addr(out, AN_T2, an_abi.stack_pointer, frame->va_start_offset);
+        an_addr(out, AN_T2, an_frame_base(frame), frame->va_start_offset);
         an_store(out, AN_T2, AN_T0, 0);
         break;
     case ARCHON_MIR_GLOBAL_ADDR:
@@ -341,7 +393,7 @@ static int compile_function(ANContext *ctx, const ArchonMIRFunction *source, ANO
          * clobber them. In RV64IM LP64 even floating scalars use XLEN slots. */
         const size_t named = an_argument_slots(fn->types, NULL, fn->param_count);
         for (i = named; i < an_abi.argc; ++i)
-            an_store(out, an_abi.args[i], an_abi.stack_pointer,
+            an_store(out, an_abi.args[i], an_frame_base(&frame),
                 frame.va_start_offset + (int)(8 * (i - named)));
     }
     an_parameters(out, fn, &frame, homes);

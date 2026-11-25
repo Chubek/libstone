@@ -87,6 +87,42 @@ static int test_emit_interface(void)
     return 0;
 }
 
+static int test_emit_mir(void)
+{
+    const char *const args[] = {"--target=x86_64-linux-gnu", "-DVALUE=42", "-"};
+    const char *const driver_args[] = {
+        "--target=x86_64-linux-gnu", "-DVALUE=42", "--emit-mir", "-o", "-", "-"
+    };
+    const char source[] = "unsigned long embedding_mir(void) { return VALUE; }\n";
+    cephyr_request request = {
+        .struct_size = offsetof(cephyr_request, lua), /* legacy request prefix */
+        .argc = sizeof(args) / sizeof(*args), .argv = args,
+        .stdin_data = source, .stdin_size = sizeof(source) - 1
+    };
+    cephyr_result *mir = NULL, *direct = NULL;
+    CHECK(cephyr_emit_mir(&request, &mir) == CEPHYR_OK && mir);
+    size_t size = 0;
+    const char *text = cephyr_result_output(mir, &size);
+    CHECK(text && size == strlen(text) && !strncmp(text, "archon-mir 1\n", 13));
+    CHECK(strstr(text, "\nfunction embedding_mir ") && strstr(text, " 42\n"));
+    request.argc = sizeof(driver_args) / sizeof(*driver_args);
+    request.argv = driver_args;
+    CHECK(cephyr_compile(&request, &direct) == CEPHYR_OK && direct);
+    CHECK(!strcmp(text, cephyr_result_output(direct, NULL)));
+    cephyr_result_destroy(direct);
+    cephyr_result_destroy(mir);
+
+    const char *const conflict[] = {"-S", "-"};
+    request.argc = sizeof(conflict) / sizeof(*conflict);
+    request.argv = conflict;
+    CHECK(cephyr_emit_mir(&request, &mir) == CEPHYR_COMPILE_ERROR && mir);
+    CHECK(cephyr_result_output(mir, &size) && size == 0);
+    CHECK(strstr(cephyr_result_diagnostics(mir, NULL), "conflicting compilation stages"));
+    cephyr_result_destroy(mir);
+    CHECK(cephyr_emit_mir(NULL, &mir) == CEPHYR_INVALID_ARGUMENT && !mir);
+    return 0;
+}
+
 static int test_context(void)
 {
     char define[] = "-DCEPHYR_VALUE=19";
@@ -488,6 +524,7 @@ int main(void)
 {
     CHECK(test_parse_c11() == 0);
     CHECK(test_emit_interface() == 0);
+    CHECK(test_emit_mir() == 0);
     const char *const preprocess[] = {"-E", "-P", "-x", "c", "-", "-o", "-"};
     const char *const syntax[] = {"-fsyntax-only", "-x", "c", "-"};
     const char *const sarif[] = {"-fsyntax-only", "--diagnostics-format=sarif", "-"};

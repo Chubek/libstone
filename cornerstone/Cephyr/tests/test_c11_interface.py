@@ -385,7 +385,7 @@ int count(int n) { while (n > 0) n = step(n); return n; }
         assert value(disabled, "status") == "disabled" and not forms(disabled, "relations")
 
         # Failure of native lowering does not invalidate the declaration.
-        vla = b"int body(int n) { int body_only[n]; return sizeof body_only; }\n"
+        vla = b"int body(int n) { int body_only[n] = {1}; return sizeof body_only; }\n"
         interface = parse(run(target, STAGE, "-", data=vla))
         assert value(named(interface, "function", "body"), "definition") == "defined"
         assert not forms(interface, "object")

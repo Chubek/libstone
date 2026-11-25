@@ -1,4 +1,4 @@
-"""Cephyr.toml extension ordering, validation and native permission tests."""
+"""Cephyr.toml discovery, extension ordering, validation and permission tests."""
 
 import json
 import os
@@ -62,6 +62,37 @@ class ConfigExtensions(unittest.TestCase):
 
     def use_plugin(self, name):
         shutil.copyfile(self.plugins / name, self.project / name)
+
+    def test_config_discovery_and_precedence(self):
+        unconfigured = self.root / "unconfigured"
+        unconfigured.mkdir()
+        cli_config = self.root / "explicit.toml"
+        for path, sentinel in (
+            (self.project / "Cephyr.toml", "from_cwd"),
+            (self.root / "Cephyr.toml", "from_pwd"),
+            (self.root / "environment.toml", "from_env"),
+            (cli_config, "from_cli"),
+        ):
+            path.write_text(
+                f'[preprocess]\ndefines = ["original={sentinel}"]\n',
+                encoding="utf-8",
+            )
+        # PWD disagrees with the child's working directory and contains its own
+        # Cephyr.toml. Neither PWD nor an ancestor is a discovery location.
+        self.env["PWD"] = str(self.root)
+
+        def check(expected, *args, cwd=self.project):
+            result = self.run_cephyr(*args, cwd=cwd)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertRegex(result.stdout, rf"^\s*int\s+{expected}\s*;\s*$")
+
+        check("from_cwd")
+        self.env["CEPHYR_CONFIG"] = "../environment.toml"
+        check("from_env")
+        check("from_cli", "--config", cli_config)
+        self.env.pop("CEPHYR_CONFIG")
+        check("from_cli", f"--config={cli_config}", cwd=unconfigured)
+        check("original", cwd=unconfigured)
 
     def test_config_relative_lua_order_and_separate_env(self):
         cfg = self.write_config(

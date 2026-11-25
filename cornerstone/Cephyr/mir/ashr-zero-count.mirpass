@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "ashr-zero-count",
+  "summary": "Remove an arithmetic right shift by zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "ashr", "match": "RhsZero", "replace": "Lhs"}
+  ]
+}

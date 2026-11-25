@@ -13,6 +13,8 @@ typedef struct {
     ANOut *out;
     size_t function;
     unsigned next_label;
+    const char *frame_base;
+    int base_save;
 } ANGas;
 
 void an_gas_print(ANGas *, const char *, ...);
@@ -27,6 +29,8 @@ void an_gas_enter(ANGas *, unsigned frame_size, int frame_record);
 void an_gas_leave(ANGas *, unsigned frame_size, int frame_record);
 void an_gas_stack_load(ANGas *, const char *dst, unsigned offset);
 void an_gas_stack_store(ANGas *, const char *src, unsigned offset);
+void an_gas_stack_alloc(ANGas *, unsigned outgoing);
+void an_gas_stack_free(ANGas *);
 /* Move between an FP ABI register and an eight-byte MIR home. Register
  * number zero is also the result register. Saving f32 clears excess bits. */
 void an_gas_fp_load(ANGas *, ArchonMIRType, unsigned reg, unsigned offset);

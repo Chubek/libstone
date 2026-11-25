@@ -27,7 +27,7 @@ def record(path):
 
 record(entry)
 files = generate_ir('gated', [db], options=dict(profile='native', target=architecture,
-                                               abi=abi, oracle=False))
+                                                abi=abi, oracle=False, translate_tool=False))
 out = Path(dest)
 out.mkdir(parents=True, exist_ok=True)
 for name in sources:

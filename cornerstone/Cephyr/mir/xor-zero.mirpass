@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "xor-zero",
+  "summary": "Remove a bitwise XOR with zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "xor", "match": "RhsZero", "replace": "Lhs"},
+    {"opcode": "xor", "match": "LhsZero", "replace": "Rhs"}
+  ]
+}

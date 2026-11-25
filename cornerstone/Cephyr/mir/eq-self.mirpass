@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "eq-self",
+  "summary": "An integer SSA value compares equal to itself.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "eq", "match": "SameOperands", "replace": "One"}
+  ]
+}

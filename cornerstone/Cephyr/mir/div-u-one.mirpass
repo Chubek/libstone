@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "div-u-one",
+  "summary": "Remove unsigned word division by one.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "div_u", "match": "RhsOne", "replace": "Lhs"}
+  ]
+}

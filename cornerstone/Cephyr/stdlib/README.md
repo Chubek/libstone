@@ -141,7 +141,8 @@ This inventory is not a conformance claim. In particular:
 | §§7.3, 7.12, 7.25 | No complex arithmetic library, math library, or type-generic math. |
 | §§7.8, 7.22 | APIs returning `imaxdiv_t`, `div_t`, `ldiv_t`, and `lldiv_t` by value are also exposed to native Cephyr callers on bundled RV64IM LP64. Other Cephyr targets lack the required aggregate ABI. The runtime implements `strtold` and `wcstold`; direct calls require a compiler that supports the target's `long double` return ABI. |
 | §7.13 | The runtime contains `setjmp` and `longjmp`, but Cephyr still lacks the returns-twice call semantics required to expose these to native callers. |
-| §§7.17, 7.26 | Atomics and threads are outside the advertised C11 conditional feature set. |
+| §7.17 | [Atomics](../docs/C11_ATOMICS.md) are available as an integer and object-pointer subset on Linux AMD64 and AArch64. |
+| §7.26 | Threads are outside the advertised C11 conditional feature set. |
 | §§7.21.6, 7.29.2 | Narrow and wide formatted output still lack `long double` conversions. Wide `v` interfaces are declared for external callers and native AMD64 and RV64IM LP64 callers; AAPCS64 would require passing its `va_list` structure by value. |
 
 ## Variadic ABI boundary

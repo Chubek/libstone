@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "project-types",
+  "kind": "ProjectTypes",
+  "input": "verified-graph",
+  "output": "wire-types",
+  "summary": "Project every output value and the function result to a supported Archon scalar carrier; preserve explicit conversions."
+}

@@ -3,9 +3,13 @@
 #include <cephyr/CephyrPlugin.h>
 #include <cephyr/diagnostics.hpp>
 
+#include "mir_catalog.hpp"
+#include "rewrite_passes.hpp"
+
 #include <toml.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -364,14 +368,16 @@ tool_value(const toml_table_t *table, std::string_view key,
 
 toml_table_t *table_value(const toml_table_t *root, std::string_view key,
                           const SourceMap &source, Diagnostics &diagnostics,
-                          bool &valid) {
+                          bool &valid, std::string_view parent = {}) {
     if (!has(root, key))
         return nullptr;
     toml_table_t *table = toml_table_in(root, std::string(key).c_str());
     if (!table) {
         error(diagnostics, source, "cephyr.config.type",
-              "configuration key '" + std::string(key) + "' must be a table",
-              {}, key);
+              "configuration key '" +
+                  (parent.empty() ? std::string{} : std::string(parent) + ".") +
+                  std::string(key) + "' must be a table",
+              parent, key);
         valid = false;
     }
     return table;
@@ -737,6 +743,89 @@ bool read_qml_parameters(QmlProfile &profile, const toml_table_t *entry,
     return valid;
 }
 
+bool validate_target(std::string_view target, std::string_view section,
+                     const SourceMap &source, Diagnostics &diagnostics) {
+    if (!target.empty() && target != "." && target != ".." &&
+        std::all_of(target.begin(), target.end(), [](unsigned char character) {
+            return std::isalnum(character) || character == '-' || character == '_' ||
+                   character == '.' || character == '+';
+        }))
+        return true;
+    error(diagnostics, source, "cephyr.config.value",
+          "target must be a nonempty target-bank name containing only "
+          "letters, digits, '.', '_', '+', and '-'", section, "target");
+    return false;
+}
+
+bool read_pipeline(CompileProfile &profile, const toml_table_t *entry,
+                   std::string_view parent, const SourceMap &source,
+                   Diagnostics &diagnostics) {
+    bool valid = true;
+    const auto section_for = [parent](std::string_view key) {
+        return parent.empty() ? std::string(key) : std::string(parent) + "." + std::string(key);
+    };
+    if (auto *table = table_value(entry, "moonstone", source, diagnostics, valid, parent)) {
+        const auto section = section_for("moonstone");
+        valid = known_keys(table, {"enabled"}, section, source, diagnostics) && valid;
+        profile.moonstone = bool_value(table, "enabled", section, source, diagnostics, valid);
+    }
+    const auto parse = [&](std::string_view key, const auto &names, auto &destination) {
+        const auto *table = table_value(entry, key, source, diagnostics, valid, parent);
+        if (!table)
+            return;
+        const auto section = section_for(key);
+        valid = known_keys(table, {"enabled", "passes"}, section, source, diagnostics) && valid;
+        const auto enabled = bool_value(table, "enabled", section, source, diagnostics, valid);
+        const auto passes = string_array(table, "passes", section, source, diagnostics, valid);
+        if (!passes) {
+            if (enabled)
+                destination = PassSelection{*enabled};
+            return;
+        }
+        if (enabled == false && !passes->empty()) {
+            error(diagnostics, source, "cephyr.config.value",
+                  "'" + section + ".passes' cannot select passes with enabled = false",
+                  section, "passes");
+            valid = false;
+        }
+        std::uint64_t mask = 0;
+        for (const auto &pass : *passes) {
+            if (!validate_text(pass, section + ".passes", section, "passes", source, diagnostics)) {
+                valid = false;
+                continue;
+            }
+            const auto index = std::find(names.begin(), names.end(), std::string_view(pass)) - names.begin();
+            if (static_cast<std::size_t>(index) == names.size()) {
+                error(diagnostics, source, "cephyr.config.pass",
+                      "unknown " + std::string(key) + " pass '" + pass + "' in '" + section + ".passes'",
+                      section, "passes");
+                valid = false;
+                continue;
+            }
+            const auto bit = std::uint64_t{1} << index;
+            if ((mask & bit) != 0) {
+                error(diagnostics, source, "cephyr.config.pass",
+                      "duplicate " + std::string(key) + " pass '" + pass + "' in '" + section + ".passes'",
+                      section, "passes");
+                valid = false;
+            }
+            mask |= bit;
+        }
+        destination = PassSelection{enabled.value_or(true), mask};
+    };
+    constexpr auto mir_names = [] {
+        std::array<std::string_view, mir::catalog::passes.size()> names{};
+        for (std::size_t i = 0; i < names.size(); ++i)
+            names[i] = mir::catalog::passes[i].id;
+        return names;
+    }();
+    parse("factir", factir_pass_names, profile.factir);
+    parse("mir", mir_names, profile.mir);
+    parse("blackstone", blackstone_pass_names, profile.blackstone);
+    parse("sandslab", sandslab_pass_names, profile.sandslab);
+    return valid;
+}
+
 bool read_profiles(Config &config, const toml_table_t *table,
                    const std::filesystem::path &base, const SourceMap &source,
                    Diagnostics &diagnostics) {
@@ -754,44 +843,42 @@ bool read_profiles(Config &config, const toml_table_t *table,
             valid = false;
             continue;
         }
-        valid = known_keys(entry, {"passes", "files", "fuel", "parameters"}, section, source, diagnostics) && valid;
-        QmlProfile profile;
+        valid = known_keys(entry,
+                           {"target", "moonstone", "factir", "mir", "blackstone", "sandslab",
+                            "passes", "files", "fuel", "parameters"},
+                           section, source, diagnostics) && valid;
+        CompileProfile profile;
+        if (auto target = string_value(entry, "target", section, source, diagnostics, valid)) {
+            valid = validate_target(*target, section, source, diagnostics) && valid;
+            profile.target = std::move(*target);
+        }
+        valid = read_pipeline(profile, entry, section, source, diagnostics) && valid;
         if (auto passes = string_array(entry, "passes", section, source, diagnostics, valid)) {
             for (const auto &pass : *passes)
                 valid = validate_text(pass, section + ".passes", section, "passes", source, diagnostics) && valid;
-            profile.passes = std::move(*passes);
+            profile.qml.passes = std::move(*passes);
         }
         if (auto files = string_array(entry, "files", section, source, diagnostics, valid)) {
             for (const auto &file : *files) {
                 if (validate_text(file, section + ".files", section, "files", source, diagnostics))
-                    profile.files.push_back(resolve_path(base, file));
+                    profile.qml.files.push_back(resolve_path(base, file));
                 else
                     valid = false;
             }
         }
-        profile.fuel = qml_fuel(entry, section, source, diagnostics, valid);
-        valid = read_qml_parameters(profile, entry, section, source, diagnostics) && valid;
-        config.qml_profiles.insert_or_assign(name, std::move(profile));
+        profile.qml.fuel = qml_fuel(entry, section, source, diagnostics, valid);
+        valid = read_qml_parameters(profile.qml, entry, section, source, diagnostics) && valid;
+        config.profiles.insert_or_assign(name, std::move(profile));
     }
     return valid;
 }
 
 bool validate_config(const Config &config, const SourceMap &source,
                      Diagnostics &diagnostics) {
-    bool valid = true;
-    const bool valid_target = !config.target ||
-        (!config.target->empty() && *config.target != "." && *config.target != ".." &&
-        std::all_of(config.target->begin(), config.target->end(),
-                    [](unsigned char character) {
-                        return std::isalnum(character) || character == '-' ||
-                               character == '_' || character == '.' ||
-                               character == '+';
-                    }));
-    if (!valid_target) {
-        error(diagnostics, source, "cephyr.config.value",
-              "target must be a nonempty target-bank name containing only "
-              "letters, digits, '.', '_', '+', and '-'",
-              {}, "target");
+    bool valid = !config.target || validate_target(*config.target, {}, source, diagnostics);
+    if (config.profile && !config.profiles.contains(*config.profile)) {
+        error(diagnostics, source, "cephyr.config.profile",
+              "unknown compilation profile '" + *config.profile + "'", {}, "profile");
         valid = false;
     }
 
@@ -925,15 +1012,21 @@ bool load_config(Config &config, const std::filesystem::path &path,
 
     bool valid = known_keys(
         root.get(),
-        {"target", "representation", "assembler_style", "stdlib",
+        {"target", "profile", "representation", "assembler_style", "stdlib",
          "cache_enabled", "static_link", "paths", "tools", "flags",
-         "preprocess", "extensions", "qml", "profiles", "factir", "blackstone", "sandslab"},
+         "preprocess", "extensions", "qml", "profiles", "moonstone", "factir", "mir", "blackstone", "sandslab"},
         {}, source, diagnostics);
     Config candidate = config;
 
     if (auto value =
             string_value(root.get(), "target", {}, source, diagnostics, valid))
         candidate.target = std::move(*value);
+    if (auto value = string_value(root.get(), "profile", {}, source, diagnostics, valid)) {
+        if (validate_text(*value, "profile", {}, "profile", source, diagnostics))
+            candidate.profile = std::move(*value);
+        else
+            valid = false;
+    }
     if (auto value = string_value(root.get(), "representation", {}, source,
                                   diagnostics, valid))
         candidate.representation = std::move(*value);
@@ -977,21 +1070,13 @@ bool load_config(Config &config, const std::filesystem::path &path,
 
     if (auto *table = table_value(root.get(), "qml", source, diagnostics, valid))
         valid = read_qml(candidate, table, source, diagnostics) && valid;
-    if (auto *table = table_value(root.get(), "sandslab", source, diagnostics, valid)) {
-        valid = known_keys(table, {"enabled"}, "sandslab", source, diagnostics) && valid;
-        if (auto value = bool_value(table, "enabled", "sandslab", source, diagnostics, valid))
-            candidate.sandslab_enabled = *value;
-    }
-    if (auto *table = table_value(root.get(), "blackstone", source, diagnostics, valid)) {
-        valid = known_keys(table, {"enabled"}, "blackstone", source, diagnostics) && valid;
-        if (auto value = bool_value(table, "enabled", "blackstone", source, diagnostics, valid))
-            candidate.blackstone_enabled = *value;
-    }
-    if (auto *table = table_value(root.get(), "factir", source, diagnostics, valid)) {
-        valid = known_keys(table, {"enabled"}, "factir", source, diagnostics) && valid;
-        if (auto value = bool_value(table, "enabled", "factir", source, diagnostics, valid))
-            candidate.factir_enabled = *value;
-    }
+    CompileProfile pipeline;
+    valid = read_pipeline(pipeline, root.get(), {}, source, diagnostics) && valid;
+    if (pipeline.moonstone) candidate.moonstone = *pipeline.moonstone;
+    if (pipeline.factir) candidate.factir = *pipeline.factir;
+    if (pipeline.mir) candidate.mir = *pipeline.mir;
+    if (pipeline.blackstone) candidate.blackstone = *pipeline.blackstone;
+    if (pipeline.sandslab) candidate.sandslab = *pipeline.sandslab;
     if (auto *table = table_value(root.get(), "profiles", source, diagnostics, valid))
         valid = read_profiles(candidate, table, base, source, diagnostics) && valid;
 

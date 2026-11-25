@@ -22,6 +22,7 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
 {
     const size_t stack_align = an_abi.stack_align;
     size_t limit, last_incoming = 0, varargs = 0, size = 0, i;
+    int dynamic = 0;
 
     if (stack_align < WordBytes || (stack_align & (stack_align - 1)))
         return an_error(ctx, ARCHON_BACKEND_INTERNAL, "invalid ABI stack alignment");
@@ -35,8 +36,13 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     limit = ((size_t)INT_MAX - last_incoming) & ~(stack_align - 1);
     if (fn->local_count > AN_MAX_VALUE)
         return an_error(ctx, ARCHON_BACKEND_LIMIT, "too many frame objects");
+    for (size_t b = 0; b < fn->block_count && !dynamic; ++b)
+        for (i = 0; i < fn->blocks[b].inst_count && !dynamic; ++i)
+            dynamic = an_is_dynamic_stack(fn->blocks[b].insts[i].op);
     if (!add_words(&size, outgoing_words, limit))
         goto too_large;
+    if (dynamic)
+        size = align_up(size, stack_align);
     frame->slots_base = (int)size;
     if (!add_words(&size, slots, limit))
         goto too_large;
@@ -72,6 +78,13 @@ int an_frame(ANContext *ctx, const ArchonMIRFunction *fn, size_t slots,
     if (calls) {
         size = align_up(size, WordBytes);
         frame->return_offset = (int)size;
+        if (!add_words(&size, 1, limit))
+            goto too_large;
+    }
+    frame->base_save = -1;
+    if (dynamic) {
+        size = align_up(size, WordBytes);
+        frame->base_save = (int)size;
         if (!add_words(&size, 1, limit))
             goto too_large;
     }
@@ -174,11 +187,19 @@ void an_enter(ANOut *out, const ANFrame *frame)
     an_addr(out, sp, sp, -frame->frame_size);
     if (frame->return_offset >= 0)
         an_store(out, an_abi.return_address, sp, frame->return_offset);
+    if (frame->base_save >= 0) {
+        an_store(out, AN_S0, sp, frame->base_save);
+        an_addr(out, AN_S0, sp, 0);
+    }
 }
 
 void an_leave(ANOut *out, const ANFrame *frame)
 {
     unsigned sp = an_abi.stack_pointer, ra = an_abi.return_address;
+    if (frame->base_save >= 0) {
+        an_addr(out, sp, AN_S0, 0);
+        an_load(out, AN_S0, sp, frame->base_save);
+    }
     if (frame->return_offset >= 0)
         an_load(out, ra, sp, frame->return_offset);
     an_addr(out, sp, sp, frame->frame_size);
@@ -202,7 +223,7 @@ void an_read(ANOut *out, const ANFrame *frame, const ANHome *homes,
     if (register_home(home))
         an_addr(out, dst, home->reg, 0);
     else
-        an_load(out, dst, an_abi.stack_pointer, slot_offset(frame, home));
+        an_load(out, dst, an_frame_base(frame), slot_offset(frame, home));
 }
 
 void an_write(ANOut *out, const ANFrame *frame, const ANHome *homes,
@@ -212,5 +233,5 @@ void an_write(ANOut *out, const ANFrame *frame, const ANHome *homes,
     if (register_home(home))
         an_addr(out, home->reg, src, 0);
     else
-        an_store(out, src, an_abi.stack_pointer, slot_offset(frame, home));
+        an_store(out, src, an_frame_base(frame), slot_offset(frame, home));
 }

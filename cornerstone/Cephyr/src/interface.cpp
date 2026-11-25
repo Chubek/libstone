@@ -1,4 +1,5 @@
 #include "interface.hpp"
+#include <cephyr/config.hpp>
 
 #include "declarations.hpp"
 #include "../FactIR.hpp"
@@ -635,7 +636,7 @@ class Projection {
 
     void write_type(std::ostream &out, const CType &type) const
     {
-        const bool qualified = type.is_const || type.is_volatile || type.is_restrict;
+        const bool qualified = type.is_const || type.is_volatile || type.is_restrict || type.is_atomic;
         if (qualified) {
             out << "(qualified (qualifiers";
             if (type.is_const)
@@ -644,6 +645,8 @@ class Projection {
                 out << " volatile";
             if (type.is_restrict)
                 out << " restrict";
+            if (type.is_atomic)
+                out << " atomic";
             out << ") ";
         }
         switch (type.kind) {
@@ -853,10 +856,10 @@ public:
     }
 
     void write_native_analysis(std::ostream &out, Node *root, const Target &target,
-                               bool factir_enabled, bool moonstone) const
+                               const PassSelection &factir_settings, bool moonstone) const
     {
         out << "\n  (native-analysis 1 (scope translation-unit)";
-        if (!factir_enabled && !moonstone) {
+        if (!factir_settings.enabled && !moonstone) {
             out << " (status disabled))";
             return;
         }
@@ -879,10 +882,11 @@ public:
         auto lowered = lower(root, unit.source, findings, unit.hosted, inspector);
         if (!lowered)
             out << " (status lowering-unavailable)";
-        else if (!factir_enabled)
+        else if (!factir_settings.enabled)
             out << " (status lowered) (factir disabled)";
         else {
-            auto facts = factir::run(lowered->mir, target, unit.source.file, findings);
+            auto facts = factir::run(lowered->mir, target, unit.source.file, findings,
+                                     factir_settings.passes);
             if (!facts)
                 out << " (status analysis-unavailable)";
             else if (facts->budget_exceeded)
@@ -907,7 +911,8 @@ public:
         out << ')';
     }
 
-    std::string write(Node *root, const Target &target, bool factir_enabled, bool moonstone) const
+    std::string write(Node *root, const Target &target, const PassSelection &factir_settings,
+                      bool moonstone) const
     {
         const auto &abi = target.abi;
         std::ostringstream out;
@@ -927,7 +932,7 @@ public:
         unsigned proof_budget = 128;
         for (const auto &decl : declarations)
             write_declaration(out, decl, convention, proof_budget);
-        write_native_analysis(out, root, target, factir_enabled, moonstone);
+        write_native_analysis(out, root, target, factir_settings, moonstone);
         out << ")\n";
         return std::move(out).str();
     }
@@ -936,8 +941,9 @@ public:
 } // namespace
 
 std::optional<std::string> project_interface(cparser::ASTNode *root, const Preprocessed &source,
-                                             Diagnostics &diagnostics, bool hosted,
-                                             const Target &target, bool factir_enabled, bool moonstone)
+                                              Diagnostics &diagnostics, bool hosted,
+                                              const Target &target, const PassSelection &factir_settings,
+                                              bool moonstone)
 {
     const auto before = diagnostics.error_count();
     Unit unit(source, diagnostics, hosted);
@@ -946,7 +952,7 @@ std::optional<std::string> project_interface(cparser::ASTNode *root, const Prepr
         Projection projection(unit);
         projection.resolve(root, at);
         if (diagnostics.error_count() == before) {
-            auto text = projection.write(root, target, factir_enabled, moonstone);
+            auto text = projection.write(root, target, factir_settings, moonstone);
             if (diagnostics.error_count() == before)
                 return text;
         }

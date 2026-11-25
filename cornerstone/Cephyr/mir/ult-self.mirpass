@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "ult-self",
+  "summary": "Unsigned strict less-than of the same value is false.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "ult", "match": "SameOperands", "replace": "Zero"}
+  ]
+}

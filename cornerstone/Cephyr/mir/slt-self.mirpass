@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "slt-self",
+  "summary": "Signed strict less-than of the same value is false.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "slt", "match": "SameOperands", "replace": "Zero"}
+  ]
+}

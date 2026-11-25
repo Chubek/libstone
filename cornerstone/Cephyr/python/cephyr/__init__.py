@@ -18,7 +18,7 @@ from ._sdk import (
 
 __all__ = [
     "ABI_VERSION", "Compiler", "Diagnostic", "Hook", "HookInput", "HookResult",
-    "Result", "Severity", "Stage", "Status", "compile", "emit_interface", "parse_c11",
+    "Result", "Severity", "Stage", "Status", "compile", "emit_interface", "emit_mir", "parse_c11",
 ]
 
 ABI_VERSION = 1
@@ -238,6 +238,24 @@ class Compiler:
             resource_root=resource_root, archon_root=archon_root, sdk=sdk,
         )
 
+    def emit_mir(
+        self,
+        argv: Iterable[_PathArg],
+        source: str | bytes | None = None,
+        *,
+        resource_root: _PathArg | None = None,
+        archon_root: _PathArg | None = None,
+        sdk: Iterable[Hook] | None = None,
+    ) -> Result:
+        """Emit Archon MachineIR v1 for one input, captured unless ``-o FILE`` is used."""
+        # Resolve the additive API on demand so other methods still work with
+        # an older ABI-v1 library.
+        emit = _function(
+            self._library, "cephyr_emit_mir", _ct.c_int,
+            _ct.POINTER(_Request), _ct.POINTER(_ct.c_void_p),
+        )
+        return self._run(emit, argv, source, resource_root, archon_root, sdk)
+
     def compile(
         self,
         argv: Iterable[_PathArg],
@@ -253,6 +271,17 @@ class Compiler:
         bytes. Paths and arguments use the filesystem encoding. ``sdk`` is
         an optional iterable of trusted hooks for this request only.
         """
+        return self._run(self._compile, argv, source, resource_root, archon_root, sdk)
+
+    def _run(
+        self,
+        invoke,
+        argv: Iterable[_PathArg],
+        source: str | bytes | None,
+        resource_root: _PathArg | None,
+        archon_root: _PathArg | None,
+        sdk: Iterable[Hook] | None,
+    ) -> Result:
         if isinstance(argv, (str, bytes, os.PathLike)):
             raise TypeError("argv must be an iterable of arguments, not a string or path")
         args = [_c_string(arg, "argv entry") for arg in argv]
@@ -274,7 +303,7 @@ class Compiler:
         )
         result = _ct.c_void_p()
         try:
-            native_status = self._compile(_ct.byref(request), _ct.byref(result))
+            native_status = invoke(_ct.byref(request), _ct.byref(result))
             if registration is not None:
                 registration.raise_if_failed()
             status = Status(native_status)
@@ -331,5 +360,20 @@ def emit_interface(
 ) -> Result:
     """Emit an interface with Cephyr, ABI-checking the library on each call."""
     return Compiler(library).emit_interface(
+        argv, source, resource_root=resource_root, archon_root=archon_root, sdk=sdk
+    )
+
+
+def emit_mir(
+    argv: Iterable[_PathArg],
+    source: str | bytes | None = None,
+    *,
+    library: _PathArg | None = None,
+    resource_root: _PathArg | None = None,
+    archon_root: _PathArg | None = None,
+    sdk: Iterable[Hook] | None = None,
+) -> Result:
+    """Emit MIR with Cephyr, resolving and ABI-checking the library on each call."""
+    return Compiler(library).emit_mir(
         argv, source, resource_root=resource_root, archon_root=archon_root, sdk=sdk
     )

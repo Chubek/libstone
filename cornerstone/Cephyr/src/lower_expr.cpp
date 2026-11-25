@@ -78,7 +78,8 @@ bool is_null_pointer_constant(const Expr &value) {
 }
 
 bool complete_object_pointer(const CType &type) {
-  return is_object_pointer(type) && size_of(*type.element).has_value();
+  return is_object_pointer(type) &&
+         (type.element->runtime_array() || size_of(*type.element).has_value());
 }
 
 bool drops_qualifiers(const CType &from, const CType &to) {
@@ -96,6 +97,7 @@ bool compatible_object_pointers(const CType &lhs, const CType &rhs) {
   if (is_void_pointer(lhs) || is_void_pointer(rhs))
     return true;
   return lhs.element && rhs.element &&
+         lhs.element->is_atomic == rhs.element->is_atomic &&
          compatible(unqualified(*lhs.element), unqualified(*rhs.element));
 }
 
@@ -110,6 +112,7 @@ CType pointer_composite(const CType &lhs, const CType &rhs) {
                         (rhs.element && rhs.element->is_volatile);
   pointee.is_restrict = (lhs.element && lhs.element->is_restrict) ||
                         (rhs.element && rhs.element->is_restrict);
+  pointee.is_atomic = !is_void(pointee) && lhs.element->is_atomic && rhs.element->is_atomic;
   return pointer_type(pointee);
 }
 
@@ -337,6 +340,107 @@ bool assignment_compatible(const TypeContext &context, const CType &target,
     return compatible(unqualified(target), source);
   return compatible_object_pointers(target, source) &&
          !drops_qualifiers(source, target);
+}
+
+enum class AtomicOp {
+  init, is_lock_free, load, store, exchange, compare_exchange,
+  fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor,
+  flag_test_and_set, flag_clear, thread_fence, signal_fence
+};
+
+constexpr std::string_view atomic_names[]{
+  "init", "is_lock_free", "load", "store", "exchange", "compare_exchange",
+  "fetch_add", "fetch_sub", "fetch_and", "fetch_or", "fetch_xor",
+  "flag_test_and_set", "flag_clear", "thread_fence", "signal_fence"
+};
+
+std::optional<AtomicOp> atomic_builtin(std::string_view name) {
+  constexpr std::string_view prefix = "__cephyr_atomic_";
+  if (!name.starts_with(prefix))
+    return std::nullopt;
+  name.remove_prefix(prefix.size());
+  for (unsigned i = 0; i != std::size(atomic_names); ++i)
+    if (atomic_names[i] == name)
+      return static_cast<AtomicOp>(i);
+  return std::nullopt;
+}
+
+struct AtomicCall {
+  CType value, result;
+};
+
+AtomicCall check_atomic_call(const TypeContext &context, Node *node, AtomicOp op,
+                             const std::vector<Node *> &args) {
+  const auto error = [&](std::string_view message) {
+    context.diagnostics.error("cephyr.atomic", message, location(context.source, node));
+    return AtomicCall{};
+  };
+  if (!context.source.native_atomics)
+    return error("atomic operations require the bundled Linux AMD64 or AArch64 backend");
+
+  const bool fence = op == AtomicOp::thread_fence || op == AtomicOp::signal_fence;
+  const bool flag = op == AtomicOp::flag_test_and_set || op == AtomicOp::flag_clear;
+  const bool fetch = op >= AtomicOp::fetch_add && op <= AtomicOp::fetch_xor;
+  const bool cas = op == AtomicOp::compare_exchange;
+  const bool ordered = op != AtomicOp::init && op != AtomicOp::is_lock_free;
+  const bool read_only = op == AtomicOp::load || op == AtomicOp::is_lock_free;
+  const bool value_arg = op == AtomicOp::init || op == AtomicOp::store ||
+                         op == AtomicOp::exchange || fetch || cas;
+  const unsigned count = fence ? 1 : 1 + unsigned(value_arg) + unsigned(ordered) + 2 * unsigned(cas);
+  if (args.size() != count)
+    return error("invalid atomic builtin argument count");
+
+  const auto get_order = [&](unsigned index) -> std::optional<unsigned> {
+    const auto order = integer_constant(args[index], context);
+    if (!order || order->value > 5)
+      return std::nullopt;
+    return static_cast<unsigned>(order->value);
+  };
+  if (ordered) {
+    const auto success = get_order(count - (cas ? 2 : 1));
+    if (!success)
+      return error("atomic memory order must be an integer constant expression in the memory_order range");
+    if (op == AtomicOp::load && (*success == 3 || *success == 4))
+      return error("atomic load cannot use release or acq_rel ordering");
+    if ((op == AtomicOp::store || op == AtomicOp::flag_clear) &&
+        (*success == 1 || *success == 2 || *success == 4))
+      return error("atomic store or flag clear cannot use consume, acquire or acq_rel ordering");
+    if (cas) {
+      const auto failure = get_order(count - 1);
+      constexpr unsigned permitted[]{0u, 1u, 2u, 0u, 2u, 5u};
+      if (!failure || *failure == 3 || *failure == 4 || *failure > permitted[*success])
+        return error("compare-exchange failure order cannot be release, acq_rel or stronger than success");
+    }
+  }
+  if (fence)
+    return {{}, void_type()};
+
+  const auto pointer = decay(expression_type(args[0], context));
+  if (!pointer.pointer() || !pointer.element ||
+      (flag ? (pointer.element->is_atomic || !compatible(unqualified(*pointer.element), integer_type(8, false)))
+            : !pointer.element->is_atomic))
+    return error(flag ? "atomic flag operation requires a pointer to atomic_flag"
+                      : "atomic operation requires a pointer to an atomic object");
+  if (!read_only && pointer.element->is_const)
+    return error("atomic modification requires a non-const atomic object");
+  auto value = unqualified(*pointer.element);
+  if (fetch && (!value.integer() || value.bits == 1))
+    return error("atomic fetch operations support only non-boolean integer objects");
+  if (cas) {
+    const auto expected = decay(expression_type(args[1], context));
+    if (!compatible(expected, pointer_type(value)))
+      return error("compare-exchange expected argument must point to the corresponding non-atomic type");
+  }
+  if (value_arg) {
+    const unsigned index = cas ? 2 : 1;
+    if (!assignment_compatible(context, value, decay(expression_type(args[index], context)), args[index]))
+      return error("atomic value argument cannot be converted to the corresponding non-atomic type");
+  }
+  if (cas || op == AtomicOp::is_lock_free || op == AtomicOp::flag_test_and_set)
+    return {value, integer_type(1, false)};
+  if (op == AtomicOp::init || op == AtomicOp::store || op == AtomicOp::flag_clear)
+    return {value, void_type()};
+  return {value, value};
 }
 
 CType arithmetic_type(ASTNodeKind kind, const CType &lhs, const CType &rhs) {
@@ -667,6 +771,8 @@ CType expression_type(Node *node, const TypeContext &context) {
       const auto name = identifier(call->getExpr());
       if (stdarg_builtin(name))
         return stdarg_builtin_type(context, node, name, elements(call->getArgs()));
+      if (const auto op = atomic_builtin(name))
+        return check_atomic_call(context, node, *op, elements(call->getArgs())).result;
     }
     const auto callee = as_value(call->getExpr());
     if (!callee.function_pointer() || !callee.element->element)
@@ -694,6 +800,7 @@ CType expression_type(Node *node, const TypeContext &context) {
     return *signature.element;
   }
   case cparser::NK_SIZEOF_EXPR:
+    return layout_operand_type(node, context).valid() ? size_type() : invalid_type();
   case cparser::NK_ALIGNOF_EXPR:
   case cparser::NK_OFFSETOF_EXPR: {
     const auto size = layout_constant(node, context);
@@ -916,9 +1023,14 @@ Expr pointer_offset(Function &function, Expr pointer, Expr index, bool subtract,
   index = convert(function, index, index_type, at);
   if (!index.type.valid())
     return invalid_expr();
-  const auto stride = *size_of(*pointer.type.element);
+  const auto stride = size_of(*pointer.type.element);
   if (stride != 1) {
-    auto amount = function.constant(stride, index_type);
+    const auto amount = stride ? function.constant(*stride, index_type)
+                               : pointer.type.element->vla_size;
+    if (amount == no_value) {
+      function.error(at, "pointer arithmetic has no captured variable-length array stride");
+      return invalid_expr();
+    }
     index.id =
         function.emit(index_type, "mul", binary_operands(index.id, amount));
     index = canonicalize(function, index, at);
@@ -954,9 +1066,14 @@ Expr pointer_difference(Function &function, Expr lhs, Expr rhs, Node *at) {
               function.emit(difference_type(), "sub",
                             binary_operands(lhs_int, rhs_int)),
               std::nullopt};
-  const auto stride = *size_of(*lhs.type.element);
+  const auto stride = size_of(*lhs.type.element);
   if (stride != 1) {
-    const auto amount = function.constant(stride, difference_type());
+    const auto amount = stride ? function.constant(*stride, difference_type())
+                               : lhs.type.element->vla_size;
+    if (amount == no_value) {
+      function.error(at, "pointer subtraction has no captured variable-length array stride");
+      return invalid_expr();
+    }
     result.id = function.emit(difference_type(), "div_s",
                               binary_operands(result.id, amount));
   }
@@ -1301,6 +1418,77 @@ Expr conditional(Function &function, cparser::CondExprASTNode *node) {
   return {result_type, result, std::nullopt, sign_exponent};
 }
 
+// Opaque impure calls preserve memory ordering on the existing Archon wire.
+// Integer bits travel as u64; the runtime touches exactly the named width.
+Expr atomic_runtime(Function &function, std::string_view operation, unsigned bytes,
+                    const CType &result, std::vector<Expr> args, Node *at) {
+  std::string name = "__cephyr_rt_atomic_" + std::string(operation);
+  if (bytes)
+    name += "_" + std::to_string(bytes);
+  std::string operands = name + " " + std::to_string(args.size());
+  CType signature;
+  signature.kind = CType::Kind::function;
+  signature.element = std::make_shared<CType>(is_void(result) ? result : size_type());
+  signature.prototype = true;
+  for (const auto &argument : args) {
+    if (!argument.type.valid() || argument.id == no_value)
+      return invalid_expr();
+    signature.params.push_back(argument.type.pointer() ? pointer_type(void_type()) : size_type());
+    operands += " " + id(argument.id);
+  }
+  function.unit.atomic_helpers.try_emplace(std::move(name), std::move(signature));
+  if (is_void(result)) {
+    function.emit_void("call", "- " + operands);
+    return {result, no_value, std::nullopt};
+  }
+  const auto raw = function.emit(size_type(), "call", operands, at);
+  return convert(function, {size_type(), raw, std::nullopt}, result, at, true);
+}
+
+unsigned atomic_bytes(const CType &type) {
+  return type.bits == 1 ? 1 : type.bits / 8;
+}
+
+Expr atomic_address(Id address) {
+  return {pointer_type(void_type()), address, std::nullopt};
+}
+
+Expr atomic_data(Function &function, Expr value, Node *at) {
+  return convert(function, value, size_type(), at, true);
+}
+
+const char *atomic_fetch_operation(ASTNodeKind kind) {
+  switch (kind) {
+  case cparser::NK_PLUS_EXPR: return "fetch_add";
+  case cparser::NK_MINUS_EXPR: return "fetch_sub";
+  case cparser::NK_BIT_AND_EXPR: return "fetch_and";
+  case cparser::NK_BIT_IOR_EXPR: return "fetch_or";
+  case cparser::NK_BIT_XOR_EXPR: return "fetch_xor";
+  default: return nullptr;
+  }
+}
+
+Expr atomic_update(Function &function, const LValue &target, ASTNodeKind kind,
+                   Expr rhs, bool post, Node *at) {
+  const auto op = atomic_fetch_operation(kind);
+  if (!op || !target.type.integer() || target.type.bits == 1 || !rhs.type.integer()) {
+    function.error(at, "atomic updates support only integer +=, -=, &=, |=, ^=, ++ and -- (not _Bool)",
+                   "cephyr.atomic");
+    return invalid_expr();
+  }
+  const auto type = unqualified(target.type);
+  const auto operand = convert(function, rhs, type, at);
+  const auto old = atomic_runtime(function, op, atomic_bytes(type), type,
+      {atomic_address(target.address), atomic_data(function, operand, at)}, at);
+  if (post || !old.type.valid())
+    return old;
+  // These operations commute with truncation to the object's width. Derive
+  // the new value from this RMW's old value, never a separate reload.
+  auto result = convert(function, integer_binary(function, kind, old, operand, at), type, at);
+  result.constant.reset();
+  return result;
+}
+
 Expr increment(Function &function, Node *operand, bool decrement, bool post,
                Node *at) {
   auto target = lower_lvalue(function, operand);
@@ -1311,6 +1499,9 @@ Expr increment(Function &function, Node *operand, bool decrement, bool post,
                        "lvalue");
     return invalid_expr();
   }
+  if (target.type.is_atomic)
+    return atomic_update(function, target, decrement ? cparser::NK_MINUS_EXPR : cparser::NK_PLUS_EXPR,
+                         {int_type(), function.constant(1, int_type()), 1}, post, at);
   Id snapshot = no_value;
   auto old = uses_bit_field_snapshot(target) ? read_volatile_bit_field(function, target, operand, &snapshot)
                                             : load(function, target, operand);
@@ -1362,6 +1553,9 @@ Expr assignment(Function &function, cparser::AssignExprASTNode *node) {
   // The parser represents `a op= b` as `a = (a op b)` and deliberately reuses
   // the exact lhs node. Preserve C's single evaluation of `a`.
   if (compound && compound->lhs == node->getLhs()) {
+    if (target.type.is_atomic)
+      return atomic_update(function, target, node->getRhs()->getKind(),
+                           lower_expr(function, compound->rhs), false, node);
     Expr lhs, rhs;
     if (uses_bit_field_snapshot(target)) {
       // Take the preservation snapshot after evaluating the RHS: its side
@@ -1396,6 +1590,42 @@ std::string call_operands(std::string target, const std::vector<Id> &args) {
   for (const auto argument : args)
     operands << ' ' << argument;
   return operands.str();
+}
+
+Expr lower_atomic_builtin(Function &function, cparser::CallExprASTNode *node, AtomicOp op) {
+  const auto args = elements(node->getArgs());
+  const auto checked = check_atomic_call(TypeContext(function.unit, &function), node, op, args);
+  if (!checked.result.valid())
+    return invalid_expr();
+  const auto operation = atomic_names[static_cast<unsigned>(op)];
+  if (op == AtomicOp::thread_fence || op == AtomicOp::signal_fence)
+    return atomic_runtime(function, operation, 0, checked.result, {}, node);
+
+  const auto object = lower_expr(function, args[0]);
+  if (!object.type.valid())
+    return invalid_expr();
+  if (op == AtomicOp::is_lock_free)
+    return {checked.result, function.constant(1, checked.result), std::nullopt};
+  if (op == AtomicOp::init) {
+    // Initialization must not run concurrently with other accesses.
+    store(function, {checked.value, object.id}, lower_expr(function, args[1]), node);
+    return {checked.result, no_value, std::nullopt};
+  }
+  const bool cas = op == AtomicOp::compare_exchange;
+  if (op == AtomicOp::load)
+    return atomic_runtime(function, operation, atomic_bytes(checked.value), checked.result, {object}, node);
+  if (op == AtomicOp::flag_test_and_set || op == AtomicOp::flag_clear) {
+    const bool set = op == AtomicOp::flag_test_and_set;
+    return atomic_runtime(function, set ? "exchange" : "store", 1, checked.result,
+        {object, {size_type(), function.constant(set, size_type()), std::nullopt}}, node);
+  }
+  std::vector<Expr> runtime_args{object};
+  if (cas)
+    runtime_args.push_back(lower_expr(function, args[1]));
+  auto value = convert(function, lower_expr(function, args[cas ? 2 : 1]), checked.value, node);
+  runtime_args.push_back(atomic_data(function, value, node));
+  return atomic_runtime(function, operation, atomic_bytes(checked.value), checked.result,
+                        std::move(runtime_args), node);
 }
 
 Expr record_call_result(Function &function, const CType &signature, std::string target,
@@ -1719,6 +1949,8 @@ Expr call(Function &function, cparser::CallExprASTNode *node) {
     const auto name = identifier(callee);
     if (stdarg_builtin(name))
       return lower_stdarg_builtin(function, node, name);
+    if (const auto op = atomic_builtin(name))
+      return lower_atomic_builtin(function, node, *op);
     if (const auto binding = function.find_linked(name, callee)) {
       if (binding->type.kind == CType::Kind::function)
         return direct_call(function, node, *binding);
@@ -1738,7 +1970,29 @@ Expr string_literal(Function &function, Node *node) {
 }
 
 Expr lower_layout_constant(Function &function, Node *node) {
-  const auto result = layout_constant(node, TypeContext(function.unit, &function));
+  const auto context = TypeContext(function.unit, &function);
+  if (node->getKind() == cparser::NK_SIZEOF_EXPR) {
+    CType type = layout_operand_type(node, context);
+    if (!type.valid())
+      return invalid_expr();
+    if (type.runtime_array()) {
+      auto *operand = static_cast<cparser::SizeOfExprASTNode *>(node)->getExpr();
+      // C11 6.5.3.4p2: unlike fixed-size operands, a VLA expression
+      // evaluates its designator, including side effects of subscripts.
+      type = operand->isType() ? capture_vla_sizes(function, std::move(type), node)
+                               : lower_lvalue(function, operand).type;
+      if (!type.valid())
+        return invalid_expr();
+      if (type.vla_size == no_value) {
+        function.error(node, "sizeof has no captured variable-length array size");
+        return invalid_expr();
+      }
+      return {size_type(), type.vla_size, std::nullopt};
+    }
+    const auto size = *size_of(type);
+    return {size_type(), function.constant(size, size_type()), size};
+  }
+  const auto result = layout_constant(node, context);
   if (!result)
     return invalid_expr();
   return {result->type, function.constant(result->value, result->type), result->value};
@@ -1795,9 +2049,61 @@ void attach_integer_constant(Function &function, Node *node, Expr &result) {
 
 } // namespace
 
+CType capture_vla_sizes(Function &function, CType type, Node *at) {
+  if (!type.runtime_array() || type.vla_size != no_value)
+    return type;
+  const auto word = size_type();
+  const auto require = [&](Id condition) {
+    const Id next = function.block(), invalid = function.block();
+    function.branch(condition, next, invalid);
+    function.select(invalid);
+    function.trap();
+    function.select(next);
+  };
+
+  Id count;
+  if (type.vla_bound) {
+    const auto value = lower_expr(function, type.vla_bound);
+    if (!value.type.integer() || value.id == no_value)
+      return {};
+    count = convert(function, value, word, type.vla_bound).id;
+    const auto zero = function.constant(0, word);
+    require(function.emit(int_type(), value.type.is_signed ? "slt" : "ult",
+                          binary_operands(zero, count), type.vla_bound));
+  } else {
+    count = function.constant(type.count, word);
+  }
+
+  // Keep products representable as ptrdiff_t and leave room for stack
+  // alignment. Check before multiplying, including variable inner strides.
+  constexpr auto max_bytes = std::uint64_t{INT64_MAX};
+  auto element = capture_vla_sizes(function, *type.element, at);
+  if (!element.valid())
+    return {};
+  const auto stride = size_of(element);
+  if ((stride && (!*stride || *stride > max_bytes)) ||
+      (!stride && element.vla_size == no_value)) {
+    function.error(at, "variable-length array element size is incomplete or too large");
+    return {};
+  }
+  const auto amount = stride == 1 ? no_value
+      : stride ? function.constant(*stride, word) : element.vla_size;
+  const auto limit = stride ? function.constant(max_bytes / *stride, word)
+      : function.emit(word, "div_u", binary_operands(function.constant(max_bytes, word), amount));
+  const auto exceeds = function.emit(int_type(), "ult", binary_operands(limit, count), at);
+  require(function.emit(int_type(), "eq", binary_operands(exceeds, function.constant(0)), at));
+  type.vla_size = amount == no_value ? count
+      : function.emit(word, "mul", binary_operands(count, amount), at);
+  type.element = std::make_shared<const CType>(std::move(element));
+  return type;
+}
+
 Expr load(Function &function, LValue value, Node *at) {
   if (!value.type.valid() || value.address == no_value)
     return invalid_expr();
+  if (value.type.is_atomic)
+    return atomic_runtime(function, "load", atomic_bytes(value.type), unqualified(value.type),
+                          {atomic_address(value.address)}, at);
   if (value.bit_field) {
     if (value.type.is_volatile)
       return read_volatile_bit_field(function, value, at);
@@ -1905,6 +2211,11 @@ void store(Function &function, LValue target, Expr value, Node *at) {
   value = convert(function, value, target.type, at);
   if (!value.type.valid())
     return;
+  if (target.type.is_atomic) {
+    atomic_runtime(function, "store", atomic_bytes(target.type), void_type(),
+                   {atomic_address(target.address), atomic_data(function, value, at)}, at);
+    return;
+  }
   if (target.bit_field) {
     if (target.type.is_volatile) {
       write_volatile_bit_field(function, target, value, at);

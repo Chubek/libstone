@@ -25,11 +25,11 @@ void an_parameters(ANOut *out, const ArchonMIRFunction *fn,
             if (slot < an_abi.argc)
                 src = an_abi.args[slot];
             else
-                an_load(out, src, an_abi.stack_pointer, frame->frame_size + stack_arg_offset(slot));
+                an_load(out, src, an_frame_base(frame), frame->frame_size + stack_arg_offset(slot));
             if (slot == start)
                 an_write(out, frame, homes, (ArchonValue)i, src);
             else
-                an_store(out, src, an_abi.stack_pointer, frame->high_offsets[i]);
+                an_store(out, src, an_frame_base(frame), frame->high_offsets[i]);
         }
     }
 }
@@ -50,7 +50,7 @@ static void call_arguments(ANOut *out, const ArchonMIRInst *inst,
                 if (slot == start)
                     an_read(out, frame, homes, v, dst);
                 else
-                    an_load(out, dst, an_abi.stack_pointer, frame->high_offsets[v]);
+                    an_load(out, dst, an_frame_base(frame), frame->high_offsets[v]);
                 if (stack)
                     an_store(out, dst, an_abi.stack_pointer, stack_arg_offset(slot));
             }
@@ -64,7 +64,7 @@ static void call_result(ANOut *out, const ArchonMIRInst *inst,
     if (inst->dst != ARCHON_MIR_NONE) {
         an_write(out, frame, homes, inst->dst, an_abi.result);
         if (frame->types && frame->types[inst->dst] == ARCHON_MIR_F128)
-            an_store(out, an_abi.args[1], an_abi.stack_pointer, frame->high_offsets[inst->dst]);
+            an_store(out, an_abi.args[1], an_frame_base(frame), frame->high_offsets[inst->dst]);
     }
 }
 

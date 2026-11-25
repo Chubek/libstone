@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "and-all-ones",
+  "summary": "Remove a bitwise AND with the full 64-bit mask.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "and", "match": "RhsAllOnes", "replace": "Lhs"},
+    {"opcode": "and", "match": "LhsAllOnes", "replace": "Rhs"}
+  ]
+}

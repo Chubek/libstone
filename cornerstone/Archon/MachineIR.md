@@ -81,6 +81,12 @@ the backend cannot inspect separately compiled function implementations.
 - `frame_addr` takes an index in the current function's local table.
   `global_addr` names a defined or external data object. Global data consists
   of eight-byte words, initialized or zero-filled.
+- `stack_alloc DST SIZE` takes an `i64` byte count and returns a 16-byte-aligned
+  `ptr` to dynamic storage in the current frame. `stack_free SIZE` releases the
+  most recent allocation; the producer must supply its original count and
+  maintain LIFO order on every path. Return discards remaining allocations.
+  These ordered operations do not move fixed `frame_addr` objects. The
+  reviewed AMD64, AArch64, and RV64 providers probe dynamic stack growth.
 - `call` is a direct fixed-signature LP64 call. `func_addr` materializes a
   declared code address. `call_indirect` names a declaration for the expected
   fixed signature and calls the `func_ptr` value, not the declaration symbol.

@@ -53,6 +53,7 @@ constexpr Opcode opaque_opcodes[] = {
     {"amd64_va_start", Op::opaque, 1},
     {"aarch64_va_start", Op::opaque, 1},
     {"rv64_va_start", Op::opaque, 1},
+    {"stack_alloc", Op::opaque, 2}, {"stack_free", Op::opaque, 1},
     {"fconst", Op::opaque, 2}, {"frame_addr", Op::opaque, 2}, {"global_addr", Op::opaque, 2},
     {"func_addr", Op::opaque, 2}, {"ptr_to_int", Op::opaque, 2}, {"int_to_ptr", Op::opaque, 2},
     {"func_ptr_to_int", Op::opaque, 2}, {"int_to_func_ptr", Op::opaque, 2},

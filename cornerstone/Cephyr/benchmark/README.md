@@ -81,6 +81,17 @@ Once a Blackstone adapter exposes its own Cephyr driver flags, pass those throug
 
 Use `--fixture '^(cse_|phi_|loop_)'` to select a group. For a target that cannot execute natively, pass `--runner /path/to/qemu-riscv64` (or equivalent), or `--skip-run` for compile-only measurements. Pass `--with-factir` if you want FactIR present in *both* configurations; by default it is off to isolate the selected rewrites. Use `--objdump /path/to/llvm-objdump` for optional `.text` byte counts (object bytes are always recorded).
 
+To isolate the Sea-of-Nodes optimizer, disable FactIR (the runner default) and Blackstone in both modes:
+
+```sh
+python3 cornerstone/Cephyr/benchmark/benchmark.py \
+  --compiler build/cephyr/cephyr --output build/cephyr-mir-bench \
+  --no-blackstone --baseline-arg=--no-mir-opt --candidate-arg=--mir-opt \
+  --repeat 11 --warmup 2
+```
+
+Baseline and candidate samples alternate within each fixture. Use `--fixture '^stress_'` for a fast iteration on dense, sparse, and inert workloads, then run the full suite before accepting a change. To measure a compiler change rather than a flag, pass the previous executable as `--baseline-compiler`.
+
 **Interpretation:** The runner's time measurements are MIR compiler invocations (including process startup), not runtime performance of the produced binaries. Object-size deltas are not necessarily instruction-count or `.text`-size deltas. A changed MIR does not establish a speedup. The self-check cases establish only sampled functional equality, not formal equivalence. An optimizer may pass all samples while still being wrong for other inputs.
 
 ## Regenerate / audit the expected results

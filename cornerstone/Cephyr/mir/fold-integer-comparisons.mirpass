@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "fold-integer-comparisons",
+  "summary": "Evaluate equality and signed/unsigned ordering of literal words.",
+  "min_opt": 2,
+  "rules": [
+    {"opcode": "eq", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "slt", "match": "BothConstants", "replace": "Fold"},
+    {"opcode": "ult", "match": "BothConstants", "replace": "Fold"}
+  ]
+}

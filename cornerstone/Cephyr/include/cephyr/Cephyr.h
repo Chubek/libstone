@@ -110,6 +110,15 @@ int cephyr_parse_c11(const cephyr_request *request, cephyr_ast_format format,
 int cephyr_emit_interface(const cephyr_request *request, cephyr_result **result);
 
 /*
+ * Emit Archon MachineIR v1 text for one C, preprocessed C, or C11 AST input.
+ * Uses the same lowering, rewrite options, and result ownership as
+ * cephyr_compile. Like --emit-mir, it stops before code generation. Output
+ * defaults to the result buffer; pass -o FILE to write it to a file instead.
+ * For in-memory input, include "-" in argv and supply bytes in stdin_data.
+ */
+int cephyr_emit_mir(const cephyr_request *request, cephyr_result **result);
+
+/*
  * Return a NUL-terminated buffer valid until result destruction. If size is
  * non-NULL, receive the byte count excluding the terminator. A NULL result
  * returns NULL and sets the size to zero.
@@ -133,7 +142,8 @@ typedef struct cephyr_context_options {
  * storage are borrowed only during that call, and result handling is the
  * same as in cephyr_compile. This single-source call ignores the translation
  * units and host symbols registered with the additive API below.
- * Include --emit-interface=sexp in the fixed arguments to project declarations.
+ * Include --emit-interface=sexp to project declarations, or --emit-mir -o -
+ * to capture MIR, in the fixed arguments.
  * A context can be shared by concurrent callers under the normal compile
  * rules; destruction must not overlap its use. Destroy accepts NULL.
  */

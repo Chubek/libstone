@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "sub-self",
+  "summary": "Subtracting the same SSA value from itself produces zero.",
+  "min_opt": 1,
+  "rules": [
+    {"opcode": "sub", "match": "SameOperands", "replace": "Zero"}
+  ]
+}

@@ -1,0 +1,194 @@
+# Cephyr Sea-of-Nodes MIR profile, lowered to the archon-mir 1 wire.
+# Graph references are indices; the acsem interpreter only checks individual
+# records. The checked syntax is projected to flat native C++ storage, where
+# graph-wide verification and scheduling take place without interpreter limits.
+language CephyrMIR {
+  start Probe;
+  syntax Probe = DescribeOpcode(opcode: Opcode)
+               | CheckNode(node: Node) | CheckInput(input: Input)
+               | CheckBlock(block: Block) | CheckSuccessor(successor: Successor);
+
+  syntax EdgeKind = data() | control() | effect();
+  syntax NodeKind = start_node() | region_node() | parameter_node()
+                  | operation_node() | terminator_node();
+  syntax ValueType = void_type() | i64() | ptr() | func_ptr()
+                   | f32() | f64() | f128() | f80();
+
+  syntax NodeId = NodeIndex(index: integer);
+  syntax BlockId = BlockIndex(index: integer);
+  syntax ValueId = ValueIndex(index: integer);
+  syntax Word = Word16x4(high: integer, upper: integer, lower: integer, low: integer);
+  syntax InputRange = Range(first: integer, count: integer);
+  syntax Input = Link(source: NodeId, kind: EdgeKind);
+  syntax Node = N(kind: NodeKind, block: BlockId, opcode: Opcode, type: ValueType,
+                  value: ValueId, inputs: InputRange, immediate: Word, symbol: identifier);
+  syntax Block = B(region: NodeId, terminator: NodeId, parameters: InputRange);
+  syntax Successor = S(terminator: NodeId, target: BlockId, arguments: InputRange);
+
+  syntax Opcode =
+      invalid_opcode()
+    | const() | copy() | add() | sub() | mul()
+    | div_s() | rem_s() | div_u() | rem_u()
+    | and() | or() | xor() | shl() | lshr() | ashr() | eq() | slt() | ult()
+    | add_checked_s() | sub_checked_s() | div_checked_s() | mul_checked_s()
+    | trunc() | zext() | sext() | ptr_add()
+    | load() | load_s8() | load_u8() | load_s16() | load_u16()
+    | load_s32() | load_u32() | load_ptr() | load_func_ptr()
+    | store() | store8() | store16() | store32() | store_ptr() | store_func_ptr()
+    | frame_addr() | ptr_to_int() | int_to_ptr() | func_ptr_to_int() | int_to_func_ptr()
+    | global_addr() | func_addr() | call() | call_indirect()
+    | fconst() | fload() | fstore() | fneg() | fadd() | fsub() | fmul() | fdiv()
+    | feq() | flt() | fle() | fcast() | sitofp() | uitofp() | fptosi() | fptoui()
+    | amd64_va_start() | aarch64_va_start() | rv64_va_start()
+    | amd64_x87_add() | amd64_x87_sub() | amd64_x87_mul() | amd64_x87_div()
+    | amd64_x87_eq() | amd64_x87_lt() | amd64_x87_le() | amd64_x87_from_fp()
+    | f128_pack() | f128_low() | f128_high()
+    | amd64_x87_pack() | amd64_x87_low() | amd64_x87_high()
+    | amd64_x87_to_fp() | amd64_x87_from_si() | amd64_x87_from_ui()
+    | amd64_x87_to_si() | amd64_x87_to_ui()
+    | stack_alloc() | stack_free()
+    | ret() | br() | cbr() | trap();
+
+  rule DescribeOpcode = evaluate(opcode);
+  rule CheckNode = evaluate(node);
+  rule CheckInput = evaluate(input);
+  rule CheckBlock = evaluate(block);
+  rule CheckSuccessor = evaluate(successor);
+
+  rule data = complete;
+  rule control = complete;
+  rule effect = complete;
+  rule start_node = complete;
+  rule region_node = complete;
+  rule parameter_node = complete;
+  rule operation_node = complete;
+  rule terminator_node = complete;
+  rule void_type = complete;
+  rule i64 = complete;
+  rule ptr = complete;
+  rule func_ptr = complete;
+  rule f32 = complete;
+  rule f64 = complete;
+  rule f128 = complete;
+  rule f80 = complete;
+
+  # -1 is the absent ID, never an actual reference.
+  rule NodeIndex = check (-2 < index) then give index;
+  rule BlockIndex = check (-2 < index);
+  rule ValueIndex = check (-2 < index);
+  rule Word16x4 = check (-1 < high) then check (high < 65536)
+    then check (-1 < upper) then check (upper < 65536)
+    then check (-1 < lower) then check (lower < 65536)
+    then check (-1 < low) then check (low < 65536);
+  rule Range = check (-1 < first) then check (-1 < count);
+  rule Link = (evaluate(source) then check (-1 < given(1))) then evaluate(kind);
+  rule N = evaluate(kind) then evaluate(block) then evaluate(type)
+    then evaluate(value) then evaluate(inputs) then evaluate(immediate);
+  rule B = (evaluate(region) then check (-1 < given(1)))
+    then (evaluate(terminator) then check (-1 < given(1))) then evaluate(parameters);
+  rule S = (evaluate(terminator) then check (-1 < given(1)))
+    then evaluate(target) then evaluate(arguments);
+
+  # Descriptor tuple: result slot, fixed data inputs, wire payload, effect
+  # class, and number of CFG successors. Call args follow fixed inputs;
+  # return_value means zero or one data input. Effects conservatively include
+  # possible faults, observable FP environment changes, and indirect memory
+  # effects. "pure" is an ordering property, not a rewrite proof.
+  rule invalid_opcode = fail;
+  rule const = give "required" and then give 0 and then give "word" and then give "pure" and then give 0;
+  rule copy = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule add = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule sub = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule mul = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  # The Archon wire's unchecked division and remainder are total, including
+  # zero divisors and signed MIN/-1. The checked operations below may trap.
+  rule div_s = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule rem_s = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule div_u = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule rem_u = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule and = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule or = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule xor = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule shl = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule lshr = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule ashr = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule eq = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule slt = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule ult = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule add_checked_s = give "required" and then give 2 and then give "none" and then give "may_trap" and then give 0;
+  rule sub_checked_s = give "required" and then give 2 and then give "none" and then give "may_trap" and then give 0;
+  rule div_checked_s = give "required" and then give 2 and then give "none" and then give "may_trap" and then give 0;
+  rule mul_checked_s = give "required" and then give 2 and then give "none" and then give "may_trap" and then give 0;
+  rule trunc = give "required" and then give 1 and then give "word" and then give "pure" and then give 0;
+  rule zext = give "required" and then give 1 and then give "word" and then give "pure" and then give 0;
+  rule sext = give "required" and then give 1 and then give "word" and then give "pure" and then give 0;
+  rule ptr_add = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule load = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_s8 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_u8 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_s16 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_u16 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_s32 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_u32 = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_ptr = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule load_func_ptr = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule store = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule store8 = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule store16 = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule store32 = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule store_ptr = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule store_func_ptr = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule frame_addr = give "required" and then give 0 and then give "word" and then give "pure" and then give 0;
+  rule ptr_to_int = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule int_to_ptr = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule func_ptr_to_int = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule int_to_func_ptr = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule global_addr = give "required" and then give 0 and then give "symbol" and then give "pure" and then give 0;
+  rule func_addr = give "required" and then give 0 and then give "symbol" and then give "pure" and then give 0;
+  rule call = give "optional" and then give 0 and then give "call" and then give "call" and then give 0;
+  rule call_indirect = give "optional" and then give 1 and then give "call" and then give "call" and then give 0;
+  rule fconst = give "required" and then give 0 and then give "word" and then give "pure" and then give 0;
+  rule fload = give "required" and then give 1 and then give "word" and then give "read" and then give 0;
+  rule fstore = give "none" and then give 2 and then give "word" and then give "write" and then give 0;
+  rule fneg = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule fadd = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule fsub = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule fmul = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule fdiv = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule feq = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule flt = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule fle = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule fcast = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule sitofp = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule uitofp = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule fptosi = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule fptoui = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_va_start = give "none" and then give 1 and then give "none" and then give "write" and then give 0;
+  rule aarch64_va_start = give "none" and then give 1 and then give "none" and then give "write" and then give 0;
+  rule rv64_va_start = give "none" and then give 1 and then give "none" and then give "write" and then give 0;
+  rule amd64_x87_add = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_sub = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_mul = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_div = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_eq = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_lt = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_le = give "required" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_from_fp = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule f128_pack = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule f128_low = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule f128_high = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule amd64_x87_pack = give "required" and then give 2 and then give "none" and then give "pure" and then give 0;
+  rule amd64_x87_low = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule amd64_x87_high = give "required" and then give 1 and then give "none" and then give "pure" and then give 0;
+  rule amd64_x87_to_fp = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_from_si = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_from_ui = give "none" and then give 2 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_to_si = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule amd64_x87_to_ui = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule stack_alloc = give "required" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule stack_free = give "none" and then give 1 and then give "none" and then give "ordered" and then give 0;
+  rule ret = give "none" and then give 0 and then give "return_value" and then give "terminator" and then give 0;
+  rule br = give "none" and then give 0 and then give "none" and then give "terminator" and then give 1;
+  rule cbr = give "none" and then give 1 and then give "none" and then give "terminator" and then give 2;
+  rule trap = give "none" and then give 0 and then give "none" and then give "terminator" and then give 0;
+}

@@ -126,6 +126,29 @@ add_custom_command(OUTPUT "${cephyr_qml_bundle}"
   VERBATIM)
 add_custom_target(cephyr_qml_assets DEPENDS "${cephyr_qml_bundle}")
 
+set(cephyr_mir "${CMAKE_CURRENT_SOURCE_DIR}/mir")
+set(cephyr_acsem "${cephyr_repo}/scripts/acsem")
+set(cephyr_mir_model "${CMAKE_CURRENT_BINARY_DIR}/CephyrMIRModel.hpp")
+set(cephyr_mir_json "${CMAKE_CURRENT_BINARY_DIR}/mir_model.json")
+file(GLOB cephyr_acsem_modules CONFIGURE_DEPENDS "${cephyr_acsem}/Acsem/*.pm")
+add_custom_command(OUTPUT "${cephyr_mir_model}"
+  BYPRODUCTS "${cephyr_mir_json}"
+  COMMAND "${PERL_EXECUTABLE}" "${cephyr_acsem}/acsem.pl" --emit json
+    "${CMAKE_CURRENT_SOURCE_DIR}/MIR.acsem" -o "${cephyr_mir_json}"
+  COMMAND "${Python3_EXECUTABLE}" -I -B "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_mir_model.py"
+    "${cephyr_mir_json}" "${cephyr_mir_model}"
+  DEPENDS MIR.acsem cmake/generate_mir_model.py "${cephyr_acsem}/acsem.pl" ${cephyr_acsem_modules}
+  VERBATIM)
+file(GLOB cephyr_mir_catalog_sources CONFIGURE_DEPENDS
+  "${cephyr_mir}/*.mirpass" "${cephyr_mir}/*.mirlower")
+set(cephyr_mir_catalog "${CMAKE_CURRENT_BINARY_DIR}/mir_catalog.hpp")
+add_custom_command(OUTPUT "${cephyr_mir_catalog}"
+  COMMAND "${Python3_EXECUTABLE}" -I -B "${cephyr_mir}/compile_catalog.py"
+    --catalog "${cephyr_mir}" --output "${cephyr_mir_catalog}"
+  DEPENDS "${cephyr_mir}/compile_catalog.py" ${cephyr_mir_catalog_sources}
+  VERBATIM)
+add_custom_target(cephyr_mir_assets DEPENDS "${cephyr_mir_catalog}" "${cephyr_mir_model}")
+
 add_library(cephyr_cparser STATIC)
 foreach(source IN ITEMS AbstractSyntaxTree ASTNode CLexer CParser GenCVisitor Lexer
                         Parser PrintTreeVisitor SymbolTable TreeVisitor)
@@ -165,7 +188,7 @@ set(cephyr_satie "${cephyr_vendor}/satie")
 add_library(cephyr_compiler SHARED
   src/main.cpp src/process.cpp src/config.cpp src/target.cpp src/host_target.cpp src/cache.cpp
   src/preprocess.cpp src/parser.cpp src/syntax.cpp src/interface.cpp src/semantics.cpp src/lower.cpp
-  src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/backend.cpp src/sdk.cpp
+  src/lower_globals.cpp src/lower_expr.cpp src/lower_stmt.cpp src/mir_bridge.cpp src/backend.cpp src/sdk.cpp
   src/embedding.cpp src/moonstone_tools.cpp src/qml_rewrite.cpp src/blackstone_opt.cpp
   extension/lua_extensions.cpp extension/native_plugins.cpp
   src/mir_verify.c "${cephyr_native}/MIRText.c" "${cephyr_native}/NativeVerify.c"
@@ -180,7 +203,7 @@ add_library(Cephyr::Cephyr ALIAS cephyr_compiler)
 target_sources(cephyr_compiler PRIVATE src/sandslab_opt.cpp "${CMAKE_CURRENT_BINARY_DIR}/sandslab_catalog.hpp")
 target_include_directories(cephyr_compiler PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(cephyr_compiler PRIVATE Sandstone::sandslab)
-add_dependencies(cephyr_compiler cephyr_qml_assets)
+add_dependencies(cephyr_compiler cephyr_qml_assets cephyr_mir_assets)
 target_compile_features(cephyr_compiler PRIVATE cxx_std_20 INTERFACE cxx_std_17)
 set_target_properties(cephyr_compiler PROPERTIES
   C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF CXX_EXTENSIONS OFF
@@ -309,11 +332,14 @@ install(FILES benchmark/README.md benchmark/run.py benchmark/workloads.py benchm
   DESTINATION "${cephyr_data_dir}/benchmark")
 install(FILES benchmark/tools/time_sandslab.py DESTINATION "${cephyr_data_dir}/benchmark/tools")
 install(DIRECTORY benchmark/fixtures DESTINATION "${cephyr_data_dir}/benchmark")
-install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md MOONSTONE.md MOONSTONE_ANALYSIS.md
+install(FILES Cephyr.toml README.md C11.md EMBEDDING.md SDK.md
   DESTINATION "${cephyr_data_dir}")
+install(FILES MOONSTONE.md MOONSTONE_ANALYSIS.md DESTINATION "${cephyr_data_dir}" OPTIONAL)
 install(FILES extension/README.md extension/CONFIGURATION.md DESTINATION "${cephyr_data_dir}/extension")
 install(FILES docs/moonstone-tools.md docs/NATIVE_FP_WIRING.md docs/FactIR.md docs/SandSLAB.md
+  docs/MIRModel.md docs/C11_ATOMICS.md docs/C11_VLA.md
   DESTINATION "${cephyr_data_dir}/docs")
+install(FILES mir/README.md DESTINATION "${cephyr_data_dir}/mir")
 install(FILES examples/sdk_desugar.c DESTINATION "${cephyr_data_dir}/examples")
 
 if(CEPHYR_BUILD_TESTS)
@@ -339,6 +365,8 @@ if(CEPHYR_BUILD_TESTS)
   add_test(NAME cephyr.cache COMMAND cephyr-cache-test)
   add_executable(cephyr-host-target-test
     tests/host_target.cpp src/host_target.cpp src/target.cpp src/process.cpp src/config.cpp)
+  add_dependencies(cephyr-host-target-test cephyr_mir_assets)
+  target_include_directories(cephyr-host-target-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(cephyr-host-target-test PRIVATE
     cephyr_diagnostics libstone_kaguya cephyr_tomlc99)
   add_test(NAME cephyr.host-target COMMAND cephyr-host-target-test
@@ -373,6 +401,14 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_config_extensions.py" "$<TARGET_FILE:cephyr>"
     "${CMAKE_C_COMPILER}")
   set_tests_properties(cephyr.config-extensions PROPERTIES TIMEOUT 60)
+  set(cephyr_profile_test_args)
+  if(cephyr_has_moonstone_analysis)
+    list(APPEND cephyr_profile_test_args --enabled)
+  endif()
+  add_test(NAME cephyr.profiles COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_profiles.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_profile_test_args})
+  set_tests_properties(cephyr.profiles PROPERTIES TIMEOUT 120)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     foreach(test IN ITEMS cephyr-diagnostics-test cephyr-preprocess-test cephyr-cache-test cephyr-host-target-test)
       target_compile_options(${test} PRIVATE -UNDEBUG)
@@ -387,6 +423,15 @@ if(CEPHYR_BUILD_TESTS)
   if(CEPHYR_QEMU_AARCH64_EXECUTABLE)
     list(APPEND cephyr_test_args --qemu-aarch64 "${CEPHYR_QEMU_AARCH64_EXECUTABLE}")
   endif()
+  add_test(NAME cephyr.mir-graph COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mir_graph.py" "$<TARGET_FILE:cephyr>"
+    ${cephyr_test_args})
+  set_tests_properties(cephyr.mir-graph PROPERTIES TIMEOUT 120)
+  add_test(NAME cephyr.mir-model COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
+    "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mir_model.py")
+  add_test(NAME cephyr.mir-catalog COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
+    "${Python3_EXECUTABLE}" -B "${cephyr_mir}/test_catalog.py")
+  set_tests_properties(cephyr.mir-model cephyr.mir-catalog PROPERTIES TIMEOUT 120)
   add_test(NAME cephyr.driver COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_cli_regression.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
@@ -447,7 +492,11 @@ if(CEPHYR_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_records.py" "$<TARGET_FILE:cephyr>"
     ${cephyr_test_args})
   set_tests_properties(cephyr.c11-records PROPERTIES TIMEOUT 120)
-  foreach(feature IN ITEMS anonymous array_parameters bitfields compound_literals frontend strings volatile volatile_aggregates)
+  add_test(NAME cephyr.c11-atomics COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_atomics.py" "$<TARGET_FILE:cephyr>"
+    --cc "${CMAKE_C_COMPILER}" ${cephyr_test_args})
+  set_tests_properties(cephyr.c11-atomics PROPERTIES TIMEOUT 120)
+  foreach(feature IN ITEMS anonymous array_parameters bitfields compound_literals frontend strings vla volatile volatile_aggregates)
     string(REPLACE "_" "-" test_feature "${feature}")
     add_test(NAME cephyr.c11-${test_feature} COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cephyr_c11_${feature}.py" "$<TARGET_FILE:cephyr>"
