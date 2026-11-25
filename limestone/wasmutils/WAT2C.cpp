@@ -1,5 +1,6 @@
 #include "CLI.hpp"
 #include "WASM-CC.hpp"
+#include "WAT-Module.hpp"
 #include "WATCompiler.hpp"
 
 #include <cstddef>
@@ -10,17 +11,23 @@
 
 int main(int argc, char** argv) {
     using namespace limestone::wasmutils;
-    if (argc != 2) {
-        std::cerr << "usage: wat2c INPUT\n";
-        return 2;
+    const bool module = argc == 3 && std::string_view(argv[1]) == "--module";
+    const bool help = argc == 2 && std::string_view(argv[1]) == "--help";
+    if (help || (argc != 2 && !module)) {
+        (help ? std::cout : std::cerr)
+            << "usage: wat2c [--module] INPUT\n"
+               "  Emit standalone C90; --module selects Core Wasm text instead of WASM.aml syntax.\n";
+        return help ? 0 : 2;
     }
 
-    const auto path = std::string_view(argv[1]) == "-" ? "<stdin>" : argv[1];
+    const auto path = std::string_view(argv[argc - 1]) == "-" ? "<stdin>" : argv[argc - 1];
     std::string input;
     try {
-        input = detail::read_input(argv[1]);
-        const auto program = compile_wat(input);
-        detail::write_output(emit_c(program));
+        input = detail::read_input(argv[argc - 1]);
+        if (module)
+            detail::write_output(core::emit_module_c(core::assemble_module(input)));
+        else
+            detail::write_output(emit_c(compile_wat(input)));
     } catch (Error const& error) {
         std::size_t line = 1;
         std::size_t column = 1;

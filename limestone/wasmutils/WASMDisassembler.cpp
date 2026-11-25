@@ -1,5 +1,6 @@
 #include "CLI.hpp"
 #include "WASM-Core.hpp"
+#include "WAT-Print.hpp"
 
 #include <iomanip>
 #include <locale>
@@ -84,13 +85,19 @@ void listing(std::ostream& out, const core::Program& program) {
 
 int main(int argc, char** argv) {
     const auto mode = argc == 3 ? std::string_view(argv[1]) : std::string_view{};
-    if (argc != 2 && mode != "--expression" && mode != "--module") {
-        std::cerr << "usage: wasm-disassemble [--expression | --module] INPUT\n";
-        return 2;
+    const bool help = argc == 2 && std::string_view(argv[1]) == "--help";
+    if (help || (argc != 2 && mode != "--expression" && mode != "--module" && mode != "--wat")) {
+        (help ? std::cout : std::cerr)
+            << "usage: wasm-disassemble [--expression | --module | --wat] INPUT\n";
+        return help ? 0 : 2;
     }
     try {
         const auto input = wasm::detail::read_input(argv[argc - 1]);
         const std::vector<std::uint8_t> bytes(input.begin(), input.end());
+        if (mode == "--wat") {
+            wasm::detail::write_output(core::print_module(core::decode_module(bytes)));
+            return 0;
+        }
         std::ostringstream out;
         out.imbue(std::locale::classic());
         if (mode == "--module") {

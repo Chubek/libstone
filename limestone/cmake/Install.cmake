@@ -18,6 +18,7 @@ install(FILES ${PROJECT_SOURCE_DIR}/traceml/runtime.h
 list(APPEND limestone_install_targets limestone_parser_tables limestone_dparse)
 if(LIMESTONE_BUILD_TOOLS)
   install(TARGETS limestone-cli limeburg-generate-specs vmweave-cli traceml-cli wasm2c wat2c wit2c wasm-disassemble
+    wasm-assemble wasm-link wasm-run wasm-validate
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 install(TARGETS ${limestone_install_targets} EXPORT LimestoneTargets
@@ -29,7 +30,8 @@ foreach(component IN ITEMS limestone metacode schedrow regtl limeburg unisel bin
   if(component STREQUAL "traceml")
     set(private_headers PATTERN "runtime.h" EXCLUDE PATTERN "integer_ops.h" EXCLUDE PATTERN "primitives.hpp" EXCLUDE)
   elseif(component STREQUAL "wasmutils")
-    set(private_headers PATTERN "CLI.hpp" EXCLUDE)
+    set(private_headers PATTERN "CLI.hpp" EXCLUDE PATTERN "WASM-Operations.hpp" EXCLUDE
+      PATTERN "WASM-SIMD.hpp" EXCLUDE)
   endif()
   install(DIRECTORY ${PROJECT_SOURCE_DIR}/${component}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${component}
     FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
@@ -50,6 +52,8 @@ install(FILES ${PROJECT_SOURCE_DIR}/vmweave/vmweave.lua DESTINATION ${CMAKE_INST
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/vmweave/examples/ DESTINATION ${CMAKE_INSTALL_DATADIR}/limestone/vmweave/examples)
 install(FILES ${PROJECT_SOURCE_DIR}/vmweave/STK-00.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone/vmweave)
 install(FILES ${PROJECT_SOURCE_DIR}/wasmutils/WASM.aml DESTINATION ${CMAKE_INSTALL_DATADIR}/limestone/wasmutils)
+install(FILES ${PROJECT_SOURCE_DIR}/wasmutils/WASM-Object-Link.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone/wasmutils)
 install(FILES ${PROJECT_SOURCE_DIR}/README.md ${PROJECT_SOURCE_DIR}/IMPLEMENTATION.md ${PROJECT_SOURCE_DIR}/LICENSE
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/limestone)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/manual/

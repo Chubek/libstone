@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WASM-IR.hpp"
+#include "WAT-Module.hpp"
 
 namespace limestone::wasmutils {
 

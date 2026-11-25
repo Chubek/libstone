@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -41,7 +44,24 @@ inline std::string read_input(const char* path) {
 
 inline void write_output(std::string_view contents) {
     if (!(std::cout << contents << std::flush))
-        throw std::runtime_error("cannot write generated C");
+        throw std::runtime_error("cannot write stdout");
+}
+
+inline void write_binary(std::span<const std::uint8_t> bytes) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1)
+        throw std::runtime_error("cannot set stdout to binary mode");
+#endif
+    // Chunk the write instead of potentially narrowing size_t to streamsize.
+    while (!bytes.empty()) {
+        const auto part = bytes.first(std::min(bytes.size(), std::size_t{8192}));
+        if (!std::cout.write(reinterpret_cast<const char*>(part.data()),
+                             static_cast<std::streamsize>(part.size())))
+            throw std::runtime_error("cannot write stdout");
+        bytes = bytes.subspan(part.size());
+    }
+    if (!std::cout.flush())
+        throw std::runtime_error("cannot flush stdout");
 }
 
 } // namespace limestone::wasmutils::detail

@@ -148,6 +148,18 @@ void test_structure() {
                               Bytes{0x02,0x40,0x05,0x0b,0x0b}, Bytes{0x02,0x40,0x0b},
                               Bytes{0x04,0x40,0x05,0x05,0x0b,0x0b}})
         rejects([&] { core::check_expression(core::decode(bytes)); });
+
+    // A delimiter-looking byte in an immediate does not end the expression.
+    // Conversely, bytes after a terminal end belong to the enclosing format.
+    const Bytes concatenated{0x02,0x40,0x41,0x0b,0x1a,0x0b,0x0b,0x41,0x01,0x0b,0xff};
+    std::size_t used = 0;
+    const auto first = core::decode_expression(concatenated, used, 40);
+    CHECK(used == 7 && first.size() == 5);
+    CHECK(first.front().offset == 40 && first.back().offset == 46);
+    const auto second = core::decode_expression(std::span(concatenated).subspan(used), used, 47);
+    CHECK(used == 3 && second.size() == 2 && second.front().offset == 47);
+    rejects([&] { core::decode_expression(Bytes{0x04,0x40,0x05,0x05,0x0b,0x0b}, used); });
+    CHECK(used == 3);
 }
 
 void test_module() {

@@ -1,15 +1,40 @@
--- Owning AST for the standalone scalar subset; implemented in WIT-IDL.hpp.
--- Names retain source case; '%' is removed. Version text omits '@'.
+-- Owning WIT syntax tree; implemented in WIT-IDL.hpp.
+-- Names retain source case, without '%'. Version text omits '@'.
 %prefix wit
 %option no-builtins
 %%
-document = (package? declared_package, interface+ interfaces)
-package = (name name_space, name package_name, version? declared_version)
-interface = (name interface_name, function* functions)
-function = (name function_name, parameter* parameters, scalar_type? result)
-parameter = (name parameter_name, scalar_type type)
+document = (package? declared_package, interface* interfaces, world* worlds,
+            standalone_use* uses)
+package = (name name_space, name package_name, version? declared_version,
+           annotations metadata)
+path = (package? containing_package, name item_name)
+standalone_use = (path target, name? alias, annotations metadata)
+use_item = (name original, name? alias)
+use = (path source_interface, use_item* items, annotations metadata)
+include = (path source_world, use_item* renames, annotations metadata)
+interface = (name interface_name, function* functions, type_def* types, use* uses,
+             annotations metadata)
+world = (name world_name, world_item* items, type_def* types, use* uses,
+         include* includes, annotations metadata)
+world_item = PathItem(path target) | FunctionItem(function signature)
+           | InterfaceItem(interface body) attributes (bool is_import, annotations metadata)
+function = (name function_name, parameter* parameters, type? result,
+            function_kind kind, annotations metadata)
+function_kind = Freestanding | Constructor | Method | Static
+parameter = (name parameter_name, type parameter_type, annotations metadata)
+type_def = Alias(type target) | Record(parameter* fields)
+         | Variant(case* cases) | Enum(case* cases) | Flags(case* cases)
+         | Resource(function* functions) attributes (name type_name, annotations metadata)
+case = (name case_name, type? payload, annotations metadata)
+type = Scalar(scalar kind) | String | Named(name target) | List(type element)
+     | Option(type element) | Tuple(type+ elements) | Result(type* arguments)
+     | Own(name resource_name) | Borrow(name resource_name) | Unit
+       attributes (location source)
+scalar = Bool | U8 | S8 | U16 | S16 | U32 | S32 | U64 | S64 | F32 | F64 | Char
+annotations = (doc_comment* docs, attribute* attribute_list)
+doc_comment = (string text, location source)
+attribute = (name attribute_name, attribute_argument* arguments)
+attribute_argument = (name argument_name, string value, location source)
 name = (string text, location source)
 version = (string text, location source)
-scalar_type = (scalar kind, location source)
-scalar = Bool | U8 | S8 | U16 | S16 | U32 | S32 | U64 | S64 | F32 | F64 | Char
 location = (usize offset, usize line, usize column)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WASM-IR.hpp"
+#include "WASM-Instance.hpp"
 
 #include <cstddef>
 #include <cstdint>

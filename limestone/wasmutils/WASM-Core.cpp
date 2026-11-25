@@ -405,6 +405,44 @@ private:
   }
 };
 
+class ExpressionNesting {
+public:
+  // Returns true only for the expression's terminal end.
+  bool add(const Instruction& instruction) {
+    const auto opcode = instruction.opcode;
+    if (opcode == Opcode{0x02} || opcode == Opcode{0x03})
+      nesting_.push_back({Control::block_or_loop, instruction.offset});
+    else if (opcode == Opcode{0x04})
+      nesting_.push_back({Control::if_then, instruction.offset});
+    else if (opcode == Opcode{0x05}) {
+      if (nesting_.empty() || nesting_.back().control == Control::block_or_loop)
+        throw Error(instruction.offset, "else without matching if");
+      if (nesting_.back().control == Control::if_else)
+        throw Error(instruction.offset, "duplicate else");
+      nesting_.back().control = Control::if_else;
+    } else if (opcode == Opcode{0x0b}) {
+      if (nesting_.empty())
+        return true;
+      nesting_.pop_back();
+    }
+    return false;
+  }
+
+  [[noreturn]] void missing_end(std::size_t offset) const {
+    if (!nesting_.empty())
+      throw Error(nesting_.back().offset, "unterminated block, loop, or if");
+    throw Error(offset, "missing expression end");
+  }
+
+private:
+  enum class Control { block_or_loop, if_then, if_else };
+  struct Frame {
+    Control control;
+    std::size_t offset;
+  };
+  std::vector<Frame> nesting_;
+};
+
 } // namespace
 
 Program decode(std::span<const std::uint8_t> bytes) {
@@ -415,6 +453,23 @@ Program decode(std::span<const std::uint8_t> bytes) {
   return result;
 }
 
+Program decode_expression(std::span<const std::uint8_t> bytes, std::size_t& consumed,
+                          std::size_t base_offset) {
+  if (bytes.size() > std::numeric_limits<std::size_t>::max() - base_offset)
+    throw Error(base_offset, "expression offsets exceed representable range");
+  Decoder decoder(bytes, base_offset);
+  Program result;
+  ExpressionNesting nesting;
+  while (!decoder.empty()) {
+    result.push_back(decoder.instruction());
+    if (nesting.add(result.back())) {
+      consumed = decoder.position() - base_offset;
+      return result;
+    }
+  }
+  nesting.missing_end(decoder.position());
+}
+
 std::vector<std::uint8_t> encode(std::span<const Instruction> instructions) {
   Bytes result;
   for (const auto& instruction : instructions)
@@ -423,37 +478,15 @@ std::vector<std::uint8_t> encode(std::span<const Instruction> instructions) {
 }
 
 void check_expression(std::span<const Instruction> instructions) {
-  enum class Control { block_or_loop, if_then, if_else };
-  struct Frame {
-    Control control;
-    std::size_t offset;
-  };
-  std::vector<Frame> nesting;
+  ExpressionNesting nesting;
   for (std::size_t i = 0; i < instructions.size(); ++i) {
-    const auto& instruction = instructions[i];
-    const auto opcode = instruction.opcode;
-    if (opcode == Opcode{0x02} || opcode == Opcode{0x03})
-      nesting.push_back({Control::block_or_loop, instruction.offset});
-    else if (opcode == Opcode{0x04})
-      nesting.push_back({Control::if_then, instruction.offset});
-    else if (opcode == Opcode{0x05}) {
-      if (nesting.empty() || nesting.back().control == Control::block_or_loop)
-        throw Error(instruction.offset, "else without matching if");
-      if (nesting.back().control == Control::if_else)
-        throw Error(instruction.offset, "duplicate else");
-      nesting.back().control = Control::if_else;
-    } else if (opcode == Opcode{0x0b}) {
-      if (nesting.empty()) {
-        if (i + 1 != instructions.size())
-          throw Error(instructions[i + 1].offset, "unexpected instruction after expression end");
-        return;
-      }
-      nesting.pop_back();
+    if (nesting.add(instructions[i])) {
+      if (i + 1 != instructions.size())
+        throw Error(instructions[i + 1].offset, "unexpected instruction after expression end");
+      return;
     }
   }
-  if (!nesting.empty())
-    throw Error(nesting.back().offset, "unterminated block, loop, or if");
-  throw Error(instructions.empty() ? 0 : instructions.back().offset, "missing expression end");
+  nesting.missing_end(instructions.empty() ? 0 : instructions.back().offset);
 }
 
 std::vector<FunctionBody> decode_code_section(std::span<const std::uint8_t> module) {

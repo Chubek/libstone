@@ -103,7 +103,7 @@ file(WRITE "${dir}/invalid.wat" "unreachable i64.const 0 i32.eqz\n")
 reject("${WAT2C}" invalid.wat)
 file(WRITE "${dir}/invalid.ops" "A")
 reject("${WASM2C}" invalid.ops)
-file(WRITE "${dir}/invalid.wit" "interface fixtures { test: func(arg: list<u8>); }\n")
+file(WRITE "${dir}/invalid.wit" "interface fixtures { test: func(arg: list<>); }\n")
 reject("${WIT2C}" invalid.wit)
 
 file(WRITE "${dir}/fixtures.wit" [=[

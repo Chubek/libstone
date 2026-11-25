@@ -79,6 +79,10 @@ const OpcodeInfo* lookup(std::string_view mnemonic, bool typed_select = false) n
 // Decode a flat binary stream (including else/end delimiters). Checks binary
 // grammar only, not typing, index ranges, alignment, or lane bounds.
 Program decode(std::span<const std::uint8_t> bytes);
+// Decode one expression from the start of bytes, stopping at its terminal
+// end. Offsets are relative to base_offset; consumed is set only on success.
+Program decode_expression(std::span<const std::uint8_t> bytes, std::size_t& consumed,
+                          std::size_t base_offset = 0);
 // Canonicalizes LEBs and preserves floating-point/vector payload bits.
 std::vector<std::uint8_t> encode(std::span<const Instruction> instructions);
 // Check block/loop/if nesting and the single terminal end of a complete
