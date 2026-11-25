@@ -8,4 +8,6 @@ cmake --build build-wetstone --parallel
 ctest --test-dir build-wetstone --output-on-failure
 ```
 
-The project is header-only and `Wetstone::wetstone` is an INTERFACE CMake target. To integrate with LibStone's root CMake build, add `add_subdirectory(wetstone)` to `libstone/CMakeLists.txt` and link it from relevant consumers. The repository's `third_party/` directory is a local dependency root, not included in this ZIP.
+The core uses the header-only `Wetstone::wetstone` target. Link
+`Wetstone::alias_analysis` to use the compiled alias and dependence APIs.
+Both targets are included in the installation's `WetstoneTargets.cmake`.

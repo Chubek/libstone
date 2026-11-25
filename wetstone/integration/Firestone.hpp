@@ -10,9 +10,14 @@ namespace wetstone::integration {
 inline constexpr bool firestone_available=WETSTONE_HAS_FIRESTONE;
 #if WETSTONE_HAS_FIRESTONE
 inline ir::Function from_firestone_cfg(const firestone::ir::ControlFlowGraph& cfg){
-    ir::Function f;f.entry=cfg.entry();
+    const auto id_cast=[](auto id){
+        if(!std::in_range<std::uint32_t>(id) || id==ir::invalid_block)
+            throw std::invalid_argument("Firestone identifier is out of Wetstone range");
+        return static_cast<std::uint32_t>(id);
+    };
+    ir::Function f;f.entry=id_cast(cfg.entry());
     for(auto id:cfg.blocks()){
-        ir::Block block;block.id=id;
+        ir::Block block;block.id=id_cast(id);
         for(const auto& source:cfg.block(id).instructions){
             ir::Instruction i;
             using FO=firestone::ir::Opcode;using WO=ir::Opcode;
@@ -25,15 +30,16 @@ inline ir::Function from_firestone_cfg(const firestone::ir::ControlFlowGraph& cf
                 case FO::Load:i.opcode=WO::Load;break;case FO::Store:i.opcode=WO::Store;break;
                 default:i.opcode=WO::Nop;break;
             }
-            if(source.result)i.result=static_cast<ir::ValueId>(*source.result);
+            if(source.result)i.result=id_cast(*source.result);
             for(const auto& a:source.operands) {
                 switch(a.kind){
-                    case firestone::ir::OperandKind::Value:i.arguments.push_back(ir::Operand::ref(static_cast<ir::ValueId>(a.value)));break;
+                    case firestone::ir::OperandKind::Value:i.arguments.push_back(ir::Operand::ref(id_cast(a.value)));break;
                     case firestone::ir::OperandKind::Integer:i.arguments.push_back(ir::Operand::constant(a.integer));break;
                     default:throw std::invalid_argument("Firestone floating/symbol operand requires custom domain");
                 }
             }
-            i.targets=source.targets;i.phi_predecessors=source.incoming_blocks;
+            for(auto target:source.targets)i.targets.push_back(id_cast(target));
+            for(auto pred:source.incoming_blocks)i.phi_predecessors.push_back(id_cast(pred));
             if(i.opcode==WO::Nop&&i.result)i.opcode=WO::Input;
             block.instructions.push_back(std::move(i));
         }f.blocks.push_back(std::move(block));

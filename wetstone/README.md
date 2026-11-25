@@ -8,6 +8,7 @@ Wetstone is an implementation of a C++20 static-analysis layer for LibStone. It 
 - **Dataflow:** generic worklist solvers in either direction, reaching definitions, liveness, definite assignment, available expressions, sparse conditional constant propagation, local value numbering, def-use chains, and backward slicing.
 - **Path/CFG:** reachability, reverse postorder, dominance, immediate dominators, frontiers, postdominance, natural loops, SCCs, bounded path enumeration, branch feasibility, bounded path-sensitive abstract execution, taint tracking, and control-dependence estimates.
 - **Pointer:** flow-insensitive inclusion-based Andersen points-to, object/variable constraints, load/store/copy modeling, alias classification, escape detection, simple nullness propagation, callsite collection, effects, and single-block double-release diagnostics.
+- **Alias and dependence:** typed memory locations, range-aware must/may queries, call effects, region-based aliasing, and direct and loop memory dependence analysis.
 - **Symbolic:** typed expression trees, evaluation, SMT-LIB2 generation, Boolean Tseitin encoding, conditional Satie CDCL solving, Satie bounded LIA integration, bounded symbolic path exploration, and proof obligations.
 - **Repair:** arithmetic/ownership repair candidates, SARIF diagnostics, and SAT-guided candidate-set selection when Satie is present. Suggestions are **not** automatically sound source patches.
 - **Interprocedural:** direct call graph, recursive SCCs, context call strings, finite effect summaries with conservative external-call behavior, external function models, and analysis caching/orchestration.
@@ -26,7 +27,21 @@ There are **no fetched dependencies**. By default the build looks for Satie unde
 
 For a standalone build without the parent LibStone tree, only the core headers and tests are required. SAT/LIA/Equinox integration will be unavailable until you supply their directories. You can disable optional search using `-DWETSTONE_USE_SATIE=OFF -DWETSTONE_USE_EQUINOX=OFF -DWETSTONE_USE_FLINTSTONE=OFF`.
 
-The implementation is *header-only*; include `Wetstone.hpp` or individual headers. For LibStone root builds, add `add_subdirectory(wetstone)` to the root CMake project and link `Wetstone::wetstone` in clients.
+The core is header-only; include `Wetstone.hpp` or individual headers and link
+`Wetstone::wetstone` for its include paths. Clients that call the compiled
+`wetstone::alias` API link `Wetstone::alias_analysis`, which also supplies the
+core headers.
+
+### Alias queries
+
+`wetstone::alias::DirectAnalysis` uses the existing Wetstone IR and points-to
+facts. Its access inventory includes opaque calls unless the caller provides
+trusted summaries. `LoopDependenceAnalysis` distinguishes same-iteration
+paths from paths crossing a backedge of a natural loop; it does not infer
+a precise positive iteration distance. Check the result's `complete` field.
+`RegionBasedAnalysis` accepts caller-supplied containment, single-instance,
+and disjointness evidence. Different region IDs or types alone do not imply
+that two byte ranges are disjoint.
 
 ## A first analysis
 
