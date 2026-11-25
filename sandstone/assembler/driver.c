@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     char err[1024] = {0};
     int load = bank ? sandstone_asm_new(&ctx, bank, err, sizeof err) :
         archml && !profile ? sandstone_asm_new_archml(&ctx, archml, err, sizeof err) :
-        profile ? sand_asm_new_profile(&ctx, profile, err, sizeof err) :
+        profile ? sandstone_asm_new_target(&ctx, profile, err, sizeof err) :
                   sandstone_asm_new(&ctx, NULL, err, sizeof err);
     if (load != 0) {
         fprintf(stderr, "sandstone-as: %s\n", err[0] ? err : "cannot initialize assembler");

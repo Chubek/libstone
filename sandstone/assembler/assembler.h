@@ -66,6 +66,9 @@ typedef struct sandstone_sym {
  * A NULL bank_path selects the build's default DSymspec profile. */
 int sandstone_asm_new(sandstone_asm_t **out, const char *bank_path,
                       char *err, size_t err_n);
+/* Select a built-in DSymspec profile by name; NULL selects the default. */
+int sandstone_asm_new_target(sandstone_asm_t **out, const char *target,
+                             char *err, size_t err_n);
 int sandstone_asm_new_from_memory(sandstone_asm_t **out, const uint8_t *data,
                                   size_t len, char *err, size_t err_n);
 void sandstone_asm_free(sandstone_asm_t *ctx);
@@ -103,6 +106,12 @@ uint64_t sandstone_asm_section_base(const sandstone_asm_t *ctx, uint32_t i);
 /* Flat image: alloc sections concatenated in order (BSS zero-filled). */
 const uint8_t *sandstone_asm_image(const sandstone_asm_t *ctx,
                                    size_t *len_out);
+/* Checked flat output after successful assembly. Rejects unresolved
+ * relocations and image failures. Both out parameters are required. Returns
+ * 0 on success, including an empty image (NULL bytes and zero length), or -1
+ * with a context diagnostic. */
+int sandstone_asm_flat_image(sandstone_asm_t *ctx, const uint8_t **bytes_out,
+                             size_t *len_out);
 
 /* Relocations and symbols (borrowed arrays). */
 const sandstone_reloc_t *sandstone_asm_relocs(const sandstone_asm_t *ctx,

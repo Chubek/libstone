@@ -17,7 +17,6 @@ static void *archml_items(void);
 static void *archml_append(void *, void *);
 static void *archml_list(void *, size_t);
 static void *archml_atom(char *, int, size_t);
-static size_t archml_offset(GLRParser p);
 %}
 %%
 %start archml_document
@@ -25,19 +24,15 @@ static size_t archml_offset(GLRParser p);
 
 archml_document: expression { $$ = archml_ast_make_document(archml_arena, $1); };
 expression:
-      '(' items ')' { $$ = archml_list($2, archml_offset(save)); }
-    | /"([^"\\\r\n]|\\[^\r\n])*"/ { $$ = archml_atom($1, 1, archml_offset(save)); }
-    | /[^()"; \t\r\n]+/ { $$ = archml_atom($1, 0, archml_offset(save)); }
+      '(' items ')' { $$ = archml_list($2, $OFFSET); }
+    | /"([^"\\\r\n]|\\[^\r\n])*"/ { $$ = archml_atom($1, 1, $OFFSET); }
+    | /[^()"; \t\r\n]+/ { $$ = archml_atom($1, 0, $OFFSET); }
     ;
 items:
       items expression { $$ = archml_append($1, $2); }
     | %empty { $$ = archml_items(); }
     ;
 %%
-static size_t archml_offset(GLRParser p) {
-    glr_skip(&p);
-    return (size_t)(p.s - p.begin);
-}
 static void *archml_items(void) {
     ArchMLItems *items = archml_ast_arena_alloc(archml_arena, sizeof(*items));
     if (items) memset(items, 0, sizeof(*items));

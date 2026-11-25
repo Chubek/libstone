@@ -142,8 +142,6 @@ struct sandstone_asm {
 int sand_emit_elf64(sandstone_asm_t *, const char *path);
 int sand_emit_native_object(sandstone_asm_t *, const char *path, const char *format);
 void sand_set_error(sandstone_asm_t *ctx, const char *fmt, ...);
-int sand_asm_new_profile(sandstone_asm_t **out, const char *profile,
-                         char *err, size_t err_n);
 int sand_dsymas_load(sandstone_asm_t *ctx, const char *profile);
 DomSymAs_Error sand_dsymas_encode(const sandstone_asm_t *ctx, uint32_t form,
     const DomSymAs_OpVal *ops, uint32_t nops, DomSymAs_Bytes *bytes,

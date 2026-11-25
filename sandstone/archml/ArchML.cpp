@@ -41,16 +41,18 @@ std::size_t invalid_utf8(std::string_view text) {
     }
     return std::string_view::npos;
 }
-Node convert(const archml_syntax_node *expr, const std::vector<std::size_t> &lines, const std::string &source) {
+Node convert(const archml_syntax_node *expr, const std::vector<std::size_t> &lines,
+             const std::string &source, unsigned depth = 0) {
     if (!expr) throw std::bad_alloc();
     Node node;
     node.location = locate(lines, archml_syntax_offset(expr));
+    if (depth >= 512) throw Error(source, node.location, "ArchML nesting limit exceeded");
     if (archml_syntax_kind(expr) == ARCHML_LIST) {
         node.kind = Node::Kind::List;
         const auto count = archml_syntax_count(expr);
         node.children.reserve(count);
         for (std::size_t i = 0; i < count; ++i)
-            node.children.push_back(convert(archml_syntax_child(expr, i), lines, source));
+            node.children.push_back(convert(archml_syntax_child(expr, i), lines, source, depth + 1));
     } else if (archml_syntax_kind(expr) == ARCHML_SYMBOL) {
         std::size_t size;
         const auto *text = archml_syntax_text(expr, &size);

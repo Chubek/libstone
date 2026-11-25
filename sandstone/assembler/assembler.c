@@ -158,14 +158,17 @@ static sandstone_asm_t *asm_alloc(void) {
     return ctx;
 }
 
-int sand_asm_new_profile(sandstone_asm_t **out, const char *profile,
-                         char *err, size_t err_n) {
+int sandstone_asm_new_target(sandstone_asm_t **out, const char *target,
+                             char *err, size_t err_n) {
     if (!out) return -1;
     *out = NULL;
 #ifdef SANDSTONE_ASM_DSYMAS
     sandstone_asm_t *ctx = asm_alloc();
-    if (!ctx) return -1;
-    if (!sand_dsymas_load(ctx, profile ? profile : SANDSTONE_ASM_DEFAULT_PROFILE)) {
+    if (!ctx) {
+        if (err && err_n) snprintf(err, err_n, "cannot allocate assembler context");
+        return -1;
+    }
+    if (!sand_dsymas_load(ctx, target ? target : SANDSTONE_ASM_DEFAULT_PROFILE)) {
         if (load_defaults(ctx)) {
             *out = ctx;
             return 0;
@@ -175,7 +178,7 @@ int sand_asm_new_profile(sandstone_asm_t **out, const char *profile,
     if (err && err_n) snprintf(err, err_n, "%s", ctx->error);
     sandstone_asm_free(ctx);
 #else
-    (void)profile;
+    (void)target;
     if (err && err_n)
         snprintf(err, err_n, "built-in targets are unavailable; use --bank or --archml");
 #endif
@@ -210,7 +213,7 @@ int sandstone_asm_new_archml(sandstone_asm_t **out, const char *path,
 int sandstone_asm_new(sandstone_asm_t **out, const char *bank_path,
                       char *err, size_t err_n) {
     if (!bank_path)
-        return sand_asm_new_profile(out, NULL, err, err_n);
+        return sandstone_asm_new_target(out, NULL, err, err_n);
     sandstone_asm_t *ctx = asm_alloc();
     if (!ctx)
         return -1;
@@ -539,6 +542,23 @@ const uint8_t *sandstone_asm_image(const sandstone_asm_t *ctx,
     if (len_out)
         *len_out = ctx->image_len;
     return ctx->image;
+}
+
+int sandstone_asm_flat_image(sandstone_asm_t *ctx, const uint8_t **bytes_out,
+                             size_t *len_out) {
+    *bytes_out = NULL;
+    *len_out = 0;
+    if (ctx->n_relocs) {
+        sand_set_error(ctx, "flat output has %zu unresolved relocation(s)", ctx->n_relocs);
+        return -1;
+    }
+    if (!rebuild_image(ctx)) {
+        sand_set_error(ctx, "cannot construct flat image (allocation or size limit)");
+        return -1;
+    }
+    *bytes_out = ctx->image;
+    *len_out = ctx->image_len;
+    return 0;
 }
 
 const sandstone_reloc_t *sandstone_asm_relocs(const sandstone_asm_t *ctx,

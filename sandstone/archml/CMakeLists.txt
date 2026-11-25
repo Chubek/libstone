@@ -7,6 +7,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 include(CMakePackageConfigHelpers)
 find_package(Perl REQUIRED)
+libstone_aurocks_command(ARCHML_AUROCKS ARCHML_AUROCKS_DEP)
 set(ARCHML_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${ARCHML_GENERATED}")
 get_filename_component(ARCHML_SCRIPTS "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts" ABSOLUTE)
@@ -18,12 +19,11 @@ add_custom_command(
   VERBATIM)
 add_custom_command(
   OUTPUT "${ARCHML_GENERATED}/ArchMLParser.c"
-  COMMAND "${CMAKE_COMMAND}" "-DPERL=${PERL_EXECUTABLE}"
-          "-DGENERATOR=${ARCHML_SCRIPTS}/aurocks.pl"
+  COMMAND "${CMAKE_COMMAND}" "-DGENERATOR_COMMAND=${ARCHML_AUROCKS}"
           "-DGRAMMAR=${CMAKE_CURRENT_SOURCE_DIR}/ArchML.g"
           "-DOUTPUT=${ARCHML_GENERATED}/ArchMLParser.c"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateParser.cmake"
-  DEPENDS ArchML.g Parser.h GenerateParser.cmake "${ARCHML_SCRIPTS}/aurocks.pl"
+  DEPENDS ArchML.g Parser.h GenerateParser.cmake "${ARCHML_AUROCKS_DEP}"
   VERBATIM)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Runtime.hpp" ARCHML_RUNTIME_SOURCE)
 configure_file(targets/RuntimeSource.hpp.in "${ARCHML_GENERATED}/RuntimeSource.hpp" @ONLY)

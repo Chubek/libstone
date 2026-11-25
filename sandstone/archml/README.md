@@ -145,7 +145,7 @@ Source and strings are UTF-8. Symbols are unquoted atoms; strings support `\"`,
 strings must also be valid UTF-8; `\x00` is permitted inside strings. Raw NUL,
 trailing input, malformed strings and excessive nesting are diagnosed.
 
-`ArchML.g` is compiled by `../../scripts/aurocks.pl`; `ArchML.asdl` is compiled by
+`ArchML.g` is compiled by native Aurocks; `ArchML.asdl` is compiled by
 `../../scripts/asdl.pl`. CMake generates both in the build directory. The ASDL
 arena owns the document and source-offset-bearing symbol/string/list nodes,
 including abandoned parse alternatives. A C bridge keeps generated C11 AST
