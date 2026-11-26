@@ -1,0 +1,16 @@
+-- A small self-describing schema used to exercise the native generator.
+-- This describes portable schema syntax, not the compiler's internal layout.
+module Bootstrap {
+    position = (usize offset, usize line, usize column)
+    span = (string file, position begin, position end)
+    cardinality = One | Optional | Sequence | NonemptySequence
+    type_ref = Primitive(identifier name)
+             | Named(identifier name)
+             | Applied(identifier name, type_ref* arguments)
+    field = (identifier? name, type_ref type, cardinality arity, span location)
+    constructor = (identifier name, field* fields, span location)
+    definition = Product(field+ fields)
+               | Sum(constructor+ constructors, field* attributes)
+               attributes (identifier name, span location)
+    schema = (identifier? module_name, definition+ definitions)
+}
