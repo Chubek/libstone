@@ -6,6 +6,7 @@ extern "C" {
 #include <lauxlib.h>
 }
 
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 
@@ -66,6 +67,7 @@ int install(lua_State* l) {
 }
 
 int broken_install(lua_State* l) { return luaL_error(l, "installer failed"); }
+int throwing_install(lua_State*) { throw std::runtime_error("installer threw"); }
 
 void native_api() {
     asdl::LuaOptions options;
@@ -78,6 +80,7 @@ void native_api() {
     lua.check("error('not executed during check')");
     throws([&] { lua.check("for"); }, "expected");
     throws([&] { lua.extend(broken_install); }, "installer failed");
+    throws([&] { lua.extend(throwing_install); }, "installer threw");
     lua.run(R"lua(
         local a = asdl
         assert(a.extension_installed and a.option('native')=='yes' and a.option('profile')=='testing')
@@ -200,6 +203,16 @@ void native_api() {
     require(lua_gettop(lua.state()) == top, "stack balance after errors/success");
     asdl::LuaSession other(schema());
     other.run("assert(saved==nil and asdl.diagnostic.count()==0)");
+    // Simulate a broken native adapter that copied a handle across arenas.
+    // Ordinary Lua code cannot copy userdata payloads or change metatables.
+    lua_getglobal(lua.state(), "saved");
+    const auto bytes = lua_rawlen(lua.state(), -1);
+    void* foreign = lua_newuserdatauv(other.state(), bytes, 0);
+    std::memcpy(foreign, lua_touserdata(lua.state(), -1), bytes);
+    luaL_setmetatable(other.state(), "asdl.node");
+    lua_setglobal(other.state(), "foreign");
+    lua_pop(lua.state(), 1);
+    other.run("assert(not asdl.isnode(foreign) and not pcall(asdl.type, foreign))");
 }
 
 void limits() {

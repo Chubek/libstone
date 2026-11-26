@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
+#include <new>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -165,6 +165,7 @@ struct LuaSession::Impl {
     bool exhausted = false;
     bool executing = false;
     lua_Integer last_id = 0;
+    static inline char live_nodes;
 
     explicit Impl(const Schema& s, LuaOptions o) : schema(s), options(std::move(o)) {
         // Bound native recursion independently of Lua's VM stack.
@@ -174,8 +175,14 @@ struct LuaSession::Impl {
             auto& family = shapes[def.name];
             auto add = [&](const Constructor* ctor) {
                 Shape shape{&def, ctor, {}};
-                for (const auto& f : ctor ? ctor->fields : def.fields) shape.fields.push_back(&f);
-                for (const auto& f : def.attributes) shape.fields.push_back(&f);
+                std::set<std::string_view> names;
+                auto append = [&](const Field& f) {
+                    if (!names.insert(f.name).second)
+                        fail("ambiguous Lua AST field " + def.name + "." + f.name);
+                    shape.fields.push_back(&f);
+                };
+                for (const auto& f : ctor ? ctor->fields : def.fields) append(f);
+                for (const auto& f : def.attributes) append(f);
                 family.push_back(std::move(shape));
             };
             if (def.kind == DefinitionKind::product) add(nullptr);
@@ -254,8 +261,15 @@ struct LuaSession::Impl {
 
     const Node* test(lua_State* l, int i) const {
         if (lua_type(l, i) != LUA_TUSERDATA || lua_rawlen(l, i) != sizeof(Node)) return nullptr;
-        const auto* n = static_cast<Node*>(luaL_testudata(l, i, node_mt));
-        return n && n->owner == this && n->shape && n->id > 0 ? n : nullptr;
+        i = lua_absindex(l, i);
+        if (!luaL_testudata(l, i, node_mt)) return nullptr;
+        lua_rawgetp(l, LUA_REGISTRYINDEX, &live_nodes);
+        lua_pushvalue(l, i);
+        const bool live = lua_rawget(l, -2) == LUA_TBOOLEAN;
+        lua_pop(l, 2);
+        if (!live) return nullptr;
+        const auto* n = static_cast<Node*>(lua_touserdata(l, i));
+        return n->owner == this && n->shape && n->id > 0 ? n : nullptr;
     }
 
     const Node& node(lua_State* l, int i) const {
@@ -282,8 +296,8 @@ struct LuaSession::Impl {
 
     void fresh(lua_State* l, const Shape& s, int data, int origin) {
         data = lua_absindex(l, data);
-        origin = lua_absindex(l, origin);
-        const auto* old = test(l, origin);
+        if (origin) origin = lua_absindex(l, origin);
+        const auto* old = origin ? test(l, origin) : nullptr;
         if (last_id == std::numeric_limits<lua_Integer>::max()) fail("ASDL node IDs exhausted");
         const auto id = ++last_id;
         // Node is trivially destructible; Lua owns the struct and all uservalues.
@@ -294,9 +308,14 @@ struct LuaSession::Impl {
         lua_pushvalue(l, data);
         lua_setiuservalue(l, result, fields_slot);
         if (old) lua_getiuservalue(l, origin, location_slot);
-        else if (origin > 0 && origin < result) copy_location(l, origin);
+        else if (origin) copy_location(l, origin);
         else lua_pushnil(l);
         lua_setiuservalue(l, result, location_slot);
+        lua_rawgetp(l, LUA_REGISTRYINDEX, &live_nodes);
+        lua_pushvalue(l, result);
+        lua_pushboolean(l, true);
+        lua_rawset(l, -3);
+        lua_pop(l, 1);
     }
 
     void normalized(lua_State* l, int i, std::string_view type) {
@@ -1007,6 +1026,22 @@ struct LuaSession::Impl {
         return 1;
     }
 
+    struct Extension {
+        lua_CFunction install;
+        void* context;
+    };
+
+    int install_extension(lua_State* l) {
+        const auto& extension = *static_cast<Extension*>(lua_touserdata(l, 1));
+        lua_settop(l, 0);
+        lua_pushglobaltable(l);
+        field(l, -1, "asdl");
+        lua_remove(l, -2);
+        if (!lua_istable(l, -1)) fail("ASDL Lua API table not available");
+        lua_pushlightuserdata(l, extension.context);
+        return extension.install(l);
+    }
+
     int install(lua_State* l) {
         struct Library { const char* name; lua_CFunction open; };
         constexpr Library safe[] = {{"_G", luaopen_base}, {LUA_TABLIBNAME, luaopen_table},
@@ -1025,6 +1060,11 @@ struct LuaSession::Impl {
         luaL_setfuncs(l, mt, 0);
         set(l, "__metatable", "ASDL node");
         lua_pop(l, 1);
+        lua_newtable(l);
+        lua_newtable(l);
+        set(l, "__mode", "k");
+        lua_setmetatable(l, -2);
+        lua_rawsetp(l, LUA_REGISTRYINDEX, &live_nodes);
         static const luaL_Reg api[] = {
             {"isnode", invoke<&Impl::isnode>}, {"type", invoke<&Impl::type>}, {"tag", invoke<&Impl::tag>},
             {"fields", invoke<&Impl::fields>}, {"destruct", invoke<&Impl::destruct>},
@@ -1109,14 +1149,11 @@ void LuaSession::extend(int (*install)(lua_State*), void* context) {
     room(l);
     lua_pushcfunction(l, traceback);
     const int handler = lua_gettop(l);
-    lua_pushcfunction(l, install);
-    lua_pushglobaltable(l);
-    field(l, -1, "asdl");
-    lua_remove(l, -2);
-    if (!lua_istable(l, -1)) fail("ASDL Lua API table not available");
-    lua_pushlightuserdata(l, context);
+    Impl::Extension extension{install, context};
+    lua_pushcfunction(l, Impl::invoke<&Impl::install_extension>);
+    lua_pushlightuserdata(l, &extension);
     Impl::Execution budget(*impl_);
-    const int status = lua_pcall(l, 2, 0, handler);
+    const int status = lua_pcall(l, 1, 0, handler);
     if (impl_->exhausted && status == LUA_OK) fail("ASDL Lua instruction limit exceeded");
     require_ok(l, status);
 }
