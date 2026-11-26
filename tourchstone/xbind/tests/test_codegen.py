@@ -84,6 +84,8 @@ class Codegen(unittest.TestCase):
             ('return x.library{name="a",functions={x.func("f",{returns="int; injected"})}}', "C type"),
             ('return x.library{name="a",functions={x.func("f",{symbol=""})}}', "non-empty"),
             ('return x.library{name="a",functions={x.func("f",{symbol_version=123})}}', "string"),
+            ('return x.library{name="a",functions={x.func("f",{symbol_ordinal=0})}}', "integer in"),
+            ('return x.library{name="a",functions={x.func("f",{symbol_ordinal=1,symbol="f"})}}', "cannot be combined"),
             ('return x.library{name="a",targets={x.target("lua")}}', "unknown target"),
         ]
         lua = shutil.which("lua5.4") or shutil.which("lua")

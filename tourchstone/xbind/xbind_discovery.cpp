@@ -146,20 +146,28 @@ std::string bind(const std::filesystem::path& path, const qamrpp::Manifest& mani
   for (const auto& f : manifest.functions) {
     const auto raw_name = f.options.find("symbol");
     const auto version = f.options.find("symbol_version");
+    const auto ordinal = f.options.find("symbol_ordinal");
     const auto name = raw_name != f.options.end() ? raw_name->second :
                       (info.format == qbfd::Format::MachO ? "_" + f.name : f.name);
     if (version != f.options.end() && info.format != qbfd::Format::ELF)
       throw std::runtime_error("symbol_version requires ELF: " + f.name);
+    if (ordinal != f.options.end() && info.format != qbfd::Format::PE)
+      throw std::runtime_error("symbol_ordinal requires PE: " + f.name);
+    const auto selector = ordinal != f.options.end() ? "#" + ordinal->second :
+                          version != f.options.end() ? name + "@" + version->second : name;
     const qbfd::LinkSymbol* match = nullptr;
     for (const auto& s : exports) {
-      if (s.name != name) continue;
-      if (version != f.options.end() ? s.version != version->second :
-          !s.version.empty() && !s.defaultVersion) continue;
-      if (match) throw std::runtime_error("ambiguous export: " + name);
+      if (ordinal != f.options.end()) {
+        if (!s.ordinal || std::to_string(*s.ordinal) != ordinal->second) continue;
+      } else {
+        if (s.name != name) continue;
+        if (version != f.options.end() ? s.version != version->second :
+            !s.version.empty() && !s.defaultVersion) continue;
+      }
+      if (match) throw std::runtime_error("ambiguous export: " + selector);
       match = &s;
     }
-    if (!match) throw std::runtime_error("no matching export: " + name +
-        (version == f.options.end() ? "" : "@" + version->second));
+    if (!match) throw std::runtime_error("no matching export: " + selector);
     if (!first) out << ',';
     first = false;
     out << "{\"declaration\":" << json_quote(f.name) << ",\"export\":";

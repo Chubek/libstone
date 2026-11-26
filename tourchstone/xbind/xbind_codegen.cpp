@@ -213,7 +213,8 @@ std::string emit_check(const qamrpp::Manifest& m) {
 std::string emit_lua(const qamrpp::Manifest& m, const std::string& root) {
   if (m.functions.empty()) throw std::runtime_error("inventory-only spec has no C functions to emit");
   for (const auto& f : m.functions)
-    if (f.options.count("symbol") || f.options.count("symbol_version"))
+    if (f.options.count("symbol") || f.options.count("symbol_version") ||
+        f.options.count("symbol_ordinal"))
       throw std::runtime_error("direct-link Lua glue does not support binary symbol overrides: " + f.name);
   auto types = lua_types(m, root);
   auto target = std::find_if(m.target_options.begin(), m.target_options.end(),

@@ -32,7 +32,7 @@ endif()
 include(cmake/XBindQaMRpp.cmake)
 
 add_library(xbind xbind.c)
-set_target_properties(xbind PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(xbind PROPERTIES POSITION_INDEPENDENT_CODE ON WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_library(XBind::xbind ALIAS xbind)
 target_compile_features(xbind PUBLIC c_std_11)
 target_include_directories(xbind PUBLIC
@@ -68,6 +68,15 @@ target_compile_definitions(xbind_cli PRIVATE
   XBIND_INSTALL_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/xbind"
   XBIND_RELATIVE_DATA_DIR="${_xbind_relative_data}")
 target_link_libraries(xbind_cli PRIVATE XBind::xbind XBind::QaMRppSpec)
+if(UNIX AND BUILD_SHARED_LIBS AND NOT DEFINED CMAKE_INSTALL_RPATH)
+  file(RELATIVE_PATH _xbind_relative_lib "${CMAKE_INSTALL_FULL_BINDIR}"
+    "${CMAKE_INSTALL_FULL_LIBDIR}")
+  if(APPLE)
+    set_property(TARGET xbind_cli PROPERTY INSTALL_RPATH "@loader_path/${_xbind_relative_lib}")
+  else()
+    set_property(TARGET xbind_cli PROPERTY INSTALL_RPATH "$ORIGIN/${_xbind_relative_lib}")
+  endif()
+endif()
 libstone_warnings(xbind_cli)
 
 if(XBIND_BUILD_QAMRPP_BINDING)
@@ -82,6 +91,14 @@ if(XBIND_BUILD_QAMRPP_BINDING)
   set_target_properties(qamrpp_xbind PROPERTIES
     OUTPUT_NAME qamrpp_xbind
     PREFIX "lib")
+  if(UNIX)
+    # Modules are installed one level below the native libraries.
+    if(APPLE)
+      set_property(TARGET qamrpp_xbind APPEND PROPERTY INSTALL_RPATH "@loader_path/..")
+    else()
+      set_property(TARGET qamrpp_xbind APPEND PROPERTY INSTALL_RPATH "$ORIGIN/..")
+    endif()
+  endif()
   target_compile_definitions(qamrpp_xbind PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   libstone_warnings(qamrpp_xbind)
 endif()

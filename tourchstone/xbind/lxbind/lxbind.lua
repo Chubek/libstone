@@ -207,6 +207,14 @@ function M.validate_library(manifest)
         fail(key .. " must not contain NUL")
       end
     end
+    if fn.symbol_ordinal ~= nil then
+      if math.type(fn.symbol_ordinal) ~= "integer" or fn.symbol_ordinal < 1 or fn.symbol_ordinal > 65535 then
+        fail("symbol_ordinal must be an integer in [1, 65535]")
+      end
+      if fn.symbol ~= nil or fn.symbol_version ~= nil then
+        fail("symbol_ordinal cannot be combined with symbol or symbol_version")
+      end
+    end
     strings(fn.features, "function.features")
     local params = {}
     for _, param in ipairs(list(fn.params, "params")) do

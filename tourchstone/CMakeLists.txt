@@ -52,10 +52,22 @@ if(XBIND_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload_fixture AND TARGET
       --fixture $<TARGET_FILE:tdynload_fixture>
       Codegen.test_tourchstone_lua_bindings_execute)
   set_tests_properties(tourchstone.bindings PROPERTIES TIMEOUT 180)
+  if(XBIND_BUILD_DISCOVERY)
+    add_library(interop_hello SHARED xbind/examples/hello/hello.c)
+    set_target_properties(interop_hello PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    add_executable(tourchstone_interop_test xbind/tests/test_interop.cpp)
+    target_link_libraries(tourchstone_interop_test PRIVATE XBind::QaMRppSpec
+      Tourchstone::dynload Tourchstone::dyninvoke)
+    libstone_warnings(tourchstone_interop_test)
+    add_test(NAME tourchstone.interop COMMAND tourchstone_interop_test
+      $<TARGET_FILE:interop_hello> "${CMAKE_CURRENT_SOURCE_DIR}/xbind/examples/hello/hello.xbind")
+    set_tests_properties(tourchstone.interop PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 endif()
 
 if(LIBSTONE_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload AND TARGET tdyninvoke
-    AND TARGET ArchBFD::archbfd AND NOT CMAKE_CROSSCOMPILING)
+    AND TARGET ArchBFD::archbfd AND NOT CMAKE_CROSSCOMPILING
+    AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_BINDIR}" AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_DATADIR}")
   add_test(NAME tourchstone.installed
     COMMAND ${CMAKE_COMMAND}
       "-DBUILD=${CMAKE_BINARY_DIR}"

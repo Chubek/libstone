@@ -412,6 +412,14 @@ std::vector<Function> function_array(Context &ctx, const ValuePtr &table) {
         function.options[key] = std::move(spelling);
       }
     }
+    auto ordinal = raw_get(ctx, value, "symbol_ordinal");
+    if (ordinal && ordinal->type != Value::NIL) {
+      if (ordinal->type != Value::INT || ordinal->int_value < 1 || ordinal->int_value > 65535)
+        throw std::runtime_error("symbol_ordinal must be an integer in [1, 65535]");
+      if (function.options.count("symbol") || function.options.count("symbol_version"))
+        throw std::runtime_error("symbol_ordinal cannot be combined with symbol or symbol_version");
+      function.options["symbol_ordinal"] = std::to_string(ordinal->int_value);
+    }
     function.features = string_array(ctx, value, "features");
     result.push_back(std::move(function));
   }

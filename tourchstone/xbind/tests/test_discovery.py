@@ -112,6 +112,14 @@ __asm__(".symver old,probe@OLD");
         self.assertIsInstance(artifact["bindings"][0]["export"]["ordinal"], int)
         self.cli_bad("symbol_version requires ELF", "--bind-ir", "fixture.dll",
                      self.spec(options=',symbol_version="X"'))
+        self.run_ok("lld-link", "/dll", "/noentry", "/export:probe,@7,NONAME",
+                    "/out:ordinal.dll", "fixture.obj")
+        info, ordinal = self.check_image("ordinal.dll", "pe", "x86-64", "",
+                                         self.spec(options=',symbol_ordinal=7'))
+        self.assertEqual(ordinal["bindings"][0]["export"]["ordinal"], 7)
+        self.assertNotIn("probe", {entry["name"] for entry in info["exports"]})
+        self.cli_bad("no matching export: #8", "--bind-ir", "ordinal.dll",
+                     self.spec(options=',symbol_ordinal=8'))
 
     def test_macho_thin_and_universal(self):
         self.require_tools("clang", "ld64.lld")

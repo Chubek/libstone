@@ -8,6 +8,9 @@ The Stone components now build from this separated `libstone` checkout. CMake
 never downloads dependencies; populate `libstone/third_party/` or pass explicit
 `LIBSTONE_*_SOURCE_DIR` cache variables for vendored dependencies.
 
+For object inspection, native loading, foreign calls and Lua bindings, see
+[Libstone native interoperability](tourchstone/xbind/INTEROPERABILITY.md).
+
 ```sh
 cmake -S libstone -B build-stone
 cmake --build build-stone --parallel

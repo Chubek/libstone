@@ -29,6 +29,8 @@ as-is for ELF and PE and prepends `_` for Mach-O. A function's `symbol` option
 selects an exact raw export name instead. For ELF, only an unversioned export or
 the default version is matched unless `symbol_version` explicitly selects a
 version. Missing or ambiguous exports fail without emitting a partial result.
+For PE, `symbol_ordinal` selects a numeric export ordinal (1–65535) and is
+mutually exclusive with name and version overrides.
 Forwarders and reexports can appear in the mapping; the mapping does not resolve
 them or prove that an export names code. An optional canonical qBFD architecture
 name (e.g. `aarch64` or `x86-64`) constrains the image and is mandatory for
@@ -39,7 +41,7 @@ Compile the emitted assertions with the target compiler to check exact pointer
 types against the actual headers, then link against the intended library. This
 does not independently prove the library implements those declarations. The
 export IR is a separate inspection artifact: the Lua backend compiles and links
-against headers and rejects raw name/version overrides rather than ignoring
+against headers and rejects raw name/version/ordinal overrides rather than ignoring
 them. It does not use dyninvoke, load an arbitrary binary by name, or support
 callbacks, variadics, records by value, automatic pointer lifetimes or out
 buffers. It supports the scalar subset, borrowed C strings and explicitly
@@ -64,3 +66,22 @@ CONFIG)` exports `XBind::xbind` and `XBind::QaMRppSpec`; the latter exposes
 the manifest, code generation and offline discovery APIs. `find_package(Tourchstone
 CONFIG)` provides the enabled native libraries. Generated Lua glue needs no
 XBind runtime library unless it is binding XBind itself.
+
+## Verification and portability
+
+The validation host for this work is Linux x86-64. These tests distinguish
+offline evidence from actual execution:
+
+| Test | What it verifies |
+|---|---|
+| `xbind.discovery` | Reproducible JSON from a versioned ELF shared object, PE DLL and thin/universal x86-64 and arm64 Mach-O. Exact match rules, ELF default and explicit versions, PE ordinals, Mach-O C spelling and explicit slice selection. Foreign fixtures are linked by Clang/LLD and inspected only. |
+| `tourchstone.interop` | Match the hello manifest against a native shared image, check that inspection returns no callable address, load and resolve it natively, then pass explicit `i32` argument/result storage to dyninvoke. |
+| `xbind.codegen`, `tourchstone.bindings` | Compile exact-signature assertions against headers. Compile and run generated hello, self, dynload and dyninvoke glue with Lua 5.4 and DomLuaBind. |
+| `tourchstone.installed` | Install into a staging prefix, configure a separate C/C++ consumer via `find_package`, and run it and the installed XBind CLI. |
+
+The native hello call, Lua tests and installed package smoke passed on Linux
+x86-64 at the qBFD/XBind integration checkpoint. The cross-image tests do not
+verify Windows or macOS loading, their trampolines, or native ARM/RISC-V
+execution. Missing optional cross toolchains or Lua 5.4 SDKs can skip the
+corresponding cases. A source assertion, an export match and a successful
+offline layout are not substitutes for a host execution test.
