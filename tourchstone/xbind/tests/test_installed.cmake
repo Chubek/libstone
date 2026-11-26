@@ -16,7 +16,8 @@ run("${CMAKE_COMMAND}" --install "${BUILD}" --prefix "${prefix}" ${config_arg})
 run("${CMAKE_COMMAND}" -S "${SOURCE}/tests/consumer" -B "${WORK}/consumer"
     "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_C_COMPILER=${CC}"
     "-DCMAKE_CXX_COMPILER=${CXX}" "-DCMAKE_C_FLAGS=${CFLAGS}"
-    "-DCMAKE_CXX_FLAGS=${CXXFLAGS}" "-DCMAKE_BUILD_TYPE=${CONFIG}")
+    "-DCMAKE_CXX_FLAGS=${CXXFLAGS}" "-DCMAKE_BUILD_TYPE=${CONFIG}"
+    "-DINTEROP_ISA_DIR=${prefix}/${DATADIR}/sandstone/isa")
 run("${CMAKE_COMMAND}" --build "${WORK}/consumer" ${config_arg})
 if(WIN32)
   set(ENV{PATH} "${prefix}/${BINDIR};$ENV{PATH}")

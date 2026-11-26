@@ -10,4 +10,4 @@ add_executable(consumer main.cpp calls.c)
 target_link_libraries(consumer PRIVATE XBind::QaMRppSpec Tourchstone::dynload
   Tourchstone::dyninvoke qbfd::qbfd ArchBFD::archbfd)
 enable_testing()
-add_test(NAME consumer COMMAND consumer)
+add_test(NAME consumer COMMAND consumer "${INTEROP_ISA_DIR}")

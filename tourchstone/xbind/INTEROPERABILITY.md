@@ -47,6 +47,8 @@ callbacks, variadics, records by value, automatic pointer lifetimes or out
 buffers. It supports the scalar subset, borrowed C strings and explicitly
 mapped opaque pointers. Compile emitted glue with the Lua 5.4 SDK and the
 DomLuaBind C API (`dombind/domluabind/generate.py`).
+Integer-mapped C enum inputs require values from the C enum's documented domain;
+the emitter does not derive an enum's valid values from its declaration.
 
 ## Build and embedding
 
@@ -66,6 +68,12 @@ CONFIG)` exports `XBind::xbind` and `XBind::QaMRppSpec`; the latter exposes
 the manifest, code generation and offline discovery APIs. `find_package(Tourchstone
 CONFIG)` provides the enabled native libraries. Generated Lua glue needs no
 XBind runtime library unless it is binding XBind itself.
+Tourchstone installs the Sandstone `.isa` files used by dyninvoke when Sandstone
+is not built with it. For a relocated prefix, pass its `share/sandstone/isa`
+directory to `dinv_isa_regcounts` explicitly, or set `DINV_ISA_DIR`.
+The full Yellowstone command suite is not required for this workflow:
+Tourchstone brings in qBFD and ArchBFD on its own. Enable the full Yellowstone
+build separately only with a working qobjld Aurocks generator.
 
 ## Verification and portability
 
@@ -79,9 +87,17 @@ offline evidence from actual execution:
 | `xbind.codegen`, `tourchstone.bindings` | Compile exact-signature assertions against headers. Compile and run generated hello, self, dynload and dyninvoke glue with Lua 5.4 and DomLuaBind. |
 | `tourchstone.installed` | Install into a staging prefix, configure a separate C/C++ consumer via `find_package`, and run it and the installed XBind CLI. |
 
-The native hello call, Lua tests and installed package smoke passed on Linux
-x86-64 at the qBFD/XBind integration checkpoint. The cross-image tests do not
-verify Windows or macOS loading, their trampolines, or native ARM/RISC-V
-execution. Missing optional cross toolchains or Lua 5.4 SDKs can skip the
-corresponding cases. A source assertion, an export match and a successful
-offline layout are not substitutes for a host execution test.
+On Linux x86-64 with Clang 22.1.8, the integrated Tourchstone suite passed
+24 tests in both the regular and AddressSanitizer/UndefinedBehaviorSanitizer
+builds; one optional qBFD source-notes check skipped in each. Standalone
+XBind also passed its six CTest entries with binary discovery disabled. A
+top-level shared build scoped to Tourchstone and its bundled qBFD/ArchBFD
+passed the same interoperability suite.
+
+Native dyninvoke calls and closures are gated to Linux SysV AMD64. The
+implemented offline layouts for Win64, AAPCS64, Darwin ARM64 and RISC-V hard
+float (LP64D/ILP32D) do not imply native execution support. The cross-image
+tests do not verify Windows or macOS native loading or ARM/RISC-V execution.
+Missing optional cross toolchains or Lua 5.4 SDKs can skip corresponding cases.
+A source assertion, export match or offline layout is not a substitute for
+a host execution test.

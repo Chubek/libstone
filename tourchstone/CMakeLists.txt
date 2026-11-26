@@ -38,6 +38,12 @@ if(TARGET Tourchstone::dynload OR TARGET Tourchstone::dyninvoke)
   install(EXPORT TourchstoneTargets NAMESPACE Tourchstone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Tourchstone)
   install(FILES cmake/TourchstoneConfig.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Tourchstone)
 endif()
+if(TARGET Tourchstone::dyninvoke AND NOT TARGET Sandstone::sandstone)
+  set(_tourchstone_isa_dir "${CMAKE_CURRENT_SOURCE_DIR}/../sandstone/isa")
+  install(FILES "${_tourchstone_isa_dir}/x86.isa" "${_tourchstone_isa_dir}/aarch64.isa"
+    "${_tourchstone_isa_dir}/riscv32.isa" "${_tourchstone_isa_dir}/riscv64.isa"
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sandstone/isa)
+endif()
 
 if(XBIND_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload_fixture AND TARGET tdyninvoke)
   find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
@@ -67,7 +73,9 @@ endif()
 
 if(LIBSTONE_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload AND TARGET tdyninvoke
     AND TARGET ArchBFD::archbfd AND NOT CMAKE_CROSSCOMPILING
-    AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_BINDIR}" AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_DATADIR}")
+    AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_BINDIR}" AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_DATADIR}"
+    AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}" AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}"
+    AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_DOCDIR}")
   add_test(NAME tourchstone.installed
     COMMAND ${CMAKE_COMMAND}
       "-DBUILD=${CMAKE_BINARY_DIR}"

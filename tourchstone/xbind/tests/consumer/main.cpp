@@ -4,10 +4,10 @@
 
 #include <string>
 
-extern "C" int calls(void);
+extern "C" int calls(const char* isa_dir);
 
 int main(int argc, char** argv) {
-  if (argc != 1 || calls()) return 1;
+  if (argc != 2 || calls(argv[1])) return 1;
   auto self = qbfd::open(std::filesystem::path(argv[0]));
   if (!self) return 2;
   if (xbind::discovery::available() &&

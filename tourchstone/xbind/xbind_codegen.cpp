@@ -280,7 +280,7 @@ template<class T> T xb_number(lua_State* L, int i) {
     luaL_argerror(L, i, "number out of range");
   return static_cast<T>(v);
 }
-inline const char* xb_string(lua_State* L, int i, bool nullable) {
+[[maybe_unused]] inline const char* xb_string(lua_State* L, int i, bool nullable) {
   if (nullable && lua_isnil(L, i)) return nullptr;
   if (lua_type(L, i) != LUA_TSTRING) luaL_argerror(L, i, "expected string");
   size_t n = 0;
@@ -295,7 +295,7 @@ template<class T> T xb_pointer(lua_State* L, int i, bool nullable) {
     luaL_argerror(L, i, "expected non-null opaque pointer");
   return static_cast<T>(lua_touserdata(L, i));
 }
-inline bool xb_boolean(lua_State* L, int i) {
+[[maybe_unused]] inline bool xb_boolean(lua_State* L, int i) {
   if (!lua_isboolean(L, i)) luaL_argerror(L, i, "expected boolean");
   return luaconv_boolean(L, i) != 0;
 }
