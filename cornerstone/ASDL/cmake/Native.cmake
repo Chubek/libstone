@@ -39,6 +39,19 @@ endif()
 if(ASDL_BUILD_TOOLS)
   add_executable(asdlc src/cli.cpp)
   target_link_libraries(asdlc PRIVATE ASDL::runtime)
+  target_include_directories(asdlc PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  set(asdl_perl_install_dir "${CMAKE_INSTALL_DATADIR}/asdl/scripts")
+  file(RELATIVE_PATH ASDL_BIN_TO_PERL "${CMAKE_INSTALL_FULL_BINDIR}"
+    "${CMAKE_INSTALL_FULL_DATADIR}/asdl/scripts/asdl.pl")
+  configure_file(cmake/asdl_compiler_paths.hpp.in asdl_compiler_paths.hpp @ONLY)
+  add_custom_target(asdl_legacy_script
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:asdlc>/asdl-legacy"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/scripts/asdl.pl"
+      "$<TARGET_FILE_DIR:asdlc>/asdl-legacy/asdl.pl"
+    VERBATIM)
+  add_dependencies(asdlc asdl_legacy_script)
+  install(FILES scripts/asdl.pl DESTINATION "${asdl_perl_install_dir}")
+
   add_executable(asdl-run src/runtime_cli.cpp)
   target_link_libraries(asdl-run PRIVATE ASDL::runtime)
   target_include_directories(asdl-run PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
@@ -158,6 +171,9 @@ if(ASDL_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
   if(Python3_Interpreter_FOUND)
     set(asdl_package_test_tools)
     if(ASDL_BUILD_TOOLS)
+      add_test(NAME asdl.perl-opt-in
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/perl_opt_in.py"
+          "$<TARGET_FILE:asdlc>")
       add_test(NAME asdl.run-cli
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_runtime.py"
           --tool "$<TARGET_FILE:asdl-run>" --work-dir "${CMAKE_CURRENT_BINARY_DIR}"

@@ -1,6 +1,8 @@
 #include "asdl/codegen.hpp"
 #include "asdl/dot.hpp"
 #include "asdl/schema.hpp"
+#include "asdl_compiler_paths.hpp"
+#include "executable_path.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -25,6 +27,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::string_view usage = R"(usage: asdlc [options] input.asdl
+  --perl                 explicitly use the legacy Perl compiler
   --header FILE, -o FILE  AST header (default: stdout)
   --source FILE          separate C implementation (requires --header)
   --header-only          static-inline header (default)
@@ -95,6 +98,67 @@ struct Arguments {
     bool check = false, help = false, man = false, version = false;
 };
 
+std::string_view canonical_option(std::string_view name)
+{
+    if (name == "o") return "header";
+    if (name == "h") return "help";
+    if (name == "V") return "version";
+    if (name == "no-builtin") return "omit-builtin";
+    if (name == "I") return "import-root";
+    return name;
+}
+
+bool takes_value(std::string_view option)
+{
+    return option == "header" || option == "source" || option == "visitor" ||
+        option == "listener" || option == "builtins-header" || option == "omit-builtin" ||
+        option == "include" || option == "prefix" || option == "guard" ||
+        option == "schema" || option == "cpp-header" || option == "dot" ||
+        option == "dot-view" || option == "import-root";
+}
+
+void select_backend(int argc, char** argv)
+{
+    std::vector<char*> forwarded;
+    bool perl = false;
+    bool positional = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view argument(argv[i]);
+        if (!positional && argument == "--perl") {
+            perl = true;
+            continue;
+        }
+        forwarded.push_back(argv[i]);
+        if (argument == "--")
+            positional = true;
+        if (positional || argument.size() < 2 || argument.front() != '-' ||
+            argument.find('=') != argument.npos)
+            continue;
+        const auto name = argument.substr(argument.starts_with("--") ? 2 : 1);
+        if (takes_value(canonical_option(name)) && i + 1 < argc)
+            forwarded.push_back(argv[++i]);
+    }
+    if (!perl)
+        return;
+
+    const auto bin = asdl::detail::executable_path(
+        argv[0], "cannot locate asdlc to find the legacy Perl script").parent_path();
+    for (const auto* path : {asdl::detail::build_perl, asdl::detail::installed_perl}) {
+        auto script = (bin / path).lexically_normal();
+        std::error_code ec;
+        if (!fs::is_regular_file(script, ec))
+            continue;
+        auto filename = script.string();
+        char interpreter[] = "perl";
+        forwarded.insert(forwarded.begin(), {interpreter, filename.data()});
+        forwarded.push_back(nullptr);
+        // Replace this process: Perl receives the same stdin, outputs, signals and argv.
+        execvp(interpreter, forwarded.data());
+        throw std::runtime_error("cannot run perl for --perl: " + std::string(std::strerror(errno)));
+    }
+    throw std::runtime_error("cannot find the bundled asdl.pl for --perl");
+}
+
 Arguments parse_arguments(int argc, char** argv)
 {
     Arguments args;
@@ -111,17 +175,9 @@ Arguments parse_arguments(int argc, char** argv)
         }
         const auto dash_count = argument.compare(0, 2, "--") == 0 ? 2 : 1;
         const auto equals = argument.find('=');
-        auto option = argument.substr(dash_count, equals - dash_count);
-        if (option == "o") option = "header";
-        if (option == "h") option = "help";
-        if (option == "V") option = "version";
-        if (option == "no-builtin") option = "omit-builtin";
-        if (option == "I") option = "import-root";
-        if (option == "header" || option == "source" || option == "visitor" ||
-            option == "listener" || option == "builtins-header" || option == "omit-builtin" ||
-            option == "include" || option == "prefix" || option == "guard" ||
-            option == "schema" || option == "cpp-header" || option == "dot" ||
-            option == "dot-view" || option == "import-root") {
+        const std::string option(canonical_option(
+            std::string_view(argument).substr(dash_count, equals - dash_count)));
+        if (takes_value(option)) {
             if (equals == std::string::npos && i + 1 == argc)
                 throw std::runtime_error("--" + option + " requires a value");
             auto value = equals == std::string::npos ? std::string(argv[++i]) :
@@ -327,6 +383,7 @@ asdl::DotView dot_view(const asdl::Options& options)
 
 int run(int argc, char** argv)
 {
+    select_backend(argc, argv);
     const auto args = parse_arguments(argc, argv);
     if (args.help) {
         std::cout << usage;

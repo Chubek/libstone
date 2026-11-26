@@ -47,10 +47,16 @@ capabilities but does not isolate untrusted code from the host process.
 
 ### Migrating an existing build
 
-Existing consumers can keep the `scripts/asdl.pl` entry point unchanged. To
-try the native compiler, first replace the `perl scripts/asdl.pl` invocation
-with `asdlc`, keeping the schema and flags. Check the output format and
-compile your own consumer against the result before switching. A native build
+`asdlc` always compiles natively unless you pass `--perl`. It never falls
+back to Perl on a native error, and normal usage does not require Perl.
+For explicit compatibility mode, run `asdlc --perl [legacy options] input.asdl`.
+This invokes the bundled legacy script with `perl` from `PATH` and preserves
+its output and exit status. Extended syntax and native-only flags are not
+available in this mode.
+
+To migrate a build that still invokes `perl scripts/asdl.pl` directly,
+replace that invocation with `asdlc`, keeping the schema and flags. Check the
+output format and compile your own consumer against the result before switching. A native build
 can use the `asdlc` target in a custom command, or the imported `ASDL::asdlc`
 target from the installed package. When cross-compiling, use a separately
 built host `asdlc` for generation.

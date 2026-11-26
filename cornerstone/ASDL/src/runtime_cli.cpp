@@ -4,6 +4,7 @@
 
 #include "asdl_loader.h"
 #include "asdl_runtime_paths.hpp"
+#include "executable_path.hpp"
 #include "lua_vendor.hpp"
 
 #include <array>
@@ -75,34 +76,6 @@ Command parse_command(int argc, char** argv) {
     return result;
 }
 
-fs::path executable_path(const fs::path& invocation) {
-    std::error_code ec;
-#if defined(__linux__)
-    auto proc_path = fs::canonical("/proc/self/exe", ec);
-    if (!ec) return proc_path;
-#endif
-    if (invocation.has_parent_path()) {
-        auto path = fs::canonical(invocation, ec);
-        if (!ec) return path;
-    } else if (const char* path_var = std::getenv("PATH")) {
-#if defined(_WIN32)
-        constexpr char separator = ';';
-#else
-        constexpr char separator = ':';
-#endif
-        std::string_view path(path_var);
-        while (true) {
-            const auto next = path.find(separator);
-            const fs::path directory(path.substr(0, next));
-            auto candidate = fs::canonical(directory / invocation, ec);
-            if (!ec && fs::is_regular_file(candidate, ec)) return candidate;
-            if (next == path.npos) break;
-            path.remove_prefix(next + 1);
-        }
-    }
-    throw std::runtime_error("cannot locate asdl-run; pass --stdlib DIR");
-}
-
 bool has_stdlib(const fs::path& root) {
     std::error_code ec;
     return fs::is_directory(root / "std", ec);
@@ -114,7 +87,8 @@ fs::path locate_stdlib(const fs::path& explicit_root, const fs::path& invocation
             throw std::runtime_error("no std/ directory under " + explicit_root.string());
         return fs::canonical(explicit_root);
     }
-    const auto bin = executable_path(invocation).parent_path();
+    const auto bin = asdl::detail::executable_path(
+        invocation, "cannot locate asdl-run; pass --stdlib DIR").parent_path();
     for (const auto* candidate : {asdl::detail::installed_stdlib, asdl::detail::build_stdlib}) {
         const auto root = bin / candidate;
         if (has_stdlib(root)) return fs::canonical(root);

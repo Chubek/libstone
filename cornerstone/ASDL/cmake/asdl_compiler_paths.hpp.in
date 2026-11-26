@@ -1,0 +1,6 @@
+#pragma once
+
+namespace asdl::detail {
+inline constexpr auto installed_perl = R"asdl(@ASDL_BIN_TO_PERL@)asdl";
+inline constexpr auto build_perl = "asdl-legacy/asdl.pl";
+}

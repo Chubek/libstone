@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -43,7 +44,10 @@ with tempfile.TemporaryDirectory(prefix="asdl-install-", dir=build) as scratch:
     suffix = ".exe" if os.name == "nt" else ""
     bin_dir = prefix / args.bindir
     if args.tools:
-        run([bin_dir / ("asdlc" + suffix), "--check", schema], cwd=cwd)
+        compiler = bin_dir / ("asdlc" + suffix)
+        run([compiler, "--check", schema], cwd=cwd, env=dict(os.environ, PATH=""))
+        if shutil.which("perl"):
+            run([compiler, "--perl", "--check", schema], cwd=cwd)
         run([bin_dir / ("asdl-run" + suffix), schema, "-"], cwd=cwd, stdin="""
             assert(type(asdl.lib.require("std.tree")) == "table")
         """)
