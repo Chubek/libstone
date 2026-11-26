@@ -20,7 +20,7 @@ using View = std::string_view;
 
 bool primitive(const Text& name)
 {
-    return primitives().contains(name);
+    return primitives().count(name) != 0;
 }
 
 Text quote(View value, bool json = false)
@@ -34,7 +34,8 @@ Text quote(View value, bool json = false)
         case '\r': out += "\\r"; break;
         case '\t': out += "\\t"; break;
         default:
-            if (ch < 32 || ch == 127) {
+            // Legacy JSON::PP uses ascii mode on raw filesystem/input bytes.
+            if (ch < 32 || ch == 127 || (json && ch >= 128)) {
                 if (json) {
                     constexpr View hex = "0123456789abcdef";
                     out += "\\u00";
@@ -77,8 +78,8 @@ Text relative_include(const Text& target, const Text& output)
 
 Text include_line(const Text& name)
 {
-    if (name.empty() || name.find_first_of(View{"\"\\\r\n\0", 5}) != Text::npos
-        || name.find("??") != Text::npos)
+    if (name.empty() || name.find_first_of("\"\\") != Text::npos || name.find("??") != Text::npos
+        || std::any_of(name.begin(), name.end(), [](unsigned char ch) { return ch < 32 || ch == 127; }))
         throw std::runtime_error("invalid quoted C include path '" + name + "'");
     return "#include \"" + name + "\"\n";
 }
@@ -115,6 +116,7 @@ private:
         return tag_name(s, d, c);
     }
     Text member(const Constructor& c) const;
+    Strings collection_types() const;
     Text apply_template(View source) const;
     void symbol(const Text& name, const Text& meaning);
     void macro_symbol(const Text& name, const Text& meaning);
@@ -155,7 +157,7 @@ Text Emitter::member(const Constructor& c) const
     };
     static const std::set<Text> widths{"8", "16", "32", "64", "LEAST8", "LEAST16", "LEAST32",
         "LEAST64", "FAST8", "FAST16", "FAST32", "FAST64", "PTR", "MAX"};
-    bool reserved = macros.contains(c.name);
+    bool reserved = macros.count(c.name) != 0;
     for (const auto& width : widths)
         reserved = reserved || c.name == "INT" + width + "_MIN"
             || c.name == "INT" + width + "_MAX" || c.name == "UINT" + width + "_MAX";
@@ -169,6 +171,15 @@ Text Emitter::member(const Constructor& c) const
     };
     while (taken(escaped)) escaped += '_';
     return escaped;
+}
+
+Strings Emitter::collection_types() const
+{
+    auto names = all_types(s);
+    // Perl's unparenthesized sort consumes both the generic keys and
+    // definition names. Keep that historical C declaration order.
+    std::sort(names.begin() + primitive_types(s).size(), names.end());
+    return names;
 }
 
 Text Emitter::apply_template(View source) const
@@ -206,13 +217,13 @@ void Emitter::macro_symbol(const Text& name, const Text& meaning)
 {
     symbol(name, meaning);
     c_macros.insert(name);
-    if (c_tags.contains(name))
+    if (c_tags.count(name))
         throw std::runtime_error(s.file + ": generated C symbol '" + name + "' conflicts: C tag / " + meaning);
 }
 
 void Emitter::tag_symbol(const Text& name)
 {
-    if (!c_tags.insert(name).second || c_macros.contains(name))
+    if (!c_tags.insert(name).second || c_macros.count(name))
         throw std::runtime_error(s.file + ": generated C tag '" + name + "' conflicts with another tag or macro");
 }
 
@@ -242,7 +253,7 @@ Text Emitter::shallow_test(const Text& type, const Text& value) const
             + v + ".data) && " + v + ".length "
             + (kind == "array" ? "== " + args.back() : "<= " + v + ".capacity") + ")";
     }
-    if (scalar_c_types().contains(type) || builtin_c_types().contains(type)) return "1";
+    if (scalar_c_types().count(type) || builtin_c_types().count(type)) return "1";
     if (type == "string") return "((" + value + ").length == 0 || (" + value + ").data != NULL)";
     if (type == "identifier" || !types.at(type)->is_enum) return "((" + value + ") != NULL)";
     const auto& d = *types.at(type);
@@ -267,7 +278,7 @@ Text Emitter::runtime_types()
     Text out;
     for (const auto& name : primitive_types(s)) {
         if (name == "string" || name == "identifier") continue;
-        const auto t = scalar_c_types().contains(name) ? scalar_c_types().at(name) : "struct " + builtin_c_types().at(name);
+        const auto t = scalar_c_types().count(name) ? scalar_c_types().at(name) : "struct " + builtin_c_types().at(name);
         symbol(ctype(name), "builtin type");
         out += "typedef " + t + " " + ctype(name) + ";\n";
     }
@@ -308,7 +319,7 @@ Text Emitter::ast_types()
         out += "typedef struct " + builtin_c_types().at(spec.kind) + " " + ctype(name) + ";\n";
     }
     out += "\n/* Typed collections and explicit presence, including scalar options. */\n";
-    for (const auto& name : all_types(s)) {
+    for (const auto& name : collection_types()) {
         auto t = ctype(name), stem = p + type_stem(name);
         for (auto suffix : {"_seq", "_opt"}) symbol(stem + suffix, "collection type");
         out += "typedef struct { size_t length; " + t + " *items; } " + stem + "_seq;\n"
@@ -321,7 +332,8 @@ Text Emitter::ast_types()
             out += fields(d.fields, "    ");
         } else {
             out += "    " + p + d.name + "_kind kind;\n" + fields(d.attributes, "    ");
-            if (std::ranges::any_of(d.constructors, [](const auto& c) { return !c.fields.empty(); })) {
+            if (std::any_of(d.constructors.begin(), d.constructors.end(),
+                            [](const auto& c) { return !c.fields.empty(); })) {
                 out += "    union {\n";
                 for (const auto& c : d.constructors)
                     if (!c.fields.empty())
@@ -372,7 +384,7 @@ void Emitter::runtime_functions()
 
 void Emitter::collection_functions()
 {
-    for (const auto& name : all_types(s)) {
+    for (const auto& name : collection_types()) {
         const auto stem = p + type_stem(name), t = ctype(name);
         function(stem + "_opt " + stem + "_none(void)",
                  "    " + stem + "_opt result = {0};\n    return result;\n");
@@ -590,7 +602,7 @@ Text Emitter::injected(const std::optional<Fragment>& fragment, const Text& outp
     if (directives)
         out += "#line " + std::to_string(fragment->span.begin.line) + " " + quote(s.file) + "\n";
     out += fragment->text;
-    if (!out.ends_with('\n')) out += '\n';
+    if (out.back() != '\n') out += '\n';
     if (directives) out += "#line 1 " + quote(output) + "\n";
     return out;
 }
@@ -614,7 +626,7 @@ Text Emitter::builtins() const
         {"regexp", rt::regexp}, {"parsec", rt::parsec},
     };
     for (const auto& [name, text] : sections)
-        if (!s.omitted_builtins.contains(Text(name))) out += text;
+        if (!s.omitted_builtins.count(Text(name))) out += text;
     return out;
 }
 
@@ -741,12 +753,15 @@ Text Emitter::schema_json() const
             entry.emplace("builder", str(p + "make_" + d.name));
         } else {
             Strings ctors;
-            for (const auto& c : d.constructors)
-                ctors.push_back(object({
+            for (const auto& c : d.constructors) {
+                Object ctor{
                     {"name", str(c.name)}, {"tag", std::to_string(c.tag)},
                     {"c_name", str(p + c.name)}, {"c_tag", str(tag(d, c))},
                     {"fields", field_list(c.fields, 5)}, {"location", location(c.span, 5)},
-                }, 4));
+                };
+                if (!c.fields.empty() && member(c) != c.name) ctor.emplace("c_member", str(member(c)));
+                ctors.push_back(object(ctor, 4));
+            }
             entry.emplace("constructors", array(ctors, 3));
         }
         defs.push_back(object(entry, 2));
@@ -817,11 +832,12 @@ Text CppModel::claim(Text name, std::set<Text>& taken)
     for (char c : name)
         if (c != '_' || clean.empty() || clean.back() != '_') clean += c;
     if (clean.empty() || clean.front() == '_') clean.insert(0, "asdl");
-    if (reserved.contains(clean) || (clean.starts_with("INT") && (clean.ends_with("_MIN") || clean.ends_with("_MAX")))
-        || (clean.starts_with("UINT") && clean.ends_with("_MAX"))) clean += "_";
+    const auto suffix = clean.size() > 4 ? View(clean).substr(clean.size() - 4) : View{};
+    if (reserved.count(clean) || (clean.compare(0, 3, "INT") == 0 && (suffix == "_MIN" || suffix == "_MAX"))
+        || (clean.compare(0, 4, "UINT") == 0 && suffix == "_MAX")) clean += "_";
     const Text base = clean;
     for (size_t i = 2; !taken.insert(clean).second; ++i)
-        clean = base + (base.ends_with('_') ? "" : "_") + std::to_string(i);
+        clean = base + (base.back() == '_' ? "" : "_") + std::to_string(i);
     return clean;
 }
 
@@ -851,7 +867,7 @@ Text CppModel::type(const Text& name) const
         {"buffer", "std::vector<std::byte>"},
     };
     if (const auto pos = scalar.find(name); pos != scalar.end()) return pos->second;
-    if (opaque.contains(name)) return "std::shared_ptr<" + name + "_handle>";
+    if (opaque.count(name)) return "std::shared_ptr<" + name + "_handle>";
     if (const auto pos = s.generics.find(name); pos != s.generics.end()) {
         const auto& g = pos->second;
         if (g.kind == "list") return "std::vector<" + type(g.args[0]) + ">";
@@ -1016,6 +1032,17 @@ Text Emitter::cpp20() const
 GeneratedOutputs Emitter::emit()
 {
     macro_symbol(s.guard, "header guard");
+    if (enabled("builtins")) {
+        const std::pair<View, View> builtin_guards[]{
+            {"", "ASDL_RUNTIME_COMMON_H"}, {"list", "ASDL_VECTOR_H"}, {"array", "ASDL_FIXED_ARRAY_H"},
+            {"map", "ASDL_HASH_MAP_H"}, {"buffer", "ASDL_BYTE_BUFFER_H"}, {"port", "ASDL_PORT_H"},
+            {"path", "ASDL_PATH_H"}, {"event", "ASDL_EVENT_HANDLER_H"}, {"sexpr", "ASDL_SEXPR_H"},
+            {"regexp", "ASDL_REGEXP_H"}, {"parsec", "ASDL_PARSEC_H"},
+        };
+        for (const auto& [name, guard] : builtin_guards)
+            if (!s.omitted_builtins.count(Text(name))) macro_symbol(Text(guard), "builtin header guard");
+    }
+    if (!opt("listener").empty()) macro_symbol(u + "LISTENER_H", "listener header guard");
     Text types = runtime_types();
     types += ast_types();
     types += inventory();
