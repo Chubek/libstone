@@ -1,0 +1,5 @@
+.modular #true;
+.import schema item as entry from leaf;
+.import JSON from std.serialize;
+
+branch ::= Branch(entry item);

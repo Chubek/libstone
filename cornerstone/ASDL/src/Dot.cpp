@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace asdl {
 namespace {
@@ -138,11 +139,23 @@ void imports(std::ostream &out, const Schema &schema)
     // Deduplicate destination nodes, not statements: independent imports of
     // the same module can bring different names into scope.
     std::map<std::pair<bool, std::string>, std::string> modules;
+    std::map<std::string, std::string> sources{{schema.file, "root"}};
+    std::vector<std::string> destinations;
+    destinations.reserve(schema.imports.size());
     for (const auto &import : schema.imports) {
         const auto id = "import_" + std::to_string(modules.size());
-        const auto [pos, inserted] = modules.emplace(std::make_pair(import.schema, import.module), id);
+        const auto &identity = import.resolved_file.empty() ? import.module : import.resolved_file;
+        const auto [pos, inserted] = modules.emplace(std::make_pair(import.schema, identity), id);
         if (inserted)
             node(out, id, "component", import.module + (import.schema ? " (schema)" : " (Lua)"));
+        if (!import.resolved_file.empty())
+            sources.emplace(import.resolved_file, pos->second);
+        destinations.push_back(pos->second);
+    }
+    // The resolver flattens declarations into one model, but every import
+    // retains the file that declared it. Keep each edge on its actual origin.
+    for (std::size_t i = 0; i < schema.imports.size(); ++i) {
+        const auto &import = schema.imports[i];
         std::string bindings;
         if (!import.alias.empty()) bindings = "as " + import.alias;
         for (const auto &name : import.names) {
@@ -150,7 +163,8 @@ void imports(std::ostream &out, const Schema &schema)
             bindings += name.name;
             if (!name.alias.empty()) bindings += " as " + name.alias;
         }
-        edge(out, "root", pos->second, bindings);
+        const auto origin = sources.find(import.span.file);
+        edge(out, origin == sources.end() ? "root" : origin->second, destinations[i], bindings);
     }
 }
 

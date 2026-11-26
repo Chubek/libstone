@@ -1,0 +1,4 @@
+.language "Import graph";
+.import schema mid as Middle;
+
+document ::= (Middle.branch child);

@@ -59,6 +59,12 @@ change requires a new major version.
 
 The runtime and CLI use the same renderer:
 
+```sh
+asdlc --check --dot graph.dot input.asdl
+asdlc --check --dot - --dot-view dependencies input.asdl
+asdlc --check --dot imports.dot --dot-view imports input.asdl
+```
+
 - **Schema** (`ASDL_DOT_SCHEMA`): module, product and sum types, constructors,
   fields and common attributes. The labels retain refinements and the ASDL
   cardinality suffixes `?`, `*`, and `+`; a missing suffix means exactly one.
@@ -67,7 +73,8 @@ The runtime and CLI use the same renderer:
   field, constructor, or attribute that makes the reference. Built-in types
   are not nodes; references through generic containers still contribute edges.
 - **Imports** (`ASDL_DOT_IMPORTS`): declared schema and Lua imports, including
-  bindings and aliases. This view does not trace Lua modules' own dependencies.
+  bindings and aliases. Imported ASDL modules retain their own outgoing edges.
+  The view does not trace Lua modules' own dependencies.
 
 Rendering preserves model order and uses synthetic node IDs, so arbitrary
 label text neither changes graph syntax nor creates ID collisions. Graphviz

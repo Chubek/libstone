@@ -112,6 +112,17 @@ int main(int argc, char **argv)
         CHECK(!schema && error && strcmp(asdl_error_source(error), argv[2]) == 0);
         asdl_error_destroy(error);
     }
+    if (argc > 3) {
+        CHECK(asdl_load(argv[3], &schema, NULL) == ASDL_OK);
+        CHECK(asdl_schema_dot(schema, ASDL_DOT_IMPORTS, &imports, NULL) == ASDL_OK);
+        CHECK(includes(imports, "mid (schema)") && includes(imports, "leaf (schema)"));
+        CHECK(includes(imports, "root -> import_0 [label=\"as Middle\"]"));
+        CHECK(includes(imports, "import_0 -> import_1 [label=\"item as entry\"]"));
+        CHECK(includes(imports, "import_0 -> import_2 [label=\"JSON\"]"));
+        CHECK(!includes(imports, "root -> import_1") && !includes(imports, "root -> import_2"));
+        asdl_buffer_destroy(imports);
+        asdl_schema_destroy(schema);
+    }
     asdl_schema_destroy(NULL);
     asdl_buffer_destroy(NULL);
     asdl_error_destroy(NULL);
