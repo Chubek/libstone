@@ -8,6 +8,8 @@ int archbfd_test_c(const void *fixture, size_t size) {
   archbfd_object *file = NULL;
   archbfd_error error;
   archbfd_object_info info;
+  archbfd_image_info image;
+  archbfd_link_symbol link;
   archbfd_section section;
   archbfd_symbol symbol;
   archbfd_relocation relocation;
@@ -44,6 +46,17 @@ int archbfd_test_c(const void *fixture, size_t size) {
   REQUIRE(info.format == ARCHBFD_FORMAT_COFF && info.arch == ARCHBFD_ARCH_X86_64);
   REQUIRE(info.address_bits == 64 && info.endian == ARCHBFD_LITTLE_ENDIAN);
   REQUIRE(info.section_count == 2 && info.symbol_count == 1 && info.dynamic_symbol_count == 0);
+  REQUIRE(archbfd_get_image_info(file, &image, &error) == ARCHBFD_OK);
+  REQUIRE(image.image_kind == ARCHBFD_IMAGE_RELOCATABLE &&
+          image.call_abi == ARCHBFD_CALL_WIN64 && !image.export_count &&
+          !image.import_count);
+  REQUIRE(archbfd_get_link_symbol(file, ARCHBFD_EXPORTS, 0, &link, &error) == ARCHBFD_OUT_OF_RANGE);
+  REQUIRE(archbfd_file_offset_for_address(file, 0x1000, &value, &error) == ARCHBFD_OK &&
+          value == 100);
+  REQUIRE(archbfd_address_for_file_offset(file, 100, &value, &error) == ARCHBFD_OK &&
+          value == 0x1000);
+  REQUIRE(archbfd_address_for_file_offset(file, UINT64_MAX, &value, &error) ==
+          ARCHBFD_OUT_OF_RANGE && value == 0x1000);
   REQUIRE(archbfd_get_section(file, 0, &section, &error) == ARCHBFD_OK);
   REQUIRE(section.vma == 0x1000 && section.name.size == 5);
   REQUIRE(memcmp(section.name.data, ".text", 5) == 0);

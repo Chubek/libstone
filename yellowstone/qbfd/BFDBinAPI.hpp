@@ -77,6 +77,36 @@ class Binary {
       return archbfd_get_object_info(handle_.get(), out, error);
     });
   }
+  archbfd_image_info imageInfo() const {
+    return detail::get<archbfd_image_info>([&](auto out, auto error) {
+      return archbfd_get_image_info(handle_.get(), out, error);
+    });
+  }
+  archbfd_link_symbol linkSymbol(size_t slot, uint32_t table) const {
+    return detail::get<archbfd_link_symbol>([&](auto out, auto error) {
+      return archbfd_get_link_symbol(handle_.get(), table, slot, out, error);
+    });
+  }
+  std::vector<archbfd_link_symbol> linkSymbols(uint32_t table) const {
+    if (table > ARCHBFD_IMPORTS)
+      throw Error(ARCHBFD_INVALID_ARGUMENT, "invalid link symbol table selector");
+    auto metadata = imageInfo();
+    auto count = table == ARCHBFD_EXPORTS ? metadata.export_count : metadata.import_count;
+    std::vector<archbfd_link_symbol> result;
+    result.reserve(count);
+    for (size_t i = 0; i < count; ++i) result.push_back(linkSymbol(i, table));
+    return result;
+  }
+  uint64_t fileOffsetForAddress(uint64_t address) const {
+    return detail::get<uint64_t>([&](auto out, auto error) {
+      return archbfd_file_offset_for_address(handle_.get(), address, out, error);
+    });
+  }
+  uint64_t addressForFileOffset(uint64_t offset) const {
+    return detail::get<uint64_t>([&](auto out, auto error) {
+      return archbfd_address_for_file_offset(handle_.get(), offset, out, error);
+    });
+  }
   std::span<const uint8_t> data() const {
     return bytes(detail::get<archbfd_bytes>([&](auto out, auto error) {
       return archbfd_get_bytes(handle_.get(), out, error);

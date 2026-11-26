@@ -68,6 +68,18 @@ class ELFFile final : public ObjectFile {
   uint16_t machine() const { return machine_; }
   uint8_t osABI() const { return r_.u8(7); }
   uint32_t flags() const { return flags_; }
+  bool isPie() const {
+    return type_ == 3 &&
+           ((dynamicFlags1_ & 0x08000000) || (hasInterpreter_ && !soname_));
+  }
+  struct SymbolVersion {
+    std::string name, library;
+    bool defaultVersion = false;
+  };
+  const SymbolVersion* symbolVersion(uint32_t index) const {
+    return index < versions_.size() && !versions_[index].name.empty()
+               ? &versions_[index] : nullptr;
+  }
   const std::vector<Section>& sections() const override { return sections_; }
   const std::vector<Symbol>& symbols() const override { return symbols_; }
   const std::vector<Symbol>& dynamicSymbols() const override {
@@ -253,6 +265,7 @@ class ELFFile final : public ObjectFile {
         base_ = g.vaddr;
         baseSet = true;
       }
+      if (g.nativeType == 3) hasInterpreter_ = true;
       segments_.push_back(std::move(g));
     }
     for (uint32_t i = 0; i < raw_.size(); ++i)
@@ -261,13 +274,7 @@ class ELFFile final : public ObjectFile {
     relocs_.resize(sections_.size());
     for (const auto& h : raw_)
       if (h.type == k::Rel || h.type == k::Rela) parseRelocations(h);
-    bool dynamicSection = false;
-    for (const auto& h : raw_)
-      if (h.type == k::Dynamic) {
-        parseDynamic(h);
-        dynamicSection = true;
-      }
-    if (!dynamicSection) parseSegmentDependencies();
+    parseDynamicMetadata();
     return {};
   }
 
@@ -285,23 +292,27 @@ class ELFFile final : public ObjectFile {
     const auto& h = raw_[table];
     if (h.link >= raw_.size() || raw_[h.link].type != k::Strtab)
       detail::malformed("invalid ELF symbol string table");
+    parseSymbolTable(h, raw_[h.link], table);
+  }
+  void parseSymbolTable(const Raw& h, const Raw& strings,
+                        std::optional<uint32_t> table = std::nullopt) {
     uint64_t count = entries(h, wide_ ? 24 : 16);
     auto& out = h.type == k::Dynsym ? dynamic_ : symbols_;
     if (count > UINT32_MAX - out.size())
       detail::malformed("too many ELF symbols");
-    symbolBases_[table] = uint32_t(out.size());
+    if (table) symbolBases_[*table] = uint32_t(out.size());
     for (uint64_t i = 0; i < count; ++i) {
       uint64_t o = h.offset + i * h.entsize;
       Symbol s;
       s.index = uint32_t(out.size());
-      s.name = string(raw_[h.link], r_.u32(o));
+      s.name = string(strings, r_.u32(o));
       uint8_t info = r_.u8(o + (wide_ ? 4 : 12)),
               other = r_.u8(o + (wide_ ? 5 : 13));
       uint32_t section = r_.u16(o + (wide_ ? 6 : 14));
       if (section == 0xffff) {
         bool found = false;
         for (const auto& x : raw_)
-          if (x.type == 18 && x.link == table) {
+          if (x.type == 18 && table && x.link == *table) {
             if (entries(x, 4) != count)
               detail::malformed("invalid extended symbol indices");
             section = r_.u32(x.offset + i * x.entsize);
@@ -355,11 +366,12 @@ class ELFFile final : public ObjectFile {
         s.kind = SymbolKind::Common;
       else if (section < sections_.size())
         s.section = section;
-      else
+      else if (table || section >= 0xff00)
         detail::malformed("invalid ELF symbol section");
       if ((other & 3) == 1 || (other & 3) == 2) s.flags |= sym::Hidden;
       else if ((other & 3) == 3) s.flags |= sym::Protected;
-      if (h.type == k::Dynsym && s.binding != SymbolBinding::Local)
+      if (h.type == k::Dynsym && s.binding != SymbolBinding::Local &&
+          !(s.flags & sym::Hidden))
         s.flags |= section ? sym::Exported : sym::Imported;
       out.push_back(std::move(s));
     }
@@ -495,67 +507,219 @@ class ELFFile final : public ObjectFile {
       relocs_[target->index].push_back(std::move(r));
     }
   }
-  void parseDynamic(const Raw& h) {
-    if (h.link >= raw_.size() || raw_[h.link].type != k::Strtab)
-      detail::malformed("invalid dynamic string table");
-    uint64_t count = entries(h, wide_ ? 16 : 8);
+  using DynamicTags = std::unordered_map<uint64_t, uint64_t>;
+  static uint64_t tagValue(const DynamicTags& tags, uint64_t tag) {
+    auto pos = tags.find(tag);
+    return pos == tags.end() ? 0 : pos->second;
+  }
+  DynamicTags parseDynamicTags(const Raw& h, std::vector<uint64_t>& names) {
+    const uint64_t count = entries(h, wide_ ? 16 : 8);
+    DynamicTags tags;
     for (uint64_t i = 0; i < count; ++i) {
       uint64_t o = h.offset + i * h.entsize, tag = word(o);
-      if (!tag) return;
+      if (!tag) return tags;
+      uint64_t value = word(o + (wide_ ? 8 : 4));
       if (tag == 1)
-        needed_.push_back(string(raw_[h.link], word(o + (wide_ ? 8 : 4))));
-      if (tag == 14)
-        soname_ = string(raw_[h.link], word(o + (wide_ ? 8 : 4)));
+        names.push_back(value);
+      else
+        tags.try_emplace(tag, value);
     }
     detail::malformed("unterminated ELF dynamic table");
   }
-  // Section headers are optional in executables. Resolve DT_STRTAB through
-  // PT_LOAD.
-  void parseSegmentDependencies() {
-    for (const auto& segment : segments_)
-      if (segment.nativeType == 2) {
-        uint64_t stride = wide_ ? 16 : 8;
-        if (segment.fileSize % stride)
-          detail::malformed("invalid PT_DYNAMIC size");
-        uint64_t strings = 0, size = 0;
-        bool terminated = false;
-        std::vector<uint64_t> offsets;
-        for (uint64_t i = 0; i < segment.fileSize; i += stride) {
-          uint64_t o = segment.fileOffset + i, tag = word(o),
-                   value = word(o + stride / 2);
-          if (!tag) {
-            terminated = true;
-            break;
-          }
-          if (tag == 1) offsets.push_back(value);
-          if (tag == 5) strings = value;
-          if (tag == 10) size = value;
+  Raw loadRange(uint64_t address, uint64_t minimum = 1) const {
+    Raw result{};
+    for (const auto& load : segments_) {
+      if (load.nativeType != 1 || address < load.vaddr ||
+          address - load.vaddr >= load.fileSize)
+        continue;
+      const uint64_t delta = address - load.vaddr;
+      if (result.size && result.offset != load.fileOffset + delta)
+        detail::malformed("ambiguous ELF dynamic pointer");
+      result.offset = load.fileOffset + delta;
+      result.size = std::max(result.size, load.fileSize - delta);
+    }
+    if (result.size < minimum) detail::malformed("unmapped ELF dynamic table");
+    return result;
+  }
+  uint64_t dynamicSymbolCount(const DynamicTags& tags) const {
+    if (tags.contains(4)) {  // DT_HASH, nchain is the number of symbols.
+      auto h = loadRange(tagValue(tags, 4), 8);
+      uint64_t buckets = r_.u32(h.offset), chains = r_.u32(h.offset + 4);
+      if (!buckets || !chains || buckets + chains > (h.size - 8) / 4)
+        detail::malformed("truncated ELF SysV hash");
+      return chains;
+    }
+    if (!tags.contains(0x6ffffef5)) return 0;  // No reliable symbol bound.
+    auto h = loadRange(tagValue(tags, 0x6ffffef5), 16);
+    uint64_t buckets = r_.u32(h.offset), first = r_.u32(h.offset + 4),
+             bloom = r_.u32(h.offset + 8);
+    if (!buckets || !first || !bloom)
+      detail::malformed("invalid ELF GNU hash geometry");
+    uint64_t bucketOffset = 16 + bloom * (wide_ ? 8 : 4);
+    uint64_t chainOffset = bucketOffset + buckets * 4;
+    if (chainOffset > h.size) detail::malformed("truncated ELF GNU hash");
+    uint64_t lastBucket = 0;
+    for (uint64_t i = 0; i < buckets; ++i) {
+      uint64_t entry = r_.u32(h.offset + bucketOffset + i * 4);
+      if (entry && entry < first) detail::malformed("invalid GNU hash bucket");
+      lastBucket = std::max(lastBucket, entry);
+    }
+    if (!lastBucket) return first;
+    uint64_t available = (h.size - chainOffset) / 4;
+    for (uint64_t i = lastBucket - first; i < available; ++i)
+      if (r_.u32(h.offset + chainOffset + i * 4) & 1) return first + i + 1;
+    detail::malformed("unterminated ELF GNU hash chain");
+  }
+  uint64_t versionOffset(const Raw& h, uint64_t offset, uint64_t size) const {
+    if (offset > h.size || size > h.size - offset)
+      detail::malformed("truncated ELF version table");
+    return h.offset + offset;
+  }
+  using VersionNames = std::unordered_map<uint16_t, SymbolVersion>;
+  void parseVersionNames(VersionNames& out, const Raw& h, const Raw& strings,
+                         uint64_t count, bool definitions) const {
+    uint64_t head = definitions ? 20 : 16;
+    if (count > h.size / head)
+      detail::malformed("too many ELF version records");
+    uint64_t pos = 0;
+    for (uint64_t i = 0; i < count; ++i) {
+      uint64_t o = versionOffset(h, pos, head);
+      if (r_.u16(o) != 1) detail::malformed("invalid ELF version revision");
+      uint64_t aux = r_.u32(o + (definitions ? 12 : 8));
+      uint64_t next = r_.u32(o + (definitions ? 16 : 12));
+      uint16_t n = r_.u16(o + (definitions ? 6 : 2));
+      if (!n || aux < head || (next && next < head))
+        detail::malformed("invalid ELF version chain");
+      if ((i + 1 < count) != (next != 0))
+        detail::malformed("invalid ELF version chain length");
+      if (next && next > h.size - pos)
+        detail::malformed("ELF version next record is out of range");
+      const uint64_t limit = next ? pos + next : h.size;
+      if (aux > limit - pos) detail::malformed("ELF version auxiliary offset");
+      aux += pos;
+      std::string lib = definitions ? std::string() : string(strings, r_.u32(o + 4));
+      uint64_t stride = definitions ? 8 : 16;
+      for (uint16_t j = 0; j < n; ++j) {
+        if (aux > limit || stride > limit - aux)
+          detail::malformed("truncated ELF version auxiliary record");
+        uint64_t a = h.offset + aux;
+        uint16_t index = definitions ? r_.u16(o + 4) : r_.u16(a + 6) & 0x7fff;
+        if ((!definitions || !j) && index > 1) {
+          auto name = string(strings, r_.u32(a + (definitions ? 0 : 8)));
+          if (name.empty() ||
+              !out.try_emplace(index, SymbolVersion{std::move(name), lib,
+                                                   definitions}).second)
+            detail::malformed("invalid or duplicate ELF version index");
         }
-        if (!terminated) detail::malformed("unterminated PT_DYNAMIC");
-        if (offsets.empty()) continue;
-        std::optional<uint64_t> fileOffset;
-        for (const auto& load : segments_)
-          if (load.nativeType == 1 && strings >= load.vaddr &&
-              strings - load.vaddr <= load.fileSize &&
-              size <= load.fileSize - (strings - load.vaddr)) {
-            fileOffset = load.fileOffset + (strings - load.vaddr);
-            break;
-          }
-        if (!fileOffset) detail::malformed("unmapped dynamic string table");
-        for (auto offset : offsets)
-          needed_.push_back(r_.stringAt(*fileOffset, size, offset));
+        uint64_t step = r_.u32(a + (definitions ? 4 : 12));
+        if (j + 1 < n && (step < stride || step > limit - aux))
+          detail::malformed("invalid ELF version auxiliary chain");
+        aux += step;
       }
+      pos += next;
+    }
+  }
+  void parseVersions(const DynamicTags& tags, const Raw& strings) {
+    constexpr uint64_t verSym = 0x6ffffff0, verDef = 0x6ffffffc,
+                       verDefNum = 0x6ffffffd, verNeed = 0x6ffffffe,
+                       verNeedNum = 0x6fffffff;
+    std::optional<Raw> table;
+    VersionNames names;
+    auto parseNames = [&](bool definitions, uint64_t addr, uint64_t count) {
+      if (tags.contains(addr))
+        parseVersionNames(names, loadRange(tagValue(tags, addr)), strings,
+                          tagValue(tags, count), definitions);
+      else
+        for (const auto& h : raw_)
+          if (h.type == (definitions ? 0x6ffffffd : 0x6ffffffe)) {
+            if (h.link >= raw_.size() || raw_[h.link].type != k::Strtab)
+              detail::malformed("invalid ELF version string table");
+            parseVersionNames(names, h, raw_[h.link], h.info, definitions);
+          }
+    };
+    if (tags.contains(verSym))
+      table = loadRange(tagValue(tags, verSym), dynamic_.size() * uint64_t(2));
+    else
+      for (const auto& h : raw_)
+        if (h.type == 0x6fffffff && h.link < raw_.size() &&
+            raw_[h.link].type == k::Dynsym) {
+          if (table) detail::malformed("multiple ELF symbol version tables");
+          table = h;
+        }
+    if (!table) return;
+    if (dynamic_.size() > table->size / 2)
+      detail::malformed("truncated ELF symbol version table");
+    parseNames(true, verDef, verDefNum);
+    parseNames(false, verNeed, verNeedNum);
+    versions_.resize(dynamic_.size());
+    for (size_t i = 0; i < dynamic_.size(); ++i) {
+      uint16_t raw = r_.u16(table->offset + i * uint64_t(2)),
+               version = raw & 0x7fff;
+      if (version <= 1) continue;
+      auto it = names.find(version);
+      if (it == names.end()) detail::malformed("unknown ELF symbol version");
+      versions_[i] = it->second;
+      versions_[i].defaultVersion &= !(raw & 0x8000);
+    }
+  }
+  void parseDynamicMetadata() {
+    std::optional<Raw> dynamic, strings;
+    bool fromSegment = false;
+    for (const auto& s : segments_)
+      if (s.nativeType == 2) {
+        if (dynamic) detail::malformed("multiple ELF dynamic segments");
+        dynamic = Raw{};
+        dynamic->offset = s.fileOffset;
+        dynamic->size = s.fileSize;
+        dynamic->entsize = wide_ ? 16 : 8;
+        fromSegment = true;
+      }
+    if (!dynamic)
+      for (const auto& h : raw_)
+        if (h.type == k::Dynamic) {
+          if (dynamic || h.link >= raw_.size() || raw_[h.link].type != k::Strtab)
+            detail::malformed("invalid ELF dynamic section");
+          dynamic = h;
+          strings = raw_[h.link];
+        }
+    std::vector<uint64_t> names;
+    DynamicTags tags;
+    if (dynamic) tags = parseDynamicTags(*dynamic, names);
+    dynamicFlags1_ = tagValue(tags, 0x6ffffffb);
+    if (fromSegment && tags.contains(5) && tags.contains(10)) {
+      auto size = tagValue(tags, 10);
+      strings = loadRange(tagValue(tags, 5), std::max<uint64_t>(1, size));
+      strings->size = size;
+    }
+    if ((!names.empty() || tags.contains(14) || tags.contains(6)) && !strings)
+      detail::malformed("missing ELF dynamic string table");
+    for (auto name : names) needed_.push_back(string(*strings, name));
+    if (tags.contains(14)) soname_ = string(*strings, tagValue(tags, 14));
+    if (fromSegment && dynamic_.empty() && tags.contains(6)) {
+      uint64_t stride = tagValue(tags, 11);
+      if (stride != (wide_ ? 24u : 16u))
+        detail::malformed("invalid ELF dynamic symbol stride");
+      if (uint64_t count = dynamicSymbolCount(tags)) {
+        auto h = loadRange(tagValue(tags, 6), count * stride);
+        h.type = k::Dynsym;
+        h.entsize = stride;
+        h.size = count * stride;
+        parseSymbolTable(h, *strings);
+      }
+    }
+    if (!dynamic_.empty()) parseVersions(tags, strings.value_or(Raw{}));
   }
   detail::Reader r_;
-  bool wide_ = false;
+  bool wide_ = false, hasInterpreter_ = false;
   uint16_t machine_ = 0, type_ = 0;
   uint32_t flags_ = 0;
-  uint64_t entry_ = 0, base_ = 0;
+  uint64_t entry_ = 0, base_ = 0, dynamicFlags1_ = 0;
   Layout layout_;
   std::string target_;
   std::vector<RawSection> raw_;
   std::vector<Section> sections_;
   std::vector<Symbol> symbols_, dynamic_;
+  std::vector<SymbolVersion> versions_;
   std::vector<Segment> segments_;
   std::vector<std::string> needed_;
   std::optional<std::string> soname_;

@@ -62,6 +62,12 @@ int main() {
   CHECK(moved.sections().size() == 2 && moved.symbols().size() == 1);
   CHECK(moved.relocations(0)[0].addend == -4);
   CHECK(moved.segments().empty() && moved.dependencies().empty());
+  CHECK(moved.imageInfo().image_kind == ARCHBFD_IMAGE_RELOCATABLE);
+  CHECK(moved.imageInfo().call_abi == ARCHBFD_CALL_WIN64);
+  CHECK(moved.linkSymbols(ARCHBFD_IMPORTS).empty());
+  CHECK(moved.fileOffsetForAddress(0x1000) == 100);
+  CHECK(moved.addressForFileOffset(100) == 0x1000);
+  throws(ARCHBFD_OUT_OF_RANGE, [&] { moved.fileOffsetForAddress(0x2000); });
   throws(ARCHBFD_INVALID_ARGUMENT, [&] { object.info(); });
   throws(ARCHBFD_OUT_OF_RANGE, [&] { moved.section(SIZE_MAX); });
   throws(ARCHBFD_INVALID_ARGUMENT, [&] { moved.symbols(42); });

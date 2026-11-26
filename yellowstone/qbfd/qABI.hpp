@@ -17,6 +17,7 @@ enum class CallConv : uint8_t {
   Aapcs64 = 3,     // ELF/Mach-O/PE aarch64
   Riscv64 = 4,     // ELF/PE riscv64 (LP64D)
   Riscv32 = 5,     // ELF riscv32 (ILP32D)
+  DarwinArm64 = 6, // Mach-O arm64 (Apple-specific PCS)
 };
 
 struct AbiInfo {
@@ -37,8 +38,18 @@ inline std::string_view toString(CallConv c) {
     case CallConv::Aapcs64: return "aapcs64";
     case CallConv::Riscv64: return "riscv64";
     case CallConv::Riscv32: return "riscv32";
+    case CallConv::DarwinArm64: return "darwin_arm64";
     default: return "unknown";
   }
+}
+
+inline std::optional<CallConv> parseCallConv(std::string_view name) {
+  for (auto candidate : {CallConv::Unknown, CallConv::SysV_AMD64,
+                         CallConv::Win64, CallConv::Aapcs64,
+                         CallConv::Riscv64, CallConv::Riscv32,
+                         CallConv::DarwinArm64})
+    if (name == toString(candidate)) return candidate;
+  return std::nullopt;
 }
 
 inline AbiInfo infoFor(CallConv conv) {
@@ -53,6 +64,8 @@ inline AbiInfo infoFor(CallConv conv) {
       return {conv, "riscv64", "riscv64", "riscv64.isa", 8, 8, 16, true};
     case CallConv::Riscv32:
       return {conv, "riscv32", "riscv32", "riscv32.isa", 8, 8, 16, true};
+    case CallConv::DarwinArm64:
+      return {conv, "darwin_arm64", "aarch64", "aarch64.isa", 8, 8, 16, true};
     default:
       return {};
   }
@@ -89,20 +102,31 @@ inline AbiInfo infoFor(Format format, Arch arch) {
   return infoFor(convFor(format, arch));
 }
 
+// Strict object-aware selection (defined in qBFD.hpp). The older format/arch
+// helper remains a coarse target default, not evidence of an image's ABI.
+inline CallConv convFor(const ObjectFile&);
+
 inline std::string_view isaArchFor(CallConv c) { return infoFor(c).isaArch; }
 inline std::string_view isaFileFor(CallConv c) { return infoFor(c).isaFile; }
 
 // Host default used for DINV_ABI_AUTO.
 inline CallConv hostConv() {
-#if defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64)) && \
+    INTPTR_MAX == INT64_MAX
   return CallConv::Win64;
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) && INTPTR_MAX == INT64_MAX
   return CallConv::SysV_AMD64;
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) && defined(__APPLE__) && !defined(__arm64e__) && \
+      INTPTR_MAX == INT64_MAX
+  return CallConv::DarwinArm64;
+#elif defined(__AARCH64EL__) && !defined(_WIN32) && !defined(__APPLE__) && \
+      INTPTR_MAX == INT64_MAX
   return CallConv::Aapcs64;
-#elif defined(__riscv) && __riscv_xlen == 64
+#elif defined(__riscv_float_abi_double) && __riscv_xlen == 64 && \
+      INTPTR_MAX == INT64_MAX
   return CallConv::Riscv64;
-#elif defined(__riscv) && __riscv_xlen == 32
+#elif defined(__riscv_float_abi_double) && __riscv_xlen == 32 && \
+      INTPTR_MAX == INT32_MAX
   return CallConv::Riscv32;
 #else
   return CallConv::Unknown;

@@ -1,5 +1,6 @@
 // Thin Mach-O reader and explicit universal-binary slice selection.
 #pragma once
+#include <unordered_set>
 #include "qBFDCore.hpp"
 
 namespace qbfd::macho {
@@ -57,12 +58,15 @@ inline Expected<std::vector<FatSlice>> slices(std::span<const uint8_t> bytes) {
           s.offset < 8 + count * stride || !s.size)
         detail::malformed("invalid universal slice");
       r.require(s.offset, s.size);
-      for (const auto& previous : result)
-        if (s.offset < previous.offset + previous.size &&
-            previous.offset < s.offset + s.size)
-          detail::malformed("overlapping universal slices");
       result.push_back(s);
     }
+    auto ordered = result;
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+      return a.offset < b.offset;
+    });
+    for (size_t i = 1; i < ordered.size(); ++i)
+      if (ordered[i - 1].offset + ordered[i - 1].size > ordered[i].offset)
+        detail::malformed("overlapping universal slices");
     return result;
   } catch (const detail::ParseFailure& e) {
     return e.error;
@@ -131,9 +135,15 @@ class MachOFile final : public ObjectFile {
   const std::vector<Symbol>& dynamicSymbols() const override {
     return dynamic_;
   }
+  const std::vector<LinkSymbol>& exportedSymbols() const { return exports_; }
+  const std::vector<LinkSymbol>& importedSymbols() const { return imports_; }
   std::vector<std::string> neededLibraries() const override { return needed_; }
   const std::vector<std::string>& runpaths() const { return runpaths_; }
   const std::string& installName() const { return installName_; }
+  std::optional<std::string> soname() const override {
+    return installName_.empty() ? std::nullopt
+                                : std::optional<std::string>(installName_);
+  }
   Expected<std::span<const uint8_t>> sectionContents(
       const Section& section) const override {
     if (section.index >= sections_.size())
@@ -178,6 +188,7 @@ class MachOFile final : public ObjectFile {
     if (count > size / 8) detail::malformed("too many Mach-O load commands");
     uint64_t o = header, end = header + size;
     std::optional<uint64_t> mainOffset;
+    std::optional<std::pair<uint64_t, uint64_t>> exportCommand, dyldExports;
     bool haveSymbols = false;
     for (uint32_t i = 0; i < count; ++i) {
       if (end - o < 8) detail::malformed("short Mach-O load command");
@@ -205,6 +216,14 @@ class MachOFile final : public ObjectFile {
       } else if (command == 0x80000028) {
         need(24);
         mainOffset = r_.u64(o + 8);
+      } else if (command == 0x80000033) {  // LC_DYLD_EXPORTS_TRIE
+        need(16);
+        if (exportCommand) detail::malformed("duplicate Mach-O export trie");
+        exportCommand = {{r_.u32(o + 8), r_.u32(o + 12)}};
+      } else if (command == 0x22 || command == 0x80000022) {  // LC_DYLD_INFO[_ONLY]
+        need(48);
+        if (dyldExports) detail::malformed("duplicate Mach-O dyld info");
+        dyldExports = {{r_.u32(o + 40), r_.u32(o + 44)}};
       } else if (command == 0xc || command == 0xd || command == 0x80000018 ||
                  command == 0x8000001f || command == 0x80000023 ||
                  command == 0x20) {
@@ -242,11 +261,121 @@ class MachOFile final : public ObjectFile {
     }
     if (mainOffset) detail::malformed("LC_MAIN without text segment");
     if (haveSymbols) parseSymbols();
+    if (exportCommand && !exportCommand->second && dyldExports)
+      exportCommand = dyldExports;
+    if (!exportCommand) exportCommand = dyldExports;
+    if (exportCommand && exportCommand->second)
+      parseExportTrie(exportCommand->first, exportCommand->second);
     parseRelocations();
     return {};
   }
 
  private:
+  std::string dylibFor(uint64_t ordinal) const {
+    return ordinal && ordinal <= needed_.size() ? needed_[ordinal - 1] : "";
+  }
+  void parseExportTrie(uint64_t offset, uint64_t size) {
+    r_.require(offset, size);
+    const uint64_t end = offset + size;
+    auto uleb = [&](uint64_t& cursor, uint64_t limit) {
+      uint64_t value = 0;
+      for (unsigned shift = 0; shift <= 63 && cursor < limit; shift += 7) {
+        uint64_t byte = r_.u8(cursor++);
+        if (shift == 63 && byte > 1) break;
+        value |= (byte & 0x7f) << shift;
+        if (!(byte & 0x80)) return value;
+      }
+      detail::malformed("invalid Mach-O export ULEB128");
+    };
+    std::erase_if(dynamic_, [](const Symbol& s) { return s.flags & sym::Exported; });
+    for (size_t i = 0; i < dynamic_.size(); ++i)
+      dynamic_[i].index = uint32_t(i);
+    exports_.clear();
+    struct NodeFrame {
+      uint64_t cursor;
+      unsigned remaining;
+      size_t restore;
+    };
+    std::vector<NodeFrame> stack;
+    std::unordered_set<uint64_t> visited;
+    std::string path;
+    // Bound the expansion of compressed name prefixes on malformed input.
+    uint64_t nameBudget = size * 64;
+    auto visit = [&](uint64_t node, size_t restore) {
+      if (node >= size || !visited.insert(node).second)
+        detail::malformed("invalid or repeated Mach-O export node offset");
+      uint64_t cursor = offset + node;
+      uint64_t terminalSize = uleb(cursor, end);
+      if (terminalSize > end - cursor || cursor + terminalSize >= end)
+        detail::malformed("truncated Mach-O export node");
+      uint64_t children = cursor + terminalSize;
+      if (terminalSize) {
+        if (path.empty() || path.size() > nameBudget)
+          detail::malformed("invalid Mach-O export trie name");
+        nameBudget -= path.size();
+        LinkSymbol ex;
+        Symbol s;
+        ex.name = s.name = path;
+        s.index = uint32_t(dynamic_.size());
+        s.flags = sym::Exported;
+        uint64_t flags = uleb(cursor, children), kind = flags & 3;
+        ex.weak = flags & 4;
+        s.binding = ex.weak ? SymbolBinding::Weak : SymbolBinding::Global;
+        if (kind == 3) detail::malformed("invalid Mach-O export kind");
+        if (flags & 8) {
+          uint64_t ordinal = uleb(cursor, children);
+          ex.library = dylibFor(ordinal);
+          if (ex.library.empty())
+            detail::malformed("invalid Mach-O reexport library ordinal");
+          ex.target = r_.cstr(cursor, children - cursor);
+          cursor += ex.target.size() + 1;
+          if (ex.target.empty()) ex.target = ex.name;
+          ex.forwarded = true;
+          s.kind = SymbolKind::Indirect;
+        } else {
+          uint64_t value = uleb(cursor, children);
+          if (kind == 2) {
+            s.value = value;
+            s.flags |= sym::Absolute;
+          } else {
+            s.value = detail::checkedAdd(base_, value);
+          }
+          if (kind == 1)
+            s.kind = SymbolKind::Tls;
+          else
+            ex.address = s.value;
+          if (flags & 0x10) {
+            (void)uleb(cursor, children);  // resolver offset
+            s.kind = SymbolKind::Indirect;
+          }
+        }
+        if (cursor != children)
+          detail::malformed("invalid Mach-O export terminal size");
+        exports_.push_back(std::move(ex));
+        dynamic_.push_back(std::move(s));
+      }
+      stack.push_back({children + 1, r_.u8(children), restore});
+    };
+    visit(0, 0);
+    while (!stack.empty()) {
+      auto& node = stack.back();
+      if (!node.remaining) {
+        path.resize(node.restore);
+        stack.pop_back();
+        continue;
+      }
+      --node.remaining;
+      auto edge = r_.cstringView(node.cursor, end - node.cursor);
+      if (edge.empty()) detail::malformed("empty Mach-O export edge");
+      node.cursor += edge.size() + 1;
+      auto child = uleb(node.cursor, end);
+      auto restore = path.size();
+      if (edge.size() > size - restore)
+        detail::malformed("oversized Mach-O export path");
+      path.append(edge);
+      visit(child, restore);
+    }
+  }
   void parseSegment(uint64_t o, uint64_t length, bool wide) {
     auto word = [&](uint64_t offset) {
       return wide ? r_.u64(offset) : uint64_t(r_.u32(offset));
@@ -355,8 +484,27 @@ class MachOFile final : public ObjectFile {
             s.kind = SymbolKind::Indirect;
             break;
         }
-        if ((type & 1) && !(s.flags & (sym::Undefined | sym::Hidden)))
+        if ((type & 1) && s.kind != SymbolKind::Common &&
+            !(s.flags & (sym::Undefined | sym::Hidden)))
           s.flags |= sym::Exported;
+      }
+      if (fileType() != FileType::Relocatable && !s.name.empty()) {
+        LinkSymbol link;
+        link.name = s.name;
+        link.weak = s.binding == SymbolBinding::Weak;
+        if (s.flags & sym::Imported) {
+          auto ordinal = desc >> 8;
+          if ((flags_ & 0x80) && ordinal < 0xfe) link.library = dylibFor(ordinal);
+          imports_.push_back(std::move(link));
+        } else if (s.flags & sym::Exported) {
+          if (s.kind == SymbolKind::Indirect) {
+            link.forwarded = true;
+            link.target = r_.stringAt(stroff_, strsize_, s.value);
+          } else if (!s.section || !(sections_[*s.section].flags & sec::Tls)) {
+            link.address = s.value;
+          }
+          exports_.push_back(std::move(link));
+        }
       }
       symbols_.push_back(s);
       if (!(s.flags & sym::Debug) &&
@@ -423,6 +571,7 @@ class MachOFile final : public ObjectFile {
   std::vector<Section> sections_;
   std::vector<Segment> segments_;
   std::vector<Symbol> symbols_, dynamic_;
+  std::vector<LinkSymbol> exports_, imports_;
   std::vector<std::string> needed_, runpaths_;
   std::string installName_;
   std::vector<std::pair<uint32_t, uint32_t>> rawRelocs_;
@@ -437,8 +586,11 @@ inline Expected<std::unique_ptr<ObjectFile>> openSlice(
     return Error{Error::Code::OutOfRange, "invalid universal slice index"};
   const auto& s = (*table)[index];
   auto result = MachOFile::open(bytes.subspan(s.offset, s.size), path);
-  if (result && static_cast<const MachOFile&>(**result).cpuType() != s.cpuType)
-    return Error{Error::Code::Malformed, "universal slice CPU mismatch"};
+  if (result) {
+    const auto& object = static_cast<const MachOFile&>(**result);
+    if (object.cpuType() != s.cpuType || object.cpuSubtype() != s.cpuSubtype)
+      return Error{Error::Code::Malformed, "universal slice CPU mismatch"};
+  }
   return result;
 }
 inline void registerTargets(Registry& registry) {

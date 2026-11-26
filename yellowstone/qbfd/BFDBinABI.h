@@ -50,6 +50,23 @@ enum {
   ARCHBFD_FILE_EXECUTABLE = 2, ARCHBFD_FILE_SHARED = 3, ARCHBFD_FILE_CORE = 4
 };
 enum {
+  ARCHBFD_IMAGE_UNKNOWN = 0, ARCHBFD_IMAGE_RELOCATABLE = 1,
+  ARCHBFD_IMAGE_EXECUTABLE = 2, ARCHBFD_IMAGE_SHARED_LIBRARY = 3,
+  ARCHBFD_IMAGE_CORE = 4, ARCHBFD_IMAGE_PIE = 5
+};
+enum {
+  ARCHBFD_CALL_UNKNOWN = 0, ARCHBFD_CALL_SYSV_AMD64 = 1,
+  ARCHBFD_CALL_WIN64 = 2, ARCHBFD_CALL_AAPCS64 = 3,
+  ARCHBFD_CALL_RISCV64 = 4, ARCHBFD_CALL_RISCV32 = 5,
+  ARCHBFD_CALL_DARWIN_ARM64 = 6
+};
+enum { ARCHBFD_EXPORTS = 0, ARCHBFD_IMPORTS = 1 };
+enum {
+  ARCHBFD_LINK_HAS_ADDRESS = 1u << 0, ARCHBFD_LINK_HAS_ORDINAL = 1u << 1,
+  ARCHBFD_LINK_WEAK = 1u << 2, ARCHBFD_LINK_DEFAULT_VERSION = 1u << 3,
+  ARCHBFD_LINK_FORWARDED = 1u << 4
+};
+enum {
   ARCHBFD_SEC_ALLOC = 1u << 0, ARCHBFD_SEC_LOAD = 1u << 1,
   ARCHBFD_SEC_CODE = 1u << 2, ARCHBFD_SEC_DATA = 1u << 3,
   ARCHBFD_SEC_READ_ONLY = 1u << 4, ARCHBFD_SEC_WRITABLE = 1u << 5,
@@ -62,7 +79,7 @@ enum {
   ARCHBFD_SYM_UNDEFINED = 1u << 0, ARCHBFD_SYM_ABSOLUTE = 1u << 1,
   ARCHBFD_SYM_HIDDEN = 1u << 2, ARCHBFD_SYM_EXPORTED = 1u << 3,
   ARCHBFD_SYM_IMPORTED = 1u << 4, ARCHBFD_SYM_SYNTHETIC = 1u << 5,
-  ARCHBFD_SYM_DEBUG = 1u << 6
+  ARCHBFD_SYM_DEBUG = 1u << 6, ARCHBFD_SYM_PROTECTED = 1u << 7
 };
 enum {
   ARCHBFD_BIND_LOCAL = 0, ARCHBFD_BIND_GLOBAL = 1,
@@ -89,6 +106,19 @@ typedef struct {
   size_t dependency_count;
   archbfd_string target;
 } archbfd_object_info;
+
+/* Additive image view; archbfd_object_info keeps its original layout. */
+typedef struct {
+  uint32_t format, arch, endian, address_bits, image_kind, call_abi;
+  uint64_t entry_point, image_base;
+  size_t export_count, import_count;
+} archbfd_image_info;
+
+typedef struct {
+  archbfd_string name, library, target, version;
+  uint64_t address;
+  uint32_t ordinal, flags;
+} archbfd_link_symbol;
 
 typedef struct {
   uint32_t index, flags, native_type;
@@ -165,6 +195,16 @@ ARCHBFD_API void archbfd_close(archbfd_object *object);
  * Missing section/symbol references use ARCHBFD_NO_INDEX. */
 ARCHBFD_API archbfd_status archbfd_get_object_info(const archbfd_object *object,
     archbfd_object_info *out, archbfd_error *error);
+ARCHBFD_API archbfd_status archbfd_get_image_info(const archbfd_object *object,
+    archbfd_image_info *out, archbfd_error *error);
+/* Optional scalars are present only when their flags are set. */
+ARCHBFD_API archbfd_status archbfd_get_link_symbol(const archbfd_object *object,
+    uint32_t table, size_t slot, archbfd_link_symbol *out, archbfd_error *error);
+/* Linked virtual addresses and offsets relative to archbfd_get_bytes(). */
+ARCHBFD_API archbfd_status archbfd_file_offset_for_address(const archbfd_object *object,
+    uint64_t address, uint64_t *out, archbfd_error *error);
+ARCHBFD_API archbfd_status archbfd_address_for_file_offset(const archbfd_object *object,
+    uint64_t offset, uint64_t *out, archbfd_error *error);
 ARCHBFD_API archbfd_status archbfd_get_bytes(const archbfd_object *object,
     archbfd_bytes *out, archbfd_error *error);
 ARCHBFD_API archbfd_status archbfd_get_section(const archbfd_object *object,

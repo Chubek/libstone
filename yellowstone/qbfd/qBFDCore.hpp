@@ -176,6 +176,14 @@ struct Symbol {
   uint32_t nativeType = 0;     // raw st_info / storage class / n_type
 };
 
+// Loader-facing symbol information, independent of native symbol indices.
+struct LinkSymbol {
+  std::string name, library, target, version;
+  std::optional<uint64_t> address;
+  std::optional<uint32_t> ordinal;
+  bool weak = false, defaultVersion = false, forwarded = false;
+};
+
 // ---------------------------------------------------------------------------
 // Relocations
 // ---------------------------------------------------------------------------
@@ -328,20 +336,27 @@ class ObjectFile {
   // accidentally indexing a section span past its file-backed portion.
   Expected<std::span<const uint8_t>> bytesAtAddress(uint64_t address,
                                                      uint64_t length) const {
-    const Section* s = sectionForAddress(address);
-    if (!s || (s->flags & sec::Bss))
+    auto offset = mapFileBytes(address, length, false);
+    if (!offset)
       return Error{Error::Code::OutOfRange,
-                   "address is not backed by section data"};
-    uint64_t delta = address - s->vma;
-    if (delta > s->fileSize || length > s->fileSize - delta)
-      return Error{Error::Code::OutOfRange,
-                   "address range exceeds section file contents"};
-    if (s->fileOffset > data_.size() ||
-        delta > data_.size() - s->fileOffset ||
-        length > data_.size() - s->fileOffset - delta)
-      return Error{Error::Code::OutOfRange,
-                   "address range exceeds file contents"};
-    return data_.subspan(size_t(s->fileOffset + delta), size_t(length));
+                   "address range is not unambiguously file-backed"};
+    return data_.subspan(size_t(*offset), size_t(length));
+  }
+
+  std::optional<uint64_t> addressForFileOffset(uint64_t offset) const {
+    return mapFileBytes(offset, 1, true);
+  }
+  std::optional<uint64_t> fileOffsetForRva(uint64_t rva) const {
+    const auto base = imageBase();
+    if (rva > UINT64_MAX - base) return std::nullopt;
+    return fileOffsetForAddress(base + rva);
+  }
+  Expected<std::span<const uint8_t>> bytesAtRva(uint64_t rva,
+                                                uint64_t length) const {
+    const auto base = imageBase();
+    if (rva > UINT64_MAX - base)
+      return Error{Error::Code::OutOfRange, "RVA overflows the address space"};
+    return bytesAtAddress(base + rva, length);
   }
 
   // Relocations that apply to a given section
@@ -357,14 +372,47 @@ class ObjectFile {
   // available).  Linkers use this rather than the input path for DT_NEEDED.
   virtual std::optional<std::string> soname() const { return std::nullopt; }
 
-  // Address <-> file offset helpers built on sections()
+  // The historic spelling for linked-address to file-offset conversion.
   std::optional<uint64_t> vmaToFileOffset(uint64_t vma) const {
-    const Section* s = sectionForAddress(vma);
-    if (!s || (s->flags & sec::Bss) || vma - s->vma >= s->fileSize ||
-        s->fileOffset > data_.size() ||
-        vma - s->vma >= data_.size() - s->fileOffset)
-      return std::nullopt;
-    return s->fileOffset + (vma - s->vma);
+    return mapFileBytes(vma, 1, false);
+  }
+
+ private:
+  std::optional<uint64_t> mapFileBytes(uint64_t key, uint64_t length,
+                                       bool reverse) const {
+    length = std::max<uint64_t>(1, length);
+    if (length - 1 > UINT64_MAX - key) return std::nullopt;
+    std::optional<uint64_t> result;
+    std::optional<std::pair<uint64_t, uint64_t>> overlap;
+    bool ambiguous = false, haveLoadMap = false;
+    auto check = [&](uint64_t va, uint64_t off, uint64_t extent) {
+      if (!extent || off >= data_.size() || extent > data_.size() - off ||
+          extent - 1 > UINT64_MAX - va)
+        return;
+      const uint64_t from = reverse ? off : va, to = reverse ? va : off;
+      const uint64_t first = std::max(key, from);
+      if (first - key >= length || first - from >= extent) return;
+      // All geometries are linear mappings of slope one. Compare their
+      // translation (sign and magnitude), even for partial overlaps.
+      const auto translation = std::pair<uint64_t, uint64_t>{
+          to >= from, to >= from ? to - from : from - to};
+      if (overlap && *overlap != translation) ambiguous = true;
+      overlap = translation;
+      if (key >= from && length <= extent - (key - from))
+        result = to + (key - from);
+    };
+    if (fileType() != FileType::Relocatable) {
+      for (const auto& s : segments()) {
+        if (format() == Format::ELF && s.nativeType != 1) continue;
+        haveLoadMap = true;
+        check(s.vaddr, s.fileOffset, std::min(s.memSize, s.fileSize));
+      }
+    }
+    if (!haveLoadMap)
+      for (const auto& s : sections())
+        if ((s.flags & sec::Alloc) && !(s.flags & sec::Bss))
+          check(s.vma, s.fileOffset, std::min(s.size, s.fileSize));
+    return ambiguous ? std::nullopt : result;
   }
 
  protected:
@@ -649,11 +697,15 @@ struct Reader {
     return {reinterpret_cast<const char*>(d.data() + off), size_t(n)};
   }
   std::string cstr(uint64_t off, uint64_t limit = UINT64_MAX) const {
+    return std::string(cstringView(off, limit));
+  }
+  std::string_view cstringView(uint64_t off, uint64_t limit) const {
     require(off, 1);
     uint64_t length = std::min<uint64_t>(limit, d.size() - off);
-    auto s = fixed(off, length);
-    if (s.size() == length) malformed("unterminated binary string");
-    return s;
+    uint64_t n = 0;
+    while (n < length && d[off + n]) ++n;
+    if (n == length) malformed("unterminated binary string");
+    return {reinterpret_cast<const char*>(d.data() + off), size_t(n)};
   }
   std::string stringAt(uint64_t base, uint64_t size, uint64_t index) const {
     require(base, size);

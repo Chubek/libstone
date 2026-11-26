@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <unordered_set>
 
 #include "qBFDCore.hpp"
 #include "qCOFF.hpp"
@@ -234,6 +235,7 @@ class PEFile final : public ObjectFile {
   const std::vector<DataDirectory>& dataDirectories() const { return dirs_; }
   const std::vector<RawSectionHeader>& rawSections() const { return raw_; }
   std::optional<std::string> exportName() const { return exportDllName_; }
+  std::optional<std::string> soname() const override { return exportDllName_; }
 
   // On-disk table geometry, for a rewriter that patches the COFF symbol table
   // (qStrip.hpp). `fileHeader` is the offset of IMAGE_FILE_HEADER, whose
@@ -280,17 +282,9 @@ class PEFile final : public ObjectFile {
   const std::vector<Export>& exports() const { return exports_; }
 
   // RVA -> file offset using section table
-  std::optional<uint64_t> rvaToOffset(uint32_t rva) const {    for (const auto& h : raw_) {
-      uint32_t span = std::max(h.virtualSize, h.rawSize);
-      if (rva >= h.virtualAddress && uint64_t(rva) - h.virtualAddress < span) {
-        uint32_t delta = rva - h.virtualAddress;
-        if (delta >= h.rawSize) return std::nullopt;  // in BSS tail
-        return uint64_t(h.rawPtr) + delta;
-      }
-    }
-    // Headers are mapped at RVA 0
-    if (rva < sizeOfHeaders_) return rva;
-    return std::nullopt;
+  std::optional<uint64_t> rvaToOffset(uint32_t rva) const {
+    auto range = rawRvaRange(rva);
+    return range ? std::optional<uint64_t>(range->first) : std::nullopt;
   }
 
   // -- Sections -------------------------------------------------------------
@@ -366,11 +360,7 @@ class PEFile final : public ObjectFile {
 
   // -- Dependencies -------------------------------------------------------
   std::vector<std::string> neededLibraries() const override {
-    std::vector<std::string> out;
-    for (const auto& i : imports_)
-      if (std::find(out.begin(), out.end(), i.dll) == out.end())
-        out.push_back(i.dll);
-    return out;
+    return needed_;
   }
 
   // -- Parsing --------------------------------------------------------------
@@ -446,6 +436,7 @@ class PEFile final : public ObjectFile {
     fileAlign_ = r_.u32(oh + 36);
     sizeOfImage_ = r_.u32(oh + 56);
     sizeOfHeaders_ = r_.u32(oh + 60);
+    r_.require(0, sizeOfHeaders_);
     subsystem_ = r_.u16(oh + 68);
     dllChars_ = r_.u16(oh + 70);
 
@@ -487,8 +478,7 @@ class PEFile final : public ObjectFile {
       s.lma = s.vma;
       s.size = h.virtualSize ? h.virtualSize : h.rawSize;
       s.fileOffset = h.rawPtr;
-      s.fileSize = std::min<uint64_t>(h.rawSize, s.size ? s.size : h.rawSize);
-      if (h.rawSize && h.virtualSize == 0) s.fileSize = h.rawSize;
+      s.fileSize = h.rawPtr ? std::min<uint64_t>(h.rawSize, s.size) : 0;
       s.nativeFlags = h.characteristics;
       s.flags = mapSectionFlags(h.characteristics, h.rawPtr != 0);
       uint32_t alignBits = (h.characteristics & k::ScnAlignMask) >> 20;
@@ -509,6 +499,15 @@ class PEFile final : public ObjectFile {
       if (h.characteristics & k::ScnExecute) g.flags |= seg::Exec;
       g.sections.push_back(i);
       segments_.push_back(std::move(g));
+    }
+
+    if (sizeOfHeaders_) {
+      Segment headers;
+      headers.name = "PE headers";
+      headers.vaddr = headers.paddr = imageBase_;
+      headers.fileSize = headers.memSize = sizeOfHeaders_;
+      headers.flags = seg::Read;
+      segments_.push_back(std::move(headers));
     }
 
     if (nSyms && !symPtr) detail::malformed("missing COFF symbol table");
@@ -639,26 +638,31 @@ class PEFile final : public ObjectFile {
     }
   }
 
+  std::optional<std::pair<uint64_t, uint64_t>> rawRvaRange(uint32_t rva) const {
+    std::optional<std::pair<uint64_t, uint64_t>> result;
+    if (rva < sizeOfHeaders_) result = {{rva, sizeOfHeaders_ - rva}};
+    for (const auto& h : raw_) {
+      if (!h.rawPtr || rva < h.virtualAddress) continue;
+      uint64_t delta = rva - h.virtualAddress;
+      if (delta >= h.rawSize) continue;
+      auto offset = h.rawPtr + delta;
+      uint64_t extent = h.rawSize - delta;
+      if (result && result->first != offset) return std::nullopt;
+      if (!result || extent > result->second) result = {{offset, extent}};
+    }
+    return result;
+  }
   uint64_t mapped(uint32_t rva, uint64_t size) const {
-    auto off = rvaToOffset(rva);
-    if (!off) detail::malformed("unmapped PE RVA");
-    uint64_t available = rva < sizeOfHeaders_ ? sizeOfHeaders_ - rva : 0;
-    for (const auto& h : raw_)
-      if (rva >= h.virtualAddress &&
-          uint64_t(rva) - h.virtualAddress < h.rawSize)
-        available = h.rawSize - (uint64_t(rva) - h.virtualAddress);
-    if (size > available) detail::malformed("PE range crosses mapped raw data");
-    r_.require(*off, size);
-    return *off;
+    auto range = rawRvaRange(rva);
+    if (!range || size > range->second)
+      detail::malformed("PE RVA range crosses mapped raw data");
+    r_.require(range->first, size);
+    return range->first;
   }
   std::string rvaString(uint32_t rva) const {
-    uint64_t off = mapped(rva, 1), available = 0;
-    if (rva < sizeOfHeaders_) available = sizeOfHeaders_ - rva;
-    for (const auto& h : raw_)
-      if (rva >= h.virtualAddress &&
-          uint64_t(rva) - h.virtualAddress < h.rawSize)
-        available = h.rawSize - (uint64_t(rva) - h.virtualAddress);
-    return r_.cstr(off, available);
+    auto range = rawRvaRange(rva);
+    if (!range) detail::malformed("unmapped PE string RVA");
+    return r_.cstr(range->first, range->second);
   }
   static uint32_t addRva(uint32_t rva, uint64_t delta) {
     if (delta > UINT32_MAX - rva) detail::malformed("PE RVA overflow");
@@ -669,6 +673,7 @@ class PEFile final : public ObjectFile {
     auto dir = dirs_[k::DirImport];
     uint64_t base = mapped(dir.rva, dir.size);
     bool terminated = false;
+    std::unordered_set<std::string> seen;
     for (uint64_t i = 0; i + 20 <= dir.size; i += 20) {
       auto o = base + i;
       uint32_t lookup = r_.u32(o), name = r_.u32(o + 12), iat = r_.u32(o + 16);
@@ -678,6 +683,8 @@ class PEFile final : public ObjectFile {
       }
       if (!name || !iat) detail::malformed("invalid import descriptor");
       auto dll = rvaString(name);
+      if (dll.empty()) detail::malformed("empty PE import library name");
+      if (seen.insert(dll).second) needed_.push_back(dll);
       if (!lookup) lookup = iat;
       unsigned width = pe32plus_ ? 8 : 4;
       for (uint64_t j = 0;; j += width) {
@@ -688,12 +695,15 @@ class PEFile final : public ObjectFile {
         im.iatAddress = detail::checkedAdd(imageBase_, addRva(iat, j));
         mapped(addRva(iat, j), width);
         uint64_t ordinalBit = uint64_t(1) << (width * 8 - 1);
-        if (thunk & ordinalBit)
+        if (thunk & ordinalBit) {
+          if (thunk & ~(ordinalBit | 0xffff))
+            detail::malformed("invalid PE import ordinal");
           im.ordinal = uint16_t(thunk);
-        else {
+        } else {
           if (thunk > UINT32_MAX) detail::malformed("import name RVA overflow");
           im.hint = r_.u16(mapped(uint32_t(thunk), 2));
           im.name = rvaString(addRva(uint32_t(thunk), 2));
+          if (im.name.empty()) detail::malformed("empty PE import name");
         }
         Symbol s;
         s.index = uint32_t(dynSymbols_.size());
@@ -733,10 +743,11 @@ class PEFile final : public ObjectFile {
       if (!rva) continue;
       Export ex;
       ex.ordinal = addRva(ordinalBase, i);
-      if (rva >= dir.rva && uint64_t(rva) - dir.rva < dir.size)
+      if (rva >= dir.rva && uint64_t(rva) - dir.rva < dir.size) {
         ex.forwarder =
             r_.cstr(mapped(rva, 1), dir.size - (uint64_t(rva) - dir.rva));
-      else
+        if (ex.forwarder.empty()) detail::malformed("empty PE export forwarder");
+      } else
         ex.address = detail::checkedAdd(imageBase_, rva);
       auto emit = [&](std::string name) {
         ex.name = std::move(name);
@@ -832,6 +843,7 @@ class PEFile final : public ObjectFile {
   std::vector<Export> exports_;
   std::vector<BaseReloc> baseRelocs_;
   std::optional<std::string> exportDllName_;
+  std::vector<std::string> needed_;
   std::unordered_map<uint32_t, uint32_t> symIndexMap_;
   Layout layout_;
 };

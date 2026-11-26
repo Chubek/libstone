@@ -109,6 +109,17 @@ archive and invokes `visitor(displayName, const Binary&)` for each ordinary
 object member. A member that cannot be decoded reports an error, rather than
 silently disappearing. Copy data needed beyond the callback's lifetime.
 
+Use `archbfd_get_image_info()` / `Binary::imageInfo()` for the normalized
+image kind (including PIE) and object-derived call ABI. This does not alter
+the legacy `archbfd_object_info` record. `archbfd_get_link_symbol()` /
+`Binary::linkSymbols()` enumerate normalized imports or exports; test the
+`ARCHBFD_LINK_HAS_ADDRESS` and `ARCHBFD_LINK_HAS_ORDINAL` flags before reading
+the optional values. PE IAT slot addresses are not addresses of the imported
+functions. Names, versions, provider libraries, and forwarding targets are
+separate borrowed fields. Use `archbfd_file_offset_for_address()` and
+`archbfd_address_for_file_offset()` (or the similarly named C++ members) to
+convert between file offsets and linked virtual addresses.
+
 ## ABI and ownership contract
 
 * ABI major version is **1**, available as `ARCHBFD_ABI_VERSION` and
@@ -132,11 +143,13 @@ silently disappearing. Copy data needed beyond the callback's lifetime.
   use `ARCHBFD_NO_INDEX`. A relocation records its owning section, static or
   dynamic symbol domain, optional target section and addend availability.
 * Section bytes are raw file bytes: BSS returns an empty span, not synthesized
-  zeros. VA reads are section-based, reject BSS, and cannot span sections.
+  zeros. VA reads prefer loadable file mappings and cannot span multiple
+  mappings or extend into zero-filled memory. Offsets are relative to the
+  exposed object bytes, not to the containing archive or fat Mach-O.
   Compressed bytes stay compressed. Native relocation type/width metadata is
   not a promise that a relocation can be applied or that every instruction
   encoding's implicit addend is understood.
-* Objects cache relocation records and dependencies during open so returned
+* Objects cache relocation records, dependencies and link symbols during open so returned
   views remain stable. Immutable object queries may run concurrently if no
   thread closes the handle. Serialize archive calls, since thin-member reads
   populate a cache. If an application also uses qBFD directly, register its
@@ -148,7 +161,7 @@ silently disappearing. Copy data needed beyond the callback's lifetime.
   members have `special != 0` and are not objects.
 * Universal Mach-O needs explicit selection: enumerate `machoSlices(bytes)`
   and use `Binary::machoSlice(bytes, index)`, or the corresponding C functions.
-  Selection validates the table and the member CPU type and retains a copy of
+  Selection validates the table and the member CPU type and subtype and retains a copy of
   the input container.
 
 The underlying readers' feature boundaries still apply: short ILF import

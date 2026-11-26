@@ -122,14 +122,51 @@ if (const auto* symbol = object.symbolAtAddress(address))
 
 auto bytes = object.bytesAtAddress(address, length);
 auto offset = object.fileOffsetForAddress(address);
+auto reverse = object.addressForFileOffset(fileOffset);
+auto image = qbfd::imageInfo(object);
+auto imported = qbfd::imports(object);
+auto exported = qbfd::exports(object);
 ```
 
-`bytesAtAddress()` refuses BSS/NOBITS and truncated file-backed ranges, while
-`symbolAtAddress()` ignores undefined symbols and prefers the most specific
-covering definition. `findSymbol()` searches both the static and dynamic
-symbol collections. `neededLibraries()` reports runtime dependencies and
-`soname()` returns an ELF `DT_SONAME` when the image records one; linkers should
-prefer that identity over an input pathname.
+Address helpers take linked virtual addresses, not live process addresses.
+RVA helpers (`fileOffsetForRva`, `bytesAtRva`) subtract no implicit load bias:
+they add RVA to the preferred `imageBase()` with overflow checks. Executable,
+shared, and core images use their file-backed load map when available
+(including the PE headers); other objects use allocated sections. Reads stay
+within one mapping, reject contradictory overlaps and never synthesize zero-fill.
+File offsets are relative to `ObjectFile::data()`, including for universal
+Mach-O slices. Relocatable sections may overlap in the address space; use
+`sectionContents()` when the intended section is known.
+
+`imageInfo()` normalizes image format, architecture, byte order, address
+width, kind, call ABI, preferred base and entry. Its ABI is descriptive rather
+than proof of signature or host compatibility. It excludes unsupported cases
+such as x32, RISC-V ABIs other than LP64D/ILP32D, Windows Arm64 and arm64e,
+rather than falling back to the host ABI. The older `abi::convFor(Format,
+Arch)` is still the coarse default for callers that have no object.
+
+`symbols()` and `dynamicSymbols()` retain native spelling and indices.
+`symbolAtAddress()` skips undefined symbols; `findSymbol()` checks both
+collections. For loader-facing symbols, `imports()` and `exports()` report
+optional linked addresses and ordinals, explicit forwarding/reexports, and
+separate ELF version and default-version fields. ELF `PT_DYNAMIC` can recover
+dependencies, SONAME and hash-bounded symbols and versions without section
+headers. PE uses its eager import and export directories; an import address
+is its IAT slot, not the imported implementation. Mach-O uses the dyld export
+trie (or nlist fallback); nlist imports can include the two-level dylib
+identity. `openMachOSlice(path, arch)` or its vector overload selects exactly
+one matching slice (or validates thin architecture); duplicate matches are
+ambiguous. COFF objects have static symbols but no runtime import/export
+inventory.
+
+`neededLibraries()` reports direct dependency names as recorded in an image.
+`soname()` reports ELF `DT_SONAME`, a PE export module name, or Mach-O
+`LC_ID_DYLIB`; neither query resolves dependencies or loads code. The reader
+does not infer sectionless ELF symbol counts without a recognized hash table,
+expand sectionless dynamic relocations, decode PE delay imports or COFF
+short-import objects, or reconstruct Mach-O imports from dyld bind opcodes
+or chained fixups when nlist is absent. A Mach-O export graph with reused
+nodes is rejected rather than expanded without a bound.
 
 ## Native C++ DSL
 

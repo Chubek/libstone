@@ -215,6 +215,145 @@ Bytes machFile(bool wide, bool big) {
   text(b, strings + 1, "_entry");
   return b;
 }
+Bytes sectionlessElf(bool gnuHash) {
+  auto b = elfFile(true, false);
+  b.resize(784);
+  constexpr uint64_t base = 0x400000;
+  auto p = [&](size_t o, uint64_t v, size_t n) { put(b, o, v, n); };
+  p(16, 3, 2);
+  p(24, base + 720, 8);
+  p(32, 64, 8);
+  p(54, 56, 2);
+  p(56, 2, 2);
+  auto program = [&](uint64_t off, uint32_t type, uint64_t data, uint64_t size,
+                     uint64_t mem) {
+    p(off, type, 4); p(off + 4, 5, 4);
+    p(off + 8, data, 8); p(off + 16, base + data, 8);
+    p(off + 32, size, 8); p(off + 40, mem, 8); p(off + 48, 1, 8);
+  };
+  program(64, 1, 0, b.size(), 1024);
+  program(120, 2, 176, 16 * 12, 16 * 12);
+  constexpr uint64_t strings = 384, syms = 480, hash = 584, versym = 624,
+                     verdef = 640, verneed = 672;
+  size_t next = 176;
+  auto tag = [&](uint64_t id, uint64_t value) {
+    p(next, id, 8); p(next + 8, value, 8); next += 16;
+  };
+  tag(5, base + strings); tag(10, 96);
+  tag(1, 1); tag(14, 9);
+  tag(6, base + syms); tag(11, 24);
+  tag(gnuHash ? 0x6ffffef5 : 4, base + hash);
+  tag(0x6ffffff0, base + versym);
+  tag(0x6ffffffc, base + verdef); tag(0x6ffffffd, 1);
+  tag(0x6ffffffe, base + verneed); tag(0x6fffffff, 1);
+  // The DT_NULL entry follows the 12 real tags.
+  p(120 + 32, 16 * 13, 8); p(120 + 40, 16 * 13, 8);
+  constexpr char names[] = "\0dep.so\0\0sample.so\0\0provided\0external\0VER_1\0VER_2\0";
+  text(b, strings, std::string_view(names, sizeof(names) - 1));
+  auto symbol = [&](size_t i, uint32_t name, uint8_t binding, uint16_t section,
+                    uint64_t value) {
+    size_t o = syms + i * 24;
+    p(o, name, 4); p(o + 4, binding, 1); p(o + 6, section, 2);
+    p(o + 8, value, 8);
+  };
+  symbol(1, 29, 0x22, 0, 0);
+  symbol(2, 20, 0x12, 1, base + 720);
+  symbol(3, 20, 0x12, 1, base + 724);
+  if (gnuHash) {
+    p(hash, 1, 4); p(hash + 4, 2, 4); p(hash + 8, 1, 4);
+    p(hash + 24, 2, 4); p(hash + 32, 1, 4);
+  } else {
+    p(hash, 1, 4); p(hash + 4, 4, 4);
+  }
+  p(versym + 2, 3, 2); p(versym + 4, 2, 2); p(versym + 6, 0x8002, 2);
+  p(verdef, 1, 2); p(verdef + 4, 2, 2); p(verdef + 6, 1, 2);
+  p(verdef + 12, 20, 4); p(verdef + 20, 38, 4);
+  p(verneed, 1, 2); p(verneed + 2, 1, 2); p(verneed + 4, 1, 4);
+  p(verneed + 8, 16, 4); p(verneed + 22, 3, 2); p(verneed + 24, 44, 4);
+  b[720] = 0xc3;
+  return b;
+}
+Bytes machExports(bool dyldInfo) {
+  Bytes b(260);
+  auto p = [&](size_t o, uint64_t v, size_t n) { put(b, o, v, n); };
+  p(0, 0xfeedfacf, 4); p(4, 0x100000c, 4);
+  p(12, 6, 4); p(16, 3, 4);
+  p(20, 72 + 40 + (dyldInfo ? 48 : 16), 4);
+  p(32, 0x19, 4); p(36, 72, 4);
+  text(b, 40, "__TEXT"); p(56, 0x100000000, 8);
+  p(64, 512, 8); p(80, b.size(), 8); p(92, 5, 4);
+  p(104, 0x8000001f, 4); p(108, 40, 4); p(112, 24, 4);
+  text(b, 128, "dep.dylib");
+  p(144, dyldInfo ? 0x80000022 : 0x80000033, 4);
+  p(148, dyldInfo ? 48 : 16, 4);
+  size_t dir = dyldInfo ? 184 : 152;
+  p(dir, 200, 4);
+  const Bytes trie = {0, 2, '_', 'p', 0, 10, '_', 'f', 0, 15,
+                      3, 4, 0xe0, 1, 0, 5, 8, 1, '_', 't', 0, 0};
+  p(dir + 4, trie.size(), 4);
+  std::copy(trie.begin(), trie.end(), b.begin() + 200);
+  return b;
+}
+void normalizedTests() {
+  for (bool gnu : {false, true}) {
+    auto b = sectionlessElf(gnu);
+    auto obj = qbfd::open(b);
+    if (!obj) std::cerr << obj.error().message << '\n';
+    CHECK(obj);
+    const auto& f = *obj->object;
+    auto info = imageInfo(f);
+    CHECK(info.format == Format::ELF && info.arch == Arch::X86_64 &&
+          info.addressBits == 64 && info.abi == abi::CallConv::SysV_AMD64 &&
+          info.kind == ImageKind::SharedLibrary);
+    CHECK(f.sections().empty() && f.symbols().empty());
+    CHECK(f.dynamicSymbols().size() == 4 && f.soname() == "sample.so");
+    CHECK(f.neededLibraries() == std::vector<std::string>{"dep.so"});
+    auto ex = exports(f), im = imports(f);
+    CHECK(ex.size() == 2 && ex[0].name == "provided" && ex[0].version == "VER_1" &&
+          ex[0].defaultVersion && !ex[1].defaultVersion && ex[0].address == info.entryPoint);
+    CHECK(im.size() == 1 && im[0].name == "external" && im[0].weak &&
+          !im[0].address && im[0].version == "VER_2" && im[0].library == "dep.so");
+    CHECK(f.fileOffsetForRva(720) == 720 &&
+          f.addressForFileOffset(720) == info.entryPoint);
+    CHECK(f.bytesAtRva(720, 1)->front() == 0xc3);
+    CHECK(!f.bytesAtRva(720, UINT64_MAX) && !f.fileOffsetForRva(UINT64_MAX));
+    CHECK(!f.fileOffsetForRva(784) && !f.bytesAtRva(783, 2));
+    // Truncated/unmapped symbol table and unrecognized symbol version ID.
+    put(b, 176 + 4 * 16 + 8, info.imageBase + 780, 8);
+    CHECK(!qbfd::open(b));
+    b = sectionlessElf(gnu);
+    put(b, 626, 22, 2);
+    CHECK(!qbfd::open(b));
+    // Change only the ELF machine/flags to exercise conservative ABI selection.
+    b = sectionlessElf(gnu);
+    put(b, 18, 243, 2);
+    auto soft = qbfd::open(b);
+    CHECK(soft && imageInfo(*soft->object).abi == abi::CallConv::Unknown);
+    put(b, 48, 5, 4);  // EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE.
+    auto hard = qbfd::open(b);
+    CHECK(hard && imageInfo(*hard->object).abi == abi::CallConv::Riscv64);
+  }
+  for (bool legacy : {false, true}) {
+    auto b = machExports(legacy);
+    auto obj = qbfd::openMachOSlice(b, Arch::AArch64);
+    CHECK(obj);
+    const auto& f = *obj->object;
+    CHECK(imageInfo(f).abi == abi::CallConv::DarwinArm64);
+    CHECK(f.symbols().empty() && f.dynamicSymbols().size() == 2);
+    auto ex = exports(f);
+    CHECK(ex[0].name == "_p" && ex[0].weak && ex[0].address == 0x1000000e0);
+    CHECK(ex[1].name == "_f" && ex[1].forwarded && !ex[1].address &&
+          ex[1].library == "dep.dylib" && ex[1].target == "_t");
+    CHECK(f.fileOffsetForRva(224) == 224);
+    b[205] = 0;  // root as child: cycle.
+    CHECK(!qbfd::open(b));
+    b = machExports(legacy);
+    b[217] = 2;  // dylib ordinal beyond load commands.
+    CHECK(!qbfd::open(b));
+  }
+  CHECK(abi::parseCallConv("darwin_arm64") == abi::CallConv::DarwinArm64);
+  CHECK(!abi::parseCallConv("not_an_abi"));
+}
 void exercise(const Bytes& bytes) {
   auto result = qbfd::open(bytes);
   if (!result) std::cerr << result.error().message << "\n";
@@ -442,6 +581,7 @@ void stripTests() {
 }
 
 int main(int argc, char** argv) {
+  normalizedTests();
   CHECK(otherTranslationUnit() > 0);
   auto count = Registry::instance().targets().size();
   registerBuiltinTargets();
@@ -498,6 +638,13 @@ int main(int argc, char** argv) {
           file.imports()[1].ordinal == 7);
     CHECK(file.exports()[1].forwarder == "other.func");
     CHECK(file.neededLibraries() == std::vector<std::string>{"dep.dll"});
+    auto ex = exports(file), im = imports(file);
+    CHECK(ex[1].name.empty() && ex[1].ordinal == 2 && ex[1].forwarded &&
+          !ex[1].address && ex[1].library == "other" && ex[1].target == "func");
+    CHECK(im[1].name.empty() && im[1].ordinal == 7 && im[1].address &&
+          im[1].library == "dep.dll");
+    CHECK(file.fileOffsetForRva(0) == 0 && file.bytesAtRva(0, 2)->front() == 'M');
+    CHECK(file.addressForFileOffset(0x400) == file.imageBase() + 0x1200);
     CHECK(!file.vmaToFileOffset(file.imageBase() + 0x1401));
     auto rel = file.relocations(file.sections()[0]);
     CHECK(rel && rel->size() == 1);
@@ -566,6 +713,9 @@ int main(int argc, char** argv) {
   CHECK(macho::slices(fat));
   CHECK(macho::openSlice(fat, 0));
   CHECK(!macho::openSlice(fat, 1));
+  auto selected = qbfd::openMachOSlice(fat, Arch::X86_64);
+  CHECK(selected && selected->object->data().size() == thin.size());
+  CHECK(!qbfd::openMachOSlice(fat, Arch::AArch64));
   auto universal = qbfd::open(fat);
   CHECK(!universal && universal.error().code == Error::Code::Unsupported);
   for (int i = 1; i < argc; ++i) {

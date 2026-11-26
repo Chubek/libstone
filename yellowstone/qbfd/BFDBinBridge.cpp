@@ -9,6 +9,7 @@ struct archbfd_object {
   std::unique_ptr<qbfd::ObjectFile> file;
   std::vector<std::vector<qbfd::Relocation>> relocations;
   std::vector<std::string> dependencies;
+  std::vector<qbfd::LinkSymbol> exports, imports;
   std::string target;
 };
 struct archbfd_archive {
@@ -46,6 +47,19 @@ SAME(qbfd::FileType::Relocatable, ARCHBFD_FILE_RELOCATABLE);
 SAME(qbfd::FileType::Executable, ARCHBFD_FILE_EXECUTABLE);
 SAME(qbfd::FileType::SharedObject, ARCHBFD_FILE_SHARED);
 SAME(qbfd::FileType::Core, ARCHBFD_FILE_CORE);
+SAME(qbfd::ImageKind::Unknown, ARCHBFD_IMAGE_UNKNOWN);
+SAME(qbfd::ImageKind::Relocatable, ARCHBFD_IMAGE_RELOCATABLE);
+SAME(qbfd::ImageKind::Executable, ARCHBFD_IMAGE_EXECUTABLE);
+SAME(qbfd::ImageKind::SharedLibrary, ARCHBFD_IMAGE_SHARED_LIBRARY);
+SAME(qbfd::ImageKind::Core, ARCHBFD_IMAGE_CORE);
+SAME(qbfd::ImageKind::PositionIndependentExecutable, ARCHBFD_IMAGE_PIE);
+SAME(qbfd::abi::CallConv::Unknown, ARCHBFD_CALL_UNKNOWN);
+SAME(qbfd::abi::CallConv::SysV_AMD64, ARCHBFD_CALL_SYSV_AMD64);
+SAME(qbfd::abi::CallConv::Win64, ARCHBFD_CALL_WIN64);
+SAME(qbfd::abi::CallConv::Aapcs64, ARCHBFD_CALL_AAPCS64);
+SAME(qbfd::abi::CallConv::Riscv64, ARCHBFD_CALL_RISCV64);
+SAME(qbfd::abi::CallConv::Riscv32, ARCHBFD_CALL_RISCV32);
+SAME(qbfd::abi::CallConv::DarwinArm64, ARCHBFD_CALL_DARWIN_ARM64);
 SAME(qbfd::sec::Alloc, ARCHBFD_SEC_ALLOC);
 SAME(qbfd::sec::Load, ARCHBFD_SEC_LOAD);
 SAME(qbfd::sec::Code, ARCHBFD_SEC_CODE);
@@ -67,6 +81,7 @@ SAME(qbfd::sym::Exported, ARCHBFD_SYM_EXPORTED);
 SAME(qbfd::sym::Imported, ARCHBFD_SYM_IMPORTED);
 SAME(qbfd::sym::Synthetic, ARCHBFD_SYM_SYNTHETIC);
 SAME(qbfd::sym::Debug, ARCHBFD_SYM_DEBUG);
+SAME(qbfd::sym::Protected, ARCHBFD_SYM_PROTECTED);
 SAME(qbfd::SymbolBinding::Local, ARCHBFD_BIND_LOCAL);
 SAME(qbfd::SymbolBinding::Global, ARCHBFD_BIND_GLOBAL);
 SAME(qbfd::SymbolBinding::Weak, ARCHBFD_BIND_WEAK);
@@ -148,6 +163,8 @@ archbfd_status finish(std::unique_ptr<qbfd::ObjectFile> file,
   auto result = std::make_unique<archbfd_object>();
   result->target = file->targetName();
   result->dependencies = file->neededLibraries();
+  result->exports = qbfd::exports(*file);
+  result->imports = qbfd::imports(*file);
   for (const auto& section : file->sections()) {
     auto entries = file->relocations(section);
     if (!entries) return fail(error, entries.error());
@@ -251,6 +268,55 @@ archbfd_status archbfd_get_bytes(const archbfd_object* object,
   return guard(error, [&]() -> archbfd_status {
     if (!object || !out) return invalid(error);
     *out = view(object->file->data()); return ARCHBFD_OK;
+  });
+}
+archbfd_status archbfd_get_image_info(const archbfd_object* object,
+                                     archbfd_image_info* out, archbfd_error* error) {
+  return guard(error, [&]() -> archbfd_status {
+    if (!object || !out) return invalid(error);
+    const auto info = qbfd::imageInfo(*object->file);
+    *out = {uint32_t(info.format), uint32_t(info.arch), uint32_t(info.endian),
+            info.addressBits, uint32_t(info.kind), uint32_t(info.abi),
+            info.entryPoint, info.imageBase, object->exports.size(), object->imports.size()};
+    return ARCHBFD_OK;
+  });
+}
+archbfd_status archbfd_get_link_symbol(const archbfd_object* object, uint32_t table,
+    size_t slot, archbfd_link_symbol* out, archbfd_error* error) {
+  return guard(error, [&]() -> archbfd_status {
+    if (!object || !out || table > ARCHBFD_IMPORTS) return invalid(error);
+    const auto& symbols = table == ARCHBFD_EXPORTS ? object->exports : object->imports;
+    if (slot >= symbols.size()) return range(error);
+    const auto& s = symbols[slot];
+    uint32_t flags = 0;
+    if (s.address) flags |= ARCHBFD_LINK_HAS_ADDRESS;
+    if (s.ordinal) flags |= ARCHBFD_LINK_HAS_ORDINAL;
+    if (s.weak) flags |= ARCHBFD_LINK_WEAK;
+    if (s.defaultVersion) flags |= ARCHBFD_LINK_DEFAULT_VERSION;
+    if (s.forwarded) flags |= ARCHBFD_LINK_FORWARDED;
+    *out = {view(s.name), view(s.library), view(s.target), view(s.version),
+            s.address.value_or(0), s.ordinal.value_or(0), flags};
+    return ARCHBFD_OK;
+  });
+}
+archbfd_status archbfd_file_offset_for_address(const archbfd_object* object,
+    uint64_t address, uint64_t* out, archbfd_error* error) {
+  return guard(error, [&]() -> archbfd_status {
+    if (!object || !out) return invalid(error);
+    auto mapped = object->file->fileOffsetForAddress(address);
+    if (!mapped) return fail(error, ARCHBFD_OUT_OF_RANGE, "address is not mapped");
+    *out = *mapped;
+    return ARCHBFD_OK;
+  });
+}
+archbfd_status archbfd_address_for_file_offset(const archbfd_object* object,
+    uint64_t offset, uint64_t* out, archbfd_error* error) {
+  return guard(error, [&]() -> archbfd_status {
+    if (!object || !out) return invalid(error);
+    auto mapped = object->file->addressForFileOffset(offset);
+    if (!mapped) return fail(error, ARCHBFD_OUT_OF_RANGE, "file offset is not mapped");
+    *out = *mapped;
+    return ARCHBFD_OK;
   });
 }
 archbfd_status archbfd_get_section(const archbfd_object* object, size_t slot,
