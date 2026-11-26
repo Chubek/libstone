@@ -138,7 +138,8 @@ void check_product_cycles(const Schema& schema,
     // in field order, rooted only at products. Avoid recursion on schema
     // input (a long acyclic definition chain is valid).
     for (std::size_t root = 0; root < schema.definitions.size(); ++root) {
-        if (schema.definitions[root].kind != DefinitionKind::product)
+        if (schema.definitions[root].kind != DefinitionKind::product ||
+            schema.definitions[root].extended)
             continue;
         struct Frame { std::size_t id, edge; };
         std::vector<Frame> path{{root, 0}};

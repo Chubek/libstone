@@ -1,0 +1,8 @@
+.modular #true;
+.import schema syntax.values as Values;
+.import schema item as value from syntax.values;
+node ::= Node(Values.item item);
+node_item ::= Wrapper(value item);
+.logistics for :node ::= lua(node) -> (result)
+  return node
+.end

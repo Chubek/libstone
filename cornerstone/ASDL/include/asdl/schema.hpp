@@ -80,6 +80,7 @@ struct Definition {
     std::vector<Constructor> constructors;
     bool is_enum = false;
     SourceSpan span;
+    bool extended = false; // ::= supports recursive products
 };
 
 struct Generic {

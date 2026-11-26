@@ -1,0 +1,8 @@
+.language "Modular";
+.import schema syntax.nodes as Syntax;
+.import schema item as imported from syntax.values;
+.import schema syntax.values as Values;
+.import schema wrapper from syntax.wrapper;
+.unit :Syntax.node;
+root ::= (Syntax.node tree, imported a, Values.item b, list[imported] values,
+          wrapper wrapped, Syntax.node_item wrapped_item);
