@@ -67,6 +67,14 @@ python3 tests/run_miniruby.py
 
 The first command runs all modules against `tests/host.lua`, a small test adapter. It uses a system Lua 5.4 executable if available, otherwise a Lua 5.4 shared library via Python ctypes. The second runs the earlier MiniRuby example's 14 logistics using a separate mock host; it uses the shared library. The tests include deterministic generated cases for coverage, dominance, serialization, and expression transformations checked against an independent evaluator.
 
+With the native runner on `PATH`, run the same-directory integration fixture:
+
+```sh
+asdl-run --stdlib "$PWD" tests/native.asdl tests/native.lua
+```
+
+This checks native AST construction, reflection, logistics imports, annotations, JSON/binary round trips, rewriting and pass caching. To test an installation instead, point `--stdlib` at the installed directory containing `std/`.
+
 ## Scope and design constraints
 
 Compiler algorithms cannot infer the semantics of arbitrary user-defined ASDL constructors. This distribution implements them over explicit reusable contracts:

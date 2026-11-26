@@ -1,0 +1,44 @@
+.language "StdlibSmoke";
+.unit :root;
+.modular #false;
+
+.import JSON, FromJSON, Binary, FromBinary from std.serialize;
+.import Rewrite from std.rewrite;
+
+root ::= (string name, value? optional, value* items);
+value ::= Num(int value)
+        | Flag(bool value);
+
+.logistics for :root ::= lua(node)
+    local match = asdl.lib.require("std.match.structural")
+    local function roundtrip(input)
+        local json = JSON(input, {annotations=true})
+        local text = FromJSON(json, {annotations=true})
+        local bin = FromBinary(Binary(input, {annotations=true}), {annotations=true})
+        assert(match.Equal(text, input))
+        assert(match.Equal(bin, input))
+        assert(asdl.annotation(text, "checked") == false)
+        assert(asdl.annotation(bin, "checked") == false)
+        assert(JSON(text, {annotations=true}) == json)
+    end
+
+    local name, optional, items = asdl.destruct(node)
+    assert(name == "café" and optional == nil and #items == 2)
+    assert(asdl.tag(items[1]) == "Num" and asdl.destruct(items[1]) == 41)
+    assert(asdl.tag(items[2]) == "Flag" and asdl.destruct(items[2]) == false)
+    asdl.annotate(node, "checked", false)
+    roundtrip(node)
+
+    local pattern = match.Node("value", "Num", {value=match.Capture("int")})
+    local result = Rewrite.bottom_up(node, function(child)
+        local captures = match.Match(pattern, child)
+        if captures then
+            return asdl.make("value", "Num", {value=captures.int + 1}, child)
+        end
+    end)
+    local _, _, out = asdl.destruct(result)
+    assert(asdl.destruct(out[1]) == 42 and asdl.destruct(out[2]) == false)
+    assert(asdl.destruct(items[1]) == 41)
+    assert(asdl.annotation(result, "checked") == nil)
+    return result
+.end
