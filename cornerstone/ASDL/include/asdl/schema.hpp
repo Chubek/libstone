@@ -135,7 +135,9 @@ struct Schema {
     std::vector<std::string> type_names;
 
     std::string language, summary, version, unit;
+    SourceSpan unit_span;
     bool modular = false;
+    bool resolved = false;
     std::vector<Import> imports;
     std::vector<Logistics> logistics;
 };
