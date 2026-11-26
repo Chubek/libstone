@@ -40,7 +40,8 @@ typedef enum dinv_abi {
   DINV_ABI_WIN64 = 2,
   DINV_ABI_AAPCS64 = 3,
   DINV_ABI_RISCV64 = 4,
-  DINV_ABI_RISCV32 = 5
+  DINV_ABI_RISCV32 = 5,
+  DINV_ABI_DARWIN_ARM64 = 6
 } dinv_abi_t;
 
 typedef enum dinv_kind {
@@ -98,7 +99,7 @@ typedef struct dinv_slot {
   dinv_loc_kind_t where;
   int reg;                // GPR/FPR index, -1 for stack
   size_t stack_offset;    // valid when where == STACK
-  size_t size;            // slot payload bytes
+  size_t size;            // slot payload bytes (excludes carrier padding)
   size_t field_offset;    // byte offset inside the arg value
 } dinv_slot_t;
 
@@ -111,6 +112,8 @@ DINV_API dinv_status_t dinv_abi_for_name(const char* name, dinv_abi_t* out);
 DINV_API dinv_abi_t dinv_abi_host(void);
 // Nonzero only when this build provides execution for the selected host ABI.
 DINV_API int dinv_abi_can_execute(dinv_abi_t abi);
+// Nonzero if executable closures are provided for this host ABI.
+DINV_API int dinv_abi_can_close_over(dinv_abi_t abi);
 DINV_API const char* dinv_abi_isa_arch(dinv_abi_t abi);
 DINV_API const char* dinv_abi_isa_file(dinv_abi_t abi);
 
@@ -121,6 +124,9 @@ DINV_API dinv_status_t dinv_type_for_name(const char* name,
 DINV_API const dinv_type_t* dinv_type_named(const char* name);
 DINV_API size_t dinv_type_size(const dinv_type_t* type);
 DINV_API size_t dinv_type_align(const dinv_type_t* type);
+// Natural C object layout for a target ABI; AUTO selects the host.
+DINV_API dinv_status_t dinv_type_layout(dinv_abi_t abi, const dinv_type_t* type,
+                                        size_t* out_size, size_t* out_align);
 
 // Precompute a call interface. `args` is an array of `nargs` type pointers
 // (borrowed during creation). The cif owns a deep copy of the type graph and
@@ -135,6 +141,7 @@ DINV_API dinv_abi_t dinv_cif_abi(const dinv_cif_t* cif);
 DINV_API size_t dinv_cif_nargs(const dinv_cif_t* cif);
 DINV_API int dinv_cif_gpr_used(const dinv_cif_t* cif);
 DINV_API int dinv_cif_fpr_used(const dinv_cif_t* cif);
+// Argument stack area, excluding final call-frame alignment and Win64 shadow.
 DINV_API size_t dinv_cif_stack_bytes(const dinv_cif_t* cif);
 DINV_API int dinv_cif_uses_hidden_ret(const dinv_cif_t* cif);
 
@@ -144,9 +151,14 @@ DINV_API int dinv_cif_uses_hidden_ret(const dinv_cif_t* cif);
 DINV_API dinv_status_t dinv_cif_arg_slots(const dinv_cif_t* cif, size_t index,
                                           dinv_slot_t* slots,
                                           size_t* inout_count);
+// Direct return slots; count is zero for void or hidden (indirect) returns.
+DINV_API dinv_status_t dinv_cif_return_slots(const dinv_cif_t* cif,
+                                             dinv_slot_t* slots,
+                                             size_t* inout_count);
 
 // `args` is an array of `nargs` pointers to argument values; `ret` points to
-// storage for the return value (unused when return is void).
+// storage for the return value (unused when return is void). The caller must
+// keep the function's module loaded and provide the exact fixed C signature.
 DINV_API dinv_status_t dinv_call(dinv_cif_t* cif, void* func, void* ret,
                                  void** args);
 
@@ -157,9 +169,10 @@ DINV_API dinv_status_t dinv_call_simple(dinv_abi_t abi,
                                         const dinv_type_t* const* arg_types,
                                         void** args);
 
-// Closure (callback) support. Currently implemented for SysV AMD64; other
+// Closure (callback) support. Currently enabled for Linux SysV AMD64; other
 // ABIs return DINV_UNSUPPORTED. `*out_fn` is an executable function pointer
-// valid until dinv_closure_destroy.
+// valid until dinv_closure_destroy. Stop all invocations before destroying it.
+// Keep `fn` (including its module) and `user` alive until then.
 DINV_API dinv_status_t dinv_closure_create(dinv_cif_t* cif,
                                            dinv_closure_fn_t fn, void* user,
                                            dinv_closure_t** out_closure,
@@ -168,6 +181,7 @@ DINV_API void dinv_closure_destroy(dinv_closure_t* closure);
 
 // Yellowstone integration: infer the call ABI for an object file and check
 // that `symbol` (optional, may be NULL) exists in its static/dynamic tables.
+// Symbol presence does not prove that the symbol is callable.
 DINV_API dinv_status_t dinv_abi_for_object(const char* path,
                                            dinv_abi_t* out_abi);
 DINV_API dinv_status_t dinv_inspect_object(const char* path,
@@ -175,9 +189,9 @@ DINV_API dinv_status_t dinv_inspect_object(const char* path,
                                            dinv_abi_t* out_abi,
                                            int* out_found);
 
-// Sandstone integration: cross-check the compiled-in register counts against
-// the .isa register file. `isa_dir` defaults to the installed
-// sandstone/isa directory when NULL. Counts are totals in the GPR/FPR
+// Sandstone integration: check architecture identity and carrier registers
+// against the .isa file. NULL `isa_dir` uses dinv_isa_default_dir().
+// Counts are totals in the GPR/FPR
 // regclasses (width-agnostic, aliases excluded).
 DINV_API const char* dinv_isa_default_dir(void);
 DINV_API dinv_status_t dinv_isa_regcounts(dinv_abi_t abi, const char* isa_dir,

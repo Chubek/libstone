@@ -33,19 +33,16 @@ if(NOT TARGET qbfd::qbfd)
 endif()
 
 set(DYNINVOKE_ABI_SOURCES "")
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
-  list(APPEND DYNINVOKE_ABI_SOURCES abi/win64.S)
-  if(NOT WIN32)
-    list(APPEND DYNINVOKE_ABI_SOURCES abi/amd64_sysv.S abi/closure_amd64_sysv.S)
-  endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
-  list(APPEND DYNINVOKE_ABI_SOURCES abi/aarch64.S)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-  list(APPEND DYNINVOKE_ABI_SOURCES abi/riscv64.S)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64)$")
+  list(APPEND DYNINVOKE_ABI_SOURCES abi/amd64_sysv.S abi/closure_amd64_sysv.S)
 endif()
 
 add_library(tdyninvoke dyninvoke.cpp ${DYNINVOKE_ABI_SOURCES})
 add_library(Tourchstone::dyninvoke ALIAS tdyninvoke)
+if(DYNINVOKE_ABI_SOURCES)
+  target_compile_definitions(tdyninvoke PRIVATE DINV_NATIVE_SYSV_AMD64)
+endif()
 target_compile_features(tdyninvoke PUBLIC cxx_std_20)
 target_include_directories(tdyninvoke PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -56,6 +53,8 @@ target_include_directories(tdyninvoke PRIVATE
 target_link_libraries(tdyninvoke PUBLIC qbfd::qbfd)
 target_compile_definitions(tdyninvoke PUBLIC
   $<$<BOOL:${BUILD_SHARED_LIBS}>:TDYNINVOKE_SHARED>)
+target_compile_definitions(tdyninvoke PRIVATE
+  DINV_INSTALLED_ISA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/sandstone/isa")
 set_target_properties(tdyninvoke PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME dyninvoke)
 if(DEFINED LIBSTONE_SOURCE_DIR)
   target_compile_definitions(tdyninvoke PRIVATE
@@ -100,6 +99,10 @@ if(DYNINVOKE_BUILD_TESTS)
   set_target_properties(dyninvoke_fixture PROPERTIES OUTPUT_NAME dyninvoke_fixture)
 
   add_executable(dyninvoke_execute_tests tests/test_dyninvoke.cpp)
+  if(DYNINVOKE_ABI_SOURCES)
+    target_sources(dyninvoke_execute_tests PRIVATE tests/preservation_amd64.S)
+    target_compile_definitions(dyninvoke_execute_tests PRIVATE DINV_TEST_SYSV_AMD64)
+  endif()
   target_compile_features(dyninvoke_execute_tests PRIVATE cxx_std_20)
   target_link_libraries(dyninvoke_execute_tests PRIVATE Tourchstone::dyninvoke)
   if(CMAKE_DL_LIBS)
@@ -121,12 +124,16 @@ if(DYNINVOKE_BUILD_TESTS)
 
   add_test(NAME dyninvoke.execute
     COMMAND dyninvoke_execute_tests $<TARGET_FILE:dyninvoke_fixture>)
+  set_tests_properties(dyninvoke.execute PROPERTIES SKIP_RETURN_CODE 77)
   add_test(NAME dyninvoke.layout COMMAND dyninvoke_layout_tests)
   if(TARGET dinvoke_cli)
     add_test(NAME dyninvoke.cli-help COMMAND dinvoke_cli --help)
-    add_test(NAME dyninvoke.cli-layout
-      COMMAND dinvoke_cli --layout --abi sysv_amd64 --ret i32
-              --arg i32:1 --arg i32:2
-              $<TARGET_FILE:dyninvoke_fixture> dinvk_add2)
+    if(DYNINVOKE_ABI_SOURCES)
+      add_test(NAME dyninvoke.cli-behavior
+        COMMAND ${CMAKE_COMMAND}
+          -DCLI=$<TARGET_FILE:dinvoke_cli>
+          -DFIXTURE=$<TARGET_FILE:dyninvoke_fixture>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli.cmake)
+    endif()
   endif()
 endif()

@@ -6,14 +6,13 @@
 .globl dinv_closure_dispatcher_sysv
 .type dinv_closure_dispatcher_sysv,@function
 dinv_closure_dispatcher_sysv:
+  .cfi_startproc
+  endbr64
   pushq %rbp
+  .cfi_def_cfa_offset 16
+  .cfi_offset %rbp, -16
   movq %rsp, %rbp
-  pushq %rbx
-  pushq %r12
-  pushq %r13
-  pushq %r14
-  pushq %r15
-  subq $8, %rsp
+  .cfi_def_cfa_register %rbp
   // 160 bytes: gpr[6] + fpr[8] + out_gpr[2] + out_fpr[4]
   subq $160, %rsp
   // Save incoming GPRs.
@@ -60,12 +59,10 @@ dinv_closure_dispatcher_sysv:
   movq 112(%rsp), %rax
   movq 120(%rsp), %rdx
   addq $160, %rsp
-  addq $8, %rsp
-  popq %r15
-  popq %r14
-  popq %r13
-  popq %r12
-  popq %rbx
   popq %rbp
+  .cfi_restore %rbp
+  .cfi_def_cfa %rsp, 8
   ret
+  .cfi_endproc
 .size dinv_closure_dispatcher_sysv, .-dinv_closure_dispatcher_sysv
+.section .note.GNU-stack,"",@progbits

@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+#ifdef DINV_TEST_SYSV_AMD64
+extern "C" int dinv_test_preserve(dinv_cif_t*, void*, void*, void**);
+#endif
+
 #if defined(_WIN32)
 #include <windows.h>
 #define LIB_NAME "dyninvoke_fixture.dll"
@@ -42,6 +46,11 @@ static void checkCall(dinv_abi_t abi, const dinv_type_t* ret, void* fn,
 
 int main(int argc, char** argv) {
   assert(argc == 2);
+  dinv_abi_t host = dinv_abi_host();
+  if (!dinv_abi_can_execute(host)) {
+    std::cout << "native execution not supported on this build\n";
+    return 77;
+  }
   std::string path = argv[1];
   // argv[1] is the full fixture path from CTest.
   void* handle = openLib(path.c_str());
@@ -49,7 +58,6 @@ int main(int argc, char** argv) {
     std::cerr << "cannot open fixture\n";
     return 1;
   }
-  dinv_abi_t host = dinv_abi_host();
   assert(host == DINV_ABI_SYSV_AMD64 || host == DINV_ABI_WIN64 ||
          host == DINV_ABI_AAPCS64 || host == DINV_ABI_RISCV64 ||
          host == DINV_ABI_RISCV32);
@@ -83,6 +91,17 @@ int main(int argc, char** argv) {
     checkCall(host, &dinv_type_i32, fn, &r, {&dinv_type_i32, &dinv_type_i32},
               {(void*)&a, (void*)&b});
     assert(r == 7);
+  }
+  {
+    const dinv_type_t* at[] = {&dinv_type_i8, &dinv_type_i16};
+    int8_t a = -41, result = 0;
+    int16_t b = 10;
+    void* values[] = {&a, &b};
+    assert(dinv_call_simple(host, &dinv_type_i8, sym(handle, "dinvk_narrow"),
+                            &result, 2, at, values) == DINV_OK);
+    assert(result == -31);
+    assert(dinv_call_simple(DINV_ABI_WIN64, &dinv_type_i8, sym(handle, "dinvk_narrow"),
+                            &result, 2, at, values) == DINV_UNSUPPORTED);
   }
   // f64 add.
   {
@@ -205,6 +224,42 @@ int main(int argc, char** argv) {
     const dinv_type_t bt{DINV_STRUCT, be};
     checkCall(host, &bt, sym(handle, "dinvk_big"), &big, {&dinv_type_i64}, {&integer});
     assert(big.x == 40 && big.y == 41 && big.z == 42);
+    const dinv_type_t* spillTypes[] = {
+        &dinv_type_i32, &dinv_type_i32, &dinv_type_i32, &dinv_type_i32,
+        &dinv_type_i32, &dinv_type_i32, &mt, &bt, &dinv_type_f64};
+    int32_t arg = 2;
+    double scale = 4;
+    mixed = {5, 1.25};
+    void* spillArgs[] = {&arg, &arg, &arg, &arg, &arg, &arg, &mixed, &big, &scale};
+    dinv_cif_t* spillCif = nullptr;
+    assert(dinv_cif_create(host, &dinv_type_i64, 9, spillTypes, &spillCif) == DINV_OK);
+    int64_t spillResult = 0;
+    void* spillFn = sym(handle, "dinvk_spill");
+#ifdef DINV_TEST_SYSV_AMD64
+    assert(dinv_test_preserve(spillCif, spillFn, &spillResult, spillArgs));
+#else
+    assert(dinv_call(spillCif, spillFn, &spillResult, spillArgs) == DINV_OK);
+#endif
+    assert(spillResult == 104);
+    dinv_cif_destroy(spillCif);
+
+    auto bigCallback = +[](dinv_cif_t*, void* ret, void** args, void*) {
+      auto n = *static_cast<int64_t*>(args[0]);
+      *static_cast<Big*>(ret) = {n, 2 * n, 3 * n};
+    };
+    dinv_cif_t* bigCif = nullptr;
+    const dinv_type_t* bigTypes[] = {&dinv_type_i64};
+    assert(dinv_cif_create(host, &bt, 1, bigTypes, &bigCif) == DINV_OK);
+    dinv_closure_t* bigClosure = nullptr;
+    void* bigCode = nullptr;
+    assert(dinv_abi_can_close_over(host));
+    assert(dinv_closure_create(bigCif, bigCallback, nullptr, &bigClosure, &bigCode) == DINV_OK);
+    dinv_cif_destroy(bigCif);
+    Big (*bigFn)(int64_t) = nullptr;
+    memcpy(&bigFn, &bigCode, sizeof(bigCode));
+    big = bigFn(13);
+    assert(big.x == 13 && big.y == 26 && big.z == 39);
+    dinv_closure_destroy(bigClosure);
 
     struct AddCtx {
       int base = 0;

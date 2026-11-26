@@ -2,8 +2,8 @@ local xbind = require("lxbind")
 
 -- DynINVOKE: Tourchstone foreign-call library (libffi/dyncall analogue).
 -- Header is relative to tourchstone/dyninvoke/ (dyninvoke.h). Layout
--- queries work for every ABI on any host; execution/closures require host
--- support (closures currently SysV AMD64 only). ABIs, kinds, and statuses
+-- queries cover the documented subset of each ABI; execution/closures require
+-- the validated Linux SysV AMD64 build. ABIs, kinds, and statuses
 -- are int-like enums; type/cif/closure handles are opaque and caller-owned
 -- (cif owns its layout copy). Only the layout/query slice is bound here so
 -- every target can describe it; Lua glue and signature probes are executable.
@@ -61,6 +61,10 @@ return xbind.library {
       params = {},
     }),
     xbind.func("dinv_abi_can_execute", {
+      returns = "int",
+      params = { xbind.param("abi", "dinv_abi_t") },
+    }),
+    xbind.func("dinv_abi_can_close_over", {
       returns = "int",
       params = { xbind.param("abi", "dinv_abi_t") },
     }),
