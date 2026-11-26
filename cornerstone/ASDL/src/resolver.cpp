@@ -251,12 +251,13 @@ private:
 
     void walk(Document &doc, const fs::path &path) {
         stack.push_back(path);
-        for (const auto &entry : doc.schema.imports) {
+        for (auto &entry : doc.schema.imports) {
             if (!entry.schema) {
                 doc.add_lua_import(entry);
                 continue;
             }
             auto &target = module(entry, path);
+            entry.resolved_file = target.schema.file;
             if (entry.names.empty()) {
                 auto add_namespace = [&](const std::string &alias) {
                     if (!doc.namespaces.emplace(alias, &target).second)

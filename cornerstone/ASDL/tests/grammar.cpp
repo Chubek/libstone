@@ -170,6 +170,10 @@ void modules(const fs::path &fixtures) {
     require(schema.logistics.size() == 1 && schema.logistics[0].type == schema.unit &&
             schema.logistics[0].span.file.find("nodes.asdl") != std::string::npos,
             "imported hook target identity and origin");
+    require(schema.imports.at(0).resolved_file == schema.logistics[0].span.file &&
+            schema.imports.at(4).span.file == schema.imports[0].resolved_file &&
+            schema.imports[4].resolved_file == schema.imports.at(1).resolved_file,
+            "direct and transitive imports retain both sides of each graph edge");
     asdl::resolve(schema);
     require(schema.definitions.size() == 5, "resolution is idempotent");
 

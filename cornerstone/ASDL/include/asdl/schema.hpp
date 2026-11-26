@@ -104,6 +104,7 @@ struct Import {
     std::vector<ImportName> names;
     bool schema = false;
     SourceSpan span;
+    std::string resolved_file; // Canonical target for a resolved schema edge; empty for Lua.
 };
 
 struct Logistics {
