@@ -3,8 +3,10 @@
 #include <qBFD.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -12,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -21,6 +24,9 @@
 #else
 #  include <dlfcn.h>
 #  include <unistd.h>
+#  if defined(TDYN_HAVE_LINKMAP)
+#    include <link.h>
+#  endif
 #  if defined(__APPLE__)
 #    include <mach-o/dyld.h>
 #  endif
@@ -43,8 +49,70 @@ tdyn_status_t ok() {
 const char* empty() { return ""; }
 
 bool hasPathSeparator(std::string_view s) {
-  return s.find('/') != std::string_view::npos ||
-         s.find('\\') != std::string_view::npos;
+  if (s.find('/') != std::string_view::npos) return true;
+#if defined(_WIN32)
+  return s.find('\\') != std::string_view::npos;
+#else
+  return false;
+#endif
+}
+
+constexpr qbfd::Format nativeFormat() {
+#if defined(_WIN32)
+  return qbfd::Format::PE;
+#elif defined(__APPLE__)
+  return qbfd::Format::MachO;
+#elif defined(__ELF__)
+  return qbfd::Format::ELF;
+#else
+  return qbfd::Format::Unknown;
+#endif
+}
+
+constexpr qbfd::Arch nativeArch() {
+#if defined(_M_ARM64EC)
+  return qbfd::Arch::Unknown;
+#elif defined(__x86_64__) || defined(_M_X64)
+  return qbfd::Arch::X86_64;
+#elif defined(__i386__) || defined(_M_IX86)
+  return qbfd::Arch::X86;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  return qbfd::Arch::AArch64;
+#elif defined(__arm__) || defined(_M_ARM)
+  return qbfd::Arch::ARM;
+#elif defined(__riscv)
+  return __riscv_xlen == 64 ? qbfd::Arch::RISCV64 : qbfd::Arch::RISCV32;
+#elif defined(__powerpc64__)
+  return qbfd::Arch::PowerPC64;
+#elif defined(__powerpc__)
+  return qbfd::Arch::PowerPC;
+#elif defined(__s390x__)
+  return qbfd::Arch::S390X;
+#elif defined(__loongarch64)
+  return qbfd::Arch::LoongArch64;
+#else
+  return qbfd::Arch::Unknown;
+#endif
+}
+
+const char* nativeMismatch(const qbfd::ImageInfo& image, bool self) {
+  constexpr auto endian = std::endian::native == std::endian::big
+                               ? qbfd::Endian::Big : qbfd::Endian::Little;
+  if (nativeFormat() != qbfd::Format::Unknown && image.format != nativeFormat())
+    return "object format does not match the host loader";
+  if (image.kind != qbfd::ImageKind::Unknown &&
+      image.kind != qbfd::ImageKind::SharedLibrary &&
+      !(self && (image.kind == qbfd::ImageKind::Executable ||
+                 image.kind == qbfd::ImageKind::PositionIndependentExecutable)))
+    return "object is not a loadable shared image";
+  if (nativeArch() != qbfd::Arch::Unknown && image.arch != qbfd::Arch::Unknown &&
+      image.arch != nativeArch())
+    return "architecture does not match the current process";
+  if (image.addressBits && image.addressBits != sizeof(void*) * 8)
+    return "address width does not match the current process";
+  if (image.endian != endian)
+    return "endianness does not match the current process";
+  return nullptr;
 }
 
 bool existsRegular(const std::filesystem::path& path) {
@@ -54,9 +122,9 @@ bool existsRegular(const std::filesystem::path& path) {
 
 std::filesystem::path absoluteIfPossible(const std::filesystem::path& path) {
   std::error_code ec;
-  auto out = std::filesystem::weakly_canonical(path, ec);
-  if (!ec) return out;
-  out = std::filesystem::absolute(path, ec);
+  // Do not canonicalize symlinks: the name passed to the loader can affect
+  // path-based dependency resolution, including ELF $ORIGIN.
+  auto out = std::filesystem::absolute(path, ec);
   return ec ? path : out;
 }
 
@@ -140,27 +208,27 @@ tdyn_status_t nativeOpen(const char* path, uint32_t flags, NativeHandle* out,
   if (!out || !owned) return fail(TDYN_INVALID_ARGUMENT, "missing native output");
   *out = nullptr;
   *owned = false;
-  if (flags & TDYN_OPEN_DEEPBIND)
-    return fail(TDYN_UNSUPPORTED, "TDYN_OPEN_DEEPBIND is not supported on Windows");
+  if (flags & (TDYN_OPEN_LAZY | TDYN_OPEN_GLOBAL | TDYN_OPEN_DEEPBIND))
+    return fail(TDYN_UNSUPPORTED, "lazy, global and deepbind flags are not supported on Windows");
   if (path == nullptr) {
     HMODULE self = GetModuleHandleA(nullptr);
     if (!self) return fail(TDYN_NATIVE_ERROR, windowsError());
     *out = self;
     return ok();
   }
+  HMODULE module = nullptr;
   if (flags & TDYN_OPEN_NOLOAD) {
-    HMODULE module = nullptr;
     if (!GetModuleHandleExA(0, path, &module))
       return fail(TDYN_NOT_FOUND, windowsError());
-    *out = module;
-    *owned = true;
-    return ok();
+  } else {
+    module = LoadLibraryExA(path, nullptr, 0);
+    if (!module) return fail(TDYN_NATIVE_ERROR, windowsError());
   }
-  HMODULE module = LoadLibraryExA(path, nullptr, 0);
-  if (!module) return fail(TDYN_NATIVE_ERROR, windowsError());
   if (flags & TDYN_OPEN_NODELETE) {
     HMODULE pinned = nullptr;
-    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN, path, &pinned)) {
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN |
+                            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                            reinterpret_cast<LPCSTR>(module), &pinned)) {
       auto message = windowsError();
       FreeLibrary(module);
       return fail(TDYN_NATIVE_ERROR, std::move(message));
@@ -191,12 +259,14 @@ bool nativeSymbol(NativeHandle handle, const char* name, void** out,
   return true;
 }
 
-std::filesystem::path currentExecutablePath() {
+std::filesystem::path nativeImagePath(NativeHandle handle) {
   std::vector<char> buffer(32768);
-  DWORD n = GetModuleFileNameA(nullptr, buffer.data(), DWORD(buffer.size()));
+  DWORD n = GetModuleFileNameA(handle, buffer.data(), DWORD(buffer.size()));
   if (n == 0 || n >= buffer.size()) return {};
   return std::filesystem::path(std::string(buffer.data(), n));
 }
+
+std::filesystem::path currentExecutablePath() { return nativeImagePath(nullptr); }
 
 #else
 using NativeHandle = void*;
@@ -288,6 +358,17 @@ std::filesystem::path currentExecutablePath() {
 #endif
 }
 
+std::filesystem::path nativeImagePath(NativeHandle handle) {
+#ifdef TDYN_HAVE_LINKMAP
+  struct link_map* map = nullptr;
+  if (dlinfo(handle, RTLD_DI_LINKMAP, &map) == 0 && map && map->l_name)
+    return std::filesystem::path(map->l_name);
+#else
+  (void)handle;
+#endif
+  return {};
+}
+
 #endif
 
 }  // namespace
@@ -307,6 +388,10 @@ struct tdyn_library {
   std::string inspectError;
   std::shared_ptr<qbfd::Buffer> buffer;
   std::unique_ptr<qbfd::ObjectFile> object;
+  qbfd::ImageInfo image{};
+  tdyn_native_compatibility_t compatibility = TDYN_NATIVE_COMPAT_UNKNOWN;
+  mutable std::optional<std::vector<qbfd::LinkSymbol>> imports;
+  mutable std::optional<std::vector<qbfd::LinkSymbol>> exports;
   mutable std::vector<std::string> needed;
   mutable bool neededReady = false;
   mutable std::vector<qbfd::Relocation> relocations;
@@ -320,33 +405,51 @@ struct EnvSymbol {
 };
 
 struct tdyn_env {
-  std::vector<std::string> searchPaths;
+  // Appending search paths must not invalidate borrowed path strings.
+  std::deque<std::string> searchPaths;
   std::vector<std::unique_ptr<tdyn_library>> libraries;
   std::unordered_map<std::string, EnvSymbol> symbols;
 };
 
 namespace {
 
-void closeLibrary(tdyn_library* library) {
-  if (!library) return;
-  nativeClose(library->native.handle, library->native.owned);
-  library->native.handle = nullptr;
-  library->native.owned = false;
-}
-
-void inspectLibrary(tdyn_library& library) {
+void inspectLibrary(tdyn_library& library, bool self) {
   library.inspectError.clear();
+  library.object.reset();
+  library.buffer.reset();
+  library.image = {};
+  library.compatibility = TDYN_NATIVE_COMPAT_UNKNOWN;
   if (library.path.empty()) {
     library.inspectError = "no file path available for qBFD inspection";
     return;
   }
   auto opened = qbfd::open(library.path);
+#if defined(__APPLE__)
+  // Deterministic default slice for offline files; prefer the process slice
+  // for native opens when a universal file has a different default slice.
+  if (opened && !(library.flags & TDYN_OPEN_INSPECT_ONLY) &&
+      opened->object->format() == qbfd::Format::MachO &&
+      nativeArch() != qbfd::Arch::Unknown && opened->object->arch() != nativeArch()) {
+    if (auto host = qbfd::openMachOSlice(library.path, nativeArch()))
+      opened = std::move(host);
+  }
+#endif
   if (!opened) {
     library.inspectError = opened.error().message;
     return;
   }
   library.buffer = std::move(opened->buffer);
   library.object = std::move(opened->object);
+  library.image = qbfd::imageInfo(*library.object);
+  if (nativeMismatch(library.image, self)) {
+    library.compatibility = TDYN_NATIVE_COMPAT_INCOMPATIBLE;
+  } else if (nativeFormat() == library.image.format &&
+             nativeArch() == library.image.arch &&
+             nativeFormat() != qbfd::Format::Unknown &&
+             nativeArch() != qbfd::Arch::Unknown &&
+             library.image.addressBits && library.image.kind != qbfd::ImageKind::Unknown) {
+    library.compatibility = TDYN_NATIVE_COMPAT_COMPATIBLE;
+  }
 }
 
 std::optional<std::filesystem::path> resolveLibrary(tdyn_env* env,
@@ -408,27 +511,57 @@ std::unique_ptr<tdyn_library> makeLibrary(const char* path, uint32_t flags,
   }
 
   auto library = std::make_unique<tdyn_library>();
-  if (!(flags & TDYN_OPEN_INSPECT_ONLY)) {
-    tdyn_status_t rc = nativeOpen(self ? nullptr : nativePath.c_str(), flags,
-                                  &library->native.handle,
-                                  &library->native.owned);
-    if (rc != TDYN_OK) {
-      if (status) *status = rc;
-      return nullptr;
-    }
-  }
   library->path = inspectPath;
   library->label = self ? std::string("<self>")
                         : (inspectPath.empty() ? nativePath : inspectPath.string());
   library->flags = flags;
-  inspectLibrary(*library);
+  inspectLibrary(*library, self);
   if ((flags & (TDYN_OPEN_REQUIRE_INSPECT | TDYN_OPEN_INSPECT_ONLY)) && !library->object) {
-    std::string message = library->inspectError.empty()
-                              ? "qBFD inspection failed"
-                              : library->inspectError;
-    closeLibrary(library.get());
-    if (status) *status = fail(TDYN_INSPECT_ERROR, std::move(message));
+    if (status) *status = fail(TDYN_INSPECT_ERROR,
+                               library->label + ": " + library->inspectError);
     return nullptr;
+  }
+  if (!(flags & TDYN_OPEN_INSPECT_ONLY)) {
+    if (library->compatibility == TDYN_NATIVE_COMPAT_INCOMPATIBLE) {
+      if (status) *status = fail(TDYN_UNSUPPORTED, library->label + ": " +
+          nativeMismatch(library->image, self) + "; use inspect-only");
+      return nullptr;
+    }
+    tdyn_status_t rc = nativeOpen(self ? nullptr : nativePath.c_str(), flags,
+                                  &library->native.handle,
+                                  &library->native.owned);
+    if (rc != TDYN_OK) {
+      std::string message = library->label + ": " + tdyn_last_error();
+      if (rc == TDYN_NATIVE_ERROR && library->object) {
+        const auto needed = library->object->neededLibraries();
+        if (!needed.empty()) {
+          message += "; declared dependencies (not a search trace): ";
+          for (size_t i = 0; i < needed.size(); ++i) {
+            if (i) message += ", ";
+            message += needed[i];
+          }
+        }
+      }
+      if (status) *status = fail(rc, std::move(message));
+      return nullptr;
+    }
+    if (!self) {
+      const auto loadedPath = nativeImagePath(library->native.handle);
+      if (!loadedPath.empty() && existsRegular(loadedPath)) {
+        std::error_code ec;
+        if (library->path.empty() ||
+            !std::filesystem::equivalent(library->path, loadedPath, ec)) {
+          library->path = absoluteIfPossible(loadedPath);
+          library->label = library->path.string();
+          inspectLibrary(*library, false);
+          if ((flags & TDYN_OPEN_REQUIRE_INSPECT) && !library->object) {
+            if (status) *status = fail(TDYN_INSPECT_ERROR,
+                                       library->label + ": " + library->inspectError);
+            return nullptr;
+          }
+        }
+      }
+    }
   }
   if (status) *status = ok();
   return library;
@@ -485,6 +618,19 @@ const std::vector<qbfd::Symbol>* symbolTable(const tdyn_library* library,
   if (table == TDYN_SYMBOL_TABLE_STATIC) return &library->object->symbols();
   if (table == TDYN_SYMBOL_TABLE_DYNAMIC) return &library->object->dynamicSymbols();
   return nullptr;
+}
+
+const std::vector<qbfd::LinkSymbol>& linkSymbols(const tdyn_library& library,
+                                                  tdyn_link_symbol_list_t list) {
+  const bool exports = list == TDYN_LINK_EXPORTS;
+  auto& cache = exports ? library.exports : library.imports;
+  if (!cache)
+    cache = exports ? qbfd::exports(*library.object) : qbfd::imports(*library.object);
+  return *cache;
+}
+
+bool validLinkList(tdyn_link_symbol_list_t list) {
+  return list == TDYN_LINK_IMPORTS || list == TDYN_LINK_EXPORTS;
 }
 
 tdyn_status_t ensureRelocations(const tdyn_library* library) {
@@ -688,7 +834,6 @@ void tdyn_library_close(tdyn_library_t* library) {
     if (it != env->libraries.end()) env->libraries.erase(it);
     return;
   }
-  closeLibrary(library);
   delete library;
 }
 
@@ -756,6 +901,11 @@ int tdyn_library_is_inspected(const tdyn_library_t* library) {
   return library && library->object ? 1 : 0;
 }
 
+tdyn_native_compatibility_t tdyn_library_native_compatibility(
+    const tdyn_library_t* library) {
+  return library ? library->compatibility : TDYN_NATIVE_COMPAT_UNKNOWN;
+}
+
 const char* tdyn_library_inspection_error(const tdyn_library_t* library) {
   if (!library) return "invalid library";
   return library->inspectError.c_str();
@@ -781,6 +931,26 @@ const char* tdyn_library_file_type_name(const tdyn_library_t* library) {
   return qbfd::toString(library->object->fileType()).data();
 }
 
+const char* tdyn_library_abi_name(const tdyn_library_t* library) {
+  return library ? qbfd::abi::toString(library->image.abi).data() : "unknown";
+}
+
+const char* tdyn_library_image_kind_name(const tdyn_library_t* library) {
+  if (!library || !library->object) return "unknown";
+  switch (library->image.kind) {
+    case qbfd::ImageKind::Relocatable: return "relocatable";
+    case qbfd::ImageKind::Executable: return "executable";
+    case qbfd::ImageKind::SharedLibrary: return "shared-library";
+    case qbfd::ImageKind::Core: return "core";
+    case qbfd::ImageKind::PositionIndependentExecutable: return "pie";
+    default: return "unknown";
+  }
+}
+
+uint32_t tdyn_library_address_bits(const tdyn_library_t* library) {
+  return library && library->object ? library->image.addressBits : 0;
+}
+
 uint64_t tdyn_library_entry_point(const tdyn_library_t* library) {
   return library && library->object ? library->object->entryPoint() : 0;
 }
@@ -792,7 +962,7 @@ uint64_t tdyn_library_image_base(const tdyn_library_t* library) {
 tdyn_status_t tdyn_library_symbol(tdyn_library_t* library, const char* name,
                                   void** out) {
   if (out) *out = nullptr;
-  if (!library || !name || !out)
+  if (!library || !name || !*name || !out)
     return fail(TDYN_INVALID_ARGUMENT, "library, symbol name and output are required");
   if (!library->native.handle)
     return fail(TDYN_UNSUPPORTED, "library is not loaded by the native loader");
@@ -800,6 +970,56 @@ tdyn_status_t tdyn_library_symbol(tdyn_library_t* library, const char* name,
   if (!nativeSymbol(library->native.handle, name, out, &error))
     return fail(TDYN_NOT_FOUND, error.empty() ? "symbol not found" : error);
   return ok();
+}
+
+tdyn_status_t tdyn_library_symbol_version(tdyn_library_t* library,
+                                          const char* name,
+                                          const char* version,
+                                          void** out) {
+  if (out) *out = nullptr;
+  if (!library || !name || !*name || !version || !*version || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library, symbol name, version and output are required");
+  if (!library->native.handle)
+    return fail(TDYN_UNSUPPORTED, "library is not loaded by the native loader");
+#if defined(TDYN_HAVE_DLVSYM)
+  dlerror();
+  void* address = dlvsym(library->native.handle, name, version);
+  if (const char* err = dlerror()) return fail(TDYN_NOT_FOUND, err);
+  *out = address;
+  return ok();
+#else
+  return fail(TDYN_UNSUPPORTED, "versioned lookup is not supported by this loader");
+#endif
+}
+
+tdyn_status_t tdyn_library_symbol_ordinal(tdyn_library_t* library,
+                                          uint32_t ordinal,
+                                          void** out) {
+  if (out) *out = nullptr;
+  if (!library || ordinal == 0 || ordinal > UINT16_MAX || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library, ordinal 1..65535 and output are required");
+  if (!library->native.handle)
+    return fail(TDYN_UNSUPPORTED, "library is not loaded by the native loader");
+#if defined(_WIN32)
+  // GetProcAddress alone can return a non-null value for a sparse ordinal
+  // table hole. Use verified export membership, but never the on-disk RVA.
+  if (!library->object || library->image.format != qbfd::Format::PE)
+    return fail(TDYN_UNSUPPORTED, "PE export metadata is required for ordinal lookup");
+  try {
+    const auto& exports = linkSymbols(*library, TDYN_LINK_EXPORTS);
+    if (std::none_of(exports.begin(), exports.end(),
+                     [ordinal](const auto& symbol) { return symbol.ordinal == ordinal; }))
+      return fail(TDYN_NOT_FOUND, "ordinal is not present in the PE export table");
+    FARPROC proc = GetProcAddress(library->native.handle, MAKEINTRESOURCEA(ordinal));
+    if (!proc) return fail(TDYN_NOT_FOUND, windowsError());
+    *out = reinterpret_cast<void*>(proc);
+    return ok();
+  } catch (const std::bad_alloc&) {
+    return fail(TDYN_OUT_OF_MEMORY, "cannot inspect PE exports");
+  }
+#else
+  return fail(TDYN_UNSUPPORTED, "ordinal lookup is not supported by this loader");
+#endif
 }
 
 tdyn_status_t tdyn_library_find_symbol_info(const tdyn_library_t* library,
@@ -920,6 +1140,45 @@ const char* tdyn_library_needed(const tdyn_library_t* library, size_t index) {
   return library->needed[index].c_str();
 }
 
+tdyn_status_t tdyn_library_link_symbol_count(
+    const tdyn_library_t* library, tdyn_link_symbol_list_t list, size_t* out) {
+  if (out) *out = 0;
+  if (!library || !validLinkList(list) || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library, link symbol list and output are required");
+  if (!library->object)
+    return fail(TDYN_INSPECT_ERROR, "library has no qBFD inspection data");
+  try {
+    *out = linkSymbols(*library, list).size();
+    return ok();
+  } catch (const std::bad_alloc&) {
+    return fail(TDYN_OUT_OF_MEMORY, "cannot inspect link symbols");
+  }
+}
+
+tdyn_status_t tdyn_library_link_symbol_info(
+    const tdyn_library_t* library, tdyn_link_symbol_list_t list, size_t index,
+    tdyn_link_symbol_info_t* out) {
+  if (out) *out = {};
+  size_t count = 0;
+  if (!out) return fail(TDYN_INVALID_ARGUMENT, "output is required");
+  if (auto rc = tdyn_library_link_symbol_count(library, list, &count); rc != TDYN_OK)
+    return rc;
+  if (index >= count) return fail(TDYN_NOT_FOUND, "link symbol index out of range");
+  const auto& symbol = linkSymbols(*library, list)[index];
+  out->name = symbol.name.c_str();
+  out->library = symbol.library.c_str();
+  out->target = symbol.target.c_str();
+  out->version = symbol.version.c_str();
+  out->address = symbol.address.value_or(0);
+  out->ordinal = symbol.ordinal.value_or(0);
+  out->has_address = symbol.address.has_value();
+  out->has_ordinal = symbol.ordinal.has_value();
+  out->weak = symbol.weak;
+  out->default_version = symbol.defaultVersion;
+  out->forwarded = symbol.forwarded;
+  return ok();
+}
+
 size_t tdyn_library_section_count(const tdyn_library_t* library) {
   return library && library->object ? library->object->sections().size() : 0;
 }
@@ -990,6 +1249,7 @@ tdyn_status_t tdyn_library_relocation_info(const tdyn_library_t* library,
 tdyn_status_t tdyn_library_file_offset_for_address(const tdyn_library_t* library,
                                                    uint64_t address,
                                                    uint64_t* out) {
+  if (out) *out = 0;
   if (!library || !out)
     return fail(TDYN_INVALID_ARGUMENT, "library and output are required");
   if (!library->object)
@@ -1005,6 +1265,8 @@ tdyn_status_t tdyn_library_bytes_at_address(const tdyn_library_t* library,
                                             uint64_t length,
                                             const uint8_t** out_bytes,
                                             size_t* out_size) {
+  if (out_bytes) *out_bytes = nullptr;
+  if (out_size) *out_size = 0;
   if (!library || !out_bytes || !out_size)
     return fail(TDYN_INVALID_ARGUMENT, "library, bytes and size are required");
   if (!library->object)
@@ -1014,6 +1276,79 @@ tdyn_status_t tdyn_library_bytes_at_address(const tdyn_library_t* library,
   *out_bytes = bytes->data();
   *out_size = bytes->size();
   return ok();
+}
+
+tdyn_status_t tdyn_library_file_offset_for_rva(
+    const tdyn_library_t* library, uint64_t rva, uint64_t* out) {
+  if (out) *out = 0;
+  if (!library || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library and output are required");
+  if (!library->object)
+    return fail(TDYN_INSPECT_ERROR, "library has no qBFD inspection data");
+  const auto offset = library->object->fileOffsetForRva(rva);
+  if (!offset) return fail(TDYN_NOT_FOUND, "RVA is not file-backed");
+  *out = *offset;
+  return ok();
+}
+
+tdyn_status_t tdyn_library_address_for_file_offset(
+    const tdyn_library_t* library, uint64_t fileOffset, uint64_t* out) {
+  if (out) *out = 0;
+  if (!library || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library and output are required");
+  if (!library->object)
+    return fail(TDYN_INSPECT_ERROR, "library has no qBFD inspection data");
+  const auto address = library->object->addressForFileOffset(fileOffset);
+  if (!address) return fail(TDYN_NOT_FOUND, "file offset has no linked address");
+  *out = *address;
+  return ok();
+}
+
+tdyn_status_t tdyn_library_runtime_address(const tdyn_library_t* library,
+                                           uint64_t address, uint64_t* out) {
+  if (out) *out = 0;
+  if (!library || !out)
+    return fail(TDYN_INVALID_ARGUMENT, "library and output are required");
+  if (!library->native.handle || !library->object)
+    return fail(TDYN_UNSUPPORTED, "runtime address mapping requires a loaded and inspected image");
+#if defined(_WIN32)
+  const auto* image = dynamic_cast<const qbfd::pe::PEFile*>(library->object.get());
+  if (!image)
+    return fail(TDYN_UNSUPPORTED, "runtime address mapping requires a native PE image");
+  const auto base = reinterpret_cast<uintptr_t>(library->native.handle);
+  if (address < image->imageBase() || address - image->imageBase() >= image->sizeOfImage() ||
+      address - image->imageBase() > UINTPTR_MAX - base)
+    return fail(TDYN_NOT_FOUND, "address is outside the loaded image");
+  const auto value = base + static_cast<uintptr_t>(address - image->imageBase());
+  MEMORY_BASIC_INFORMATION info{};
+  if (!VirtualQuery(reinterpret_cast<const void*>(value), &info, sizeof(info)) ||
+      info.AllocationBase != library->native.handle || info.Type != MEM_IMAGE ||
+      info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+    return fail(TDYN_NOT_FOUND, "address is not mapped in the loaded image");
+  *out = value;
+  return ok();
+#elif defined(TDYN_HAVE_DL_PHDR)
+  if (library->image.format != qbfd::Format::ELF)
+    return fail(TDYN_UNSUPPORTED, "runtime address mapping requires a native ELF image");
+  const ElfW(Phdr)* phdr = nullptr;
+  const int count = dlinfo(library->native.handle, RTLD_DI_PHDR, &phdr);
+  struct link_map* map = nullptr;
+  if (count <= 0 || !phdr || dlinfo(library->native.handle, RTLD_DI_LINKMAP, &map) || !map)
+    return fail(TDYN_UNSUPPORTED, "native loader did not provide ELF mapping information");
+  for (int i = 0; i < count; ++i) {
+    if (phdr[i].p_type != PT_LOAD || address < phdr[i].p_vaddr ||
+        address - phdr[i].p_vaddr >= phdr[i].p_memsz)
+      continue;
+    // The ELF load bias may be negative, represented in address-width
+    // unsigned arithmetic by the loader's ElfW(Addr).
+    *out = static_cast<ElfW(Addr)>(map->l_addr + static_cast<ElfW(Addr)>(address));
+    return ok();
+  }
+  return fail(TDYN_NOT_FOUND, "address is not inside a loaded ELF segment");
+#else
+  (void)address;
+  return fail(TDYN_UNSUPPORTED, "runtime address mapping is not supported by this loader");
+#endif
 }
 
 tdyn_status_t tdyn_env_insert_symbol(tdyn_env_t* env, const char* name,
@@ -1038,26 +1373,32 @@ tdyn_status_t tdyn_env_promote(tdyn_env_t* env, tdyn_library_t* library,
     return fail(TDYN_INSPECT_ERROR, "library has no qBFD inspection data");
   if (!library->native.handle)
     return fail(TDYN_UNSUPPORTED, "library is not loaded by the native loader");
-  auto promote = [&](tdyn_symbol_table_t which) {
-    const auto* symbols = symbolTable(library, which);
-    if (!symbols) return;
-    for (const auto& symbol : *symbols) {
-      if (symbol.name.empty()) continue;
-      if (symbol.flags & qbfd::sym::Undefined) continue;
-      void* address = nullptr;
-      if (!nativeSymbol(library->native.handle, symbol.name.c_str(), &address, nullptr))
-        continue;
-      env->symbols[symbol.name] = EnvSymbol{address, library};
-    }
-  };
+  if (table != TDYN_SYMBOL_TABLE_ANY && table != TDYN_SYMBOL_TABLE_STATIC &&
+      table != TDYN_SYMBOL_TABLE_DYNAMIC)
+    return fail(TDYN_INVALID_ARGUMENT, "invalid symbol table");
   try {
-    if (table == TDYN_SYMBOL_TABLE_ANY || table == TDYN_SYMBOL_TABLE_STATIC)
-      promote(TDYN_SYMBOL_TABLE_STATIC);
-    if (table == TDYN_SYMBOL_TABLE_ANY || table == TDYN_SYMBOL_TABLE_DYNAMIC)
-      promote(TDYN_SYMBOL_TABLE_DYNAMIC);
-    if (table != TDYN_SYMBOL_TABLE_ANY && table != TDYN_SYMBOL_TABLE_STATIC &&
-        table != TDYN_SYMBOL_TABLE_DYNAMIC)
-      return fail(TDYN_INVALID_ARGUMENT, "invalid symbol table");
+    std::unordered_set<std::string_view> staticNames;
+    if (table == TDYN_SYMBOL_TABLE_STATIC)
+      for (const auto& symbol : library->object->symbols())
+        if (!(symbol.flags & qbfd::sym::Undefined))
+          staticNames.insert(symbol.name);
+
+    auto next = env->symbols;
+    for (const auto& symbol : linkSymbols(*library, TDYN_LINK_EXPORTS)) {
+      if (symbol.name.empty() || (!symbol.version.empty() && !symbol.defaultVersion))
+        continue;
+      if (table == TDYN_SYMBOL_TABLE_STATIC && !staticNames.contains(symbol.name))
+        continue;
+      auto name = std::string_view(symbol.name);
+      if (library->image.format == qbfd::Format::MachO) {
+        if (!name.starts_with('_')) continue;
+        name.remove_prefix(1);
+      }
+      if (!name.empty()) next[std::string(name)] = EnvSymbol{nullptr, library};
+    }
+    // Resolve on each lookup, not at promotion: some addresses (e.g. ELF
+    // TLS) belong to the calling thread rather than to the process.
+    env->symbols.swap(next);
     return ok();
   } catch (const std::bad_alloc&) {
     return fail(TDYN_OUT_OF_MEMORY, "cannot promote symbols");
@@ -1068,24 +1409,30 @@ tdyn_status_t tdyn_env_symbol(tdyn_env_t* env, const char* name, void** out,
                               tdyn_library_t** owner) {
   if (out) *out = nullptr;
   if (owner) *owner = nullptr;
-  if (!env || !name || !out)
+  if (!env || !name || !*name || !out)
     return fail(TDYN_INVALID_ARGUMENT, "environment, symbol name and output are required");
-  auto it = env->symbols.find(name);
-  if (it != env->symbols.end()) {
-    *out = it->second.address;
-    if (owner) *owner = it->second.owner;
-    return ok();
-  }
-  for (auto& library : env->libraries) {
-    if (!library->native.handle) continue;
-    void* address = nullptr;
-    if (nativeSymbol(library->native.handle, name, &address, nullptr)) {
-      *out = address;
-      if (owner) *owner = library.get();
+  try {
+    auto it = env->symbols.find(name);
+    if (it != env->symbols.end() &&
+        (!it->second.owner ||
+         nativeSymbol(it->second.owner->native.handle, name, out, nullptr))) {
+      if (!it->second.owner) *out = it->second.address;
+      if (owner) *owner = it->second.owner;
       return ok();
     }
+    for (auto& library : env->libraries) {
+      if (!library->native.handle || (it != env->symbols.end() &&
+                                      library.get() == it->second.owner))
+        continue;
+      if (nativeSymbol(library->native.handle, name, out, nullptr)) {
+        if (owner) *owner = library.get();
+        return ok();
+      }
+    }
+    return fail(TDYN_NOT_FOUND, "symbol not found in environment: " + std::string(name));
+  } catch (const std::bad_alloc&) {
+    return fail(TDYN_OUT_OF_MEMORY, "cannot look up environment symbol");
   }
-  return fail(TDYN_NOT_FOUND, "symbol not found in environment: " + std::string(name));
 }
 
 }  // extern "C"

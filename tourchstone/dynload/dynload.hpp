@@ -72,6 +72,9 @@ class Library {
   }
   bool nativeLoaded() const { return tdyn_library_is_native_loaded(handle_) != 0; }
   bool inspected() const { return tdyn_library_is_inspected(handle_) != 0; }
+  tdyn_native_compatibility_t nativeCompatibility() const {
+    return tdyn_library_native_compatibility(handle_);
+  }
   std::string inspectionError() const {
     const char* e = tdyn_library_inspection_error(handle_);
     return e ? e : std::string{};
@@ -80,6 +83,19 @@ class Library {
   void* symbolRaw(std::string_view name) const {
     void* p = nullptr;
     check(tdyn_library_symbol(handle_, std::string(name).c_str(), &p));
+    return p;
+  }
+
+  void* symbolVersionRaw(std::string_view name, std::string_view version) const {
+    void* p = nullptr;
+    check(tdyn_library_symbol_version(handle_, std::string(name).c_str(),
+                                      std::string(version).c_str(), &p));
+    return p;
+  }
+
+  void* symbolOrdinalRaw(uint32_t ordinal) const {
+    void* p = nullptr;
+    check(tdyn_library_symbol_ordinal(handle_, ordinal, &p));
     return p;
   }
 

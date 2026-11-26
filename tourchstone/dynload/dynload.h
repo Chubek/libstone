@@ -51,6 +51,14 @@ typedef enum tdyn_open_flag {
   TDYN_OPEN_INSPECT_ONLY = 1u << 8
 } tdyn_open_flag_t;
 
+// Preliminary qBFD-based judgment for a library open, not a guarantee that
+// the OS loader can load the image. UNKNOWN includes absent inspection data.
+typedef enum tdyn_native_compatibility {
+  TDYN_NATIVE_COMPAT_UNKNOWN = 0,
+  TDYN_NATIVE_COMPAT_COMPATIBLE = 1,
+  TDYN_NATIVE_COMPAT_INCOMPATIBLE = 2
+} tdyn_native_compatibility_t;
+
 typedef enum tdyn_symbol_table {
   TDYN_SYMBOL_TABLE_STATIC = 0,
   TDYN_SYMBOL_TABLE_DYNAMIC = 1,
@@ -121,6 +129,27 @@ typedef struct tdyn_relocation_info {
   uint32_t target_section;
 } tdyn_relocation_info_t;
 
+typedef enum tdyn_link_symbol_list {
+  TDYN_LINK_IMPORTS = 0,
+  TDYN_LINK_EXPORTS = 1
+} tdyn_link_symbol_list_t;
+
+// Normalized qBFD metadata. Empty strings indicate unavailable text.
+// address is a linked VA (possibly an IAT slot), never a runtime pointer.
+typedef struct tdyn_link_symbol_info {
+  const char* name;
+  const char* library;
+  const char* target;
+  const char* version;
+  uint64_t address;
+  uint32_t ordinal;
+  int has_address;
+  int has_ordinal;
+  int weak;
+  int default_version;
+  int forwarded;
+} tdyn_link_symbol_info_t;
+
 TDYN_API const char* tdyn_version(void);
 TDYN_API const char* tdyn_status_string(tdyn_status_t status);
 TDYN_API const char* tdyn_last_error(void);
@@ -165,18 +194,32 @@ TDYN_API tdyn_library_t* tdyn_env_library(tdyn_env_t* env, size_t index);
 TDYN_API const char* tdyn_library_path(const tdyn_library_t* library);
 TDYN_API int tdyn_library_is_native_loaded(const tdyn_library_t* library);
 TDYN_API int tdyn_library_is_inspected(const tdyn_library_t* library);
+TDYN_API tdyn_native_compatibility_t tdyn_library_native_compatibility(
+    const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_inspection_error(
     const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_format_name(const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_arch_name(const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_endian_name(const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_file_type_name(const tdyn_library_t* library);
+TDYN_API const char* tdyn_library_image_kind_name(const tdyn_library_t* library);
+TDYN_API const char* tdyn_library_abi_name(const tdyn_library_t* library);
+TDYN_API uint32_t tdyn_library_address_bits(const tdyn_library_t* library);
 TDYN_API uint64_t tdyn_library_entry_point(const tdyn_library_t* library);
 TDYN_API uint64_t tdyn_library_image_base(const tdyn_library_t* library);
 
 TDYN_API tdyn_status_t tdyn_library_symbol(tdyn_library_t* library,
                                            const char* name,
                                            void** out);
+// These are native loader operations. They do not interpret on-disk values
+// as runtime addresses. Unavailable on unsupported loaders or offline handles.
+TDYN_API tdyn_status_t tdyn_library_symbol_version(tdyn_library_t* library,
+                                                   const char* name,
+                                                   const char* version,
+                                                   void** out);
+TDYN_API tdyn_status_t tdyn_library_symbol_ordinal(tdyn_library_t* library,
+                                                   uint32_t ordinal,
+                                                   void** out);
 TDYN_API tdyn_status_t tdyn_library_find_symbol_info(
     const tdyn_library_t* library,
     const char* name,
@@ -202,6 +245,11 @@ TDYN_API tdyn_status_t tdyn_library_symbol_at(
 TDYN_API size_t tdyn_library_needed_count(const tdyn_library_t* library);
 TDYN_API const char* tdyn_library_needed(const tdyn_library_t* library,
                                          size_t index);
+TDYN_API tdyn_status_t tdyn_library_link_symbol_count(
+    const tdyn_library_t* library, tdyn_link_symbol_list_t list, size_t* out);
+TDYN_API tdyn_status_t tdyn_library_link_symbol_info(
+    const tdyn_library_t* library, tdyn_link_symbol_list_t list, size_t index,
+    tdyn_link_symbol_info_t* out);
 
 TDYN_API size_t tdyn_library_section_count(const tdyn_library_t* library);
 TDYN_API tdyn_status_t tdyn_library_section_info(
@@ -225,6 +273,18 @@ TDYN_API tdyn_status_t tdyn_library_bytes_at_address(
     uint64_t length,
     const uint8_t** out_bytes,
     size_t* out_size);
+// Offline address mapping, including on foreign images. RVA is relative to
+// image_base; file offsets are relative to the selected image (Mach-O slice).
+TDYN_API tdyn_status_t tdyn_library_file_offset_for_rva(
+    const tdyn_library_t* library, uint64_t rva, uint64_t* out);
+TDYN_API tdyn_status_t tdyn_library_address_for_file_offset(
+    const tdyn_library_t* library, uint64_t file_offset, uint64_t* out);
+// Translate a linked VA in the loaded image to a numeric runtime address.
+// This is not symbol resolution or a promise that the address is callable.
+// Offline handles and loaders without suitable mapping information return
+// TDYN_UNSUPPORTED. Unmapped addresses return TDYN_NOT_FOUND.
+TDYN_API tdyn_status_t tdyn_library_runtime_address(
+    const tdyn_library_t* library, uint64_t address, uint64_t* out);
 
 TDYN_API tdyn_status_t tdyn_env_insert_symbol(tdyn_env_t* env,
                                               const char* name,

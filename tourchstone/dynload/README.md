@@ -47,24 +47,83 @@ environment-owned library removes it and its promoted symbols; all aliases and
 metadata pointers become invalid. Promotion requires membership in that same
 environment, preventing stale symbols from a separately owned library.
 
-Inspect-only opens require successful qBFD inspection. Unknown flags and mutually
-exclusive lazy/now or local/global flags are rejected. Failed symbol lookups
-clear outputs. POSIX nodelete handles still release their acquired loader
-reference; Windows nodelete pins the module explicitly.
+## Inspection vs. loading
+
+`TDYN_OPEN_INSPECT_ONLY` requires successful qBFD inspection and never asks the
+host loader to load the file. Use it for foreign images, relocatable objects, or
+any image whose code you do not intend to execute. For a native open, a known
+format, architecture, address-width, byte-order, or image-kind mismatch returns
+`TDYN_UNSUPPORTED`; the open does not silently become offline. The compatibility
+query applies only to these preliminary checks, not to dependencies, detailed
+platform ABI requirements, or whether the OS will accept the image. The ABI
+name may be `unknown` even when the image is loadable. Native loads may run
+constructors.
+
+`TDYN_OPEN_REQUIRE_INSPECT` inspects a resolved path before native loading and
+fails if no file can be inspected. Without it, an unresolved name may fall
+back to native search. The loader may find an image with no inspectable path,
+particularly on systems with a shared image cache. `tdyn_env_resolve_library`
+only probes the given name in the current directory and then the registered
+search directories in order (with platform filename suffix candidates for
+unqualified names). It does not resolve the transitive dependency graph or
+change the native loader search path. `tdyn_library_needed` exposes declared
+dependencies, not a search result. Native failures preserve the loader's error
+and can include declared dependency names for context.
+
+`tdyn_library_link_symbol_count` and `tdyn_library_link_symbol_info` provide
+normalized imports and exports, including available ELF versions, PE ordinal
+and forwarding metadata, and Mach-O linker spelling. Linked VAs and optional
+ordinals have explicit presence flags. On-disk addresses are not callable.
+`tdyn_library_file_offset_for_address`, `tdyn_library_file_offset_for_rva`,
+and `tdyn_library_address_for_file_offset` translate file-backed addresses;
+RVA is relative to the linked image base and offsets are relative to the
+selected Mach-O slice, not the containing universal file.
+`tdyn_library_runtime_address` is a separate numeric mapping for loaded images
+on Windows and ELF loaders exposing program headers through `dlinfo`. It is
+not symbol lookup and returns `TDYN_UNSUPPORTED` if native mapping information
+is unavailable (including Mach-O).
+
+Resolve executable symbols with `tdyn_library_symbol` (native spelling,
+including unprefixed C symbol names on Mach-O),
+`tdyn_library_symbol_version` (`dlvsym` where detected), or
+`tdyn_library_symbol_ordinal` (Windows `GetProcAddress`). Ordinal lookup
+requires inspected PE export metadata to reject sparse export table holes.
+The native loader resolves forwarded exports, not the on-disk forwarder
+string. Failed symbol lookups clear outputs.
+
+Promotion registers named, default-version exports for native lookup. Selecting
+the static table restricts promotion to names also defined in that table; it
+does not make private symbols callable. The address is resolved on each lookup
+so thread-local addresses are not cached across threads. The reported owner is
+the searched handle, not necessarily the image that defines a forwarded or
+dependency symbol. Keep handles alive while using their addresses; synchronize
+mutations and close against concurrent use.
+
+Unknown flags and mutually exclusive lazy/now or local/global flags are rejected.
+Windows does not implement lazy, global, or deepbind modes. POSIX nodelete handles
+still release their acquired loader reference; Windows nodelete pins the module
+explicitly.
 
 ## Tool
 
 `tdynload` opens a library, inspects it, and resolves symbols:
 
 ```sh
-tdynload --inspect --needed ./libplugin.so
-tdynload --symbols ./libplugin.so
+tdynload --inspect-only --inspect --needed ./libplugin.so
+tdynload --manifest ./plugin.dll
+tdynload --inspect-only --exports --imports ./libplugin.so
 tdynload --promote --env-symbol plugin_init ./libplugin.so
+tdynload --resolve-version plugin_init@PLUGIN_1 ./libplugin.so
+tdynload --resolve-ordinal 17 ./plugin.dll
 tdynload --self --resolve malloc
 ```
 
 Use `-L DIR` to add search paths and `--default-paths` to import the platform
-path environment (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, or `PATH`).
+path environment (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, or `PATH`) after
+explicit `-L` entries. `--manifest` implies inspect-only and emits a
+`tdynload-inspection-v1` JSON document. Addresses are hex strings; absent link
+symbol addresses and ordinals are `null`. Metadata byte strings are escaped
+byte-for-byte.
 
 ## XBind spec
 

@@ -1,0 +1,4 @@
+TDYN_1 {};
+TDYN_2 {
+    local: tdynload_fixture_old; tdynload_fixture_new;
+} TDYN_1;

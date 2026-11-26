@@ -4,7 +4,8 @@ local xbind = require("lxbind")
 -- Header is relative to tourchstone/dynload/ (dynload.h). Native loading
 -- uses the host loader; metadata comes from Yellowstone qBFD readers.
 -- Borrowed strings stay valid until close/destroy. Symbol/section/
--- relocation index accessors (which need record structs) are deferred
+-- relocation and link-symbol index accessors (which need record structs)
+-- are deferred, as are native address/symbol lookups with out-pointers
 -- until XBind IR gains records; everything below uses only opaque
 -- env/library handles, strings, ints, size_t, and uint64_t addresses so
 -- all nine target inventories represent this surface; Lua emits working glue.
@@ -29,6 +30,7 @@ return xbind.library {
     xbind.typedef("tdyn_status_t", "int", { range = "status" }),
     xbind.typedef("tdyn_symbol_binding_t", "int", { range = "binding" }),
     xbind.typedef("tdyn_symbol_kind_t", "int", { range = "kind" }),
+    xbind.typedef("tdyn_native_compatibility_t", "int", { range = "native_compatibility" }),
     xbind.typedef("tdyn_env_t *", "opaque", { ownership = "opaque" }),
     xbind.typedef("const tdyn_env_t *", "opaque", { ownership = "opaque" }),
     xbind.typedef("const tdyn_library_t *", "opaque", { ownership = "opaque" }),
@@ -132,6 +134,30 @@ return xbind.library {
     }),
     xbind.func("tdyn_library_is_inspected", {
       returns = "int",
+      params = {
+        xbind.param("library", "const tdyn_library_t *"),
+      },
+    }),
+    xbind.func("tdyn_library_native_compatibility", {
+      returns = "tdyn_native_compatibility_t",
+      params = {
+        xbind.param("library", "const tdyn_library_t *"),
+      },
+    }),
+    xbind.func("tdyn_library_abi_name", {
+      returns = "const char *",
+      params = {
+        xbind.param("library", "const tdyn_library_t *"),
+      },
+    }),
+    xbind.func("tdyn_library_image_kind_name", {
+      returns = "const char *",
+      params = {
+        xbind.param("library", "const tdyn_library_t *"),
+      },
+    }),
+    xbind.func("tdyn_library_address_bits", {
+      returns = "uint32_t",
       params = {
         xbind.param("library", "const tdyn_library_t *"),
       },

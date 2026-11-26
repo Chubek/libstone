@@ -1,0 +1,3 @@
+EXPORTS
+    tdynload_fixture_ordinal @17 NONAME
+    tdynload_fixture_forward=KERNEL32.GetCurrentProcessId @31
