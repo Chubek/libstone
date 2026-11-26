@@ -80,7 +80,9 @@ def main():
         macros.write_text("module Macros { expr = EOF(int class) | EOF_(int access); }\n")
         header, cpp = root / "macros.h", root / "macros.hpp"
         run(asdl, "--header", header, "--cpp-header", cpp, macros)
-        run(*cc, "-std=c11", *flags, "-fsyntax-only", "-x", "c", header)
+        c_source = root / "macros.c"
+        c_source.write_text('#include "macros.h"\n')
+        run(*cc, "-std=c11", *flags, "-fsyntax-only", c_source)
         source = root / "macros.cpp"
         source.write_text(
             '#include "macros.hpp"\n'
