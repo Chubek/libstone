@@ -134,3 +134,8 @@ Header AST ingestion, source spans, automatic ownership, records, callbacks,
 out-buffer marshalling and the other language emitters remain future work.
 
 See [`REGIMEN.md`](REGIMEN.md) for the staged validation plan.
+
+## Binary interoperability
+
+See [Libstone native interoperability](INTEROPERABILITY.md) for offline
+discovery, manifest-to-export mapping, compiler checks and backend capabilities.

@@ -3,6 +3,16 @@ project(Tourchstone VERSION 0.1.0 LANGUAGES C CXX)
 
 include(../cmake/LibstoneBuild.cmake)
 
+if(BUILD_SHARED_LIBS AND UNIX AND NOT DEFINED CMAKE_INSTALL_RPATH)
+  file(RELATIVE_PATH _tourchstone_lib_from_bin
+    "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
+  if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path;@loader_path/${_tourchstone_lib_from_bin}")
+  else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/${_tourchstone_lib_from_bin}")
+  endif()
+endif()
+
 option(TOURCHSTONE_BUILD_XBIND "Build the XBind generator and tool" ON)
 set(_tourchstone_native_default OFF)
 if(TARGET qbfd::qbfd OR EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../yellowstone/qbfd/CMakeLists.txt")
@@ -14,16 +24,15 @@ if((TOURCHSTONE_BUILD_DYNLOAD OR TOURCHSTONE_BUILD_DYNINVOKE) AND NOT _tourchsto
   message(FATAL_ERROR "Tourchstone native loader/invocation needs the active Yellowstone qBFD component. Disable TOURCHSTONE_BUILD_DYNLOAD and TOURCHSTONE_BUILD_DYNINVOKE for XBind-only builds.")
 endif()
 
-if(TOURCHSTONE_BUILD_XBIND)
-  add_subdirectory(xbind)
-endif()
-
 if(TOURCHSTONE_BUILD_DYNLOAD)
   add_subdirectory(dynload)
 endif()
 
 if(TOURCHSTONE_BUILD_DYNINVOKE)
   add_subdirectory(dyninvoke)
+endif()
+if(TOURCHSTONE_BUILD_XBIND)
+  add_subdirectory(xbind)
 endif()
 if(TARGET Tourchstone::dynload OR TARGET Tourchstone::dyninvoke)
   install(EXPORT TourchstoneTargets NAMESPACE Tourchstone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Tourchstone)
@@ -43,4 +52,20 @@ if(XBIND_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload_fixture AND TARGET
       --fixture $<TARGET_FILE:tdynload_fixture>
       Codegen.test_tourchstone_lua_bindings_execute)
   set_tests_properties(tourchstone.bindings PROPERTIES TIMEOUT 180)
+endif()
+
+if(LIBSTONE_BUILD_TESTS AND TARGET xbind_cli AND TARGET tdynload AND TARGET tdyninvoke
+    AND TARGET ArchBFD::archbfd AND NOT CMAKE_CROSSCOMPILING)
+  add_test(NAME tourchstone.installed
+    COMMAND ${CMAKE_COMMAND}
+      "-DBUILD=${CMAKE_BINARY_DIR}"
+      "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/xbind"
+      "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/installed-test/$<CONFIG>"
+      "-DCONFIG=$<CONFIG>"
+      "-DBINDIR=${CMAKE_INSTALL_BINDIR}" "-DDATADIR=${CMAKE_INSTALL_DATADIR}"
+      "-DEXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+      "-DCC=${CMAKE_C_COMPILER}" "-DCXX=${CMAKE_CXX_COMPILER}"
+      "-DCFLAGS=${CMAKE_C_FLAGS}" "-DCXXFLAGS=${CMAKE_CXX_FLAGS}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/xbind/tests/test_installed.cmake")
+  set_tests_properties(tourchstone.installed PROPERTIES TIMEOUT 180)
 endif()

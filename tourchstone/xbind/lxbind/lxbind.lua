@@ -202,6 +202,11 @@ function M.validate_library(manifest)
     if functions[fn.name] then fail("duplicate function: " .. fn.name) end
     functions[fn.name] = true
     options(fn)
+    for _, key in ipairs({"symbol", "symbol_version"}) do
+      if fn[key] ~= nil and require_string(fn[key], key):find("\0", 1, true) then
+        fail(key .. " must not contain NUL")
+      end
+    end
     strings(fn.features, "function.features")
     local params = {}
     for _, param in ipairs(list(fn.params, "params")) do

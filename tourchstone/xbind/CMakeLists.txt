@@ -20,6 +20,14 @@ endif()
 option(XBIND_BUILD_TESTS "Build XBind contract and generated-binding tests" "${LIBSTONE_BUILD_TESTS}")
 option(XBIND_BUILD_DOMBIND "Build the DomBind runtime subproject" OFF)
 option(XBIND_BUILD_QAMRPP_BINDING "Build the QaMRpp Lua binding for XBind" ON)
+set(_xbind_discovery_default OFF)
+if(TARGET qbfd::qbfd)
+  set(_xbind_discovery_default ON)
+endif()
+option(XBIND_BUILD_DISCOVERY "Build offline binary discovery using qBFD" "${_xbind_discovery_default}")
+if(XBIND_BUILD_DISCOVERY AND NOT TARGET qbfd::qbfd)
+  find_package(qBFD CONFIG REQUIRED)
+endif()
 
 include(cmake/XBindQaMRpp.cmake)
 
@@ -33,7 +41,7 @@ target_include_directories(xbind PUBLIC
 target_compile_definitions(xbind PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 libstone_warnings(xbind)
 
-add_library(xbind_qamrpp STATIC xbind_qamrpp.cpp xbind_codegen.cpp)
+add_library(xbind_qamrpp STATIC xbind_qamrpp.cpp xbind_codegen.cpp xbind_discovery.cpp)
 set_target_properties(xbind_qamrpp PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME QaMRppSpec)
 add_library(XBind::QaMRppSpec ALIAS xbind_qamrpp)
 target_compile_features(xbind_qamrpp PUBLIC cxx_std_20)
@@ -42,14 +50,23 @@ target_include_directories(xbind_qamrpp PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/xbind>)
 target_link_libraries(xbind_qamrpp PUBLIC XBind::xbind
   PRIVATE $<BUILD_INTERFACE:XBind::QaMRpp> ${CMAKE_DL_LIBS})
-target_compile_definitions(xbind_qamrpp PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(xbind_qamrpp PRIVATE XBIND_HAVE_DISCOVERY=$<BOOL:${XBIND_BUILD_DISCOVERY}>)
+if(XBIND_BUILD_DISCOVERY)
+  # qBFD is header-only and is not part of the installed XBind API.
+  target_link_libraries(xbind_qamrpp PRIVATE $<BUILD_INTERFACE:qbfd::qbfd>)
+endif()
 libstone_warnings(xbind_qamrpp)
 
 add_executable(xbind_cli tools/xbind_tool.cpp)
 set_target_properties(xbind_cli PROPERTIES OUTPUT_NAME xbind)
 target_compile_features(xbind_cli PRIVATE cxx_std_20)
 target_include_directories(xbind_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(xbind_cli PRIVATE XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+file(RELATIVE_PATH _xbind_relative_data "${CMAKE_INSTALL_FULL_BINDIR}"
+  "${CMAKE_INSTALL_FULL_DATADIR}/xbind")
+target_compile_definitions(xbind_cli PRIVATE
+  XBIND_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  XBIND_INSTALL_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/xbind"
+  XBIND_RELATIVE_DATA_DIR="${_xbind_relative_data}")
 target_link_libraries(xbind_cli PRIVATE XBind::xbind XBind::QaMRppSpec)
 libstone_warnings(xbind_cli)
 
@@ -83,7 +100,9 @@ install(TARGETS xbind_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(TARGET qamrpp_xbind)
   install(TARGETS qamrpp_xbind LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/qamrpp)
 endif()
-install(FILES xbind.h xbind.hpp xbind_qamrpp.hpp xbind_codegen.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xbind)
+install(FILES xbind.h xbind.hpp xbind_qamrpp.hpp xbind_codegen.hpp xbind_discovery.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xbind)
+install(FILES INTEROPERABILITY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind)
 install(DIRECTORY lxbind/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/lxbind)
 install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/stdlib)
 install(DIRECTORY typedefs/ DESTINATION ${CMAKE_INSTALL_DATADIR}/xbind/typedefs)
@@ -111,6 +130,11 @@ if(XBIND_BUILD_TESTS)
       --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER}
       --work ${CMAKE_CURRENT_BINARY_DIR})
   set_tests_properties(xbind.codegen PROPERTIES TIMEOUT 180)
+  add_test(NAME xbind.discovery
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_discovery.py
+      --cli $<TARGET_FILE:xbind_cli> --cxx ${CMAKE_CXX_COMPILER}
+      --work ${CMAKE_CURRENT_BINARY_DIR} --enabled $<BOOL:${XBIND_BUILD_DISCOVERY}>)
+  set_tests_properties(xbind.discovery PROPERTIES TIMEOUT 180)
   if(TARGET qamrpp_xbind)
     add_executable(xbind_qamrpp_module_test tests/qamrpp_module.cpp)
     target_link_libraries(xbind_qamrpp_module_test PRIVATE XBind::QaMRpp)

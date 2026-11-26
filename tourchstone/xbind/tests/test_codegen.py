@@ -82,6 +82,8 @@ class Codegen(unittest.TestCase):
             ('return x.library{name="a",version=1}', "string"),
             ('return x.library{name="a",functions={x.func("bad-name")}}', "identifier"),
             ('return x.library{name="a",functions={x.func("f",{returns="int; injected"})}}', "C type"),
+            ('return x.library{name="a",functions={x.func("f",{symbol=""})}}', "non-empty"),
+            ('return x.library{name="a",functions={x.func("f",{symbol_version=123})}}', "string"),
             ('return x.library{name="a",targets={x.target("lua")}}', "unknown target"),
         ]
         lua = shutil.which("lua5.4") or shutil.which("lua")
@@ -118,6 +120,16 @@ typedefs={x.typedef("T","int",{range="status"})},functions={x.func("f",{returns=
         result = run([ARGS.cxx, "-std=c++20", "-fsyntax-only", "-I" + str(self.path), check])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("XBind signature mismatch", result.stderr)
+
+    def test_binary_annotations_are_preserved_not_used_for_direct_link(self):
+        spec = self.spec('''return x.library{name="a",targets={x.target("Lua")},
+functions={x.func("f",{returns="int",symbol="_foo",symbol_version="v2"})}}''')
+        ir = json.loads(self.good(self.cli("--dump-ir", spec)))
+        self.assertEqual(ir["functions"][0]["options"], {"symbol": "_foo", "symbol_version": "v2"})
+        result = self.cli("--emit-lua", spec)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("binary symbol overrides", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_spec_resolution_priority_and_directories_are_not_specs(self):
         directory = self.path / "directory.xbind"

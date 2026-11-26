@@ -1,6 +1,7 @@
 #include "xbind.h"
 #include "xbind_qamrpp.hpp"
 #include "xbind_codegen.hpp"
+#include "xbind_discovery.hpp"
 
 #include <cstring>
 #include <cstdlib>
@@ -27,13 +28,54 @@ bool file_exists(const std::string &path) {
   return input.good();
 }
 
+std::string data_directory(const char* argv0) {
+  namespace fs = std::filesystem;
+  if (const char* data = std::getenv("XBIND_DATA_DIR"); data && *data) return data;
+  auto has_map = [](const fs::path& dir) {
+    return file_exists((dir / "typedefs/Lua-Default.sexpr").string());
+  };
+  fs::path executable(argv0);
+  if (!executable.has_parent_path()) {
+    if (const char* path = std::getenv("PATH")) {
+      std::string_view dirs(path);
+#ifdef _WIN32
+      constexpr char separator = ';';
+#else
+      constexpr char separator = ':';
+#endif
+      for (;;) {
+        auto end = dirs.find(separator);
+        auto candidate = fs::path(dirs.substr(0, end)) / executable;
+#ifdef _WIN32
+        if (!candidate.has_extension()) candidate += ".exe";
+#endif
+        if (file_exists(candidate.string())) {
+          executable = std::move(candidate);
+          break;
+        }
+        if (end == std::string_view::npos) break;
+        dirs.remove_prefix(end + 1);
+      }
+    }
+  }
+  std::error_code error;
+  auto canonical = fs::canonical(executable, error);
+  if (!error) {
+    const auto relocated = canonical.parent_path() / XBIND_RELATIVE_DATA_DIR;
+    if (has_map(relocated)) return relocated.string();
+  }
+  if (has_map(XBIND_INSTALL_DATA_DIR)) return XBIND_INSTALL_DATA_DIR;
+  return XBIND_SOURCE_DIR;
+}
+
 void print_usage(std::ostream &stream) {
   stream << "usage: xbind <command> [args]\n"
          << "\n"
          << "commands:\n"
          << "  --help                         Show this help.\n"
          << "  --version                      Print the XBind version.\n"
-         << "  --list-targets                 List supported output targets.\n"
+         << "  --list-targets                 List registered target names.\n"
+         << "  --capabilities                 Distinguish emitters from scaffolds (JSON).\n"
          << "  --target NAME                  Show one target's scaffold paths.\n"
          << "  --show-paths [ROOT]            Show key XBind source directories.\n"
          << "  --check-layout [ROOT]          Validate the scaffold layout.\n"
@@ -41,6 +83,8 @@ void print_usage(std::ostream &stream) {
          << "  --check-spec LIB [DIR]         Execute and validate a Lua spec with QaMRpp.\n"
          << "  --dump-spec LIB [DIR]          Execute and summarize a Lua spec with QaMRpp.\n"
          << "  --dump-ir LIB [DIR]            Write deterministic spec IR as JSON.\n"
+         << "  --discover IMAGE [ARCH]        Inventory an image without loading it.\n"
+         << "  --bind-ir IMAGE SPEC [ARCH]    Match explicit declarations to image exports.\n"
          << "  --emit-check LIB [DIR]         Write C++20 exact-signature assertions.\n"
          << "  --emit-lua LIB [DIR]           Write Lua 5.4 glue through DomLuaBind.\n";
 }
@@ -90,8 +134,7 @@ int command_spec(int argc, char **argv) {
     } else if (std::strcmp(argv[1], "--emit-check") == 0) {
       std::cout << xbind::codegen::emit_check(manifest);
     } else if (std::strcmp(argv[1], "--emit-lua") == 0) {
-      const char* data = std::getenv("XBIND_DATA_DIR");
-      std::cout << xbind::codegen::emit_lua(manifest, data && *data ? data : XBIND_SOURCE_DIR);
+      std::cout << xbind::codegen::emit_lua(manifest, data_directory(argv[0]));
     } else if (std::strcmp(argv[1], "--dump-spec") == 0) {
       std::cout << xbind::qamrpp::dump_manifest(manifest);
     } else {
@@ -100,6 +143,29 @@ int command_spec(int argc, char **argv) {
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "xbind: " << error.what() << "\n";
+    return 1;
+  }
+}
+
+int command_image(int argc, char** argv, bool bind) {
+  const int required = bind ? 4 : 3;
+  if (argc != required && argc != required + 1) {
+    std::cerr << "xbind: " << argv[1] << (bind ? " requires IMAGE SPEC [ARCH]\n" : " requires IMAGE [ARCH]\n");
+    return 2;
+  }
+  try {
+    if (!xbind::discovery::available())
+      throw std::runtime_error("binary discovery was not built (requires qBFD)");
+    const char* arch = argc > required ? argv[required] : "";
+    if (bind) {
+      auto manifest = xbind::qamrpp::load_spec_file(argv[3]);
+      std::cout << xbind::discovery::bind(argv[2], manifest, arch);
+    } else {
+      std::cout << xbind::discovery::inventory(argv[2], arch);
+    }
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << "xbind: " << error.what() << '\n';
     return 1;
   }
 }
@@ -123,6 +189,21 @@ int main(int argc, char **argv) {
     }
     return 0;
   }
+  if (std::strcmp(argv[1], "--capabilities") == 0) {
+    std::cout << "{\"binary_discovery\":" << (xbind::discovery::available() ? "true" : "false")
+              << ",\"targets\":[";
+    for (size_t i = 0; i < xbind_target_count(); ++i) {
+      if (i) std::cout << ',';
+      const auto* target = xbind_target_at(i);
+      const bool lua = std::strcmp(target->name, "Lua") == 0;
+      std::cout << "{\"name\":\"" << target->name << "\",\"backend\":\""
+                << (lua ? "lua54-direct-link" : "scaffold-only") << "\"}";
+    }
+    std::cout << "]}\n";
+    return 0;
+  }
+  if (std::strcmp(argv[1], "--discover") == 0) return command_image(argc, argv, false);
+  if (std::strcmp(argv[1], "--bind-ir") == 0) return command_image(argc, argv, true);
 
   if (std::strcmp(argv[1], "--target") == 0) {
     if (argc < 3) {

@@ -403,6 +403,15 @@ std::vector<Function> function_array(Context &ctx, const ValuePtr &table) {
     if (!names.insert(function.name).second)
       throw std::runtime_error("duplicate function: " + function.name);
     function.options = read_options(ctx, value);
+    for (const char* key : {"symbol", "symbol_version"}) {
+      const auto field = raw_get(ctx, value, key);
+      if (field && field->type != Value::NIL) {
+        auto spelling = string_field(ctx, value, key, true);
+        if (spelling.find('\0') != std::string::npos)
+          throw std::runtime_error(std::string(key) + " must not contain NUL");
+        function.options[key] = std::move(spelling);
+      }
+    }
     function.features = string_array(ctx, value, "features");
     result.push_back(std::move(function));
   }
