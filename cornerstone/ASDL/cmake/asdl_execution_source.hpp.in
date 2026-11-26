@@ -1,0 +1,5 @@
+#pragma once
+
+namespace asdl::detail {
+inline constexpr char execution_source[] = R"asdl_lua(@ASDL_EXECUTION_SOURCE@)asdl_lua";
+}

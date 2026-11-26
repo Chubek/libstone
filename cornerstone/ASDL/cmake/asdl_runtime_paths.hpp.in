@@ -1,0 +1,6 @@
+#pragma once
+
+namespace asdl::detail {
+inline constexpr char installed_stdlib[] = R"asdl_path(@ASDL_BIN_TO_STDLIB@)asdl_path";
+inline constexpr char build_stdlib[] = "asdl-stdlib";
+}

@@ -31,3 +31,5 @@ endif()
 if(ASDL_BUILD_TOOLS AND ASDL_BUILD_MQCTL)
   include(cmake/MessageQueue.cmake)
 endif()
+
+include(cmake/Native.cmake)

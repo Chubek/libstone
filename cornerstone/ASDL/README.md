@@ -1,4 +1,66 @@
-# ASDL: generate C11 syntax trees from a schema
+# ASDL: schema compiler and syntax-tree runtime
+
+`asdlc` is the native schema compiler. It checks both legacy and
+[extended ASDL](GRAMMAR.md), generates C11 interfaces, and can also emit a
+standalone C++20 AST/reflection header or Graphviz DOT. `asdl-run` loads a schema
+into a native, typed Lua AST session and executes a driver script against it.
+
+```sh
+cmake -S cornerstone/ASDL -B build/asdl
+cmake --build build/asdl
+ctest --test-dir build/asdl --output-on-failure
+cmake --install build/asdl --prefix /path/to/prefix
+```
+
+Building from source uses the repository's `third_party/lua` (Lua 5.5.0) and
+`third_party/kaguya` snapshots. It does not require a system Lua installation.
+The native build needs a C++20 compiler and a C11 compiler. Perl and Python
+enable additional regression tests but are not required to build the tools.
+To embed the installed C/C++ library, use `find_package(ASDL CONFIG REQUIRED)`
+and link `ASDL::runtime`. See [the embedding guide](embedding.md).
+
+### Using the native tools
+
+```sh
+build/asdl/asdlc --header bootstrap.h --cpp-header bootstrap.hpp \
+  cornerstone/ASDL/examples/Bootstrap.asdl
+build/asdl/asdlc --check --dot schema.dot --dot-view dependencies \
+  cornerstone/ASDL/examples/Bootstrap.asdl
+build/asdl/asdl-run cornerstone/ASDL/tests/fixtures/calculator.asdl - <<'LUA'
+assert(type(asdl.lib.require("std.tree")) == "table")
+LUA
+```
+
+`asdl-run [-I DIR] [--stdlib DIR] SCHEMA SCRIPT [ARGS...]` runs a Lua source
+file or reads it from standard input when `SCRIPT` is `-`. Driver arguments
+are available in the one-based Lua `arg` table. `--check SCHEMA [SCRIPT]`
+loads the schema and prepares its hooks; it syntax-checks an optional driver
+without running that driver. The runtime locates its installed standard
+library relative to the executable, or accepts `--stdlib` pointing to a
+directory containing `std/`. The library loader also accepts
+`LIBSTONE_ASDL_PATH` for additional module roots; see the
+[loader reference](runtime/LOADER.md).
+
+Only run trusted schemas, scripts, and module libraries. Library loading may
+execute import code even in `asdl-run --check`. The runtime limits some Lua
+capabilities but does not isolate untrusted code from the host process.
+
+### Migrating an existing build
+
+Existing consumers can keep the `scripts/asdl.pl` entry point unchanged. To
+try the native compiler, first replace the `perl scripts/asdl.pl` invocation
+with `asdlc`, keeping the schema and flags. Check the output format and
+compile your own consumer against the result before switching. A native build
+can use the `asdlc` target in a custom command, or the imported `ASDL::asdlc`
+target from the installed package. When cross-compiling, use a separately
+built host `asdlc` for generation.
+
+The downstream regression compares JSON metadata and exercises the original
+generation flags for consumers available in the checkout. It is not a claim
+that generated C files are byte-for-byte identical or that all downstream
+projects have been migrated.
+
+## Legacy Perl compiler
 
 [`scripts/asdl.pl`](scripts/asdl.pl) is a standalone compiler for the Zephyr
 Abstract Syntax Description Language (ASDL). It needs Perl 5.14 or newer and
@@ -50,7 +112,8 @@ shallow copies; keep their owning storage alive while the tree uses it.
 Run `perl scripts/asdl.pl --help` for a CLI summary or
 `perl scripts/asdl.pl --man` for grammar details, C API and lifetime rules,
 macro-configured visitors, runtime components, and listener examples.
-The generator does not implement ASDL pickling/serialization or module imports.
+The Perl generator does not implement ASDL pickling/serialization or module
+imports.
 
 ## Tests
 
@@ -66,15 +129,6 @@ metadata. With a C11 compiler on a POSIX host, it builds and runs both
 header-only and split output across multiple translation units, exercising
 arena ownership, validation, visitors, typed containers, and file events.
 Set `CC` to select a compiler and `CFLAGS` for extra flags.
-
-The standalone CMake project also registers the legacy suite and checks the
-generation recipes for downstream schemas available in the checkout:
-
-```sh
-cmake -S cornerstone/ASDL -B build/asdl
-cmake --build build/asdl
-ctest --test-dir build/asdl --output-on-failure
-```
 
 Libstone's top-level CMake can include the ASDL project through
 `-DLIBSTONE_BUILD_ASDL=ON`. The root option does not change any existing
