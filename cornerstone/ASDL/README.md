@@ -14,10 +14,8 @@ cmake --install build/asdl --prefix /path/to/prefix
 
 Building from source uses the repository's `third_party/lua` (Lua 5.5.0) and
 `third_party/kaguya` snapshots. It does not require a system Lua installation.
-The native tools need a C++17 compiler and a C11 compiler. Tests for the
-generated C++ API require C++20; disable tests with `-DASDL_BUILD_TESTS=OFF`
-to build with a C++17-only compiler. Perl and Python enable additional
-regression tests but are not required to build the tools.
+The native tools need a C++20 compiler and a C11 compiler. Perl and Python
+enable additional regression tests but are not required to build the tools.
 To embed the installed C/C++ library, use `find_package(ASDL CONFIG REQUIRED)`
 and link `ASDL::runtime`. See [the embedding guide](embedding.md).
 
@@ -147,4 +145,4 @@ queue with a randomly generated name, not any live coordination queues.
 capacity and pending messages, and `cleanup` removes the name. `send` accepts
 a payload on standard input; `receive` prints the validated `ASDL-MQ/1` header
 and the payload bytes. Timeouts return status 3, invalid requests return 2,
-and other errors return 1.
+and other errors return 1. See the [wire protocol and shutdown procedure](tools/MQ-PROTOCOL.md).

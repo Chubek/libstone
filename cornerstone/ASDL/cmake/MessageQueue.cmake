@@ -26,7 +26,7 @@ unset(_asdl_mq_probe)
 
 if(ASDL_HAVE_POSIX_MQ OR ASDL_HAVE_POSIX_MQ_RT)
   add_executable(mqctl tools/mqctl.cpp)
-  target_compile_features(mqctl PRIVATE cxx_std_17)
+  target_compile_features(mqctl PRIVATE cxx_std_20)
   target_compile_definitions(mqctl PRIVATE _POSIX_C_SOURCE=200809L)
   if(NOT ASDL_HAVE_POSIX_MQ)
     target_link_libraries(mqctl PRIVATE rt)

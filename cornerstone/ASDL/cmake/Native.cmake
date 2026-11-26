@@ -19,7 +19,7 @@ add_library(asdl_runtime
 add_library(ASDL::runtime ALIAS asdl_runtime)
 set_target_properties(asdl_runtime PROPERTIES EXPORT_NAME runtime OUTPUT_NAME asdl
   VERSION "${PROJECT_VERSION}" SOVERSION 1 POSITION_INDEPENDENT_CODE ON)
-target_compile_features(asdl_runtime PUBLIC cxx_std_17 PRIVATE c_std_11)
+target_compile_features(asdl_runtime PUBLIC cxx_std_20 PRIVATE c_std_11)
 target_include_directories(asdl_runtime
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
