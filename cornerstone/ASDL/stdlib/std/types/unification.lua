@@ -10,14 +10,32 @@ function LIB.Term(s,a)
     return {symbol=s,args=a or {}}
 end
 
+local function walk(t,s)
+    local seen
+    while t.var and s[t.var] do
+        seen=seen or {}
+        assert(not seen[t.var],'cyclic substitution')
+        seen[t.var]=true
+        t=s[t.var]
+    end
+    return t
+end
+
 function LIB.Apply(t,s)
-    if t.var then
-        return s[t.var] and LIB.Apply(s[t.var],s) or t
-    end;
-    local a={} for i,x in ipairs(t.args) do
-        a[i]=LIB.Apply(x,s)
-    end;
-    return LIB.Term(t.symbol,a)
+    local memo,active={},{}
+    local function apply(x)
+        x=walk(x,s)
+        if x.var then return x end
+        if memo[x] then return memo[x] end
+        assert(not active[x],'cyclic substitution or term')
+        active[x]=true
+        local a={}
+        for i,y in ipairs(x.args) do a[i]=apply(y) end
+        local result=LIB.Term(x.symbol,a)
+        active[x],memo[x]=nil,result
+        return result
+    end
+    return apply(t)
 end
 
 function LIB.Unify(a,b,initial)
@@ -26,20 +44,21 @@ function LIB.Unify(a,b,initial)
     end
 
     local function occurs(n,t)
-        t=LIB.Apply(t,s);
-        if t.var then
-            return t.var==n
-        end;
-        for _,x in ipairs(t.args) do
-            if occurs(n,x) then
-                return true
+        local seen,pending={},{t}
+        while #pending>0 do
+            local x=walk(table.remove(pending),s)
+            if x.var==n then return true end
+            if not x.var and not seen[x] then
+                seen[x]=true
+                for _,y in ipairs(x.args) do pending[#pending+1]=y end
             end
         end;
         return false
     end
 
     local function u(x,y)
-        x,y=LIB.Apply(x,s),LIB.Apply(y,s);
+        x,y=walk(x,s),walk(y,s);
+        if x==y then return true end
         if x.var then
             if x.var==y.var then
                 return true

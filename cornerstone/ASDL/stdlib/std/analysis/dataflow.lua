@@ -9,8 +9,10 @@ local function solve(g,s,back)
         ins[v]=s.bottom();
         outs[v]=s.bottom()
     end;
+    local input,output,neighbors,users=ins,outs,g.incoming,g.out
+    if back then input,output,neighbors,users=outs,ins,g.out,g.incoming end
     local q=W.new(g.nodes);
-    local steps=0;
+    local steps,changes=0,0;
     while not W.empty(q) do
         steps=steps+1;
         assert(steps<=(s.limit or 1000000),'dataflow did not converge');
@@ -19,8 +21,8 @@ local function solve(g,s,back)
         if s.boundary and s.boundary[v]~=nil then
             a=s.join(a,s.boundary[v])
         end;
-        for _,p in ipairs((back and g.out or g.incoming)[v]) do
-            local value=(back and ins or outs)[p];
+        for _,p in ipairs(neighbors[v]) do
+            local value=output[p];
             if s.edge then
                 if back then
                     value=s.edge(v,p,value)
@@ -31,20 +33,16 @@ local function solve(g,s,back)
             a=s.join(a,value)
         end;
         local b=s.transfer(v,a);
-        local prev=(back and ins or outs)[v];
-        if back then
-            outs[v]=a;
-            ins[v]=b
-        else
-            ins[v]=a;
-            outs[v]=b
-        end;
+        local prev=output[v];
+        input[v],output[v]=a,b;
         if not s.equal(prev,b) then
-            for _,p in ipairs((back and g.incoming or g.out)[v]) do
+            changes=changes+1;
+            for _,p in ipairs(users[v]) do
                 W.push(q,p)
             end
         end
     end;
+    if s.statistics then return ins,outs,{steps=steps,changes=changes} end
     return ins,outs
 end
 

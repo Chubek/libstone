@@ -30,7 +30,10 @@ function LIB.InsertPhi(cfg)
     local vars={} for v in pairs(sites) do
         vars[#vars+1]=v
     end;
-    table.sort(vars);
+    table.sort(vars,function(a,b)
+        if type(a)==type(b) then return a<b end
+        return type(a)<type(b)
+    end);
     for _,v in ipairs(vars) do
         local q,seen={},{};
         for _,b in ipairs(c.order) do
@@ -148,6 +151,51 @@ function LIB.ToSSA(cfg)
     return c
 end
 
+function LIB.ValidateSSA(c)
+    assert(c.ssa,'expected SSA CFG')
+    local g=C.Graph(c)
+    local dom=D.Dominators(g,c.entry)
+    assert(#g.incoming[c.entry]==0,'SSA requires predecessor-free entry')
+    local defs={}
+    local function define(v,b,i)
+        assert(v~=nil and not defs[v],'duplicate/missing SSA definition: '..tostring(v))
+        defs[v]={block=b,index=i}
+    end
+    local function use(v,b,i)
+        local d=assert(defs[v],'missing SSA definition: '..tostring(v))
+        assert(not d.block or (d.block==b and d.index<i) or
+            (d.block~=b and dom[b][d.block]),'SSA definition does not dominate use: '..tostring(v))
+    end
+    for _,v in pairs(c.undef or {}) do define(v) end
+    for _,b in ipairs(c.order) do
+        assert(dom[b],'SSA requires reachable blocks')
+        local block=c.blocks[b]
+        for _,p in ipairs(block.phis or {}) do
+            assert(#g.incoming[b]>0,'phi in predecessor-free block')
+            define(p.dest,b,0)
+        end
+        for i,x in ipairs(C.Instructions(block)) do
+            for _,v in ipairs(x.defs or {}) do define(v,b,i) end
+        end
+    end
+    for _,b in ipairs(c.order) do
+        local block=c.blocks[b]
+        local preds={}
+        for _,p in ipairs(g.incoming[b]) do preds[p]=true end
+        for _,p in ipairs(block.phis or {}) do
+            for pred in pairs(p.args) do assert(preds[pred],'extra phi predecessor') end
+            for _,pred in ipairs(g.incoming[b]) do
+                assert(p.args[pred]~=nil,'missing phi operand')
+                use(p.args[pred],pred,#c.blocks[pred].instrs+2)
+            end
+        end
+        for i,x in ipairs(C.Instructions(block)) do
+            for _,v in ipairs(x.uses or {}) do use(v,b,i) end
+        end
+    end
+    return true
+end
+
 -- Lower phis by splitting each incoming edge and scheduling parallel copies with temporaries.
 
 function LIB.FromSSA(cfg)
@@ -156,6 +204,7 @@ function LIB.FromSSA(cfg)
     local g=C.Graph(c);
     local n=0;
     local names={};
+    for _,v in pairs(c.undef or {}) do names[v]=true end
     for _,b in ipairs(c.order) do
         local block=c.blocks[b];
         for _,p in ipairs(block.phis or {}) do

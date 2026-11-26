@@ -2,20 +2,22 @@ LIB = asdl.lib.new "std.rewrite"
 
 local Rewrite = {}
 -- A rule returns nil (no change) or a replacement of the same ASDL type.
+local function replacement(node,r)
+    if r==nil then return node end
+    assert(asdl.isnode(r) and asdl.type(r)==asdl.type(node),"rewrite changed ASDL type")
+    return r
+end
 
-function Rewrite.bottom_up(root, rule)
-
+function Rewrite.bottom_up(root, rule, source_map)
+    local record=source_map and asdl.lib.require('std.sourcemap').Record
     local function visit(node)
-
         local mapped = asdl.map_children(node, visit)
-        local replacement = rule(mapped)
-        if replacement then
-
-            assert(asdl.type(replacement) == asdl.type(mapped), "rewrite changed ASDL type")
-            return replacement
+        local r=replacement(mapped,rule(mapped))
+        if record then
+            record(source_map,mapped,node)
+            record(source_map,r,mapped)
         end
-
-        return mapped
+        return r
     end
 
     return visit(root)
@@ -47,12 +49,14 @@ function Rewrite.rule(type_name, tag, transform)
 
 end
 
-function Rewrite.top_down(root,rule)
-
+function Rewrite.top_down(root,rule,source_map)
+    local record=source_map and asdl.lib.require('std.sourcemap').Record
     local function visit(n)
-        local r=rule(n) or n;
-        assert(asdl.type(n)==asdl.type(r),'rewrite changed ASDL type');
-        return asdl.map_children(r,visit)
+        local r=replacement(n,rule(n))
+        if record then record(source_map,r,n) end
+        local mapped=asdl.map_children(r,visit)
+        if record then record(source_map,mapped,r) end
+        return mapped
     end;
     return visit(root)
 end

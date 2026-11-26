@@ -3,7 +3,7 @@
 import ctypes as C, ctypes.util, pathlib, os, shutil, subprocess, sys
 root = pathlib.Path(__file__).resolve().parents[1]
 os.chdir(root)
-modules = sorted(p.relative_to(root/'cornerstone/ASDL/stdlib').as_posix()[:-4].replace('/','.') for p in (root/'cornerstone/ASDL/stdlib').rglob('*.lua'))
+modules = sorted(p.relative_to(root).as_posix()[:-4].replace('/','.') for p in (root/'std').rglob('*.lua'))
 script = 'MODULES = {' + ','.join('"'+m+'"' for m in modules) + '}\n' + pathlib.Path('tests/test.lua').read_text()
 exe = shutil.which('lua5.4') or shutil.which('lua54')
 if exe:

@@ -1,7 +1,7 @@
 -- Test-only host adapter. It is not the native C/Perl ASDL implementation.
 local A={lib={},diagnostic={}}
 local cache, loading, libraries, diagnostics, hooks, defs = {},{},{},{},{},{}
-local root='cornerstone/ASDL/stdlib'
+local root='.'
 local function paths()
     local r={};for p in (os.getenv('LIBSTONE_ASDL_PATH') or ''):gmatch('[^:]+') do r[#r+1]=p end
     r[#r+1]=root;return r

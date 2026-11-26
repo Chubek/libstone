@@ -27,7 +27,7 @@ local function eq(a,b)
             return false
         end;
         for i,f in ipairs(af) do
-            if f.name~=bf[i].name or not eq(f.value,bf[i].value) then
+            if f.name~=bf[i].name or f.cardinality~=bf[i].cardinality or not eq(f.value,bf[i].value) then
                 return false
             end
         end;
@@ -56,7 +56,7 @@ function LIB.Match(p,v)
         if type(x)=='table' and x.kind=='any' then
             return true
         elseif type(x)=='table' and x.kind=='capture' then
-            if x.pattern and not m(x.pattern,y) then
+            if x.pattern~=nil and not m(x.pattern,y) then
                 return false
             end;
             if seen[x.name] then
@@ -79,11 +79,8 @@ function LIB.Match(p,v)
             end;
             return true
         elseif type(x)=='table' and type(y)=='table' and not asdl.isnode(x) and not asdl.isnode(y) then
-            if #x~=#y then
-                return false
-            end;
             for k,z in pairs(x) do
-                if not m(z,y[k]) then
+                if y[k]==nil or not m(z,y[k]) then
                     return false
                 end
             end;

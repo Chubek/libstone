@@ -9,7 +9,7 @@ function asdl.lib.require(name)
     local relative = name:gsub('%.','/') .. '.lua'
     local env = setmetatable({asdl=asdl}, {__index=_G})
     local chunk = loadfile('examples/userlib/' .. relative, 't', env) or
-                  assert(loadfile('cornerstone/ASDL/stdlib/' .. relative,'t',env))
+                   assert(loadfile(relative,'t',env))
     local lib = chunk(); cache[name]=lib; return lib
 end
 function asdl.lib.derive(path)

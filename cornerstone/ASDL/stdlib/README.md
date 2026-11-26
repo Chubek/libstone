@@ -1,6 +1,6 @@
 # Extended ASDL — Lua standard library
 
-**61 implemented modules** for the proposed libstone Extended ASDL, targeting Lua 5.4. The installation tree is `cornerstone/ASDL/stdlib`. All standard-library implementation code is Lua; the Python in `tests/` is only a portable test launcher. No external Lua packages are required.
+**63 implemented modules** for libstone Extended ASDL, targeting Lua 5.4. The source tree is `cornerstone/ASDL/stdlib`. All standard-library implementation code is Lua; the Python in `tests/` is only a portable test launcher. No external Lua packages are required.
 
 This is a source distribution, not a patch to the existing C11-generating `asdl.pl`. The native reflection API, logistics dispatcher, import parser, and production library loader must be supplied by Extended ASDL. A standalone test host is included so the library can be exercised now. See `API.md` for precise data representations, preconditions, and every module's interface.
 
@@ -42,7 +42,7 @@ A `.lua` file in a path root can also be loaded by its filename, and derive acce
 
 | Area | Modules | Implementations |
 |---|---:|---|
-| Core | 8 | Tree traversal, diagnostics, serialization, scope/capture, control, rewriting, expression IR, CFG |
+| Core | 10 | Tree traversal, diagnostics, serialization, scope/capture, control, rewriting, expression IR, CFG, pass management, source provenance |
 | Collections | 7 | Vector, set, multimap, ordered map, worklist, bitset, priority queue |
 | Graphs | 7 | Directed graphs, reachability, topological order, SCCs, dominators/frontiers, natural loops, Dijkstra |
 | Types | 5 | Hindley–Milner, first-order unification, subtyping, constraints, lattices |
@@ -52,20 +52,20 @@ A `.lua` file in a path root can also be loaded by its filename, and derive acce
 | Match | 3 | Structural matching, first-order unification, pattern matrix and decision DAG |
 | Format | 4 | Pretty printer, DOT, Mermaid, HTML |
 | Testing | 4 | Assertions, fixtures, deterministic property tests/shrinking, snapshots |
-| **Total** | **61** | |
+| **Total** | **63** | |
 
 `examples/` also contains the earlier MiniRuby schema and its two user libraries (not counted as standard-library modules).
 
 ## Running the tests
 
-From the extracted archive root:
+From `cornerstone/ASDL/stdlib`:
 
 ```sh
 python3 tests/run.py
 python3 tests/run_miniruby.py
 ```
 
-The first command runs all modules against `tests/host.lua`, a small test adapter. It uses a system Lua 5.4 executable if available, otherwise a Lua 5.4 shared library via Python ctypes. The second runs the earlier MiniRuby example's 14 logistics using a separate mock host and the new stdlib; it uses the shared library. Tests cover loading/signing/derivation, collection and graph algorithms, HM polymorphism and occurs checking, recursive ADT coverage and guards, JSON and binary round trips, lexical captures, C3 inheritance, expression rewrite equivalence under an independent evaluator, SSA phi insertion/lowering, liveness, dataflow, and formatting/testing helpers. `TEST-RESULTS.txt` records the execution performed while packaging.
+The first command runs all modules against `tests/host.lua`, a small test adapter. It uses a system Lua 5.4 executable if available, otherwise a Lua 5.4 shared library via Python ctypes. The second runs the earlier MiniRuby example's 14 logistics using a separate mock host; it uses the shared library. The tests include deterministic generated cases for coverage, dominance, serialization, and expression transformations checked against an independent evaluator.
 
 ## Scope and design constraints
 
@@ -77,4 +77,4 @@ Compiler algorithms cannot infer the semantics of arbitrary user-defined ASDL co
 - `std.match.decisiontree`: typed constructor/literal pattern matrix, open and finite domains, guards and ordered matching. MiniML supplies a concrete adapter.
 - Nominal type environments, graph edges, effect summaries and call/escape targets are provided by the source-language logistics or lowering pass. Dynamic dispatch, effects, exception semantics and arbitrary AST inlining are not guessed by the library.
 
-This is an implemented reference standard library for the proposed API, not proof of production integration or compiler correctness for every input. Recursive algorithms assume manageable acyclic trees/terms (graphs may contain cycles). The test loader uses lexical path normalization, not native realpath or a secure sandbox. Large untrusted inputs need separate resource controls. The `std.serialize.Binary` format is a versioned JSON transport, not existing Zephyr ASDL pickling. No repository files were modified.
+Tests on the mock host do not establish native integration or compiler correctness for every input. Recursive algorithms assume manageable acyclic trees/terms (graphs may contain cycles). The test loader uses lexical path normalization, not native realpath or a secure sandbox. Large untrusted inputs need separate resource controls. The `std.serialize.Binary` format is a versioned JSON transport, not existing Zephyr ASDL pickling.

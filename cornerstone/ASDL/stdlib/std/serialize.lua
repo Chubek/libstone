@@ -32,6 +32,19 @@ local function arraylike(t)
     return n>0 and n==#t
 end
 
+local decimal_point=string.format('%.1f',1.5):sub(2,-2)
+local function number(v)
+    assert(v==v and math.abs(v)~=math.huge,'nonfinite JSON number')
+    if math.type(v)=='integer' then return tostring(v) end
+    local s=string.format('%.17g',v)
+    if decimal_point~='.' then
+        local i,j=s:find(decimal_point,1,true)
+        if i then s=s:sub(1,i-1)..'.'..s:sub(j+1) end
+    end
+    if not s:find('[.eE]') then s=s..'.0' end
+    return s
+end
+
 function LIB.JSON(value,options)
     local seen={};
     options=options or {};
@@ -59,8 +72,7 @@ function LIB.JSON(value,options)
         elseif t=='boolean' then
             return tostring(v)
         elseif t=='number' then
-            assert(v==v and math.abs(v)~=math.huge,'nonfinite JSON number');
-            return tostring(v)
+            return number(v)
         end;
         assert(not seen[v],'cyclic JSON value');
         seen[v]=true;
@@ -256,16 +268,20 @@ end
 function LIB.FromJSON(s,options)
     options=options or {};
     local function go(v)
-        if v==NULL then
-            return nil
-        end;
-        if type(v)~='table' then
+        if v==NULL or type(v)~='table' then
             return v
         end;
-        if v['$type'] then
+        if v['$type']~=nil then
+            assert(type(v['$type'])=='string','invalid node type')
+            assert(v['$tag']==nil or type(v['$tag'])=='string','invalid node tag')
             local fields={} for k,x in pairs(v) do
                 if k~='$type' and k~='$tag' and k~='$annotations' then
-                    fields[k]=go(x)
+                    if x~=NULL then
+                        if getmetatable(x)==array_mt then
+                            for _,item in ipairs(x) do assert(item~=NULL,'null in AST sequence') end
+                        end
+                        fields[k]=go(x)
+                    end
                 end
             end;
             local n=asdl.make(v['$type'],v['$tag'],fields);
@@ -276,10 +292,9 @@ function LIB.FromJSON(s,options)
             end;
             return n
         end;
-        local r={} for k,x in pairs(v) do
-            local y=go(x);
-            assert(y~=nil or getmetatable(v)~=array_mt,'null in AST sequence');
-            r[k]=y
+        local r=getmetatable(v)==array_mt and LIB.Array() or {}
+        for k,x in pairs(v) do
+            r[k]=go(x)
         end;
         return r
     end;

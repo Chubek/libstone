@@ -42,10 +42,10 @@ The test host exposes `lib.searchpath`, `lib.resolve`, `lib.loaded`, `lib.export
 `Control.enter(parent,kind,owner,ctx)` assigns a control ID; `Control.target(frame,operation,policy?)` returns the nearest allowed frame, respecting barriers. Default policy is MiniRuby-compatible (Return/Break/Next/Retry/Yield/Super). Custom policy is `{targets={Operation={kind=true}}, barrier=function(frame,operation)...end}`; `barrier` returns true to stop lookup after testing current frame. Control IDs are lexical, not activation IDs.
 
 ### `std.serialize`
-`JSON(value,options?)`, `DecodeJSON(string,options?)`, `FromJSON(string,options?)`, `SExpr(value)`, `Binary(value,options?)`, `FromBinary(bytes,options?)`. JSON node objects have reserved `$type`, optional `$tag`, and schema fields; sequence fields are arrays, absent optionals null. `options.annotations=true` includes/restores `$annotations` when host supports it. Decoding validates JSON syntax, UTF-8, surrogate pairs, duplicate keys and depth (default 256). `Null` is a sentinel; `Array(xs?)` disambiguates empty arrays from objects. Generic JSON numbers must be finite. `FromJSON` reconstructs AST objects through `asdl.make` and rejects null elements in AST sequences. Binary is `ASDL\x01` + big-endian unsigned 64-bit length + UTF-8 JSON. SExpr is a human-readable encoding, not a Scheme reader or Zephyr pickle. Metadata is optional; source locations are not serialized automatically. Cyclic values are rejected. Raw binary ASDL primitives need a language adapter to encode as UTF-8 or another representation.
+`JSON(value,options?)`, `DecodeJSON(string,options?)`, `FromJSON(string,options?)`, `SExpr(value)`, `Binary(value,options?)`, `FromBinary(bytes,options?)`. JSON node objects have reserved `$type`, optional `$tag`, and schema fields; sequence fields are arrays, absent optionals null. `options.annotations=true` includes/restores `$annotations` when host supports it. Decoding validates JSON syntax, UTF-8, surrogate pairs, duplicate keys and depth (default 256). `Null` is a sentinel; `Array(xs?)` disambiguates empty arrays from objects. Generic JSON numbers must be finite; floats are formatted to round-trip Lua binary64, including negative zero. `FromJSON` reconstructs AST objects through `asdl.make`, omits null node fields, rejects null elements in AST sequence fields, and preserves null and array markers in ordinary JSON values. Binary is `ASDL\x01` + big-endian unsigned 64-bit length + UTF-8 JSON. SExpr is a human-readable encoding, not a Scheme reader or Zephyr pickle. Metadata is optional; source locations are not serialized automatically. Cyclic values are rejected. Raw binary ASDL primitives need a language adapter to encode as UTF-8 or another representation.
 
 ### `std.rewrite`
-`Rewrite.bottom_up(root,rule)`, `top_down`, `pipeline(root,...)`, `rule(type,tag,fn)`, `fixed_point(root,pass,equal,limit?)`. A rule returns nil (unchanged) or same-type node. Top-down rules must not introduce infinitely expanding subtrees; fixed point limits passes.
+`Rewrite.bottom_up(root,rule,source_map?)`, `top_down(root,rule,source_map?)`, `pipeline(root,...)`, `rule(type,tag,fn)`, `fixed_point(root,pass,equal,limit?)`. A rule returns nil (unchanged) or same-type node. The optional map records transformations of handles, including nodes rebuilt by `asdl.map_children`. With provenance enabled, a new replacement must not be reused for multiple inputs. Top-down rules must not introduce infinitely expanding subtrees; fixed point limits passes.
 
 `Curry(root)` handles MiniML's LambdaMany and ApplicationMany. `ConstFold(root,adapter?)` handles the Mini literal operator AST conservatively; default does not fold division/modulo where source semantics were unspecified. For IR, delegates to `std.transform.constfold` (adapter argument becomes primitive map). `LIB['foldable!'](node)` requests folding. `Inline(root,target,adapter?)` supports a safe Mini nullary, no-locals, single-literal-return function or user-provided AST adapter; the IR overload beta-inlines direct lambda applications. `BetaReduce`, `EtaReduce`, `DeadEliminate` are IR operations. Generic AST optimizers must receive language adapters; MiniRuby Send is not treated as primitive arithmetic.
 
@@ -69,6 +69,33 @@ local cfg = {
 ```
 
 Definitions and uses are complete lists of variable IDs, not inferred from opcodes; branch destinations occur only in `term.targets`. Model parameters as entry definitions. Instructions are plain data and must not hide variable operands elsewhere. CFG analyses treat all syntactic edges as possible. IDs should be strings or positive integers. An SSA CFG has `ssa=true`, `block.phis={{var,dest,args={ [pred]=version }}}` and `undef={ original=version }` for undefined incoming values.
+
+### `std.passes`
+
+`New(specs)` validates a list of named artifact-producing passes. A spec has `name`, optional `requires` list, `run(input,dependencies,context)`, and optional `cache`, `key(input,context)`, `effects`. `Plan(manager,targets?)` returns a deterministic dependency-first order, including transitive dependencies; omitted targets mean all passes in declaration order where dependencies permit. Missing names and cycles are errors. Passes run serially; dependencies are the only scheduling constraints.
+
+`Run(manager,input,{targets?,revision?,context?})` returns a name-to-result map and `{order,ran,hits,passes={ [name]={cached=bool} }}`. Result/dependency maps omit nil values, but nil results are memoizable. The dependency map contains only direct dependencies, and inputs and cached artifacts must not be mutated. `Clear(manager)` invalidates all cached entries. Caches hold the latest entry per pass; a newer entry produced by any prerequisite invalidates dependents, including when values compare equal. Failed runs do not commit staged cache changes; side effects are not rolled back.
+
+By default a pass is not cached. `cache=true` requires explicit effects with no writes or unknown effects. A cached pass uses its `key` callback or the run's `revision`, compared by Lua raw equality. The caller must change the key whenever any relevant input, context, or externally read resource changes; for incrementality across a change, use a per-pass key over the relevant immutable input. Effects use `{reads=set,writes=set,unknown=bool}`; omitted effects are unknown. `Conflict(a,b)` reports write/read and write/write conflicts, treating unknown as conflicting with nonempty summaries. It does not create dependency edges or schedule parallel execution.
+
+```lua
+local P = asdl.lib.require("std.passes")
+local SSA = asdl.lib.require("std.transform.ssa")
+local L = asdl.lib.require("std.analysis.liveness")
+local manager = P.New {
+    {name="ssa", cache=true, effects={}, run=SSA.ToSSA},
+    {name="liveness", requires={"ssa"}, cache=true, effects={},
+     run=function(_, deps)
+         local live_in, live_out = L.Liveness(deps.ssa)
+         return {input=live_in, output=live_out}
+     end},
+}
+local results, stats = P.Run(manager, cfg, {revision=1})
+```
+
+### `std.sourcemap`
+
+`New()`, `Record(map,generated,input)`, `Origin(map,generated)` (direct origin or nil), `Trace(map,generated)` (oldest origin and path, including `generated`), `Compose(previous,next_map)` (new combined map). Provenance is keyed by Lua identity for handles or by caller-chosen stable IDs. Each output has at most one direct origin; self-maps are ignored and conflicting origins rejected. Trace and composition detect cycles. Maps retain their keys and values, so keep them only as long as their provenance is needed. This tracks provenance, not line/column translations; use `asdl.location(origin)` for a native node.
 
 ## Collections
 
@@ -129,7 +156,7 @@ Mutation methods operate in place. Keys/items must be non-nil; sequences may con
 
 | Module | API and results |
 |---|---|
-| `std.analysis.dataflow` | `Forward(g,spec)`, `Backward(g,spec)` → in,out maps. Spec: bottom(), join(a,b), equal(a,b), transfer(vertex,value), optional boundary map, edge(from,to,value), limit. Must be monotone on a converging domain, values treated immutably. `FixedPoint(initial,step,equal,limit?)`. |
+| `std.analysis.dataflow` | `Forward(g,spec)`, `Backward(g,spec)` → in,out maps. Spec: bottom(), join(a,b), equal(a,b), transfer(vertex,value), optional boundary map, edge(from,to,value), limit. `statistics=true` adds a third `{steps,changes}` return value. Must be monotone on a converging domain, values treated immutably. `FixedPoint(initial,step,equal,limit?)`. |
 | `std.analysis.liveness` | `Liveness(cfg)` → live-in/out sets; `LiveIn`, `LiveOut`, `Interference` (conservative symmetric graph). SSA phi uses are edge-specific. |
 | `std.analysis.reachingdefs` | `ReachingDefinitions(cfg)` → in,out,definition records, per-instruction IDs. Ordinary or phi-lowered CFG only. |
 | `std.analysis.defuse` | `DefUse(cfg)` → `{uses,definitions,by_definition}`; uses carry reaching def IDs. Ordinary CFG only. |
@@ -149,7 +176,7 @@ Except SSA, these use `std.ir`. They return fresh expression structures as neede
 - `std.transform.constfold.ConstFold(expr,primitives?)` evaluates constant primitive applications safely under caller-provided pure semantics; default `Primitives()` includes arithmetic, comparisons, not. Defaults follow Lua number/arithmetic semantics (division/mod by zero explicitly fail). Keeps operations that throw or cannot be folded. Boolean constant branches are simplified.
 - `std.transform.inline.Inline(expr,limit?)`/`BetaReduce(expr)` use capture-free let-based inlining of direct lambda applications (argument evaluated once). `EtaReduce` only reduces a statically known lambda function value where binder is not free.
 - `std.transform.deadcode.DeadEliminate(expr)` eliminates unused constant/lambda bindings and constant boolean branches, not possibly failing primitive operations or calls.
-- `std.transform.ssa.InsertPhi(cfg)` uses iterated dominance frontiers. `ToSSA(cfg)` inserts phis and renames by dominator-tree traversal, explicitly recording undefined incoming versions. Input CFG must have predecessor-free entry, all blocks reachable, no existing phis. No liveness-pruning of phis. `FromSSA(cfg)` splits incoming edges and uses temporary copies to implement simultaneous phi assignments; leaves `undef` map for backend handling. Does not coalesce copies or allocate registers.
+- `std.transform.ssa.InsertPhi(cfg)` uses iterated dominance frontiers. `ToSSA(cfg)` inserts phis and renames by dominator-tree traversal, explicitly recording undefined incoming versions. Input CFG must have predecessor-free entry, all blocks reachable, no existing phis. No liveness-pruning of phis. `ValidateSSA(cfg)` checks unique definitions, complete phi operands and dominance, including predecessor-edge phi uses; returns true or raises an error. `FromSSA(cfg)` splits incoming edges and uses temporary copies to implement simultaneous phi assignments; leaves `undef` map for backend handling. Does not coalesce copies or allocate registers.
 
 ## Formatting/testing
 

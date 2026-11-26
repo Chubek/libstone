@@ -42,7 +42,7 @@ local function expand(rows)
 end
 
 local function specialize(rows,p,n)
-    local r={} for _,row in ipairs(expand(rows)) do
+    local r={} for _,row in ipairs(rows) do
         local h=row[1];
         if h.tag=='wild' then
             local w={} for i=1,n do
@@ -57,7 +57,7 @@ local function specialize(rows,p,n)
 end
 
 local function default(rows)
-    local r={} for _,row in ipairs(expand(rows)) do
+    local r={} for _,row in ipairs(rows) do
         if row[1].tag=='wild' then
             r[#r+1]=tail(row)
         end
@@ -91,14 +91,16 @@ local function useful(rows,q,domains)
     end
 
     if p.tag~='wild' then
-        local d={} for _,c in ipairs(domain) do
+        local d
+        for _,c in ipairs(domain) do
             if same(c.pattern,p) then
                 d=c.domains;
                 break
             end
         end;
         local args=p.args or {};
-        if #d==0 then
+        if not d then
+            d={}
             for i=1,#args do
                 d[i]={}
             end

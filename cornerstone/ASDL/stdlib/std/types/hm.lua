@@ -19,20 +19,25 @@ function LIB.Tuple(xs)
 end
 
 function LIB.Prune(t)
-    if t.kind=='var' and t.link then
-        t.link=LIB.Prune(t.link);
-        return t.link
+    local root=t
+    while root.kind=='var' and root.link do root=root.link end
+    while t~=root do
+        local next_link=t.link
+        t.link=root
+        t=next_link
     end
-    return t
+    return root
 end
 
-local function occurs(v,t)
+local function occurs(v,t,seen)
     t=LIB.Prune(t);
     if t==v then
         return true
     end;
+    if seen[t] then return false end
+    seen[t]=true
     for _,a in ipairs(t.args or {}) do
-        if occurs(v,a) then
+        if occurs(v,a,seen) then
             return true
         end
     end
@@ -99,7 +104,7 @@ function LIB.Unify(a,b,node)
     end
 
     if a.kind=='var' then
-        if occurs(a,b) then
+        if occurs(a,b,{}) then
             fail(a,b,node,'Occurs check')
         end;
         a.link=b;
@@ -121,15 +126,19 @@ function LIB.Unify(a,b,node)
 end
 
 function LIB.Free(t,out)
-    out=out or {};
-    t=LIB.Prune(t);
-    if t.kind=='var' then
-        out[t]=true
-    else
-        for _,a in ipairs(t.args) do
-            LIB.Free(a,out)
+    out=out or {}
+    local seen={}
+    local function visit(x)
+        x=LIB.Prune(x)
+        if seen[x] then return end
+        seen[x]=true
+        if x.kind=='var' then
+            out[x]=true
+        else
+            for _,a in ipairs(x.args) do visit(a) end
         end
-    end;
+    end
+    visit(t)
     return out
 end
 
