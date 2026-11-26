@@ -66,3 +66,29 @@ metadata. With a C11 compiler on a POSIX host, it builds and runs both
 header-only and split output across multiple translation units, exercising
 arena ownership, validation, visitors, typed containers, and file events.
 Set `CC` to select a compiler and `CFLAGS` for extra flags.
+
+The standalone CMake project also registers the legacy suite and checks the
+generation recipes for downstream schemas available in the checkout:
+
+```sh
+cmake -S cornerstone/ASDL -B build/asdl
+cmake --build build/asdl
+ctest --test-dir build/asdl --output-on-failure
+```
+
+Libstone's top-level CMake can include the ASDL project through
+`-DLIBSTONE_BUILD_ASDL=ON`. The root option does not change any existing
+consumer's use of `scripts/asdl.pl`.
+
+### Developer transport
+
+On platforms with linkable POSIX message queues the build includes `mqctl`.
+It is a development tool, not part of the schema runtime or installed package.
+Disable it with `-DASDL_BUILD_MQCTL=OFF`. The transport test uses a disposable
+queue with a randomly generated name, not any live coordination queues.
+
+`mqctl create SESSION ROLE` creates an exclusive queue, `inspect` reports
+capacity and pending messages, and `cleanup` removes the name. `send` accepts
+a payload on standard input; `receive` prints the validated `ASDL-MQ/1` header
+and the payload bytes. Timeouts return status 3, invalid requests return 2,
+and other errors return 1.
