@@ -33,3 +33,7 @@ run(args.schema, "-", "first", "--second", body="""
     assert(arg[1] == "first" and arg[2] == "--second")
 """)
 run(args.schema, "-", body="error('driver failure')", status=1, error="driver failure")
+
+modular = args.schema.parent / "modular"
+run("--check", modular / "main.asdl", status=1, error="syntax.nodes")
+run("-I", modular / "modules", "--check", modular / "main.asdl")

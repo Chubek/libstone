@@ -18,8 +18,8 @@ add_library(asdl_runtime
   $<TARGET_OBJECTS:asdl_lua_vendor>)
 add_library(ASDL::runtime ALIAS asdl_runtime)
 set_target_properties(asdl_runtime PROPERTIES EXPORT_NAME runtime OUTPUT_NAME asdl
-  POSITION_INDEPENDENT_CODE ON)
-target_compile_features(asdl_runtime PUBLIC cxx_std_17 PRIVATE c_std_11 cxx_std_20)
+  VERSION "${PROJECT_VERSION}" SOVERSION 1 POSITION_INDEPENDENT_CODE ON)
+target_compile_features(asdl_runtime PUBLIC cxx_std_17 PRIVATE c_std_11)
 target_include_directories(asdl_runtime
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
@@ -109,7 +109,8 @@ if(ASDL_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
   target_link_libraries(asdl_abi_test PRIVATE ASDL::runtime)
   add_test(NAME asdl.abi COMMAND asdl_abi_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calculator.asdl"
-    "${CMAKE_CURRENT_BINARY_DIR}/missing.asdl")
+    "${CMAKE_CURRENT_BINARY_DIR}/missing.asdl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dot_imports/root.asdl")
 
   add_executable(asdl_loader_test tests/asdl_loader_test.c)
   target_compile_features(asdl_loader_test PRIVATE c_std_11)
@@ -125,6 +126,7 @@ if(ASDL_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
     if(PERL_FOUND)
       add_test(NAME asdl.compiler
         COMMAND "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+          "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}"
           "${PERL_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_cli.t"
           "$<TARGET_FILE:asdlc>")
     endif()
@@ -162,6 +164,13 @@ if(ASDL_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
           --schema "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calculator.asdl")
       set(asdl_package_test_tools --tools)
       if(TEST asdl.downstream-legacy)
+        add_test(NAME asdl.codegen
+          COMMAND "${CMAKE_COMMAND}" -E env
+            "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+            "PERL=${PERL_EXECUTABLE}" "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen_parity.py"
+            "$<TARGET_FILE:asdlc>")
+        set_tests_properties(asdl.codegen PROPERTIES TIMEOUT 120)
         add_test(NAME asdl.downstream-native
           COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/downstream.py"
             --root "${CMAKE_CURRENT_SOURCE_DIR}/../.." --work-dir "${CMAKE_CURRENT_BINARY_DIR}"

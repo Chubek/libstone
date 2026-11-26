@@ -13,7 +13,7 @@ if(ASDL_BUILD_TESTS)
   find_package(Perl QUIET)
   if(PERL_FOUND AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME asdl.legacy
-      COMMAND "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}"
+      COMMAND "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}"
         "${PERL_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/asdl.t")
     set_tests_properties(asdl.legacy PROPERTIES TIMEOUT 120)
     find_package(Python3 QUIET COMPONENTS Interpreter)

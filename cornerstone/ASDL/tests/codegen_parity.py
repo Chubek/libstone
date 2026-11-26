@@ -12,6 +12,7 @@ import tempfile
 
 TESTS = Path(__file__).resolve().parent
 PERL = TESTS.parent / "scripts" / "asdl.pl"
+PERL_EXECUTABLE = os.environ.get("PERL", "perl")
 FIXTURE = TESTS / "fixtures" / "calculator.asdl"
 
 
@@ -30,11 +31,11 @@ def main():
     cxx = shlex.split(os.environ.get("CXX", "c++"))
     flags = ("-Wall", "-Wextra", "-Werror", "-pedantic", "-UNDEBUG")
 
-    legacy = run("perl", PERL, "--check", "--schema=-", FIXTURE)
+    legacy = run(PERL_EXECUTABLE, PERL, "--check", "--schema=-", FIXTURE)
     native = run(asdl, "--check", "--schema=-", FIXTURE)
     assert json.loads(legacy) == json.loads(native)
     assert native == run(asdl, "--check", "--schema=-", FIXTURE)
-    assert run("perl", PERL, FIXTURE).split(b"\n", 1)[1] == run(asdl, FIXTURE).split(b"\n", 1)[1]
+    assert run(PERL_EXECUTABLE, PERL, FIXTURE).split(b"\n", 1)[1] == run(asdl, FIXTURE).split(b"\n", 1)[1]
 
     with tempfile.TemporaryDirectory(prefix="asdl-codegen-test-") as tmp:
         root = Path(tmp)
@@ -73,7 +74,7 @@ def main():
         escaped = root / 'input-é"\\.asdl'
         escaped.write_bytes(FIXTURE.read_bytes())
         data = run(asdl, "--check", "--schema=-", escaped)
-        assert json.loads(data) == json.loads(run("perl", PERL, "--check", "--schema=-", escaped))
+        assert json.loads(data) == json.loads(run(PERL_EXECUTABLE, PERL, "--check", "--schema=-", escaped))
 
         macros = root / "macros.asdl"
         macros.write_text("module Macros { expr = EOF(int class) | EOF_(int access); }\n")
