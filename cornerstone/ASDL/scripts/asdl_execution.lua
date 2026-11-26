@@ -1,6 +1,8 @@
 -- Trusted runtime code. The embedding host installs this once, before loading
 -- extension libraries, and retains the returned controller privately.
-return function(asdl)
+return function(asdl, compile)
+    compile = compile or load -- available in the standalone test host only
+    local running = coroutine and coroutine.running
     local pack, unpack = table.pack, table.unpack
     local isnode, typename, tagof = asdl.isnode, asdl.type, asdl.tag
     local make, map_children, clone = asdl.make, asdl.map_children, asdl.clone
@@ -14,7 +16,8 @@ return function(asdl)
     local controller = {}
 
     local function thread()
-        local co, ismain = coroutine.running()
+        if not running then return main end
+        local co, ismain = running()
         return ismain and main or co
     end
 
@@ -130,6 +133,22 @@ return function(asdl)
         end
     end
 
+    -- Some embeddings expose mutable builders. Do not let extension code
+    -- mutate an input root or its existing descendants during a transaction.
+    for _, name in ipairs({"set", "freeze"}) do
+        local mutate = asdl[name]
+        if mutate then
+            asdl[name] = function(...)
+                local state = session()
+                if state then
+                    failure(state, state.current, "ASDL_TRANSFORM",
+                        "asdl." .. name .. " cannot mutate nodes during execution; use immutable constructors")
+                end
+                return mutate(...)
+            end
+        end
+    end
+
     local emit = diagnostic.emit
     function diagnostic.emit(record)
         local state = session()
@@ -241,7 +260,7 @@ return function(asdl)
             assert(#params > 0, "logistics hook needs an AST parameter")
             local source = ("\n"):rep(hook.line - 1)
                 .. "return function(" .. table.concat(params, ",") .. ") " .. hook.body .. "\nend"
-            local chunk, message = load(source, "@" .. hook.file, "t", env)
+            local chunk, message = compile(source, "@" .. hook.file, "t", env)
             assert(chunk, message)
             if hook.check_inherited then
                 hook.inherited = {}

@@ -131,6 +131,25 @@ void call(lua_State* lua, int args, int results)
         throw_error(lua);
 }
 
+// Keep Lua's general-purpose load function unavailable in the session. The
+// private runtime receives a text-only compiler for schema hook closures.
+int compile_hook(lua_State* lua)
+{
+    std::size_t size = 0;
+    const char* source = luaL_checklstring(lua, 1, &size);
+    const char* chunk = luaL_checkstring(lua, 2);
+    luaL_checktype(lua, 4, LUA_TTABLE);
+    if (luaL_loadbufferx(lua, source, size, chunk, "t") != LUA_OK) {
+        lua_pushnil(lua);
+        lua_insert(lua, -2);
+        return 2;
+    }
+    lua_pushvalue(lua, 4);
+    if (!lua_setupvalue(lua, -2, 1))
+        return luaL_error(lua, "schema hook text did not have an environment");
+    return 1;
+}
+
 } // namespace
 
 void push_execution(lua_State* lua, const Schema& schema)
@@ -144,7 +163,8 @@ void push_execution(lua_State* lua, const Schema& schema)
         lua_getglobal(lua, "asdl");
         if (!lua_istable(lua, -1))
             throw std::runtime_error("ASDL core API must be installed before execution");
-        call(lua, 1, 1);
+        lua_pushcfunction(lua, compile_hook);
+        call(lua, 2, 1);
         lua_getfield(lua, -1, "load_schema");
         push_schema(lua, schema);
         call(lua, 1, 0);
