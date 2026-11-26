@@ -1,0 +1,308 @@
+.language "Mini";
+.summary "A basic modular language";
+.unit :toplevel;
+.modular #false;
+
+
+.import JSON, SExpr from std.serialize;
+.import FaultPattern, Inform, Warn, Error from std.diagnostics;
+.import ConstFold, Inline, foldable! from std.rewrite;
+
+
+toplevel ::= (funcdef+ fndef, directive* dir)
+           ;
+
+funcdef ::= (identifier<:fn> name,
+             varinit* vars,
+             statement+ defn)
+          ;
+
+directive ::= Import(string fpath)
+            | Inline(identifier<:fn> fn)
+            | Docstring(identifier<:fn> fn, string doc)
+            ;
+
+varinit ::= Constant(identifier<:const> lhs, literal rhs)
+          | Mutable(identifier<:mut> lhs, expression rhs)
+          ;
+
+statement ::= Expression(expression expr)
+            | MutableRewrite(identifier<:mut> lhs, expression rhs)
+            | Conditional(expression<foldable!> cond,
+                          statement true_arm,
+                          statement false_arm)
+            | Block(statement* body)
+            | Return(expression retval)
+            | Nop
+            ;
+
+expression ::= Literal(literal value)
+             | Reference(identifier name)
+             | Invocation(identifier<:fn> fn)
+             | Binary(binop op, expression lhs, expression rhs)
+             | Unary(unop op, expression operand)
+             ;
+
+literal ::= Integer(int value)
+          | Real(real value)
+          | Boolean(bool value)
+          | String(string value)
+          ;
+
+binop ::= Add | Sub | Mul | Div | Mod
+        | Eq  | Neq
+        | Lt  | Gt  | Leq | Geq
+        | And | Or
+        ;
+
+unop ::= Neg | Not
+       ;
+
+
+.logistics for :toplevel ::= lua(tlvl)
+
+    local fndef, dir = asdl.destruct(tlvl)
+
+    local functions = {}
+    local imports   = {}
+    local inlines   = {}
+    local docs      = {}
+    local errors    = 0
+
+
+    -- Diagnostic patterns
+
+    local NoEntryPoint = FaultPattern(
+        "E001", "No entry point 'main' defined")
+
+    local DuplicateFunction = FaultPattern(
+        "E002", "Function '%s' is already defined")
+
+    local UnknownFunction = FaultPattern(
+        "E003", "Function '%s' is not defined")
+
+    local DuplicateVariable = FaultPattern(
+        "E004", "Variable '%s' is already declared")
+
+    local UnknownVariable = FaultPattern(
+        "E005", "Variable '%s' is not declared")
+
+    local ImmutableRewrite = FaultPattern(
+        "E006", "Cannot rewrite constant '%s'")
+
+    local DuplicateImport = FaultPattern(
+        "W001", "Module '%s' is already imported")
+
+    local DuplicateDocstring = FaultPattern(
+        "W002", "Function '%s' already has a docstring")
+
+
+    local function fault(pattern, node, ...)
+        errors = errors + 1
+        Error(pattern, node, ...)
+    end
+
+
+    -- Pass I: Populate the function namespace.
+
+    for _, fn in ipairs(fndef) do
+        local name, vars, defn = asdl.destruct(fn)
+
+        if functions[name] then
+            fault(DuplicateFunction, fn, name)
+        else
+            functions[name] = fn
+        end
+    end
+
+    if not functions["main"] then
+        fault(NoEntryPoint, tlvl)
+    end
+
+
+    -- Pass II: Process compilation directives.
+
+    for _, d in ipairs(dir) do
+        local tag = asdl.tag(d)
+
+        if tag == "Import" then
+            local fpath = asdl.destruct(d)
+
+            if imports[fpath] then
+                Warn(DuplicateImport, d, fpath)
+            else
+                imports[fpath] = true
+            end
+
+        elseif tag == "Inline" then
+            local fn = asdl.destruct(d)
+
+            if not functions[fn] then
+                fault(UnknownFunction, d, fn)
+            else
+                inlines[fn] = true
+            end
+
+        elseif tag == "Docstring" then
+            local fn, doc = asdl.destruct(d)
+
+            if not functions[fn] then
+                fault(UnknownFunction, d, fn)
+            else
+                if docs[fn] then
+                    Warn(DuplicateDocstring, d, fn)
+                end
+
+                docs[fn] = doc
+            end
+        end
+    end
+
+
+    -- Pass III: Validate expressions.
+
+    local function check_expr(expr, scope)
+        local tag = asdl.tag(expr)
+
+        if tag == "Reference" then
+            local name = asdl.destruct(expr)
+
+            if not scope[name] then
+                fault(UnknownVariable, expr, name)
+            end
+
+        elseif tag == "Invocation" then
+            local fn = asdl.destruct(expr)
+
+            if not functions[fn] then
+                fault(UnknownFunction, expr, fn)
+            end
+
+        elseif tag == "Binary" then
+            local op, lhs, rhs = asdl.destruct(expr)
+
+            check_expr(lhs, scope)
+            check_expr(rhs, scope)
+
+        elseif tag == "Unary" then
+            local op, operand = asdl.destruct(expr)
+
+            check_expr(operand, scope)
+        end
+    end
+
+
+    -- Pass IV: Validate statements.
+
+    local function check_stmt(stmt, scope)
+        local tag = asdl.tag(stmt)
+
+        if tag == "Expression" or tag == "Return" then
+            local expr = asdl.destruct(stmt)
+
+            check_expr(expr, scope)
+
+        elseif tag == "MutableRewrite" then
+            local lhs, rhs = asdl.destruct(stmt)
+
+            if not scope[lhs] then
+                fault(UnknownVariable, stmt, lhs)
+
+            elseif scope[lhs] == ":const" then
+                fault(ImmutableRewrite, stmt, lhs)
+            end
+
+            check_expr(rhs, scope)
+
+        elseif tag == "Conditional" then
+            local cond, tarm, farm = asdl.destruct(stmt)
+
+            check_expr(cond, scope)
+            check_stmt(tarm, scope)
+            check_stmt(farm, scope)
+
+        elseif tag == "Block" then
+            local body = asdl.destruct(stmt)
+
+            for _, item in ipairs(body) do
+                check_stmt(item, scope)
+            end
+        end
+    end
+
+
+    -- Pass V: Establish and validate function-local scopes.
+
+    for _, fn in ipairs(fndef) do
+        local name, vars, defn = asdl.destruct(fn)
+        local scope = {}
+
+        for _, v in ipairs(vars) do
+            local lhs, rhs = asdl.destruct(v)
+            local tag = asdl.tag(v)
+
+            -- Initializers may reference earlier declarations.
+            if tag == "Mutable" then
+                check_expr(rhs, scope)
+            end
+
+            if scope[lhs] then
+                fault(DuplicateVariable, v, lhs)
+            else
+                scope[lhs] =
+                    tag == "Constant" and ":const" or ":mut"
+            end
+        end
+
+        for _, stmt in ipairs(defn) do
+            check_stmt(stmt, scope)
+        end
+    end
+
+
+    -- Do not transform a semantically invalid tree.
+
+    if errors > 0 then
+        return nil
+    end
+
+
+    -- Pass VI: Attach semantic metadata.
+
+    for name, doc in pairs(docs) do
+        asdl.annotate(functions[name], "docstring", doc)
+    end
+
+
+    -- Pass VII: Perform tree transformations.
+
+    tlvl = ConstFold(tlvl)
+
+    -- Iterate in declaration order rather than hash-table order.
+    for _, fn in ipairs(fndef) do
+        local name = asdl.destruct(fn)
+
+        if inlines[name] then
+            tlvl = Inline(tlvl, name)
+        end
+    end
+
+    -- Inlining may expose additional constant expressions.
+    tlvl = ConstFold(tlvl)
+
+
+    -- Pass VIII: Optional serialization.
+
+    if asdl.option("dump-json") then
+        Inform(JSON(tlvl))
+    end
+
+    if asdl.option("dump-sexpr") then
+        Inform(SExpr(tlvl))
+    end
+
+    Inform("Mini: semantic analysis completed successfully")
+
+    return tlvl
+
+.end

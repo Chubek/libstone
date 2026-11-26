@@ -1,0 +1,951 @@
+.language "MiniML";
+.summary "A polymorphic, higher-order, functional language";
+.version "0.1.0";
+.unit :toplevel;
+.modular #false;
+
+
+.import JSON, SExpr from std.serialize;
+
+.import FaultPattern, Inform, Warn, Error
+    from std.diagnostics;
+
+.import Fresh, Named, Arrow, Tuple, Mono,
+        Unify, Instantiate, Generalize, Pretty,
+        CtorScheme, InstantiateCtor
+    from std.types.hm;
+
+.import Env from std.semantics.environment;
+
+.import CheckCoverage
+    from std.semantics.patterns;
+
+.import Curry, ConstFold
+    from std.rewrite;
+
+
+
+/* ============================================
+ * ABSTRACT SYNTAX
+ * ============================================ */
+
+toplevel ::= (declaration+ decls)
+           ;
+
+
+declaration ::= Define(binding bind)
+              | Datatype(identifier<:type> name,
+                         identifier<:tyvar>* params,
+                         ctor_def+ ctors)
+              | Evaluate(expression expr)
+              ;
+
+
+ctor_def ::= (identifier<:ctor> name,
+              typeexpr* args)
+           ;
+
+
+binding ::= Value(identifier<:var> name,
+                  expression rhs)
+          | Recursive(identifier<:var> name,
+                      identifier<:var> param,
+                      expression body)
+          ;
+
+
+expression ::= Literal(literal value)
+
+             | Reference(identifier<:var> name)
+
+             | Constructor(identifier<:ctor> name,
+                           expression* args)
+
+             | Lambda(identifier<:var> param,
+                      expression body)
+
+             | Application(expression fn,
+                           expression arg)
+
+             | LambdaMany(identifier<:var>+ params,
+                          expression body)
+
+             | ApplicationMany(expression fn,
+                               expression+ args)
+
+             | Let(binding bind,
+                   expression body)
+
+             | Conditional(expression cond,
+                           expression conseq,
+                           expression altern)
+
+             | Match(expression subject,
+                     matcharm+ arms)
+
+             | Product(expression+ elems)
+
+             | Ascription(expression expr,
+                          typeexpr annotation)
+             ;
+
+
+matcharm ::= (pattern pat,
+              expression? guard,
+              expression body)
+           ;
+
+
+pattern ::= Wildcard
+
+          | Bind(identifier<:var> name)
+
+          | LiteralPattern(literal value)
+
+          | ConstructorPattern(identifier<:ctor> name,
+                               pattern* args)
+
+          | ProductPattern(pattern+ elems)
+
+          | Alias(pattern pat,
+                  identifier<:var> name)
+
+          | Alternative(pattern lhs,
+                        pattern rhs)
+          ;
+
+
+typeexpr ::= TypeName(identifier<:type> name,
+                      typeexpr* args)
+
+           | TypeVariable(identifier<:tyvar> name)
+
+           | FunctionType(typeexpr domain,
+                          typeexpr codomain)
+
+           | ProductType(typeexpr+ elems)
+           ;
+
+
+literal ::= Integer(int value)
+          | Real(real value)
+          | Boolean(bool value)
+          | String(string value)
+          | Unit
+          ;
+
+
+
+/* ============================================
+ * LITERAL LOGISTICS
+ * Synthesized attribute: inferred type
+ * ============================================ */
+
+.logistics for :literal ::= lua(lit)
+
+    local types = {
+        Integer = "int",
+        Real    = "real",
+        Boolean = "bool",
+        String  = "string",
+        Unit    = "unit"
+    }
+
+    return Named(types[asdl.tag(lit)], {})
+
+.end
+
+
+
+/* ============================================
+ * TYPE EXPRESSION LOGISTICS
+ * Inherited: environment, type parameters
+ * Synthesized: internal monotype
+ * ============================================ */
+
+.logistics for :typeexpr ::= lua(ty, env, params)
+
+    local tag = asdl.tag(ty)
+
+    if tag == "TypeName" then
+
+        local name, args = asdl.destruct(ty)
+        local arity = Env.type_arity(env, name)
+
+        if arity == nil then
+            Error("Unknown type: " .. name, ty)
+            error("type resolution failed", 0)
+        end
+
+        if #args ~= arity then
+            Error("Incorrect type arity: " .. name, ty)
+            error("type resolution failed", 0)
+        end
+
+        local resolved = {}
+
+        for i, arg in ipairs(args) do
+            resolved[i] =
+                asdl.logistics(arg, env, params)
+        end
+
+        return Named(name, resolved)
+
+
+    elseif tag == "TypeVariable" then
+
+        local name = asdl.destruct(ty)
+
+        if not params[name] then
+            Error("Unbound type variable: " .. name, ty)
+            error("type resolution failed", 0)
+        end
+
+        return params[name]
+
+
+    elseif tag == "FunctionType" then
+
+        local domain, codomain = asdl.destruct(ty)
+
+        return Arrow(
+            asdl.logistics(domain, env, params),
+            asdl.logistics(codomain, env, params)
+        )
+
+
+    elseif tag == "ProductType" then
+
+        local elems = asdl.destruct(ty)
+        local types = {}
+
+        for i, elem in ipairs(elems) do
+            types[i] =
+                asdl.logistics(elem, env, params)
+        end
+
+        return Tuple(types)
+
+    end
+
+.end
+
+
+
+/* ============================================
+ * CONSTRUCTOR DEFINITION LOGISTICS
+ * Inherited: environment, quantified variables,
+ *            parameter map, result type
+ * Synthesized: extended environment
+ * ============================================ */
+
+.logistics for :ctor_def ::= lua(
+    ctor, env, quantified, params, result
+)
+
+    local name, args = asdl.destruct(ctor)
+    local argtypes = {}
+
+    for i, arg in ipairs(args) do
+        argtypes[i] =
+            asdl.logistics(arg, env, params)
+    end
+
+    local scheme = CtorScheme(
+        quantified,
+        argtypes,
+        result
+    )
+
+    return Env.declare_ctor(env, name, scheme, ctor)
+
+.end
+
+
+
+/* ============================================
+ * PATTERN LOGISTICS
+ * Inherited: environment, expected type,
+ *            pattern-local bindings
+ *
+ * Synthesized: names bound by the pattern
+ * ============================================ */
+
+.logistics for :pattern ::= lua(
+    pat, env, expected, bindings
+)
+
+    local tag = asdl.tag(pat)
+
+    local DuplicateBinding = FaultPattern(
+        "E201", "Repeated pattern binding '%s'")
+
+    local UnequalAlternatives = FaultPattern(
+        "E202", "Alternative patterns bind different names")
+
+
+    local function bind(name, ty)
+
+        if bindings[name] then
+            Error(DuplicateBinding, pat, name)
+            error("invalid pattern", 0)
+        end
+
+        bindings[name] = ty
+
+    end
+
+
+    if tag == "Wildcard" then
+
+        -- No constraints and no bindings.
+
+
+    elseif tag == "Bind" then
+
+        local name = asdl.destruct(pat)
+
+        bind(name, expected)
+
+
+    elseif tag == "LiteralPattern" then
+
+        local lit = asdl.destruct(pat)
+        local actual = asdl.logistics(lit)
+
+        Unify(expected, actual, pat)
+
+
+    elseif tag == "ConstructorPattern" then
+
+        local name, args = asdl.destruct(pat)
+
+        local scheme = Env.lookup_ctor(env, name, pat)
+
+        local argtypes, result =
+            InstantiateCtor(scheme)
+
+        if #args ~= #argtypes then
+            Error("Incorrect constructor arity: " .. name,
+                  pat)
+            error("invalid pattern", 0)
+        end
+
+        Unify(expected, result, pat)
+
+        for i, arg in ipairs(args) do
+            asdl.logistics(
+                arg, env, argtypes[i], bindings
+            )
+        end
+
+
+    elseif tag == "ProductPattern" then
+
+        local elems = asdl.destruct(pat)
+        local types = {}
+
+        for i, elem in ipairs(elems) do
+            types[i] = Fresh()
+        end
+
+        Unify(expected, Tuple(types), pat)
+
+        for i, elem in ipairs(elems) do
+            asdl.logistics(
+                elem, env, types[i], bindings
+            )
+        end
+
+
+    elseif tag == "Alias" then
+
+        local inner, name = asdl.destruct(pat)
+
+        asdl.logistics(
+            inner, env, expected, bindings
+        )
+
+        bind(name, expected)
+
+
+    elseif tag == "Alternative" then
+
+        local lhs, rhs = asdl.destruct(pat)
+
+        local left_bindings  = {}
+        local right_bindings = {}
+
+        asdl.logistics(
+            lhs, env, expected, left_bindings
+        )
+
+        asdl.logistics(
+            rhs, env, expected, right_bindings
+        )
+
+        for name, ty in pairs(left_bindings) do
+
+            if not right_bindings[name] then
+                Error(UnequalAlternatives, pat)
+                error("invalid pattern", 0)
+            end
+
+            Unify(ty, right_bindings[name], pat)
+
+        end
+
+        for name, ty in pairs(right_bindings) do
+
+            if not left_bindings[name] then
+                Error(UnequalAlternatives, pat)
+                error("invalid pattern", 0)
+            end
+
+        end
+
+        for name, ty in pairs(left_bindings) do
+            bind(name, ty)
+        end
+
+    end
+
+    return bindings
+
+.end
+
+
+
+/* ============================================
+ * MATCH ARM LOGISTICS
+ * Inherited: environment, subject type,
+ *            compilation context
+ * Synthesized: result type
+ * ============================================ */
+
+.logistics for :matcharm ::= lua(
+    arm, env, subject_type, ctx
+)
+
+    local pat, guard, body = asdl.destruct(arm)
+
+    local bindings =
+        asdl.logistics(pat, env, subject_type, {})
+
+    local localenv = env
+
+    for name, ty in pairs(bindings) do
+        localenv = Env.bind_value(
+            localenv, name, Mono(ty)
+        )
+    end
+
+    if guard ~= nil then
+
+        local guard_type =
+            asdl.logistics(guard, localenv, ctx)
+
+        Unify(
+            guard_type,
+            Named("bool", {}),
+            guard
+        )
+
+    end
+
+    return asdl.logistics(body, localenv, ctx)
+
+.end
+
+
+
+/* ============================================
+ * EXPRESSION LOGISTICS
+ * Inherited: typing environment,
+ *            compilation context
+ * Synthesized: inferred monotype
+ * ============================================ */
+
+.logistics for :expression ::= lua(expr, env, ctx)
+
+    local tag = asdl.tag(expr)
+    local ty
+
+
+    if tag == "Literal" then
+
+        local lit = asdl.destruct(expr)
+
+        ty = asdl.logistics(lit)
+
+
+    elseif tag == "Reference" then
+
+        local name = asdl.destruct(expr)
+
+        local scheme =
+            Env.lookup_value(env, name, expr)
+
+        ty = Instantiate(scheme)
+
+
+    elseif tag == "Constructor" then
+
+        local name, args = asdl.destruct(expr)
+
+        local scheme =
+            Env.lookup_ctor(env, name, expr)
+
+        local argtypes, result =
+            InstantiateCtor(scheme)
+
+        if #args ~= #argtypes then
+            Error("Incorrect constructor arity: " .. name,
+                  expr)
+            error("invalid constructor", 0)
+        end
+
+        for i, arg in ipairs(args) do
+
+            local actual =
+                asdl.logistics(arg, env, ctx)
+
+            Unify(actual, argtypes[i], arg)
+
+        end
+
+        ty = result
+
+
+    elseif tag == "Lambda" then
+
+        local param, body = asdl.destruct(expr)
+
+        local param_type = Fresh()
+
+        local localenv = Env.bind_value(
+            env, param, Mono(param_type)
+        )
+
+        local body_type =
+            asdl.logistics(body, localenv, ctx)
+
+        ty = Arrow(param_type, body_type)
+
+
+    elseif tag == "Application" then
+
+        local fn, arg = asdl.destruct(expr)
+
+        local fn_type =
+            asdl.logistics(fn, env, ctx)
+
+        local arg_type =
+            asdl.logistics(arg, env, ctx)
+
+        local result = Fresh()
+
+        Unify(
+            fn_type,
+            Arrow(arg_type, result),
+            expr
+        )
+
+        ty = result
+
+
+    elseif tag == "Let" then
+
+        local bind, body = asdl.destruct(expr)
+
+        local localenv =
+            asdl.logistics(bind, env, ctx)
+
+        ty = asdl.logistics(body, localenv, ctx)
+
+
+    elseif tag == "Conditional" then
+
+        local cond, conseq, altern =
+            asdl.destruct(expr)
+
+        local cond_type =
+            asdl.logistics(cond, env, ctx)
+
+        Unify(
+            cond_type,
+            Named("bool", {}),
+            cond
+        )
+
+        local ttype =
+            asdl.logistics(conseq, env, ctx)
+
+        local ftype =
+            asdl.logistics(altern, env, ctx)
+
+        Unify(ttype, ftype, expr)
+
+        ty = ttype
+
+
+    elseif tag == "Match" then
+
+        local subject, arms = asdl.destruct(expr)
+
+        local subject_type =
+            asdl.logistics(subject, env, ctx)
+
+        local result = Fresh()
+
+        for _, arm in ipairs(arms) do
+
+            local arm_type = asdl.logistics(
+                arm, env, subject_type, ctx
+            )
+
+            Unify(result, arm_type, arm)
+
+        end
+
+        -- Coverage analysis is deferred until inference
+        -- has supplied all relevant type constraints.
+
+        table.insert(ctx.matches, {
+            node = expr,
+            env  = env,
+            type = subject_type,
+            arms = arms
+        })
+
+        ty = result
+
+
+    elseif tag == "Product" then
+
+        local elems = asdl.destruct(expr)
+        local types = {}
+
+        for i, elem in ipairs(elems) do
+            types[i] =
+                asdl.logistics(elem, env, ctx)
+        end
+
+        ty = Tuple(types)
+
+
+    elseif tag == "Ascription" then
+
+        local inner, annotation =
+            asdl.destruct(expr)
+
+        local inferred =
+            asdl.logistics(inner, env, ctx)
+
+        -- Ascriptions in MiniML are closed monotypes.
+
+        local declared =
+            asdl.logistics(annotation, env, {})
+
+        Unify(inferred, declared, expr)
+
+        ty = declared
+
+
+    else
+
+        -- LambdaMany and ApplicationMany should have
+        -- been eliminated by the Curry rewrite.
+
+        error("Unexpected expression: " .. tag, 0)
+
+    end
+
+
+    -- Keep the internal type rather than immediately
+    -- formatting it: later unification may refine it.
+
+    ctx.types[expr] = ty
+
+    return ty
+
+.end
+
+
+
+/* ============================================
+ * BINDING LOGISTICS
+ * Inherited: typing environment,
+ *            compilation context
+ * Synthesized: extended typing environment
+ * ============================================ */
+
+.logistics for :binding ::= lua(bind, env, ctx)
+
+    local tag = asdl.tag(bind)
+
+    local name
+    local scheme
+
+
+    if tag == "Value" then
+
+        local lhs, rhs = asdl.destruct(bind)
+
+        name = lhs
+
+        local inferred =
+            asdl.logistics(rhs, env, ctx)
+
+        scheme = Generalize(env, inferred)
+
+
+    elseif tag == "Recursive" then
+
+        local lhs, param, body =
+            asdl.destruct(bind)
+
+        name = lhs
+
+        local param_type  = Fresh()
+        local result_type = Fresh()
+
+        local fn_type =
+            Arrow(param_type, result_type)
+
+        -- Recursive references are monomorphic within
+        -- the body of their own definition.
+
+        local localenv = Env.bind_value(
+            env, name, Mono(fn_type)
+        )
+
+        localenv = Env.bind_value(
+            localenv, param, Mono(param_type)
+        )
+
+        local actual =
+            asdl.logistics(body, localenv, ctx)
+
+        Unify(result_type, actual, bind)
+
+        -- Generalize only after the recursive function
+        -- has been completely inferred.
+
+        scheme = Generalize(env, fn_type)
+
+    end
+
+    ctx.bindings[bind] = scheme
+
+    return Env.bind_value(env, name, scheme)
+
+.end
+
+
+
+/* ============================================
+ * DECLARATION LOGISTICS
+ * Inherited: environment, compilation context
+ * Synthesized: extended environment
+ * ============================================ */
+
+.logistics for :declaration ::= lua(decl, env, ctx)
+
+    local tag = asdl.tag(decl)
+
+
+    if tag == "Define" then
+
+        local bind = asdl.destruct(decl)
+
+        return asdl.logistics(bind, env, ctx)
+
+
+    elseif tag == "Datatype" then
+
+        local name, params, ctors =
+            asdl.destruct(decl)
+
+        local variables = {}
+        local quantified = {}
+
+        for i, param in ipairs(params) do
+
+            if variables[param] then
+                Error("Duplicate type parameter: " .. param,
+                      decl)
+                error("invalid datatype", 0)
+            end
+
+            local var = Fresh()
+
+            variables[param] = var
+            quantified[i] = var
+
+        end
+
+        -- Register the type before its constructors.
+        -- This permits recursive algebraic data types.
+
+        local newenv = Env.declare_type(
+            env, name, #params, decl
+        )
+
+        local result = Named(name, quantified)
+
+        for _, ctor in ipairs(ctors) do
+
+            newenv = asdl.logistics(
+                ctor,
+                newenv,
+                quantified,
+                variables,
+                result
+            )
+
+        end
+
+        return newenv
+
+
+    elseif tag == "Evaluate" then
+
+        local expr = asdl.destruct(decl)
+
+        asdl.logistics(expr, env, ctx)
+
+        return env
+
+    end
+
+.end
+
+
+
+/* ============================================
+ * TOPLEVEL LOGISTICS
+ * Synthesized: validated and annotated AST
+ * ============================================ */
+
+.logistics for :toplevel ::= lua(tlvl)
+
+    local NonExhaustive = FaultPattern(
+        "W301", "Non-exhaustive match; missing case: %s")
+
+    local RedundantPattern = FaultPattern(
+        "W302", "Redundant match arm")
+
+
+    -- Normalize syntactic sugar before inference.
+    -- This rewrite does not eliminate semantic branches.
+
+    tlvl = Curry(tlvl)
+
+
+    local decls = asdl.destruct(tlvl)
+
+    local ctx = {
+        types    = {},
+        bindings = {},
+        matches  = {}
+    }
+
+    local env = Env.prelude("MiniML")
+
+
+    -- Infer each declaration in lexical order.
+
+    for _, decl in ipairs(decls) do
+        env = asdl.logistics(decl, env, ctx)
+    end
+
+
+    -- Perform pattern coverage analysis.
+
+    for _, match in ipairs(ctx.matches) do
+
+        local report = CheckCoverage(
+            match.env,
+            match.type,
+            match.arms
+        )
+
+        if not report.exhaustive then
+
+            Warn(
+                NonExhaustive,
+                match.node,
+                report.witness
+            )
+
+        end
+
+        for _, arm in ipairs(report.redundant) do
+            Warn(RedundantPattern, arm)
+        end
+
+    end
+
+
+    -- Materialize synthesized type annotations.
+
+    for expr, ty in pairs(ctx.types) do
+
+        asdl.annotate(
+            expr,
+            "inferred-type",
+            Pretty(ty)
+        )
+
+    end
+
+    for bind, scheme in pairs(ctx.bindings) do
+
+        asdl.annotate(
+            bind,
+            "type-scheme",
+            Pretty(scheme)
+        )
+
+    end
+
+
+    -- Emit top-level inferred type signatures.
+
+    for _, decl in ipairs(decls) do
+
+        if asdl.tag(decl) == "Define" then
+
+            local bind = asdl.destruct(decl)
+            local name = asdl.destruct(bind)
+
+            Inform(
+                name .. " : " ..
+                Pretty(ctx.bindings[bind])
+            )
+
+        end
+
+    end
+
+
+    -- Rewrite only after successful type checking.
+    -- ConstFold must preserve types and error semantics.
+
+    if asdl.option("optimize") then
+        tlvl = ConstFold(tlvl)
+    end
+
+
+    if asdl.option("dump-json") then
+        Inform(JSON(tlvl))
+    end
+
+    if asdl.option("dump-sexpr") then
+        Inform(SExpr(tlvl))
+    end
+
+    return tlvl
+
+.end

@@ -1,0 +1,305 @@
+.language "MiniRuby";
+.summary "A dynamically typed, Ruby-inspired object language";
+.unit :toplevel;
+.modular #false;
+
+.import JSON, SExpr from std.serialize;
+.import Inform, Checkpoint, FailedSince from std.diagnostics;
+.import Scope from std.scope;
+.import Control from std.control;
+.import RubyError from miniruby.diagnostics;
+.import Ruby from miniruby.semantics;
+
+toplevel ::= (declaration* decls);
+
+declaration ::= ClassDef(identifier<:class> name,
+                         identifier<:class>? superclass,
+                         class_member* members)
+              | TopExpr(expression expr);
+
+class_member ::= MethodDef(method defn)
+               | ClassExpr(expression expr);
+
+method ::= (method_kind kind, identifier<:method> name,
+            parameter* params, expression body);
+method_kind ::= Instance | Singleton;
+
+parameter ::= Required(identifier<:local> name)
+            | Optional(identifier<:local> name, expression default)
+            | Rest(identifier<:local>? name)
+            | KeywordRequired(identifier<:local> name)
+            | KeywordOptional(identifier<:local> name, expression default)
+            | KeywordRest(identifier<:local>? name)
+            | BlockParam(identifier<:local> name);
+
+block ::= (block_kind kind, parameter* params,
+           identifier<:local>* locals, expression body);
+block_kind ::= Closure | Lambda;
+
+argument ::= Positional(expression value)
+           | Splat(expression value)
+           | Keyword(identifier name, expression value)
+           | KeywordSplat(expression value)
+           | BlockPass(expression value);
+
+target ::= LocalTarget(identifier<:local> name)
+         | InstanceTarget(identifier<:ivar> name)
+         | AttributeTarget(expression receiver, identifier<:method> name)
+         | IndexTarget(expression receiver, expression+ indices)
+         | Destructure(target* elems, target? rest);
+
+expression ::= Literal(literal value)
+             | Name(identifier name)
+             | Self
+             | ConstantRef(identifier<:class> name)
+             | InstanceRead(identifier<:ivar> name)
+             | Assign(target lhs, expression rhs)
+             | ParallelAssign(target+ lhs, expression+ rhs)
+             | Send(expression? receiver, identifier<:method> name,
+                    argument* args, block? attached)
+             | SafeSend(expression receiver, identifier<:method> name,
+                        argument* args, block? attached)
+             | BlockValue(block closure)
+             | Yield(argument* args)
+             | Super(argument* args, block? attached)
+             | SuperForward
+             | Array(expression* elems)
+             | Hash(hash_entry* entries)
+             | Range(expression first, expression last, bool exclusive)
+             | Interpolate(string_part* parts)
+             | And(expression lhs, expression rhs)
+             | Or(expression lhs, expression rhs)
+             | Not(expression operand)
+             | If(expression cond, expression body, expression? altern)
+             | Unless(expression cond, expression body, expression? altern)
+             | While(expression cond, expression body)
+             | Until(expression cond, expression body)
+             | Sequence(expression* elems)
+             | Case(expression subject, case_arm+ arms, expression? altern)
+             | Try(expression body, rescue_arm* handlers,
+                   expression? altern, expression? ensure_body)
+             | Raise(expression? value)
+             | Return(expression? value)
+             | Break(expression? value)
+             | Next(expression? value)
+             | Retry;
+
+hash_entry ::= Pair(expression key, expression value)
+             | HashSpread(expression value);
+string_part ::= Text(string value) | Embedded(expression value);
+case_arm ::= (expression+ tests, expression body);
+rescue_arm ::= (expression* classes, identifier<:local>? name,
+                expression body);
+literal ::= Integer(int value) | Real(real value) | String(string value)
+          | Symbol(string value) | Boolean(bool value) | Nil;
+
+/* Shared helpers live in Lua libraries; each hook owns its traversal. */
+
+.logistics for :toplevel ::= lua(root)
+    local mark = Checkpoint()
+    root = Ruby.normalize(root)
+    local decls = asdl.destruct(root)
+    local ctx = Ruby.context()
+    local scope = Scope.new(nil, "top", root, ctx)
+    local ctl = Control.enter(nil, "top", root, ctx)
+
+    for _, decl in ipairs(decls) do
+        if asdl.tag(decl) == "TopExpr" then
+            Ruby.predeclare(asdl.destruct(decl), scope)
+        end
+    end
+    for _, decl in ipairs(decls) do
+        asdl.logistics(decl, scope, ctl, ctx)
+    end
+    Scope.finish(scope)
+    if FailedSince(mark) then return nil end
+    if asdl.option("dump-json") then Inform(JSON(root)) end
+    if asdl.option("dump-sexpr") then Inform(SExpr(root)) end
+    return root
+.end
+
+.logistics for :declaration ::= lua(decl, scope, ctl, ctx)
+    if asdl.tag(decl) == "TopExpr" then
+        asdl.logistics(asdl.destruct(decl), scope, ctl, ctx)
+        return
+    end
+    local name, superclass, members = asdl.destruct(decl)
+    local class = Ruby.open_class(decl, name, superclass, ctx)
+    local inner = Scope.new(nil, "class", decl, ctx)
+    local frame = Control.enter(nil, "class", decl, ctx)
+    asdl.annotate(decl, "class-name", name)
+    for _, member in ipairs(members) do
+        if asdl.tag(member) == "ClassExpr" then
+            Ruby.predeclare(asdl.destruct(member), inner)
+        end
+    end
+    for _, member in ipairs(members) do
+        asdl.logistics(member, inner, frame, ctx, class, name)
+    end
+    Scope.finish(inner)
+.end
+
+.logistics for :class_member ::= lua(member, scope, ctl, ctx, class, name)
+    local value = asdl.destruct(member)
+    if asdl.tag(member) == "MethodDef" then
+        Ruby.register_method(class, name, value)
+        asdl.logistics(value, ctx, name)
+    else
+        asdl.logistics(value, scope, ctl, ctx)
+    end
+.end
+
+.logistics for :method ::= lua(defn, ctx, class_name)
+    local kind, name, params, body = asdl.destruct(defn)
+    -- Methods cannot capture class-body locals.
+    local scope = Scope.new(nil, "method", defn, ctx)
+    local ctl = Control.enter(nil, "method", defn, ctx)
+    asdl.annotate(defn, "owner-class", class_name)
+    asdl.annotate(defn, "method-kind", asdl.tag(kind))
+    Ruby.parameters(params, scope, ctl, ctx)
+    Ruby.predeclare(body, scope)
+    asdl.logistics(body, scope, ctl, ctx)
+    Scope.finish(scope)
+.end
+
+.logistics for :parameter ::= lua(param, scope, ctl, ctx)
+    local name, default = asdl.destruct(param)
+    -- Defaults see earlier parameters and enclosing lexical scopes.
+    if default then
+        Ruby.predeclare(default, scope)
+        asdl.logistics(default, scope, ctl, ctx)
+    end
+    if name then
+        local b = Scope.declare(scope, name, "parameter")
+        if not b then RubyError("E101", param, name)
+        else asdl.annotate(param, "binding-id", b.id) end
+    end
+.end
+
+.logistics for :block ::= lua(blk, outer, ctl, ctx)
+    local kind, params, locals, body = asdl.destruct(blk)
+    local flavor = asdl.tag(kind) == "Lambda" and "lambda" or "block"
+    local scope = Scope.new(outer, flavor, blk, ctx)
+    local frame = Control.enter(ctl, flavor, blk, ctx)
+    for _, name in ipairs(locals) do
+        if not Scope.declare(scope, name, "block-local") then
+            RubyError("E101", blk, name)
+        end
+    end
+    Ruby.parameters(params, scope, frame, ctx)
+    Ruby.predeclare(body, scope)
+    asdl.logistics(body, scope, frame, ctx)
+    Scope.finish(scope)
+.end
+
+.logistics for :target ::= lua(lhs, scope, ctl, ctx)
+    local tag = asdl.tag(lhs)
+    if tag == "LocalTarget" then
+        local name = asdl.destruct(lhs)
+        local b = assert(Scope.resolve(scope, name), "missing predeclared local")
+        asdl.annotate(lhs, "binding-id", b.id)
+    elseif tag == "AttributeTarget" then
+        local recv, name = asdl.destruct(lhs)
+        asdl.logistics(recv, scope, ctl, ctx)
+        asdl.annotate(lhs, "setter", name .. "=")
+    elseif tag == "IndexTarget" then
+        local recv, indices = asdl.destruct(lhs)
+        asdl.logistics(recv, scope, ctl, ctx)
+        for _, index in ipairs(indices) do asdl.logistics(index, scope, ctl, ctx) end
+    elseif tag == "Destructure" then
+        local elems, rest = asdl.destruct(lhs)
+        for _, item in ipairs(elems) do asdl.logistics(item, scope, ctl, ctx) end
+        if rest then asdl.logistics(rest, scope, ctl, ctx) end
+    end
+.end
+
+.logistics for :argument ::= lua(arg, scope, ctl, ctx)
+    local value, second = asdl.destruct(arg)
+    if asdl.tag(arg) == "Keyword" then value = second end
+    asdl.logistics(value, scope, ctl, ctx)
+.end
+
+.logistics for :case_arm ::= lua(arm, scope, ctl, ctx)
+    local tests, body = asdl.destruct(arm)
+    for _, test in ipairs(tests) do asdl.logistics(test, scope, ctl, ctx) end
+    asdl.logistics(body, scope, ctl, ctx)
+.end
+
+.logistics for :rescue_arm ::= lua(arm, scope, ctl, ctx)
+    local classes, name, body = asdl.destruct(arm)
+    for _, class in ipairs(classes) do asdl.logistics(class, scope, ctl, ctx) end
+    if name then
+        local b = assert(Scope.resolve(scope, name), "missing rescue local")
+        asdl.annotate(arm, "binding-id", b.id)
+    end
+    local frame = Control.enter(ctl, "rescue", arm, ctx)
+    asdl.logistics(body, scope, frame, ctx)
+.end
+
+.logistics for :hash_entry ::= lua(entry, scope, ctl, ctx)
+    for _, child in ipairs(asdl.children(entry)) do
+        asdl.logistics(child, scope, ctl, ctx)
+    end
+.end
+
+.logistics for :string_part ::= lua(part, scope, ctl, ctx)
+    if asdl.tag(part) == "Embedded" then
+        asdl.logistics(asdl.destruct(part), scope, ctl, ctx)
+    end
+.end
+
+.logistics for :literal ::= lua(lit, scope, ctl, ctx)
+    local classes = {Integer="Integer", Real="Float", String="String",
+                     Symbol="Symbol", Boolean="Boolean", Nil="NilClass"}
+    asdl.annotate(lit, "literal-class", classes[asdl.tag(lit)])
+.end
+
+.logistics for :expression ::= lua(expr, scope, ctl, ctx)
+    local tag = asdl.tag(expr)
+    if tag == "Name" then
+        local name = asdl.destruct(expr)
+        local b = Scope.resolve(scope, name)
+        if b then
+            asdl.annotate(expr, "resolution", "local")
+            asdl.annotate(expr, "binding-id", b.id)
+        else
+            asdl.annotate(expr, "resolution", "implicit-self-send")
+        end
+    elseif tag == "Send" or tag == "SafeSend" then
+        local recv, name, args, attached = asdl.destruct(expr)
+        if recv then asdl.logistics(recv, scope, ctl, ctx) end
+        Ruby.arguments(args, attached, scope, ctl, ctx)
+        asdl.annotate(expr, "dispatch", "dynamic")
+        if tag == "SafeSend" then asdl.annotate(expr, "nil-short-circuit", true) end
+    elseif tag == "Super" or tag == "Yield" then
+        Ruby.control(expr, tag, ctl)
+        local args, attached = asdl.destruct(expr)
+        Ruby.arguments(args, attached, scope, ctl, ctx)
+    elseif tag == "SuperForward" then
+        Ruby.control(expr, "Super", ctl)
+    elseif tag == "Return" or tag == "Break" or tag == "Next" or tag == "Retry" then
+        Ruby.control(expr, tag, ctl)
+        local value = asdl.destruct(expr)
+        if value then asdl.logistics(value, scope, ctl, ctx) end
+    elseif tag == "While" then
+        local cond, body = asdl.destruct(expr)
+        asdl.logistics(cond, scope, ctl, ctx)
+        local frame = Control.enter(ctl, "loop", expr, ctx)
+        asdl.logistics(body, scope, frame, ctx)
+    elseif tag == "Assign" then
+        local lhs, rhs = asdl.destruct(expr)
+        asdl.logistics(lhs, scope, ctl, ctx)
+        asdl.logistics(rhs, scope, ctl, ctx)
+    elseif tag == "ParallelAssign" then
+        local lhs, rhs = asdl.destruct(expr)
+        for _, item in ipairs(lhs) do asdl.logistics(item, scope, ctl, ctx) end
+        for _, item in ipairs(rhs) do asdl.logistics(item, scope, ctl, ctx) end
+    elseif tag == "Unless" or tag == "Until" then
+        error("unnormalized expression: " .. tag, 0)
+    else
+        -- All other expression children have the same inherited context.
+        for _, child in ipairs(asdl.children(expr)) do
+            asdl.logistics(child, scope, ctl, ctx)
+        end
+    end
+.end
