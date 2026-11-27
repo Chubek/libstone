@@ -1,0 +1,4 @@
+(library Minimal
+  (def MINIMAL_BASE 40)
+  (fn int minimal_answer ((int delta))
+    (block (return (+ MINIMAL_BASE delta)))))

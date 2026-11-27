@@ -1,0 +1,12 @@
+(module ArithmeticExtra
+  (import "Arithmetic.am8")
+  (export twice arithmetic_double)
+  (syntax (twice $value) (plus $value $value))
+  (fn "long long" arithmetic_double (((ptr (const "long long")) operands))
+    (block (return (twice (index operands 0)))))
+  (c "
+static const arithmetic_form arithmetic_extra_vocabulary[] = {
+    {\"twice\", ARITHMETIC_OPERATION, 1, arithmetic_double},
+    {NULL, ARITHMETIC_INTEGER, 0, NULL}
+};
+"))

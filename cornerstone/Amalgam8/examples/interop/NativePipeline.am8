@@ -1,0 +1,33 @@
+(library NativePipeline
+  (use tourchstone:xbind)
+  (use moonstone:core)
+  (use firestone:BigInt)
+
+  (extern int am8_xbind_has_target (((ptr (const char)) name)))
+  (extern int am8_moonstone_sexpr_arity (((ptr (const char)) text)))
+  (extern int am8_demo_bigint_check ((int arity)))
+
+  (cpp "extern \"C\" inline int am8_demo_bigint_check(int arity) {
+    using firestone::bignum::BigInt;
+    try {
+        return BigInt(\"18446744073709551615\") + BigInt(arity) ==
+               BigInt(\"18446744073709551618\");
+    } catch (...) {
+        return 0;
+    }
+}")
+
+  (fn int native_pipeline (((ptr (const char)) target) ((ptr (const char)) text))
+    (block
+      (if (! (call am8_xbind_has_target target)) (return 1))
+      (let int arity (call am8_moonstone_sexpr_arity text))
+      (if (< arity 0) (return 2))
+      (if (! (call am8_demo_bigint_check arity)) (return 3))
+      (return 0)))
+
+  (fn int run_pipeline ((int argc) ((ptr (ptr char)) argv))
+    (block
+      (if (!= argc 3) (return 64))
+      (return (call native_pipeline (index argv 1) (index argv 2)))))
+
+  (cli run_pipeline))

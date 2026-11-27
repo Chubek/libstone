@@ -1,0 +1,7 @@
+(library Generator
+  (syntax (constant $name $value) (def $name $value))
+  (stage-fn make (name value) (list (quote constant) name value))
+  (stage (declarations (make (quote BASE) (quote 40))
+                       (make (quote DELTA) (quote 2))))
+  (fn int generated_answer () (block (return (+ BASE DELTA))))
+  (cli "return generated_answer() == 42 && argc == 2 && argv[1][0] == 'x' ? 0 : 1;"))

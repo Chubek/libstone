@@ -1,0 +1,38 @@
+(library ArithmeticExample
+  (import "Arithmetic.am8" A)
+  (import "ArithmeticExtra.am8")
+  (include stdio.h)
+  (fn int arithmetic_eval ((int x))
+    (block
+      (return (twice (A.plus (A.literal 2) (A.times (A.variable x) (A.literal 10)))))))
+  (c "
+static inline int arithmetic_interpret(const char *program, long long x, long long *out,
+                                       const char **error) {
+    static const arithmetic_form *const vocabularies[] = {
+        arithmetic_base_vocabulary, arithmetic_extra_vocabulary, NULL
+    };
+    return arithmetic_run(program, x, out, error, vocabularies);
+}
+")
+  (fn int arithmetic_main ((int argc) ((ptr (ptr char)) argv))
+    "long long x = 0;
+     long long result;
+     const char *error;
+     if (argc != 2 && argc != 3) {
+         fputs(\"usage: arithmetic PROGRAM [X]\\n\", stderr);
+         return 2;
+     }
+     if (argc == 3) {
+         const size_t size = arithmetic_bounded_length(argv[2]);
+         if (size > ARITHMETIC_MAX_BYTES || !arithmetic_integer(argv[2], size, &x)) {
+             fputs(\"error: x must be between -1000000 and 1000000\\n\", stderr);
+             return 1;
+         }
+     }
+     if (arithmetic_interpret(argv[1], x, &result, &error)) {
+         fprintf(stderr, \"error: %s\\n\", error);
+         return 1;
+     }
+     printf(\"%lld\\n\", result);
+     return 0;")
+  (cli arithmetic_main))

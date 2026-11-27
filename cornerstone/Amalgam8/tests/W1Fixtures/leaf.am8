@@ -1,0 +1,3 @@
+(module LeafModule
+  (export leaf)
+  (fn int leaf () (block (return 20))))

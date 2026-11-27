@@ -1,0 +1,2 @@
+(module CycleFixture
+  (import "./cycle.am8"))

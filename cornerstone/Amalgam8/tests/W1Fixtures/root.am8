@@ -1,0 +1,9 @@
+; Legacy library roots and explicit module roots share one grammar.
+(library GrammarFixture
+  (import "nested/branch.am8" Branch)
+  (import "leaf.am8")
+  (import "./leaf.am8")
+  (import "leaf.am8" Leaf)
+  (fn int answer ()
+    (block (return (+ (call Branch.branch) (call Leaf.leaf)))))
+  (cli "return answer() == 42 ? 0 : 1;"))

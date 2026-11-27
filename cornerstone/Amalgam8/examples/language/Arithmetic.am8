@@ -1,0 +1,24 @@
+(module Arithmetic
+  (import "Runtime.am8")
+  (export literal variable plus times arithmetic_add arithmetic_mul)
+  (syntax (literal $value) $value)
+  (syntax (variable $name) $name)
+  (syntax (plus $left $right) (+ $left $right))
+  (syntax (times $left $right) (* $left $right))
+
+  (syntax (binary_form $name $form)
+    (fn "long long" $name (((ptr (const "long long")) operands))
+      (block (return ($form (index operands 0) (index operands 1))))))
+
+  (binary_form arithmetic_add plus)
+  (binary_form arithmetic_mul times)
+
+  (c "
+static const arithmetic_form arithmetic_base_vocabulary[] = {
+    {\"literal\", ARITHMETIC_INTEGER, 0, NULL},
+    {\"variable\", ARITHMETIC_VARIABLE, 0, NULL},
+    {\"plus\", ARITHMETIC_OPERATION, 2, arithmetic_add},
+    {\"times\", ARITHMETIC_OPERATION, 2, arithmetic_mul},
+    {NULL, ARITHMETIC_INTEGER, 0, NULL}
+};
+"))

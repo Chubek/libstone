@@ -1,0 +1,4 @@
+(module BranchModule
+  (import "../leaf.am8")
+  (export branch)
+  (fn int branch () (block (return (+ (call leaf) 2)))))

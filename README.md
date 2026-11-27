@@ -41,6 +41,8 @@ cmake -S libstone/flintstone -B build-flintstone
 - `LIBSTONE_BUILD_YELLOWSTONE=ON` enables the active Yellowstone linker and
   object tools. The full suite is off by default; Tourchstone can still use
   the standalone qBFD reader when its native facilities are enabled.
+- `LIBSTONE_BUILD_AMALGAM8=ON` enables [Amalgam8](cornerstone/Amalgam8/README.md),
+  a staged DSL that emits C11-compatible header-only APIs and optional C++ CLIs.
 - Flintstone provides parametric dialects/types/targets, verified high-to-core-to-VM
   lowering, Blackstone optimization, Firestone execution, Limestone/Sandstone
   native backend handoffs and a C ABI. The [Flintstone SDK](flintstone/manual/12-collective.md)
