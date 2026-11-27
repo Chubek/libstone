@@ -4,6 +4,7 @@ project(Firestone VERSION 0.1.0 LANGUAGES CXX)
 include(../cmake/LibstoneBuild.cmake)
 include(CMakePackageConfigHelpers)
 option(FIRESTONE_BUILD_TESTS "Build Firestone tests" "${LIBSTONE_BUILD_TESTS}")
+option(FIRESTONE_BUILD_DSL_EXAMPLES "Build standalone LibDSL examples" OFF)
 if(FIRESTONE_BUILD_TESTS)
   enable_testing()
 endif()
@@ -26,6 +27,21 @@ foreach(component IN LISTS firestone_components)
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/firestone>)
 endforeach()
 add_library(Firestone::firestone ALIAS firestone)
+# LibDSL is independent of the C++17 component aggregate.
+add_library(firestone_dsl INTERFACE)
+add_library(Firestone::dsl ALIAS firestone_dsl)
+set_target_properties(firestone_dsl PROPERTIES EXPORT_NAME dsl)
+target_compile_features(firestone_dsl INTERFACE cxx_std_20)
+target_include_directories(firestone_dsl INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libdsl>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/firestone/libdsl>)
+if(FIRESTONE_BUILD_DSL_EXAMPLES)
+  foreach(example IN ITEMS archive_cli archive_dispatch live_lisp)
+    add_executable(firestone_dsl_${example} examples/libdsl/${example}.cpp)
+    target_link_libraries(firestone_dsl_${example} PRIVATE Firestone::dsl)
+    set_target_properties(firestone_dsl_${example} PROPERTIES CXX_EXTENSIONS OFF)
+  endforeach()
+endif()
 target_link_libraries(firestone_isel INTERFACE firestone_ir firestone_rewrite firestone_eqsat)
 target_link_libraries(firestone_isched INTERFACE firestone_isel firestone_ir firestone_regalloc)
 target_link_libraries(firestone_regalloc INTERFACE firestone_ir)
@@ -48,8 +64,9 @@ foreach(component IN LISTS firestone_components)
   list(APPEND firestone_header_patterns lib${component}/*.hpp)
 endforeach()
 
-install(TARGETS firestone ${firestone_targets} EXPORT FirestoneTargets)
+install(TARGETS firestone firestone_dsl ${firestone_targets} EXPORT FirestoneTargets)
 install(FILES Firestone.hpp FireIR.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone)
+install(FILES libdsl/LibDSL.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone/libdsl)
 install(DIRECTORY ${firestone_directories} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/firestone FILES_MATCHING PATTERN "*.hpp")
 install(EXPORT FirestoneTargets NAMESPACE Firestone:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Firestone)
 configure_package_config_file(cmake/FirestoneConfig.cmake.in
@@ -61,6 +78,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/FirestoneConfig.cmake
   ${CMAKE_CURRENT_BINARY_DIR}/FirestoneConfigVersion.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Firestone)
 
 if(FIRESTONE_BUILD_TESTS)
+  add_subdirectory(tests/libdsl)
   foreach(suite IN ITEMS ir representations rewrite trs eqsat memory types objects semantics cps algorithms extensions vm vm_compiler vm_binary vm_tiering bignum compute concurrency gfx intrin hardening isel isched regalloc
       lr_automata lr_bottom_up lr_top_down lr_utf8 lr_generators lr_runtimes
       lr_diagnostics lr_diagnostic_recovery)

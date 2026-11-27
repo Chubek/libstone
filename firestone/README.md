@@ -7,6 +7,10 @@ arbitrary-precision arithmetic, concurrency, portable vector operations, and
 compute/graphics adapters, instruction selection, instruction scheduling, register
 allocation, and lexical analysis and parsing.
 
+The separately consumable [LibDSL](docs/LibDSL.md) header provides C++20
+language-definition and live tooling faculties. It does not change the C++17
+requirement of Firestone's existing components.
+
 ## Build and test
 
 Requires CMake 3.20+ and a C++17 compiler.
@@ -27,7 +31,8 @@ phi-correct SSA compilation, malformed bytecode, tiering contracts, big-number
 arithmetic/rounding, channel shutdown and scheduling, vector overflow semantics,
 compute/display resource lifetimes, SPIR-V framing, cross-component hardening
 contracts, lexer and parser behavior, and relocated installed-package consumers.
-Every public header is also compiled independently in C++17 mode.
+Every C++17 component header is also compiled independently. LibDSL is
+checked separately in C++20 mode.
 With a native C compiler, the lexer backend tests also compile and run the
 emitted C99 scanner and, on supported Linux x86-64 systems, the assembly scanner.
 Set `-DFIRESTONE_ENABLE_OPENMP=ON` to test the native OpenMP path as well as the
@@ -50,6 +55,8 @@ Individual targets are `Firestone::ir`, `Firestone::rewrite`, `Firestone::trs`, 
 Source-tree embedding uses `add_subdirectory(firestone)`
 with the same target names. Include `<Firestone.hpp>` or individual headers,
 such as `<libir/SimpleSSAGraph.hpp>` and `<libeqsat/Saturation.hpp>`.
+For LibDSL, request the `dsl` component and link `Firestone::dsl`, or copy
+`libdsl/LibDSL.hpp` and use it directly.
 
 ## Components
 

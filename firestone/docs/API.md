@@ -1,5 +1,8 @@
 # API contracts
 
+For the separate C++20 header and `Firestone::dsl` target, see
+[LibDSL](LibDSL.md).
+
 ## Shared IR model
 
 `NodeId`, `BlockId`, and `ValueId` are `std::size_t`; `invalid_id` is the maximum
