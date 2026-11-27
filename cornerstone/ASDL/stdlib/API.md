@@ -20,7 +20,7 @@ All paths below are dotted names loaded with `asdl.lib.require`. A module return
 | `asdl.clone(node)` | Deep structural clone. |
 | `asdl.annotate(node,key,value)` | Write session-local annotations; `annotation`, `annotations` are corresponding getters. `annotations` optional for serialization. |
 | `asdl.location(node)` | Source span or nil. |
-| `asdl.diagnostic.emit(record)` | Emit `{severity,code,message,location}`. |
+| `asdl.diagnostic.emit(record)` | Emit `{severity,code,message,location}` with optional string `name` and `group`. |
 | `asdl.diagnostic.count(severity)` | Count diagnostics in the current session. |
 | `asdl.logistics(node,...)` | Call the node type's registered hook; no implicit traversal. Used by examples. |
 | `asdl.option(name)` | Optional host settings. Used by examples. |
@@ -30,7 +30,36 @@ The test host exposes `lib.searchpath`, `lib.resolve`, `lib.loaded`, `lib.export
 ## Core
 
 ### `std.diagnostics`
-`FaultPattern(code,format)` creates a template. `Error`, `Warn`, `Inform` and `Fatal(pattern_or_string,node?,...)` emit diagnostics; `Fatal` then throws. `Checkpoint()` records the error count; `FailedSince(mark)` detects errors since that checkpoint. These compose with derived libraries.
+`FaultPattern(code,format,metadata?)` creates a template. Its optional metadata
+table accepts `name` (a stable message identifier) and `group` (a label shared by
+related messages). Both are nonempty, case-sensitive strings, matched exactly
+within the current session. They are independent of the display `code` and
+are preserved on emitted records. `Error`, `Warn`, `Inform` and
+`Fatal(pattern_or_string,node?,...)` emit diagnostics; `Fatal` then throws.
+`Checkpoint()` records the error count; `FailedSince(mark)` detects errors
+since that checkpoint. These compose with derived libraries.
+
+`Disable(selector?)` and `Enable(selector?)` accept a severity (`"error"`,
+`"warning"`, or `"info"`), `{group = "..."}`, or `{name = "..."}`. A name
+setting overrides a group setting, which overrides the severity setting.
+Omitting the selector sets all severities and clears all group and name
+overrides. `IsEnabled(severity, pattern?)` checks the effective setting for
+a pattern; omitting the pattern checks only the severity.
+
+```lua
+local D = asdl.lib.require("std.diagnostics")
+local unused = D.FaultPattern("W01", "Unused binding %s",
+    {name = "bindings.unused", group = "bindings"})
+D.Disable({group = "bindings"})
+D.Enable({name = "bindings.unused"}) -- keep just this message enabled in the group
+D.Warn(unused, nil, "x")
+```
+
+All messages start enabled in each session. Suppressed messages return nil
+without formatting or adding a host diagnostic record. Suppressed errors still
+count toward `Checkpoint()` and `FailedSince()`, and `Fatal` still throws.
+These controls only affect `std.diagnostics` and its inherited exports, not
+direct calls to `asdl.diagnostic.emit`.
 
 ### `std.tree`
 `Tree.walk(root,enter?,leave?)` walks in schema order; enter returning false prunes the subtree and skips leave. `Tree.collect(root,predicate,descend?)` finds matching nodes; `Tree.any(root,predicate)` short-circuits; `Tree.fold(root,initial,combine)` folds postorder. Input must be an acyclic AST. Shared subtrees are visited once per path.

@@ -994,6 +994,13 @@ struct LuaSession::Impl {
                 fail("diagnostic code must be a string or integer");
             lua_setfield(l, record, "code");
         } else lua_pop(l, 1);
+        for (const auto* label : {"name", "group"}) {
+            if (field(l, 1, label) != LUA_TNIL) {
+                if (text(l, -1).empty())
+                    fail(std::string("diagnostic ") + label + " must not be empty");
+                lua_setfield(l, record, label);
+            } else lua_pop(l, 1);
+        }
         field(l, 1, "location");
         copy_location(l, -1);
         lua_setfield(l, record, "location");
