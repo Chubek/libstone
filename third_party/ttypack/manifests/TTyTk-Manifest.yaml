@@ -1,0 +1,474 @@
+# TTyTk-Manifest.yaml
+# Manifest for the TTyTk bundle of the TTyPack collection.
+
+- name: Core
+  path: "include/TTyTk/TTyTk-Core.hpp"
+  exposes: [ttytk::version, ttytk::Error, ttytk::Result, ttytk::Span, ttytk::Bytes]
+  depends_on: []
+  description: >-
+    Foundation header. Common types, error handling, byte-span utilities,
+    versioning, and platform detection macros. Every other header includes this.
+  examples: 'auto v = ttytk::version(); // {major, minor, patch}'
+
+- name: EscapeCodes
+  path: "include/TTyTk/TTyTk-EscapeCodes.hpp"
+  exposes: [esc::csi, esc::osc, esc::dcs, esc::st, esc::sgr, esc::cursor_to, esc::clear, esc::Hyperlink]
+  depends_on: [Core]
+  description: >-
+    Constants and builders for ANSI/VT escape sequences: CSI, OSC, DCS,
+    SGR attributes, cursor movement, and screen clearing.
+  examples: 'out << esc::cursor_to(5, 10) << esc::sgr(esc::Bold);'
+
+- name: Automaton
+  path: "include/TTyTk/TTyTk-Automaton.hpp"
+  exposes: [Automaton::feed, Automaton::reset, Automaton::on_csi, Automaton::on_osc, Automaton::on_dcs, Automaton::on_escape, Automaton::on_control, Automaton::on_print, Automaton::max_sequence_bytes]
+  depends_on: [Core, EscapeCodes]
+  description: >-
+    VT500-style state machine parser. Consumes raw bytes and dispatches
+    callbacks for printable text, CSI, OSC, DCS, and control characters.
+  examples: 'Automaton a; a.on_csi = handle_csi; a.feed(buf, n);'
+
+- name: Encoding
+  path: "include/TTyTk/TTyTk-Encoding.hpp"
+  exposes: [utf8::decode, utf8::encode, utf8::validate, cp::to_utf8, cp::from_utf8]
+  depends_on: [Core]
+  description: >-
+    UTF-8 encoding/decoding with error recovery (replacement characters),
+    validation, and legacy codepage conversion (Latin-1, CP437).
+  examples: 'auto cps = utf8::decode(bytes); // vector<char32_t>'
+
+- name: CharWidth
+  path: "include/TTyTk/TTyTk-CharWidth.hpp"
+  exposes: [charwidth::of, charwidth::of_string, charwidth::of_grapheme, charwidth::is_wide, charwidth::is_zero]
+  depends_on: [Core]
+  description: >-
+    Display-cell width of codepoints and strings per UAX #11 East Asian
+    Width, including ambiguous-width policy configuration.
+  examples: 'int w = charwidth::of(U''字''); // 2'
+
+- name: Grampheme   # NOTE: typo — should be "Grapheme"
+  path: "include/TTyTk/TTyTk-Grampheme.hpp"
+  exposes: [grapheme::next_break, grapheme::segment, grapheme::count, grapheme::Iterator]
+  depends_on: [Core, Encoding]
+  description: >-
+    Grapheme cluster segmentation per UAX #29. Iterates user-perceived
+    characters including emoji ZWJ sequences and combining marks.
+  examples: 'for (auto g : grapheme::segment(text)) draw(g);'
+
+- name: BiDi
+  path: "include/TTyTk/TTyTk-BiDi.hpp"
+  exposes: [bidi::resolve, bidi::reorder_line, bidi::base_direction, bidi::Level]
+  depends_on: [Core, Encoding]
+  description: >-
+    Bidirectional text support per UAX #9: embedding-level resolution,
+    visual reordering of lines, and paragraph direction detection.
+  examples: 'auto visual = bidi::reorder_line(logical, levels);'
+
+- name: TextLayout
+  path: "include/TTyTk/TTyTk-TextLayout.hpp"
+  exposes: [layout::wrap, layout::truncate, layout::measure, layout::reflow]
+  depends_on: [Core, CharWidth, Grampheme]
+  description: >-
+    Width-aware text layout: word wrapping, ellipsis truncation, string
+    measurement, and reflow of wrapped content on resize.
+  examples: 'auto lines = layout::wrap(text, cols);'
+
+- name: ColorTools
+  path: "include/TTyTk/TTyTk-ColorTools.hpp"
+  exposes: [color::Rgb, color::to_256, color::to_16, color::from_16, color::from_256, color::distance, color::parse, color::luminance]
+  depends_on: [Core]
+  description: >-
+    Color model conversions and quantization: truecolor to 256/16-color
+    palettes, perceptual distance, hex/X11-name parsing, luminance for
+    dark/light detection.
+  examples: 'uint8_t idx = color::to_256({0xff, 0x87, 0x00});'
+
+- name: ThemeTools
+  path: "include/TTyTk/TTyTk-ThemeTools.hpp"
+  exposes: [theme::Theme, theme::load, theme::builtin, theme::apply]
+  depends_on: [Core, ColorTools, EscapeCodes]
+  description: >-
+    Named color schemes: base16-style theme loading, built-in themes,
+    and applying a theme to terminal palette via OSC 4/10/11.
+  examples: 'theme::apply(theme::builtin("solarized-dark"));'
+
+- name: CellBuffer
+  path: "include/TTyTk/TTyTk-CellBuffer.hpp"
+  exposes: [Cell, CellAttribute, CellBuffer::at, CellBuffer::put, CellBuffer::resize, CellBuffer::scroll, CellBuffer::clear]
+  depends_on: [Core, CharWidth, Grampheme, ColorTools]
+  description: >-
+    2D grid of terminal cells holding grapheme, attributes, and colors.
+    Handles wide-character spanning cells, scrolling regions, and resize.
+  examples: 'buf.put(row, col, Cell{u8"A", attrs});'
+
+- name: Scrollback
+  path: "include/TTyTk/TTyTk-Scrollback.hpp"
+  exposes: [Scrollback::push_line, Scrollback::line, Scrollback::size, Scrollback::set_limit, Scrollback::reflow]
+  depends_on: [Core, CellBuffer]
+  description: >-
+    Ring-buffer history of lines evicted from the CellBuffer, with
+    configurable limits, lazy compression, and reflow on width change.
+  examples: 'sb.set_limit(10''000); sb.push_line(std::move(line));'
+
+- name: Damage
+  path: "include/TTyTk/TTyTk-Damage.hpp"
+  exposes: [Damage::mark, Damage::mark_all, Damage::regions, Damage::clear, Damage::merge]
+  depends_on: [Core]
+  description: >-
+    Dirty-region tracking. Records which cells/rows changed since last
+    frame so the Renderer can emit minimal updates.
+  examples: 'dmg.mark(row, col_begin, col_end);'
+
+- name: RectOps
+  path: "include/TTyTk/TTyTk-RectOps.hpp"
+  exposes: [rect::Region, rect::copy, rect::fill, rect::erase, rect::checksum]
+  depends_on: [Core, CellBuffer]
+  description: >-
+    VT420 rectangular-area operations on a CellBuffer: DECCRA copy,
+    DECFRA fill, DECERA erase, and DECRQCRA checksum.
+  examples: 'rect::fill(buf, {2,2,10,40}, U''*'', attrs);'
+
+- name: Tabstops
+  path: "include/TTyTk/TTyTk-Tabstops.hpp"
+  exposes: [Tabstops::set, Tabstops::clear, Tabstops::clear_all, Tabstops::next, Tabstops::prev]
+  depends_on: [Core]
+  description: >-
+    Tab stop management: HTS/TBC handling, default 8-column stops,
+    forward/backward tab navigation (CHT/CBT).
+  examples: 'int col = tabs.next(cursor_col);'
+
+- name: TermMode
+  path: "include/TTyTk/TTyTk-TermMode.hpp"
+  exposes: [Mode, AnsiMode, TermMode::set, TermMode::reset, TermMode::test, TermMode::save, TermMode::restore]
+  depends_on: [Core, EscapeCodes]
+  description: >-
+    DEC private and ANSI mode state (DECSET/DECRST): alt screen, cursor
+    keys, bracketed paste, mouse modes, autowrap, with save/restore.
+  examples: 'if (modes.test(Mode::AltScreen)) { ... }'
+
+- name: BufferTools
+  path: "include/TTyTk/TTyTk-BufferTools.hpp"
+  exposes: [bufutil::diff, bufutil::dump_text, bufutil::dump_ansi, bufutil::compare]
+  depends_on: [Core, CellBuffer, EscapeCodes]
+  description: >-
+    Utilities over cell buffers: generating diffs between two buffers,
+    dumping to plain text or ANSI-formatted strings for logging/debug.
+  examples: 'std::string s = bufutil::dump_ansi(buf);'
+
+- name: Renderer
+  path: "include/TTyTk/TTyTk-Renderer.hpp"
+  exposes: [Renderer::render, Renderer::flush, Renderer::set_terminal_state, Renderer::reset_cache]
+  depends_on: [Core, CellBuffer, Damage, EscapeCodes, TermMode]
+  description: >-
+    Optimizing compositor. Generates the minimal escape-sequence stream
+    needed to update a physical terminal from a CellBuffer.
+  examples: 'renderer.render(current_buf, screen_out);'
+
+- name: CapTools
+  path: "include/TTyTk/TTyTk-CapTools.hpp"
+  exposes: [caps::query, caps::request, caps::query_async, caps::on_response, caps::Info]
+  depends_on: [Core, Automaton, EscapeCodes]
+  description: >-
+    Terminal capability discovery via runtime queries: DA, DA2, DSR,
+    DECRQSS, and feature-specific OSC probes.
+  examples: 'caps::query_async([](auto i){ return i.has_sixel; });'
+
+- name: InputProto
+  path: "include/TTyTk/TTyTk-InputProto.hpp"
+  exposes: [input::Event, input::Key, input::Mouse, input::Paste, input::decode_seq, input::encode_seq]
+  depends_on: [Core, Automaton]
+  description: >-
+    Encoder/Decoder for modern input protocols: Kitty keyboard,
+    CSI u, SGR mouse (1006), and bracketed paste.
+  examples: 'auto ev = input::decode_seq(csi_data);'
+
+- name: KeyListener
+  path: "include/TTyTk/TTyTk-KeyListener.hpp"
+  exposes: [KeyListener::on_key, KeyListener::on_raw, KeyListener::bind, KeyListener::dispatch, KeyListener::dispatch_raw, KeyListener::flush, KeyListener::reset]
+  depends_on: [Core, InputProto]
+  description: >-
+    Keyboard event dispatcher. Higher-level binding of keys/chords to
+    callbacks, with support for sequences and modifiers.
+  examples: 'key_listener.bind("Ctrl-C", []{ exit(); });'
+
+- name: MouseListener
+  path: "include/TTyTk/TTyTk-MouseListener.hpp"
+  exposes: [MouseListener::on_move, MouseListener::on_click, MouseListener::on_drag, MouseListener::on_release, MouseListener::hit_test, MouseListener::dispatch, MouseListener::set_region, MouseListener::click_count]
+  depends_on: [Core, InputProto]
+  description: >-
+    Mouse event dispatcher with hit-testing against regions, click
+    tracking, and coordinate translation.
+  examples: 'mouse_listener.on_click([](auto m){ log(m.x, m.y); });'
+
+- name: EventListener
+  path: "include/TTyTk/TTyTk-EventListener.hpp"
+  exposes: [Event, EventBus::post, EventBus::subscribe, EventBus::poll]
+  depends_on: [Core, KeyListener, MouseListener]
+  description: >-
+    Central event hub. Unifies key, mouse, resize, and custom user
+    events into a single polling or callback mechanism.
+  examples: 'while (bus.poll(ev)) { ... }'
+
+- name: LineEdit
+  path: "include/TTyTk/TTyTk-LineEdit.hpp"
+  exposes: [Editor::insert, Editor::backspace, Editor::history_up, Editor::set_completion_callback]
+  depends_on: [Core, CellBuffer, KeyListener, SearchTools]
+  description: >-
+    Readline-style text input engine: multi-line support, history,
+    kill-ring, and pluggable tab completion.
+  examples: 'editor.insert(U''A''); editor.on_submit([](auto line){...});'
+
+- name: PromptTools
+  path: "include/TTyTk/TTyTk-PromptTools.hpp"
+  exposes: [prompt::render, prompt::Segment, prompt::SegmentList]
+  depends_on: [Core, ColorTools, CellBuffer]
+  description: >-
+    Powerline-style prompt building: segments with distinct colors/icons,
+    arrow separators, and dynamic segment evaluation.
+  examples: 'auto s = prompt::render(segments, cols);'
+
+- name: SearchTools
+  path: "include/TTyTk/TTyTk-SearchTools.hpp"
+  exposes: [search::find, search::find_all, search::Regex, search::Match]
+  depends_on: [Core, CellBuffer, Scrollback]
+  description: >-
+    Text and attribute search across CellBuffers and Scrollback,
+    including case-insensitivity and regex support.
+  examples: 'auto results = search::find(sb, "error");'
+
+- name: Selection
+  path: "include/TTyTk/TTyTk-Selection.hpp"
+  exposes: [Selection::Mode, Selection::start, Selection::update, Selection::get_rects, Selection::to_text]
+  depends_on: [Core, CellBuffer]
+  description: >-
+    Text selection logic: click-drag to select, word/line snapping,
+    block selection, and extracting text from selected regions.
+  examples: 'sel.start(row, col); auto txt = sel.to_text(buf);'
+
+- name: ClipboardTools
+  path: "include/TTyTk/TTyTk-ClipboardTools.hpp"
+  exposes: [clipboard::set, clipboard::get, clipboard::clear, clipboard::request_osc52, clipboard::set_osc52, clipboard::parse_osc52]
+  depends_on: [Core, EscapeCodes, Automaton]
+  description: >-
+    System and terminal-integrated clipboard access. Prefers OSC 52
+    with fallback to local system APIs (X11/Wayland/Windows).
+  examples: 'clipboard::set("Hello", clipboard::Global);'
+
+- name: ImageProto
+  path: "include/TTyTk/TTyTk-ImageProto.hpp"
+  exposes: [image::Sixel, image::Kitty, image::ITerm2, image::ITerm2::encode_file, image::render_to_seq]
+  depends_on: [Core, ColorTools]
+  description: >-
+    Terminal graphics support: encoding pixel buffers into Sixel,
+    Kitty, or iTerm2 inline image protocols.
+  examples: 'auto s = image::Kitty::encode(pixels, w, h);'
+
+- name: OSCTools
+  path: "include/TTyTk/TTyTk-OSCTools.hpp"
+  exposes: [osc::set_title, osc::hyperlink, osc::desktop_notify, osc::palette_query, osc::palette_set, osc::parse]
+  depends_on: [Core, EscapeCodes]
+  description: >-
+    Builders and parsers for Operating System Commands: OSC 8 hyperlinks,
+    window titles, desktop notifications, and palette updates.
+  examples: 'out << osc::hyperlink("https://github.com", "link");'
+
+- name: NotifyTools
+  path: "include/TTyTk/TTyTk-NotifyTools.hpp"
+  exposes: [notify::show, notify::progress, notify::badge]
+  depends_on: [Core, OSCTools]
+  description: >-
+    Higher-level notifications: OSC 9/777 desktop notifications,
+    ConEmu/iTerm2 progress bar reports, and shell integration.
+  examples: 'notify::progress(42, 100);'
+
+- name: PsuedoTerm # NOTE: typo — should be "PseudoTerm"
+  path: "include/TTyTk/TTyTk-PsuedoTerm.hpp"
+  exposes: [PTY::fork, PTY::master_fd, PTY::child_pid, PTY::wait, PTY::resize, PTY::write, PTY::read]
+  depends_on: [Core, Winsize]
+  description: >-
+    PTY management (forkpty/openpty wrapper). Spawns shell processes,
+    handles master/slave side of the terminal device.
+  examples: 'PTY p = PTY::fork("/bin/bash", {"--login"});'
+
+- name: JobControl
+  path: "include/TTyTk/TTyTk-JobControl.hpp"
+  exposes: [job::suspend, job::resume, job::foreground, job::background]
+  depends_on: [Core, PsuedoTerm, SignalTools]
+  description: >-
+    Shell job control: managing process groups, foregrounding/backgrounding,
+    and handling terminal ownership.
+  examples: 'job::foreground(pid);'
+
+- name: MuxTools
+  path: "include/TTyTk/TTyTk-MuxTools.hpp"
+  exposes: [Mux::add_window, Mux::split, Mux::next_window, Mux::Session]
+  depends_on: [Core, CellBuffer, PsuedoTerm]
+  description: >-
+    Terminal multiplexing primitives: session management, window splits,
+    and routing input/output between PTYs and CellBuffers.
+  examples: 'mux.split(Window::Vertical);'
+
+- name: VirtTools
+  path: "include/TTyTk/TTyTk-VirtTools.hpp"
+  exposes: [VirtualTerm::input, VirtualTerm::output, VirtualTerm::screen]
+  depends_on: [Core, Automaton, CellBuffer, TermMode]
+  description: >-
+    Virtual terminal emulator. Pipes raw escape sequences into a
+    CellBuffer; essentially a "software terminal" for headless usage.
+  examples: 'vt.input(raw_bytes); draw(vt.screen());'
+
+- name: EmbedTools
+  path: "include/TTyTk/TTyTk-EmbedTools.hpp"
+  exposes: [embed::passthrough, embed::wrap_shell, embed::inject_env]
+  depends_on: [Core, PsuedoTerm]
+  description: >-
+    Tools for embedding TTyTk-based apps inside other shells or
+    terminals; shell wrapper generation and environment management.
+  examples: 'embed::passthrough(stdin, stdout);'
+
+- name: UITools
+  path: "include/TTyTk/TTyTk-UITools.hpp"
+  exposes: [ui::Box, ui::Label, ui::Layout, ui::Panel, ui::Theme]
+  depends_on: [Core, CellBuffer, RectOps, TextLayout]
+  description: >-
+    High-level TUI widgets and layout managers: box-drawing, labels,
+    panels, and basic flex/grid positioning.
+  examples: 'auto b = ui::Box(ui::DoubleBorder);'
+
+- name: Winsize
+  path: "include/TTyTk/TTyTk-Winsize.hpp"
+  exposes: [winsize::get, winsize::set, winsize::on_change, winsize::Size]
+  depends_on: [Core, SignalTools]
+  description: >-
+    Terminal window size (TIOCGWINSZ) management. Queries rows, cols,
+    and pixels; sets up SIGWINCH handlers.
+  examples: 'auto s = winsize::get(stdout_fd);'
+
+- name: SignalTools
+  path: "include/TTyTk/TTyTk-SignalTools.hpp"
+  exposes: [signals::on_sigwinch, signals::on_sigint, signals::block_all, signals::notification_fd, signals::dispatch_pending]
+  depends_on: [Core]
+  description: >-
+    Cross-platform signal handling: self-pipe trick or signalfd-based
+    asynchronous signal notification.
+  examples: 'signals::on_sigwinch([]{ handle_resize(); });'
+
+- name: FlowControl
+  path: "include/TTyTk/TTyTk-FlowControl.hpp"
+  exposes: [flow::Throttle, flow::Backpressure, flow::XonXoff]
+  depends_on: [Core]
+  description: >-
+    I/O flow control: throttling output to prevent terminal saturation,
+    handling XON/XOFF, and backpressure monitoring.
+  examples: 'throttle.wait_for_capacity(bytes_to_write);'
+
+- name: SerialPort
+  path: "include/TTyTk/TTyTk-SerialPort.hpp"
+  exposes: [Serial::open, Serial::set_baud, Serial::set_params, Serial::set_handshake, Serial::is_hardware]
+  depends_on: [Core]
+  description: >-
+    Hardware terminal connectivity: baud rate, parity, stop bits,
+    and serial handshake management.
+  examples: 'auto port = Serial::open("/dev/ttyUSB0", 9600);'
+
+- name: IPCTools
+  path: "include/TTyTk/TTyTk-IPCTools.hpp"
+  exposes: [ipc::Channel, ipc::Channel::accept, ipc::Channel::native_fd, ipc::Message, ipc::listen, ipc::connect]
+  depends_on: [Core]
+  description: >-
+    Inter-process communication for TUI apps (e.g., client/server
+    architectures): Unix domain sockets or named pipes.
+  examples: 'ipc::listen("/tmp/ttytk.sock", callback);'
+
+- name: ServerNetUtils
+  path: "include/TTyTk/TTyTk-ServerNetUtils.hpp"
+  exposes: [net::TcpServer, net::TcpServer::port, net::TlsServer, net::accept_terminal]
+  depends_on: [Core, IPCTools]
+  description: >-
+    Network server primitives for multi-user terminal apps (SSH-like
+    behavior): TCP/TLS listeners and terminal session negotiation.
+  examples: 'net::TcpServer srv(2222); srv.on_client(handler);'
+
+- name: P2PNetUtils
+  path: "include/TTyTk/TTyTk-P2PNetUtils.hpp"
+  exposes: [p2p::Connection, p2p::Connection::receive, p2p::Discovery, p2p::sync_buffer]
+  depends_on: [Core, IPCTools]
+  description: >-
+    Peer-to-peer terminal synchronization: experimental primitives
+    for shared terminal sessions without a central server.
+  examples: 'p2p::sync_buffer(buf, peer);'
+
+- name: PuppetTools
+  path: "include/TTyTk/TTyTk-PuppetTools.hpp"
+  exposes: [Puppet::send_key, Puppet::send_mouse, Puppet::wait_for_text]
+  depends_on: [Core, Automaton, InputProto]
+  description: >-
+    Testing and automation: simulates user input to drive a TUI app
+    or terminal for automated integration tests.
+  examples: 'puppet.send_key(Key::Enter);'
+
+- name: RecordTools
+  path: "include/TTyTk/TTyTk-RecordTools.hpp"
+  exposes: [Recorder::start, Recorder::stop, Recorder::record_input, Recorder::record_output, Recorder::save_asciicast, Recorder::save_binary]
+  depends_on: [Core, Automaton]
+  description: >-
+    Terminal session recording: captures raw input/output and saves
+    to asciicast (v2) or proprietary binary formats.
+  examples: 'rec.save_asciicast("session.cast");'
+
+- name: Snapshot
+  path: "include/TTyTk/TTyTk-Snapshot.hpp"
+  exposes: [snapshot::State, snapshot::capture, snapshot::diff, snapshot::serialize]
+  depends_on: [Core, CellBuffer]
+  description: >-
+    Golden-file testing: captures an immutable state of a CellBuffer
+    for comparison against known-good baselines in CI.
+  examples: 'assert(snapshot::diff(current, baseline).empty());'
+
+- name: Fuzz
+  path: "include/TTyTk/TTyTk-Fuzz.hpp"
+  exposes: [fuzz::random_sequence, fuzz::mutate, fuzz::stress_test]
+  depends_on: [Core, Automaton, EscapeCodes]
+  description: >-
+    Fuzz-testing utilities: generates valid/invalid escape sequence
+    garbage to stress-test the Automaton and Renderer.
+  examples: 'fuzz::stress_test(my_automaton, 10000);'
+
+- name: TermInfo
+  path: "include/TTyTk/TTyTk-TermInfo.hpp"
+  exposes: [terminfo::load, terminfo::load_from, terminfo::Entry, terminfo::Entry::flag, terminfo::Entry::num, terminfo::Entry::str, terminfo::tparm, terminfo::search_paths]
+  depends_on: [Core]
+  description: >-
+    Parser for compiled terminfo databases. Reads both legacy (magic
+    0432, 16-bit) and extended-number (magic 01036, 32-bit) formats,
+    including the extended capability storage section (user-defined
+    caps like "Tc", "Smulx"). Resolves entries by name via the standard
+    search order ($TERMINFO, ~/.terminfo, $TERMINFO_DIRS, /usr/share/terminfo)
+    with support for both directory-tree and hashed-database layouts.
+    Includes a tparm-style parameterized string interpreter (%p, %d,
+    %i, %t/%e conditionals, stack ops) so capability strings can be
+    expanded without linking curses.
+  examples: |
+    auto e = terminfo::load("xterm-256color");
+    if (e.flag("bce")) { ... }
+    int colors = e.num("colors");                 // 256
+    auto seq = terminfo::tparm(e.str("cup"), 5, 10); // cursor to 5,10
+
+- name: TermCap
+  path: "include/TTyTk/TTyTk-TermCap.hpp"
+  exposes: [termcap::load, termcap::load_from, termcap::Entry, termcap::Entry::flag, termcap::Entry::num, termcap::Entry::str, termcap::tgoto, termcap::from_terminfo]
+  depends_on: [Core, TermInfo]
+  description: >-
+    Parser for the legacy /etc/termcap text database and $TERMCAP
+    environment entries. Handles the two-letter capability codes,
+    "tc=" entry chaining/inheritance, backslash escapes, and padding
+    specifications. Provides a tgoto-style expander for %-encoded
+    cursor addressing strings. Includes bidirectional mapping between
+    termcap codes and terminfo names ("co" ↔ "cols", "cm" ↔ "cup")
+    and a from_terminfo bridge so TermInfo entries can serve termcap
+    consumers on systems without the text database.
+  examples: |
+    auto e = termcap::load("vt100");
+    auto cm = e.str("cm");
+    auto seq = termcap::tgoto(cm, 10, 5);   // note: col, row order
+    auto e2 = termcap::from_terminfo(terminfo::load("xterm"));

@@ -1,0 +1,370 @@
+cmake_minimum_required(VERSION 3.10.0)
+project(valijson)
+
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+option(valijson_BUILD_EXAMPLES "Build valijson examples." FALSE)
+option(valijson_BUILD_TESTS "Build valijson test suite." FALSE)
+option(valijson_EXCLUDE_BOOST "Exclude Boost when building test suite." FALSE)
+option(valijson_EXCLUDE_JSON11 "Exclude json11 when building test suite (json11 is archived upstream)." FALSE)
+option(valijson_REQUIRE_ALL_ADAPTER_TESTS "Fail configuration when optional adapter test dependencies are unavailable." FALSE)
+option(valijson_USE_FAST_FLOAT "Use the vendored fast_float library for string-to-double conversions." FALSE)
+option(valijson_USE_EXCEPTIONS "Use exceptions in valijson and included libs." TRUE)
+
+option(valijson_USE_BOOST_REGEX "Use boost::regex instead of std::regex internally." FALSE)
+mark_as_advanced(valijson_USE_BOOST_REGEX)
+
+if(MSVC)
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
+else()
+    # Suppress boost warnings that aren't relevant to the test suite
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -DBOOST_BIND_GLOBAL_PLACEHOLDERS")
+    SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0")
+endif()
+
+add_library(valijson INTERFACE)
+# create alias, so that user could always write target_link_libraries(... ValiJSON::valijson)
+# despite of valijson target is imported or not
+add_library(ValiJSON::valijson ALIAS valijson)
+
+target_compile_features(valijson INTERFACE cxx_std_17)
+
+include(GNUInstallDirs)
+target_include_directories(valijson INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+if(valijson_USE_FAST_FLOAT)
+    target_include_directories(valijson INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/fast_float/include>)
+    target_compile_definitions(valijson INTERFACE
+            VALIJSON_HAS_FAST_FLOAT_FROM_CHARS=1
+            VALIJSON_HAS_STD_FROM_CHARS=0)
+endif()
+
+if(valijson_USE_EXCEPTIONS)
+    target_compile_definitions(valijson INTERFACE -DVALIJSON_USE_EXCEPTIONS=1)
+endif()
+if (valijson_USE_BOOST_REGEX)
+    target_compile_definitions(valijson INTERFACE -DVALIJSON_USE_BOOST_REGEX=1)
+endif()
+
+if(valijson_EXCLUDE_JSON11)
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            PATTERN "json11_adapter.hpp" EXCLUDE
+            PATTERN "json11_utils.hpp" EXCLUDE)
+else()
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
+if(valijson_USE_FAST_FLOAT)
+    install(DIRECTORY thirdparty/fast_float/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
+
+install(TARGETS valijson
+    EXPORT valijsonConfig
+)
+
+install(EXPORT valijsonConfig
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/valijson"
+)
+
+if(NOT valijson_BUILD_TESTS AND NOT valijson_BUILD_EXAMPLES)
+    return()
+endif()
+
+if(valijson_USE_FAST_FLOAT)
+    include_directories(SYSTEM thirdparty/fast_float/include)
+    add_compile_definitions(
+            VALIJSON_HAS_FAST_FLOAT_FROM_CHARS=1
+            VALIJSON_HAS_STD_FROM_CHARS=0)
+endif()
+
+if(valijson_USE_EXCEPTIONS)
+    add_compile_definitions(VALIJSON_USE_EXCEPTIONS=1)
+else()
+    add_compile_definitions(_HAS_EXCEPTIONS=0)
+    add_compile_definitions(BOOST_NO_EXCEPTIONS)
+    add_compile_definitions(JSON_USE_EXCEPTION=0)
+    add_compile_definitions(VALIJSON_USE_EXCEPTIONS=0)
+endif()
+
+find_package(Poco QUIET COMPONENTS Foundation JSON)
+find_package(QT NAMES Qt6 Qt5 COMPONENTS Core)
+if(QT_FOUND)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core)
+endif()
+
+set(valijson_QT_CORE_TARGET "")
+if(Qt${QT_VERSION_MAJOR}Core_FOUND)
+    set(valijson_QT_CORE_TARGET Qt${QT_VERSION_MAJOR}::Core)
+endif()
+
+# jsoncpp library
+add_library(jsoncpp
+    thirdparty/jsoncpp/src/lib_json/json_reader.cpp
+    thirdparty/jsoncpp/src/lib_json/json_value.cpp
+    thirdparty/jsoncpp/src/lib_json/json_writer.cpp
+)
+
+target_include_directories(jsoncpp SYSTEM PRIVATE thirdparty/jsoncpp/include)
+set_target_properties(jsoncpp PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/thirdparty/jsoncpp)
+
+if(NOT valijson_EXCLUDE_JSON11)
+    add_library(json11
+        thirdparty/json11/json11.cpp
+    )
+
+    target_include_directories(json11 SYSTEM PRIVATE thirdparty/json11)
+    if(MSVC)
+        target_compile_options(json11 PRIVATE /FIcstdint)
+    else()
+        target_compile_options(json11 PRIVATE
+            -include cstdint
+            $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-unqualified-std-cast-call>
+        )
+    endif()
+    set_target_properties(json11 PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/thirdparty/json11)
+endif()
+
+# yaml-cpp library
+file(GLOB yamlcpp_SOURCES "thirdparty/yaml-cpp/src/*.cpp")
+add_library(yamlcpp ${yamlcpp_SOURCES})
+
+target_include_directories(yamlcpp SYSTEM PRIVATE thirdparty/yamlcpp/include)
+set_target_properties(yamlcpp PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/thirdparty/yamlcpp)
+
+# Not all of these are required for examples build it doesn't hurt to include them
+include_directories(include SYSTEM
+    thirdparty/googletest/include
+    thirdparty/json11
+    thirdparty/jsoncpp/include
+    thirdparty/rapidjson/include
+    thirdparty/picojson
+    thirdparty/nlohmann-json/include
+    thirdparty/yaml-cpp/include
+)
+
+if(valijson_BUILD_TESTS)
+    if(NOT valijson_EXCLUDE_BOOST)
+        find_package(Boost)
+    endif()
+
+    # Build local gtest
+    set(gtest_force_shared_crt ON)
+    option(BUILD_GMOCK FALSE)
+    option(INSTALL_GTEST FALSE)
+    add_subdirectory(thirdparty/googletest)
+
+    set(TEST_SOURCES
+        tests/test_adapter_comparison.cpp
+        tests/test_date_time.cpp
+        tests/test_date_time_format.cpp
+        tests/test_double_parser.cpp
+        tests/test_fetch_absolute_uri_document_callback.cpp
+        tests/test_ip_address.cpp
+        tests/test_fetch_relative_uri_document_callback.cpp
+        tests/test_fetch_urn_document_callback.cpp
+        tests/test_hostname.cpp
+        tests/test_json_pointer.cpp
+        tests/test_jsoncpp_adapter.cpp
+        tests/test_nlohmann_json_adapter.cpp
+        tests/test_rapidjson_adapter.cpp
+        tests/test_picojson_adapter.cpp
+        tests/test_poly_constraint.cpp
+        tests/test_uri.cpp
+        tests/test_validation_errors.cpp
+        tests/test_validator.cpp
+        tests/test_validator_with_custom_regular_expression_engine.cpp
+        tests/test_yaml_cpp_adapter.cpp
+        tests/test_utf8_utils.cpp
+    )
+
+    set(TEST_LIBS gtest_main jsoncpp yamlcpp)
+
+    if(NOT valijson_EXCLUDE_JSON11)
+        list(APPEND TEST_SOURCES tests/test_json11_adapter.cpp)
+        list(APPEND TEST_LIBS json11)
+    elseif(valijson_REQUIRE_ALL_ADAPTER_TESTS)
+        message(FATAL_ERROR
+            "json11 is required when valijson_REQUIRE_ALL_ADAPTER_TESTS is enabled.")
+    endif()
+
+    if(Boost_FOUND)
+        include_directories(${Boost_INCLUDE_DIRS})
+
+        # Property Trees have been in Boost since 1.41.0, so we just assume they're present
+        list(APPEND TEST_SOURCES tests/test_property_tree_adapter.cpp)
+
+        # Boost.JSON was introduced in Boost 1.75.0, so we should check for its presence before
+        # including the unit tests for boost_json_adapter
+        include(CheckIncludeFileCXX)
+        set (CMAKE_REQUIRED_INCLUDES ${Boost_INCLUDE_DIRS})
+        check_include_file_cxx("boost/json.hpp" BOOST_JSON_HPP_FOUND)
+        if(${BOOST_JSON_HPP_FOUND})
+            list(APPEND TEST_SOURCES tests/test_boost_json_adapter.cpp)
+        elseif(valijson_REQUIRE_ALL_ADAPTER_TESTS)
+            message(FATAL_ERROR
+                "Boost.JSON is required when valijson_REQUIRE_ALL_ADAPTER_TESTS is enabled.")
+        else()
+            message(WARNING
+                "boost/json.hpp not found; tests for boost_json_adapter will not be built. "
+                "If you have recently upgraded Boost to 1.75.0 or later, you may need to clear "
+                "your CMake cache for the header to be found.")
+        endif()
+    elseif(valijson_REQUIRE_ALL_ADAPTER_TESTS)
+        message(FATAL_ERROR
+            "Boost is required when valijson_REQUIRE_ALL_ADAPTER_TESTS is enabled.")
+    endif()
+
+    if(Poco_FOUND)
+        list(APPEND TEST_SOURCES tests/test_poco_json_adapter.cpp)
+        list(APPEND TEST_LIBS
+            Poco::Foundation
+            Poco::JSON)
+    elseif(valijson_REQUIRE_ALL_ADAPTER_TESTS)
+        message(FATAL_ERROR
+            "Poco Foundation and JSON are required when valijson_REQUIRE_ALL_ADAPTER_TESTS is enabled.")
+    endif()
+
+    if(valijson_QT_CORE_TARGET)
+        list(APPEND TEST_LIBS ${valijson_QT_CORE_TARGET})
+        list(APPEND TEST_SOURCES tests/test_qtjson_adapter.cpp)
+        if(QT_VERSION_MAJOR GREATER_EQUAL 6)
+            list(APPEND TEST_SOURCES tests/test_qvariant_adapter.cpp)
+        endif()
+    elseif(valijson_REQUIRE_ALL_ADAPTER_TESTS)
+        message(FATAL_ERROR
+            "Qt Core is required when valijson_REQUIRE_ALL_ADAPTER_TESTS is enabled.")
+    endif()
+
+    # Unit tests executable
+    add_executable(test_suite ${TEST_SOURCES})
+    add_executable(test_rapidjson_crt_allocator
+        tests/test_rapidjson_crt_allocator.cpp)
+    if(NOT valijson_USE_EXCEPTIONS)
+        if(MSVC)
+            if(CMAKE_CXX_FLAGS MATCHES "/EHsc ")
+                string(REPLACE "/EHsc" "/EHs-c-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+            else()
+                target_compile_options(test_suite PUBLIC /EHs-c-)
+            endif()
+        else()
+            target_compile_options(test_suite PUBLIC -fno-exceptions)
+        endif()
+    endif()
+
+    if(NOT MSVC)
+        set_target_properties(test_suite PROPERTIES
+            COMPILE_FLAGS " -pedantic -Werror -Wshadow -Wunused"
+            CXX_STANDARD 17
+        )
+    endif()
+
+    if (MSVC)
+        target_compile_options(test_suite PRIVATE "/bigobj")
+    endif()
+
+    # Definition for using picojson
+    set_target_properties(test_suite PROPERTIES COMPILE_DEFINITIONS "PICOJSON_USE_INT64")
+
+    if(Boost_FOUND)
+        add_compile_definitions(BOOST_ALL_DYN_LINK)
+        set(Boost_USE_STATIC_LIBS OFF)
+        set(Boost_USE_MULTITHREADED ON)
+        set(Boost_USE_STATIC_RUNTIME OFF)
+        target_compile_definitions(test_suite PRIVATE "VALIJSON_BUILD_BOOST_PROPERTY_TREE_ADAPTER")
+        if(${BOOST_JSON_HPP_FOUND})
+            target_compile_definitions(test_suite PRIVATE "VALIJSON_BUILD_BOOST_JSON_ADAPTER")
+        endif()
+    endif()
+
+    if(Poco_FOUND)
+        target_compile_definitions(test_suite PRIVATE "VALIJSON_BUILD_POCO_ADAPTER")
+    endif()
+
+    if(valijson_QT_CORE_TARGET)
+        target_compile_definitions(test_suite PRIVATE "VALIJSON_BUILD_QT_ADAPTER")
+    endif()
+
+    if(NOT valijson_EXCLUDE_JSON11)
+        target_compile_definitions(test_suite PRIVATE "VALIJSON_BUILD_JSON11_ADAPTER")
+    endif()
+
+    target_link_libraries(test_suite ${TEST_LIBS} ${Boost_LIBRARIES})
+endif()
+
+if(valijson_BUILD_EXAMPLES)
+    find_package(curlpp)
+    include_directories(SYSTEM)
+
+    add_executable(custom_schema
+        examples/custom_schema.cpp
+    )
+
+    add_executable(external_schema
+        examples/external_schema.cpp
+    )
+
+    add_executable(array_iteration_basics
+        examples/array_iteration_basics.cpp
+    )
+
+    add_executable(array_iteration_template_fn
+        examples/array_iteration_template_fn.cpp
+    )
+
+    add_executable(check_schema
+        examples/check_schema.cpp
+    )
+
+    add_executable(object_iteration
+        examples/object_iteration.cpp
+    )
+
+    add_executable(json_pointers
+        examples/json_pointers.cpp
+    )
+
+    add_executable(picojson_format_test
+        examples/picojson_format_test.cpp
+    )
+
+    add_executable(remote_resolution_local_file
+        examples/remote_resolution_local_file.cpp
+    )
+
+    add_executable(valijson_benchmark
+        examples/valijson_benchmark.cpp
+    )
+
+    add_executable(valijson_nlohmann_bundled_test
+        examples/valijson_nlohmann_bundled_test.cpp
+    )
+
+    if(curlpp_FOUND)
+        include_directories(${curlpp_INCLUDE_DIR})
+
+        add_executable(remote_resolution_url
+            examples/remote_resolution_url.cpp
+        )
+
+        target_link_libraries(remote_resolution_url curl ${curlpp_LIBRARIES})
+    endif()
+
+    target_link_libraries(custom_schema ${Boost_LIBRARIES})
+    target_link_libraries(external_schema ${Boost_LIBRARIES})
+    target_link_libraries(array_iteration_basics jsoncpp)
+    target_link_libraries(array_iteration_template_fn jsoncpp)
+    target_link_libraries(check_schema jsoncpp)
+    target_link_libraries(object_iteration jsoncpp)
+    target_link_libraries(json_pointers)
+endif()

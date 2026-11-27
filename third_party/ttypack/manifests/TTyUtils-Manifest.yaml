@@ -1,0 +1,773 @@
+# TTyUtils-Manifests.yaml
+# Bundle: TTyUtils — high-level terminal application toolkit, built on TTyTk.
+# Convention: depends_on entries prefixed "TTyTk::" refer to the TTyTk bundle;
+#             bare names refer to other TTyUtils headers.
+
+# ── Text engine ────────────────────────────────────────────────────────────
+
+- name: TextBuffer
+  path: "include/TTyUtils/TTyUtils-TextBuffer.hpp"
+  exposes: [textbuf::Buffer, textbuf::Piece, textbuf::LineIndex, textbuf::Snapshot, textbuf::load_file, textbuf::save_file]
+  depends_on: [TTyTk::Core, TTyTk::Grampheme]
+  description: >-
+    Piece-table text buffer with a line index for O(log n) line/column
+    addressing. Stores UTF-8, tracks EOL convention (LF/CRLF/mixed) and
+    BOM, and supports cheap copy-on-write snapshots for background
+    workers (highlighters, search). Grapheme-aware column arithmetic is
+    delegated to TTyTk so display width stays consistent with rendering.
+  examples: |
+    auto buf = textbuf::load_file("main.cpp");
+    buf.insert({.line=10, .col=0}, "// fixme\n");
+    auto snap = buf.snapshot();   // immutable view for async work
+
+- name: TextCursor
+  path: "include/TTyUtils/TTyUtils-TextCursor.hpp"
+  exposes: [textcur::Cursor, textcur::Selection, textcur::CursorSet, textcur::Motion, textcur::word_boundary]
+  depends_on: [TextBuffer, TTyTk::Grampheme]
+  description: >-
+    Cursor and selection model over TextBuffer, including multi-cursor
+    sets with automatic merge-on-overlap. Provides semantic motions
+    (word, sub-word, paragraph, matching bracket) and sticky-column
+    behaviour for vertical movement across short lines. Cursors remap
+    themselves through buffer edits so concurrent edits don't strand
+    positions.
+  examples: |
+    textcur::CursorSet cs(buf);
+    cs.add({.line=3, .col=0});
+    cs.move(textcur::Motion::WordRight);
+    cs.insert_each("TODO: ");
+
+- name: UndoHistory
+  path: "include/TTyUtils/TTyUtils-UndoHistory.hpp"
+  exposes: [undo::History, undo::Transaction, undo::Checkpoint, undo::TreeNode]
+  depends_on: [TextBuffer, TextCursor]
+  description: >-
+    Undo *tree* (not stack) recording buffer transactions with cursor
+    state, so redo branches are never lost. Groups keystrokes into
+    transactions by time window and edit adjacency, supports named
+    checkpoints (e.g. "before format"), and serializes to disk for
+    persistent undo across sessions.
+  examples: |
+    undo::History h(buf);
+    { undo::Transaction t(h); cs.insert_each("x"); }
+    h.undo();
+    h.redo_branch(1);   // take the other future
+
+- name: Search
+  path: "include/TTyUtils/TTyUtils-Search.hpp"
+  exposes: [search::find, search::find_all, search::Query, search::Match, search::Replacer, search::incremental]
+  depends_on: [TextBuffer, TTyTk::Grampheme]
+  description: >-
+    Buffer search: literal (Boyer–Moore–Horspool), regex (own NFA
+    engine, no std::regex), and fuzzy subsequence scoring for pickers.
+    Case folding is Unicode-aware. Incremental mode re-uses previous
+    match state as the query grows, and Replacer supports capture
+    references and per-match confirmation callbacks.
+  examples: |
+    for (auto& m : search::find_all(snap, search::Query::regex(R"(\bTODO\b)")))
+      mark(m.range);
+    search::Replacer r(buf, q, "FIXME");
+    r.confirm_each([&](auto& m){ return ask(m); });
+
+- name: Diff
+  path: "include/TTyUtils/TTyUtils-Diff.hpp"
+  exposes: [diff::lines, diff::words, diff::Hunk, diff::Patch, diff::merge3, diff::Conflict]
+  depends_on: [TextBuffer]
+  description: >-
+    Myers O(ND) line diff with histogram fallback for large inputs,
+    intra-line word refinement, and unified-format patch emit/apply.
+    merge3 performs three-way merge producing either a clean result or
+    structured Conflict blocks suitable for an interactive resolver UI.
+  examples: |
+    auto hunks = diff::lines(old_snap, new_snap);
+    auto patch = diff::Patch::unified(hunks, 3);
+    auto res = diff::merge3(base, ours, theirs);
+    if (!res.conflicts.empty()) { ... }
+
+- name: WordWrap
+  path: "include/TTyUtils/TTyUtils-WordWrap.hpp"
+  exposes: [wrap::soft_wrap, wrap::reflow, wrap::WrapMap, wrap::BreakRules]
+  depends_on: [TextBuffer, TTyTk::Grampheme, TTyTk::CharWidth]
+  description: >-
+    Soft-wrap layout producing a WrapMap (visual row ↔ buffer position
+    mapping) that TextArea and Pager consume. Implements UAX #14 line
+    breaking with tailorable rules (CJK, no-break for code tokens),
+    hanging indent, and hard reflow for prose (gq-style rewrap).
+  examples: |
+    auto map = wrap::soft_wrap(snap, 80, wrap::BreakRules::code());
+    auto pos = map.visual_to_buffer({.row=120, .col=4});
+    wrap::reflow(buf, sel.range(), 72);
+
+- name: SyntaxGrammar
+  path: "include/TTyUtils/TTyUtils-SyntaxGrammar.hpp"
+  exposes: [syntax::Grammar, syntax::load_tm, syntax::Scope, syntax::Registry, syntax::detect]
+  depends_on: [Search, Config, TTyTk::Encoding]
+  description: >-
+    Grammar definitions for the highlighter: loads TextMate-style JSON
+    grammars and a compact native format, resolves include/repository
+    references, and manages a Registry keyed by language id, filename
+    glob, shebang and modeline detection. Scopes are interned for cheap
+    comparison in the render path.
+  examples: |
+    auto& reg = syntax::Registry::global();
+    reg.load_dir("~/.config/ttyutils/grammars");
+    auto g = reg.by_filename("build.rs");
+
+- name: SyntaxHighlight
+  path: "include/TTyUtils/TTyUtils-SyntaxHighlight.hpp"
+  exposes: [hl::Highlighter, hl::SpanList, hl::LineState, hl::Incremental, hl::to_style]
+  depends_on: [SyntaxGrammar, TextBuffer, Theme, Search]
+  description: >-
+    Incremental highlighting engine: per-line state caching so an edit
+    only re-lexes forward until states converge, background execution
+    over Snapshots with generation checks, and span output mapped to
+    Theme styles. Degrades gracefully by budget — lines beyond a length
+    threshold get lexical-only highlighting.
+  examples: |
+    hl::Highlighter h(g, theme);
+    h.attach(buf);
+    auto spans = h.line_spans(42);   // ready or placeholder
+    h.on_ready([&](int first, int last){ invalidate(first, last); });
+
+- name: Readline
+  path: "include/TTyUtils/TTyUtils-Readline.hpp"
+  exposes: [rl::Editor, rl::read_line, rl::Keymap, rl::Binding, rl::Prompt, rl::KillRing]
+  depends_on: [TextBuffer, Completion, HistoryFile, KeyMap, TTyTk::InputProto, TTyTk::CellBuffer, TTyTk::CharWidth, TTyTk::Grampheme]
+  description: >-
+    Line editor: emacs and vi keymaps, kill ring, numeric arguments,
+    incremental history search (C-r), multi-line continuation with
+    bracket-awareness, undo, and bracketed-paste handling. Prompt
+    supports styled segments and a right-aligned side prompt. Renders
+    through TTyTk so it works on dumb terminals too.
+  examples: |
+    rl::Editor ed;
+    ed.set_prompt(rl::Prompt("db> ").right("[prod]"));
+    ed.set_completer(sql_completer);
+    if (auto line = ed.read()) exec(*line);
+
+- name: Completion
+  path: "include/TTyUtils/TTyUtils-Completion.hpp"
+  exposes: [completion::Engine, completion::Source, completion::Candidate, completion::rank, completion::FilenameSource, completion::WordSource, completion::CallbackSource]
+  depends_on: [Search]
+  description: >-
+    Completion engine aggregating multiple Sources (filenames, buffer
+    words, user callbacks) with fuzzy ranking, common-prefix insertion,
+    and a paged candidate model consumed by Readline's menu or a UI
+    popup. Sources run async with a deadline so slow providers can't
+    stall typing.
+  examples: |
+    completion::Engine eng;
+    eng.add(std::make_unique<completion::FilenameSource>());
+    auto candidates = eng.query("src/ma");
+
+- name: HistoryFile
+  path: "include/TTyUtils/TTyUtils-HistoryFile.hpp"
+  exposes: [hist::History, hist::Entry, hist::dedup, hist::Merge]
+  depends_on: []
+  description: >-
+    Persistent command history with timestamps and optional per-entry
+    metadata (cwd, exit status). Append-only on-disk format safe for
+    concurrent writers (multiple shells), lock-free merge on load,
+    dedup policies (all/adjacent/none) and ignore rules (space-prefix,
+    patterns).
+  examples: |
+    hist::History h("~/.myapp_history");
+    h.append({.text=line, .cwd=cwd()});
+    for (auto& e : h.match_prefix("git re")) ...
+
+# ── UI toolkit core ────────────────────────────────────────────────────────
+
+- name: EventLoop
+  path: "include/TTyUtils/TTyUtils-EventLoop.hpp"
+  exposes: [loop::Loop, loop::Event, loop::Timer, loop::Idle, loop::FdWatch, loop::post]
+  depends_on: [TTyTk::Core, TTyTk::InputProto]
+  description: >-
+    Single-threaded event loop multiplexing terminal input, timers,
+    file-descriptor watches and cross-thread posted tasks (wakeup via
+    self-pipe/eventfd). Coalesces resize events, delivers SIGWINCH and
+    SIGTSTP/SIGCONT as ordinary events, and exposes idle callbacks for
+    background work slicing.
+  examples: |
+    loop::Loop lp;
+    lp.watch(sock_fd, loop::Readable, on_data);
+    lp.every(1s, refresh_clock);
+    lp.run();
+
+- name: App
+  path: "include/TTyUtils/TTyUtils-App.hpp"
+  exposes: [app::App, app::Options, app::quit, app::suspend, app::Screen]
+  depends_on: [EventLoop, Widget, Focus, Theme, TTyTk::CellBuffer, TTyTk::CapTools]
+  description: >-
+    Application shell tying the stack together: enters raw mode and the
+    alternate screen, negotiates capabilities, owns the root widget,
+    schedules damage-based redraws on loop idle, and restores the
+    terminal on exit or crash (signal-safe teardown). Also handles
+    suspend/resume (C-z) correctly.
+  examples: |
+    app::App a(app::Options{.mouse=true});
+    a.set_root(std::move(main_panel));
+    return a.run();
+
+- name: Widget
+  path: "include/TTyUtils/TTyUtils-Widget.hpp"
+  exposes: [ui::Widget, ui::Rect, ui::Canvas, ui::SizeHint, ui::DamageList, ui::HitTest]
+  depends_on: [Theme, TTyTk::CellBuffer, TTyTk::ColorTools, TTyTk::InputProto]
+  description: >-
+    Base widget class: rectangle geometry, size hints (min/preferred/
+    stretch), a clipped Canvas for drawing styled cells, damage
+    tracking so only dirty regions repaint, hit-testing for mouse
+    routing, and the parent/child ownership model used by every other
+    UI header.
+  examples: |
+    struct Clock : ui::Widget {
+      void paint(ui::Canvas& c) override { c.text({0,0}, now_str(), style()); }
+      ui::SizeHint hint() const override { return {.min={8,1}}; }
+    };
+
+- name: Layout
+  path: "include/TTyUtils/TTyUtils-Layout.hpp"
+  exposes: [ui::HBox, ui::VBox, ui::Grid, ui::Stack, ui::Spacer, ui::Split, ui::Constraint]
+  depends_on: [Widget]
+  description: >-
+    Layout containers: flex-style boxes with grow/shrink factors, a
+    row/column Grid with spans, Stack (z-order, for overlays), and
+    user-draggable Split panes with min-size constraints. Solves in
+    integer cells with a deterministic remainder distribution so
+    layouts don't jitter on resize.
+  examples: |
+    auto root = ui::VBox{
+      ui::HBox{ sidebar | ui::grow(1), editor | ui::grow(3) },
+      status_bar
+    };
+
+- name: Focus
+  path: "include/TTyUtils/TTyUtils-Focus.hpp"
+  exposes: [ui::FocusChain, ui::focus_next, ui::focus_prev, ui::FocusScope, ui::on_focus]
+  depends_on: [Widget]
+  description: >-
+    Keyboard focus management: tab-order chains derived from the
+    widget tree with explicit overrides, focus scopes for modal
+    dialogs (focus can't escape), directional focus movement for
+    arrow-key navigation between panes, and enter/leave notifications
+    widgets use to restyle.
+  examples: |
+    ui::FocusScope scope(dialog);
+    ui::focus_next(root);            // Tab
+    ok_btn.on_focus([&](bool f){ ok_btn.set_hilite(f); });
+
+- name: Theme
+  path: "include/TTyUtils/TTyUtils-Theme.hpp"
+  exposes: [theme::Theme, theme::Style, theme::Palette, theme::load, theme::role, theme::dark_mode]
+  depends_on: [Config, TTyTk::ColorTools]
+  description: >-
+    Styling system: named roles (e.g. "menu.selected", "editor.linenr")
+    resolved to concrete styles through a cascading theme file, palette
+    abstraction that degrades 24-bit themes to 256/16 colors using
+    TTyTk quantization, and light/dark variants switchable at runtime
+    (reacting to OSC 10/11 background detection).
+  examples: |
+    auto th = theme::load("gruvbox.toml");
+    auto s = th.role("statusbar.mode.insert");
+    canvas.text(pos, "INSERT", s);
+
+# ── Widgets ────────────────────────────────────────────────────────────────
+
+- name: Panel
+  path: "include/TTyUtils/TTyUtils-Panel.hpp"
+  exposes: [ui::Panel, ui::Border, ui::TitlePos, ui::Shadow]
+  depends_on: [Widget, Layout]
+  description: >-
+    Framed container: border styles (single/double/rounded/heavy/
+    custom), optional title with alignment and styled segments,
+    collapsible state, and an optional shadow for floating panels.
+    Border cells are drawn from box-drawing glyphs with ASCII fallback
+    when the terminal lacks them.
+  examples: |
+    ui::Panel p("Results", ui::Border::Rounded);
+    p.set_child(list);
+    p.set_title_pos(ui::TitlePos::Center);
+
+- name: Menu
+  path: "include/TTyUtils/TTyUtils-Menu.hpp"
+  exposes: [ui::MenuBar, ui::Menu, ui::MenuItem, ui::ContextMenu, ui::Accel]
+  depends_on: [Widget, Focus, KeyMap]
+  description: >-
+    Menu bar, drop-down and context menus: nested submenus, separators,
+    checkable and radio items, accelerator hints rendered right-aligned,
+    Alt-mnemonic activation, and type-ahead selection. Menus open as
+    Stack overlays and close correctly on outside-click or Esc.
+  examples: |
+    ui::MenuBar bar{
+      ui::Menu("File", { {"Open…", "C-o", act_open}, {"Quit", "C-q", act_quit} }),
+      ui::Menu("Edit", edit_items)
+    };
+
+- name: Button
+  path: "include/TTyUtils/TTyUtils-Button.hpp"
+  exposes: [ui::Button, ui::CheckBox, ui::Radio, ui::RadioGroup, ui::Toggle]
+  depends_on: [Widget, Focus]
+  description: >-
+    Clickable controls: push buttons (default/cancel roles, repeat on
+    hold), checkboxes with tri-state support, radio groups, and toggle
+    switches. All react to keyboard (Space/Enter), mouse, and expose a
+    single activated signal.
+  examples: |
+    ui::Button ok("OK");
+    ok.set_default(true);
+    ok.on_activate([&]{ submit(); });
+
+- name: TextInput
+  path: "include/TTyUtils/TTyUtils-TextInput.hpp"
+  exposes: [ui::TextInput, ui::PasswordInput, ui::Validator, ui::InputMask]
+  depends_on: [Widget, Readline, Focus]
+  description: >-
+    Single-line input widget wrapping the Readline editing core:
+    horizontal scrolling, placeholder text, live validation with error
+    styling, input masks (e.g. dates), password mode with optional
+    last-char peek, and completion popup integration.
+  examples: |
+    ui::TextInput host("hostname");
+    host.set_validator(ui::Validator::regex("[a-z0-9.-]+"));
+    host.on_submit([&](auto s){ connect(s); });
+
+- name: TextArea
+  path: "include/TTyUtils/TTyUtils-TextArea.hpp"
+  exposes: [ui::TextArea, ui::Gutter, ui::EditorOptions]
+  depends_on: [Widget, TextBuffer, TextCursor, UndoHistory, WordWrap, SyntaxHighlight, Search]
+  description: >-
+    Full multi-line editor widget: gutter (line numbers, signs, folds),
+    soft wrap, multi-cursor editing, syntax highlighting, incremental
+    search with match overlay, and viewport management (scrolloff,
+    center-on-jump). This is the flagship consumer of the text engine
+    headers; suitable as the core of an editor or as an embedded field.
+  examples: |
+    ui::TextArea ed;
+    ed.open("notes.md");
+    ed.options().wrap = true;
+    ed.gutter().show_line_numbers(true);
+
+- name: ListView
+  path: "include/TTyUtils/TTyUtils-ListView.hpp"
+  exposes: [ui::ListView, ui::ListModel, ui::ListDelegate, ui::MultiSelect]
+  depends_on: [Widget, ScrollBar, Search]
+  description: >-
+    Virtualized list: model/delegate split so only visible rows are
+    materialized (fine for millions of rows), single/multi selection,
+    type-ahead and fuzzy filter hooks, and per-row custom painting via
+    delegates. Keyboard model matches common pickers (C-n/C-p, Home/End,
+    PgUp/PgDn).
+  examples: |
+    ui::ListView lv(files_model);
+    lv.set_filter(fuzzy_query);
+    lv.on_choose([&](int row){ open(files_model.at(row)); });
+
+- name: TableView
+  path: "include/TTyUtils/TTyUtils-TableView.hpp"
+  exposes: [ui::TableView, ui::TableModel, ui::Column, ui::SortOrder]
+  depends_on: [ListView]
+  description: >-
+    Columnar view over the virtualized list core: resizable and
+    reorderable columns, per-column alignment and elision, click-to-
+    sort with stable multi-key ordering, sticky header row, and cell-
+    level styling callbacks (e.g. red negative numbers).
+  examples: |
+    ui::TableView tv(procs);
+    tv.add_column({.title="PID", .width=6, .align=ui::Right});
+    tv.sort_by("CPU", ui::SortOrder::Desc);
+
+- name: TreeView
+  path: "include/TTyUtils/TTyUtils-TreeView.hpp"
+  exposes: [ui::TreeView, ui::TreeModel, ui::TreeNodeRef, ui::ExpandPolicy]
+  depends_on: [ListView]
+  description: >-
+    Tree widget rendered through the virtualized list (a flattened
+    visible-node projection), with lazy child loading for large trees
+    (filesystems), guide lines, expand/collapse-all, and path-based
+    node addressing so state survives model refreshes.
+  examples: |
+    ui::TreeView tree(fs_model);
+    tree.expand("/src");
+    tree.on_choose([&](auto& node){ open(node.path()); });
+
+- name: ScrollBar
+  path: "include/TTyUtils/TTyUtils-ScrollBar.hpp"
+  exposes: [ui::ScrollBar, ui::Scrollable, ui::ScrollMark]
+  depends_on: [Widget]
+  description: >-
+    Vertical/horizontal scroll bars with proportional thumbs, sub-cell
+    rendering via eighth-block glyphs where available, click/drag/wheel
+    handling, and annotation marks on the track (search hits, errors) —
+    plus the Scrollable interface viewers implement to be driven by it.
+  examples: |
+    ui::ScrollBar sb(ui::Vertical);
+    sb.attach(editor);
+    sb.set_marks(search_hit_lines, theme.role("scroll.mark"));
+
+- name: StatusBar
+  path: "include/TTyUtils/TTyUtils-StatusBar.hpp"
+  exposes: [ui::StatusBar, ui::Segment, ui::Align, ui::transient]
+  depends_on: [Widget, Theme]
+  description: >-
+    Segmented status line: left/center/right groups, priority-based
+    elision when width is short, powerline-style separators with ASCII
+    fallback, click-sensitive segments, and transient messages that
+    revert after a timeout.
+  examples: |
+    ui::StatusBar sb;
+    sb.left({mode_seg, file_seg});
+    sb.right({pos_seg});
+    sb.flash("Saved", 2s);
+
+- name: TabBar
+  path: "include/TTyUtils/TTyUtils-TabBar.hpp"
+  exposes: [ui::TabBar, ui::Tab, ui::TabPolicy]
+  depends_on: [Widget, Menu]
+  description: >-
+    Tab strip: close buttons, modified-indicator dots, overflow
+    scrolling with a pick-list fallback, drag-to-reorder with mouse,
+    and Ctrl-number / next-prev keyboard switching. Purely a selector —
+    pair it with a ui::Stack to switch content.
+  examples: |
+    ui::TabBar tabs;
+    tabs.add({.title="main.cpp", .modified=true});
+    tabs.on_select([&](int i){ stack.raise(i); });
+
+- name: Dialog
+  path: "include/TTyUtils/TTyUtils-Dialog.hpp"
+  exposes: [ui::Dialog, ui::message_box, ui::confirm, ui::prompt, ui::DialogResult]
+  depends_on: [Panel, Button, TextInput, Focus, Layout]
+  description: >-
+    Composable dialogs for caller-owned overlays with a focus scope.
+    The message_box, confirm, and prompt helpers return an owned Dialog.
+    Both callback and coroutine-awaitable result styles are provided;
+    Esc/Enter map to cancel/default roles.
+  examples: |
+    auto dialog = ui::confirm("Quit", "Quit without saving?");
+    dialog->on_result([&](auto result) {
+      if (result == ui::DialogResult::Yes) app.quit();
+    });
+    dialog->open(); // attach to the application overlay before dispatching input
+
+- name: FilePicker
+  path: "include/TTyUtils/TTyUtils-FilePicker.hpp"
+  exposes: [ui::FilePicker, ui::PickMode, ui::FileFilter, ui::Bookmark]
+  depends_on: [Dialog, TreeView, ListView, TextInput, Config]
+  description: >-
+    File open/save dialog: dual navigation (breadcrumb path bar +
+    directory list), glob filters, hidden-file toggle, bookmarks
+    persisted via Config, inline mkdir/rename, and fuzzy filename
+    jump. Modes for open-file, save-file (with overwrite confirm) and
+    pick-directory.
+  examples: |
+    auto path = co_await ui::FilePicker(app)
+        .mode(ui::PickMode::Open)
+        .filter({"*.cpp", "*.hpp"})
+        .show();
+
+- name: Progress
+  path: "include/TTyUtils/TTyUtils-Progress.hpp"
+  exposes: [ui::ProgressBar, ui::Spinner, ui::MultiProgress, ui::EtaModel]
+  depends_on: [Widget, EventLoop]
+  description: >-
+    Progress indicators: determinate bars with sub-cell precision,
+    indeterminate spinners (glyph sets with ASCII fallback), stacked
+    MultiProgress for parallel jobs, rate/ETA smoothing via exponential
+    decay, and an inline mode for non-fullscreen CLI use that plays
+    nicely with normal stdout logging.
+  examples: |
+    ui::MultiProgress mp;
+    auto t = mp.add("download", total_bytes);
+    t.advance(n);            // renders rate + ETA
+
+# ── Viewers & paging ───────────────────────────────────────────────────────
+
+- name: Pager
+  path: "include/TTyUtils/TTyUtils-Pager.hpp"
+  exposes: [pager::Pager, pager::Source, pager::page_file, pager::page_stream, pager::Marks]
+  depends_on: [Widget, Search, WordWrap, ScrollBar, StatusBar, TTyTk::CellBuffer, TTyTk::Automaton, TTyTk::CharWidth, TTyTk::ColorTools, TTyTk::Grampheme]
+  description: >-
+    less-style pager: streams from files or pipes without loading
+    everything (mmap for files, growing spill buffer for pipes),
+    forward/backward search with highlight, marks, follow mode (F),
+    horizontal scroll or wrap, and SGR passthrough so pre-colored
+    output (git, grep) renders faithfully.
+  examples: |
+    pager::page_file("CHANGELOG.md");
+    pager::Pager p(pager::Source::stream(child_stdout));
+    p.follow(true);   // like less +F
+
+- name: HexView
+  path: "include/TTyUtils/TTyUtils-HexView.hpp"
+  exposes: [hexview::HexView, hexview::Region, hexview::Annotation, hexview::Inspector]
+  depends_on: [Widget, ScrollBar]
+  description: >-
+    Hex viewer/editor widget: offset/hex/ASCII panes with linked
+    cursors, mmap-backed random access for huge files, byte and
+    pattern search, named region annotations with colors (for format
+    dissection), an insert/overwrite editing mode, and a data
+    inspector (int/float/string decoding at cursor, both endians).
+  examples: |
+    hexview::HexView hv;
+    hv.open("firmware.bin");
+    hv.annotate({0x0, 0x40}, "ELF header", th.role("hex.header"));
+
+- name: MarkdownView
+  path: "include/TTyUtils/TTyUtils-MarkdownView.hpp"
+  exposes: [mdview::MarkdownView, mdview::render, mdview::Options, mdview::TocEntry]
+  depends_on: [Widget, Pager, TTyTk::Encoding, TTyTk::Grampheme]
+  description: >-
+    CommonMark renderer for the terminal: headings, emphasis, lists,
+    tables, block quotes, task lists, and fenced code blocks routed
+    through SyntaxHighlight. Links become OSC 8 hyperlinks when
+    supported. Provides both a scrollable widget and a one-shot render
+    to styled text for piping into Pager.
+  examples: |
+    mdview::MarkdownView v;
+    v.set_text(readme);
+    v.jump(v.toc()[2]);      // third heading
+
+- name: LogView
+  path: "include/TTyUtils/TTyUtils-LogView.hpp"
+  exposes: [logview::LogView, logview::Rule, logview::Filter, logview::tail_file]
+  depends_on: [Pager, Search, EventLoop]
+  description: >-
+    Log-tailing viewer built on Pager's stream core: inotify/kqueue
+    file following with rotation detection, level-based coloring rules
+    (regex → style), live include/exclude filters, timestamp
+    re-rendering (relative/absolute), and pause-on-scroll-up with a
+    "N new lines" resume banner.
+  examples: |
+    logview::LogView lv(logview::tail_file("/var/log/app.log"));
+    lv.add_rule({.pattern=R"(\bERROR\b)", .style=th.role("log.error")});
+    lv.set_filter(logview::Filter::exclude(R"(healthz)"));
+
+- name: ImageView
+  path: "include/TTyUtils/TTyUtils-ImageView.hpp"
+  exposes: [imgview::ImageView, imgview::show, imgview::FitMode, imgview::Backend]
+  depends_on: [Widget, TTyTk::ImageProto, TTyTk::ColorTools]
+  description: >-
+    Image display widget negotiating the best available backend via
+    TTyTk (kitty graphics, iTerm2, sixel) and falling back to
+    half-block cell mosaics with quantization. Handles fit modes
+    (contain/cover/actual), cell-grid alignment, zoom/pan, and cleanup
+    of graphics placements on scroll or destroy.
+  examples: |
+    imgview::ImageView iv;
+    iv.load("plot.png");
+    iv.set_fit(imgview::FitMode::Contain);
+
+# ── Transports & remote ────────────────────────────────────────────────────
+
+- name: NetLink
+  path: "include/TTyUtils/TTyUtils-NetLink.hpp"
+  exposes: [net::Link, net::Listener, net::Addr, net::TlsContext, net::Resolver]
+  depends_on: [EventLoop, TTyTk::Core]
+  description: >-
+    TCP and Unix socket transport. Resolution and connection setup
+    are synchronous; connected links support non-blocking I/O and
+    bounded output queues and can attach to EventLoop. TLS and
+    Happy Eyeballs are not implemented.
+  examples: |
+    if (auto link = net::Link::connect({"example.com", 23})) {
+      link->on_data([&](auto bytes){ feed(bytes); });
+      link->attach(loop);
+      (void)link->write(hello);
+    }
+
+- name: SSH
+  path: "include/TTyUtils/TTyUtils-SSH.hpp"
+  exposes: [ssh::Session, ssh::Channel, ssh::Auth, ssh::KnownHosts, ssh::Sftp, ssh::AgentClient]
+  depends_on: [NetLink, Config, TTyTk::PsuedoTerm]
+  description: >-
+    SSH2 client: transport crypto (curve25519/AES-GCM/chacha20-poly1305),
+    auth via agent, key files and password/keyboard-interactive,
+    known_hosts verification with TOFU prompts, PTY channels that
+    forward window resizes, exec/subsystem channels, port forwarding,
+    and a minimal SFTP subset (stat/read/write/dir) for pickers.
+  examples: |
+    ssh::Session s(co_await net::Link::connect({host, 22}));
+    co_await s.auth(ssh::Auth::agent(user));
+    auto ch = co_await s.open_pty({.term="xterm-256color", .cols=80, .rows=24});
+    ch.on_data(feed_terminal);
+
+- name: Telnet
+  path: "include/TTyUtils/TTyUtils-Telnet.hpp"
+  exposes: [telnet::Session, telnet::Option, telnet::Negotiator]
+  depends_on: [NetLink]
+  description: >-
+    Telnet client with correct IAC escaping and option negotiation
+    (ECHO, SGA, NAWS window size, TTYPE, BINARY), a loop-safe
+    negotiator (no ping-pong storms), and hooks for nonstandard server
+    quirks. Mostly for lab gear, BBSes and MUDs — but those users are
+    loyal.
+  examples: |
+    telnet::Session t(co_await net::Link::connect({host, 23}));
+    t.enable(telnet::Option::NAWS);
+    t.send_window_size(cols, rows);
+
+- name: Serial
+  path: "include/TTyUtils/TTyUtils-Serial.hpp"
+  exposes: [serial::Port, serial::Settings, serial::enumerate, serial::Modem]
+  depends_on: [EventLoop, TTyTk::Core]
+  description: >-
+    Serial port transport: device enumeration, termios configuration
+    (baud, parity, stop bits, flow control), modem line control and
+    monitoring (DTR/RTS/CD), break signaling, and EventLoop
+    integration — the missing piece for a picocom/minicom-style tool
+    on this stack.
+  examples: |
+    auto port = serial::Port::open("/dev/ttyUSB0",
+        {.baud=115200, .flow=serial::Flow::None});
+    port.on_data(feed_terminal);
+
+- name: P2P
+  path: "include/TTyUtils/TTyUtils-P2P.hpp"
+  exposes: [p2p::Node, p2p::PeerId, p2p::Channel, p2p::Discovery, p2p::NatTraversal]
+  depends_on: [NetLink, Config]
+  description: >-
+    Encrypted peer-to-peer channels for SessionShare: Noise-protocol
+    handshake over UDP with reliability layer, peer identity keys with
+    short authentication strings for out-of-band verification, local
+    discovery via mDNS, and NAT traversal (STUN-style hole punching
+    with relay fallback through a user-supplied rendezvous server).
+  examples: |
+    p2p::Node node(my_identity);
+    auto ch = co_await node.dial(peer_id);
+    ch.send(frame);
+
+- name: Roam
+  path: "include/TTyUtils/TTyUtils-Roam.hpp"
+  exposes: [roam::Client, roam::Server, roam::StateSync, roam::Predictor]
+  depends_on: [NetLink, TTyTk::PsuedoTerm, TTyTk::CellBuffer]
+  description: >-
+    Mosh-style roaming remote terminal: UDP state-synchronization
+    protocol shipping screen diffs rather than a byte stream, so
+    connections survive IP changes and sleep. Includes client-side
+    predictive echo with underline-until-confirmed display, and jitter
+    -adaptive frame pacing. Server side runs atop TTyTk's PseudoTerm.
+  examples: |
+    roam::Client c(server_addr, key);
+    c.attach(terminal_widget);
+    // survives Wi-Fi -> cellular handoff
+
+- name: Multiplex
+  path: "include/TTyUtils/TTyUtils-Multiplex.hpp"
+  exposes: [mux::Server, mux::Client, mux::Session, mux::Window, mux::Pane, mux::detach]
+  depends_on: [EventLoop, Terminal, TTyTk::PsuedoTerm, Config]
+  description: >-
+    tmux-style session multiplexer: a detachable server process owning
+    PTY sessions, windows and panes; clients attach over a Unix socket
+    and render via the Terminal widget. Sessions persist across client
+    disconnects, panes can be split/resized/zoomed, and a control mode
+    exposes the object tree for scripting.
+  examples: |
+    mux::Client c;
+    auto s = c.attach_or_create("work");
+    s.window(0).split(mux::Vertical).run("htop");
+
+- name: SessionShare
+  path: "include/TTyUtils/TTyUtils-SessionShare.hpp"
+  exposes: [share::Host, share::Guest, share::Permissions, share::Presence]
+  depends_on: [P2P, Multiplex, Terminal]
+  description: >-
+    Collaborative terminal sharing over P2P: host grants read-only or
+    read-write access per guest, guests see live output and (with
+    permission) type into the shared session, presence shows remote
+    cursors/selections in shared editors, and everything rides the
+    Noise-encrypted channels with SAS verification.
+  examples: |
+    share::Host h(session);
+    auto invite = h.invite(share::Permissions::ReadOnly);
+    // send invite string out-of-band; guest: share::Guest::join(invite)
+
+# ── System integration ─────────────────────────────────────────────────────
+
+- name: Terminal
+  path: "include/TTyUtils/TTyUtils-Terminal.hpp"
+  exposes: [term::Terminal, term::Emulator, term::Scrollback, term::hook_osc]
+  depends_on: [Widget, EventLoop, TTyTk::PsuedoTerm, TTyTk::EscapeCodes, TTyTk::CellBuffer, TTyTk::Automaton, TTyTk::CharWidth, TTyTk::ColorTools, TTyTk::Encoding, TTyTk::Grampheme, TTyTk::Winsize]
+  description: >-
+    Embedded terminal emulator widget: spawns a child on a TTyTk PTY,
+    interprets VT/xterm sequences (the decoder from TTyTk::EscapeCodes)
+    into a cell grid with scrollback, handles resize propagation, mouse
+    reporting passthrough, OSC hooks (title, cwd via OSC 7, clipboard
+    policy for OSC 52), and URL/path detection for click-to-open.
+  examples: |
+    term::Terminal t;
+    t.spawn({"bash", "-l"});
+    t.on_title([&](auto s){ tab.set_title(s); });
+
+- name: Shell
+  path: "include/TTyUtils/TTyUtils-Shell.hpp"
+  exposes: [shell::run, shell::Job, shell::Pipeline, shell::Capture, shell::JobTable]
+  depends_on: [EventLoop, TTyTk::PsuedoTerm]
+  description: >-
+    Child process orchestration without a widget: run commands or
+    pipelines with captured or PTY-backed stdio, incremental output
+    callbacks, timeouts and kill escalation (TERM→KILL), a job table
+    with process-group signaling for suspend/resume, and correct exit
+    status decoding. The non-interactive counterpart to Terminal.
+  examples: |
+    auto job = shell::run({"git", "status", "--porcelain"},
+                          {.capture=shell::Capture::Stdout});
+    job.on_line([&](auto l){ parse(l); });
+    int rc = co_await job.wait();
+
+- name: Clipboard
+  path: "include/TTyUtils/TTyUtils-Clipboard.hpp"
+  exposes: [clip::copy, clip::paste, clip::History, clip::Backend, clip::Policy]
+  depends_on: [Config, TTyTk::ClipboardTools, Shell]
+  description: >-
+    Clipboard manager above TTyTk's OSC 52 primitive: backend cascade
+    (OSC 52, wl-copy/xclip/pbcopy via Shell, internal ring as last
+    resort), a local clipboard history ring with picker integration,
+    size limits for OSC 52 payloads, and a security policy object
+    governing whether remote sessions may read the system clipboard.
+  examples: |
+    clip::copy(selection_text);
+    auto prev = clip::History::global().entry(1);
+    clip::Policy::global().allow_remote_read = false;
+
+- name: Notify
+  path: "include/TTyUtils/TTyUtils-Notify.hpp"
+  exposes: [notify::send, notify::Urgency, notify::bell, notify::Backend]
+  depends_on: [TTyTk::EscapeCodes, TTyTk::Encoding, TTyTk::NotifyTools, Shell]
+  description: >-
+    User notifications with graceful degradation: OSC 777/9 terminal
+    notifications where supported, notify-send/osascript via Shell as
+    fallback, then urgency-styled bell (BEL + optional visual flash).
+    Deduplicates bursts and respects a global do-not-disturb toggle.
+  examples: |
+    notify::send({.title="Build done", .body="0 errors",
+                  .urgency=notify::Urgency::Normal});
+
+- name: Config
+  path: "include/TTyUtils/TTyUtils-Config.hpp"
+  exposes: [config::Store, config::Value, config::Schema, config::watch, config::xdg_path]
+  depends_on: [TTyTk::Core]
+  description: >-
+    Configuration loading: a TOML-subset parser (no external deps),
+    XDG base-directory resolution with layered merge (system → user →
+    project), schema validation with typed accessors and helpful error
+    positions, live reload via file watching, and write-back that
+    preserves comments for the keys it doesn't touch.
+  examples: |
+    auto cfg = config::Store::load("myapp");
+    int ts = cfg.get<int>("editor.tabstop", 4);
+    config::watch(cfg, [&]{ apply(cfg); });
+
+- name: KeyMap
+  path: "include/TTyUtils/TTyUtils-KeyMap.hpp"
+  exposes: [keymap::Map, keymap::Chord, keymap::parse_key, keymap::Action, keymap::WhichKey]
+  depends_on: [Config, TTyTk::InputProto, TTyTk::Grampheme]
+  description: >-
+    Keybinding system: human-readable key notation parsing ("C-x C-s",
+    "<leader>gd"), multi-key chords with timeout, mode-scoped maps
+    (normal/insert/visual or app-defined), binding to named Actions
+    with user re-binding via Config, and a which-key style pending-
+    chord hint feed the StatusBar can display.
+  examples: |
+    keymap::Map m;
+    m.bind("C-x C-s", "file.save");
+    m.bind("g d", "goto.definition");
+    m.on_pending([&](auto hints){ sb.flash(hints, 1s); });

@@ -1,9 +1,4 @@
-# Third party
-third_party/
 # Keep the checked-in Boost snapshot visible, without exposing other dependencies.
-!/third_party/
-/third_party/*
-!/third_party/boost/
 generated/
 # Info
 .info

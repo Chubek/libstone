@@ -1,0 +1,774 @@
+#ifdef _MSC_VER
+#pragma warning(disable: 4706)
+#include <picojson.h>
+#pragma warning(default: 4706)
+#else
+#include <picojson.h>
+#endif
+
+#include <iostream>
+#include <map>
+#include <set>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#ifdef VALIJSON_BUILD_JSON11_ADAPTER
+#include <valijson/adapters/json11_adapter.hpp>
+#include <valijson/utils/json11_utils.hpp>
+#endif
+#include <valijson/adapters/jsoncpp_adapter.hpp>
+#include <valijson/adapters/rapidjson_adapter.hpp>
+#include <valijson/adapters/picojson_adapter.hpp>
+#include <valijson/adapters/nlohmann_json_adapter.hpp>
+#include <valijson/utils/jsoncpp_utils.hpp>
+#include <valijson/utils/picojson_utils.hpp>
+#include <valijson/utils/rapidjson_utils.hpp>
+#include <valijson/utils/nlohmann_json_utils.hpp>
+#include <valijson/schema.hpp>
+#include <valijson/schema_parser.hpp>
+#include <valijson/validation_results.hpp>
+#include <valijson/validator.hpp>
+#include <valijson/exceptions.hpp>
+
+#ifdef VALIJSON_BUILD_POCO_ADAPTER
+#include <valijson/adapters/poco_json_adapter.hpp>
+#include <valijson/utils/poco_json_utils.hpp>
+#endif
+
+#define REMOTES_DIR "../thirdparty/JSON-Schema-Test-Suite/remotes/"
+
+#define TEST_SUITE_DIR "../thirdparty/JSON-Schema-Test-Suite/tests/"
+
+using valijson::adapters::AdapterTraits;
+using valijson::adapters::RapidJsonAdapter;
+using valijson::Schema;
+using valijson::SchemaParser;
+using valijson::Validator;
+
+std::string getRelativePath(const std::string &uri)
+{
+   const std::string dummyUri = "http://localhost:1234/";
+   if (uri.find(dummyUri) != std::string::npos) {
+       return REMOTES_DIR + uri.substr(dummyUri.size());
+   }
+
+   static const std::map<std::string, std::string> schemaMap = {
+       { "http://json-schema.org/draft-03/schema", "../doc/schema/draft-03.json" },
+       { "http://json-schema.org/draft-04/schema", "../doc/schema/draft-04.json" },
+       { "http://json-schema.org/draft-07/schema", "../doc/schema/draft-07.json" }
+   };
+
+   const auto itr = schemaMap.find(uri);
+   if (itr != schemaMap.end()) {
+       return itr->second;
+   }
+
+   valijson::throwRuntimeError("Attempt fetchDoc of " + uri);
+}
+
+template<typename AdapterType>
+const typename AdapterTraits<AdapterType>::DocumentType * fetchDocument(
+       const std::string &uri)
+{
+   const std::string relativePath = getRelativePath(uri);
+
+   typename AdapterTraits<AdapterType>::DocumentType *document =
+           new typename AdapterTraits<AdapterType>::DocumentType();
+
+   if (!valijson::utils::loadDocument(relativePath, *document)) {
+       delete document;
+       valijson::throwRuntimeError("Failed fetchDoc of " + uri);
+   }
+
+   return document;
+}
+
+template<typename AdapterType>
+void freeDocument(const typename AdapterTraits<AdapterType>::DocumentType *ptr)
+{
+   delete ptr;
+}
+
+class TestValidator : public ::testing::TestWithParam<const char *>
+{
+protected:
+
+    template<typename AdapterType>
+    static void processTestFile(const std::string &testFile,
+                                const SchemaParser::Version version,
+                                const std::set<std::string> &skipCases =
+                                        std::set<std::string>())
+    {
+        std::string currentTestCase;
+        std::string currentTest;
+
+#if VALIJSON_USE_EXCEPTIONS
+        try {
+#endif
+            // Load test document
+            typename AdapterTraits<AdapterType>::DocumentType document;
+            ASSERT_TRUE( valijson::utils::loadDocument(testFile, document) );
+            AdapterType testCases(document);
+            ASSERT_TRUE( testCases.isArray() );
+
+            // Process each test case in the file
+            for (const AdapterType testCase : testCases.getArray()) {
+                currentTestCase.clear();
+                currentTest.clear();
+
+                // Ensure that testCase is an object
+                ASSERT_TRUE( testCase.isObject() );
+                const typename AdapterType::Object object = testCase.getObject();
+
+                // Get test case description
+                typename AdapterType::Object::const_iterator itr = object.find("description");
+                ASSERT_NE( object.end(), itr );
+                currentTestCase = itr->second.getString();
+
+                // Skip test cases that exercise features which have not yet
+                // been implemented (e.g. schema registry and canonical URI
+                // handling required for sibling-id $ref resolution).
+                if (skipCases.find(currentTestCase) != skipCases.end()) {
+                    continue;
+                }
+
+                // Ensure that 'schema' property is present
+                itr = object.find("schema");
+                ASSERT_NE( object.end(), itr );
+
+                // Parse schema
+                Schema schema;
+                SchemaParser parser(version);
+                parser.populateSchema(itr->second, schema,
+                        fetchDocument<AdapterType>, freeDocument<AdapterType>);
+
+                // For each test in the 'tests' array
+                itr = object.find("tests");
+                ASSERT_NE( object.end(), itr );
+                ASSERT_TRUE( itr->second.isArray() );
+                for (const AdapterType test : itr->second.getArray()) {
+                    const bool strict = itr->second.hasStrictTypes();
+
+                    ASSERT_TRUE( test.isObject() );
+                    const typename AdapterType::Object testObject = test.getObject();
+
+                    typename AdapterType::Object::const_iterator testItr = testObject.find("valid");
+                    ASSERT_NE( testObject.end(), testItr );
+                    ASSERT_TRUE( testItr->second.maybeBool() );
+                    const bool shouldValidate = testItr->second.getBool();
+
+                    testItr = testObject.find("description");
+                    ASSERT_NE( testObject.end(), testItr );
+                    currentTest = testItr->second.getString();
+
+                    testItr = testObject.find("data");
+                    ASSERT_NE( testObject.end(), testItr );
+                    Validator validator(strict ?
+                            Validator::kStrongTypes : Validator::kWeakTypes);
+
+                    EXPECT_EQ( shouldValidate, validator.validate(schema, testItr->second, NULL) )
+                        << "Failed while testing validate() function in '"
+                        << currentTest << "' of test case '"
+                        << currentTestCase << "' with adapter '"
+                        << AdapterTraits<AdapterType>::adapterName() << "'";
+
+                    // Validation that collects all errors must reach the same
+                    // result as validation that stops at the first error
+                    valijson::ValidationResults results;
+                    EXPECT_EQ( shouldValidate, validator.validate(schema, testItr->second, &results) )
+                        << "Failed while testing validate() function with results in '"
+                        << currentTest << "' of test case '"
+                        << currentTestCase << "' with adapter '"
+                        << AdapterTraits<AdapterType>::adapterName() << "'";
+                }
+            }
+#if VALIJSON_USE_EXCEPTIONS
+        } catch (const std::exception &e) {
+            FAIL() << "Exception thrown with message '" << e.what()
+                   << "' in '" << currentTest << "' of test case '"
+                   << currentTestCase << "' with adapter '"
+                   << AdapterTraits<AdapterType>::adapterName() << "'";
+        }
+#endif
+    }
+
+    void processTestFile(const std::string &testFile,
+                         const SchemaParser::Version version,
+                         const std::set<std::string> &skipCases =
+                                 std::set<std::string>())
+    {
+#ifdef VALIJSON_BUILD_JSON11_ADAPTER
+        processTestFile<valijson::adapters::Json11Adapter>(testFile, version, skipCases);
+#endif // VALIJSON_BUILD_JSON11_ADAPTER
+        processTestFile<valijson::adapters::JsonCppAdapter>(testFile, version, skipCases);
+        processTestFile<valijson::adapters::RapidJsonAdapter>(testFile, version, skipCases);
+        processTestFile<valijson::adapters::PicoJsonAdapter>(testFile, version, skipCases);
+        processTestFile<valijson::adapters::NlohmannJsonAdapter>(testFile, version, skipCases);
+
+#ifdef VALIJSON_BUILD_POCO_ADAPTER
+        processTestFile<valijson::adapters::PocoJsonAdapter>(testFile, version, skipCases);
+#endif // VALIJSON_BUILD_POCO_ADAPTER
+    }
+
+    void processDraft3TestFile(const std::string &testFile,
+                               const std::set<std::string> &skipCases =
+                                       std::set<std::string>())
+    {
+        return processTestFile(testFile, SchemaParser::kDraft3, skipCases);
+    }
+
+    void processDraft4TestFile(const std::string &testFile)
+    {
+        return processTestFile(testFile, SchemaParser::kDraft4);
+    }
+
+    void processDraft7TestFile(const std::string &testFile)
+    {
+        return processTestFile(testFile, SchemaParser::kDraft7);
+    }
+};
+
+//
+// draft 3
+// ------------------------------------------------------------------------------------------------
+//
+
+TEST_F(TestValidator, Draft3_AdditionalItems)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/additionalItems.json");
+}
+
+TEST_F(TestValidator, Draft3_AdditionalProperties)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/additionalProperties.json");
+}
+
+TEST_F(TestValidator, Draft3_Dependencies)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/dependencies.json");
+}
+
+TEST_F(TestValidator, Draft3_DivisibleBy)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/divisibleBy.json");
+}
+
+TEST_F(TestValidator, Draft3_Enum)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/enum.json");
+}
+
+TEST_F(TestValidator, Draft3_Items)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/items.json");
+}
+
+TEST_F(TestValidator, Draft3_Maximum)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/maximum.json");
+}
+
+TEST_F(TestValidator, Draft3_MaxItems)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/maxItems.json");
+}
+
+TEST_F(TestValidator, Draft3_MaxLength)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/maxLength.json");
+}
+
+TEST_F(TestValidator, Draft3_Minimum)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/minimum.json");
+}
+
+TEST_F(TestValidator, Draft3_MinItems)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/minItems.json");
+}
+
+TEST_F(TestValidator, Draft3_MinLength)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/minLength.json");
+}
+
+TEST_F(TestValidator, Draft3_Pattern)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/pattern.json");
+}
+
+TEST_F(TestValidator, Draft3_PatternProperties)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/patternProperties.json");
+}
+
+TEST_F(TestValidator, Draft3_Properties)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/properties.json");
+}
+
+TEST_F(TestValidator, Draft3_Ref)
+{
+    // The "$ref prevents a sibling id from changing the base uri" test case
+    // requires a schema registry that maps canonical URIs (computed from id
+    // resolution) to subschemas defined elsewhere in the same document.
+    // Implementing that is tracked in PLAN.md; skip the case for now.
+    const std::set<std::string> skipCases = {
+        "$ref prevents a sibling id from changing the base uri"
+    };
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/ref.json", skipCases);
+}
+
+TEST_F(TestValidator, Draft3_RefRemote)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/refRemote.json");
+}
+
+TEST_F(TestValidator, Draft3_Required)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/required.json");
+}
+
+TEST_F(TestValidator, Draft3_Type)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/type.json");
+}
+
+TEST_F(TestValidator, Draft3_UniqueItems)
+{
+    processDraft3TestFile(TEST_SUITE_DIR "draft3/uniqueItems.json");
+}
+
+//
+// draft 4
+// ------------------------------------------------------------------------------------------------
+//
+
+TEST_F(TestValidator, Draft4_AdditionalItems)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/additionalItems.json");
+}
+
+TEST_F(TestValidator, Draft4_AdditionalProperties)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/additionalProperties.json");
+}
+
+TEST_F(TestValidator, Draft4_AllOf)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/allOf.json");
+}
+
+TEST_F(TestValidator, Draft4_AnyOf)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/anyOf.json");
+}
+
+TEST_F(TestValidator, Draft4_Dependencies)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/dependencies.json");
+}
+
+TEST_F(TestValidator, Draft4_Enum)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/enum.json");
+}
+
+TEST_F(TestValidator, Draft4_Items)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/items.json");
+}
+
+TEST_F(TestValidator, Draft4_Maximum)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/maximum.json");
+}
+
+TEST_F(TestValidator, Draft4_MaxItems)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/maxItems.json");
+}
+
+TEST_F(TestValidator, Draft4_MaxLength)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/maxLength.json");
+}
+
+TEST_F(TestValidator, Draft4_MaxProperties)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/maxProperties.json");
+}
+
+TEST_F(TestValidator, Draft4_Minimum)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/minimum.json");
+}
+
+TEST_F(TestValidator, Draft4_MinItems)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/minItems.json");
+}
+
+TEST_F(TestValidator, Draft4_MinLength)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/minLength.json");
+}
+
+TEST_F(TestValidator, Draft4_MinProperties)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/minProperties.json");
+}
+
+TEST_F(TestValidator, Draft4_MultipleOf)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/multipleOf.json");
+}
+
+TEST_F(TestValidator, Draft4_Not)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/not.json");
+}
+
+TEST_F(TestValidator, Draft4_OneOf)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/oneOf.json");
+}
+
+TEST_F(TestValidator, Draft4_Pattern)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/pattern.json");
+}
+
+TEST_F(TestValidator, Draft4_PatternProperties)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/patternProperties.json");
+}
+
+TEST_F(TestValidator, Draft4_Properties)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/properties.json");
+}
+
+TEST_F(TestValidator, Draft4_Ref)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/ref.json");
+}
+
+TEST_F(TestValidator, Draft4_RefRemote)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/refRemote.json");
+}
+
+TEST_F(TestValidator, Draft4_Required)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/required.json");
+}
+
+TEST_F(TestValidator, Draft4_Type)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/type.json");
+}
+
+TEST_F(TestValidator, Draft4_UniqueItems)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/uniqueItems.json");
+}
+
+TEST_F(TestValidator, Draft4_OptionalFormatHostname)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/optional/format/hostname.json");
+}
+
+TEST_F(TestValidator, Draft4_OptionalFormatIpv6)
+{
+    processDraft4TestFile(TEST_SUITE_DIR "draft4/optional/format/ipv6.json");
+}
+
+//
+// draft 7
+// ------------------------------------------------------------------------------------------------
+//
+
+TEST_F(TestValidator, Draft7_AdditionalItems)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/additionalItems.json");
+}
+
+TEST_F(TestValidator, Draft7_AdditionalProperties)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/additionalProperties.json");
+}
+
+TEST_F(TestValidator, Draft7_AllOf)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/allOf.json");
+}
+
+TEST_F(TestValidator, Draft7_AnyOf)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/anyOf.json");
+}
+
+TEST_F(TestValidator, Draft7_BooleanSchema)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/boolean_schema.json");
+}
+
+TEST_F(TestValidator, Draft7_Const)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/const.json");
+}
+
+TEST_F(TestValidator, Draft7_Contains)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/contains.json");
+}
+
+TEST_F(TestValidator, Draft7_Default)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/default.json");
+}
+
+TEST_F(TestValidator, Draft7_Definitions)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/definitions.json");
+}
+
+TEST_F(TestValidator, Draft7_Dependencies)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/dependencies.json");
+}
+
+TEST_F(TestValidator, Draft7_Enum)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/enum.json");
+}
+
+TEST_F(TestValidator, Draft7_ExclusiveMaximum)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/exclusiveMaximum.json");
+}
+
+TEST_F(TestValidator, Draft7_ExclusiveMinimum)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/exclusiveMinimum.json");
+}
+
+TEST_F(TestValidator, Draft7_Format)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/format.json");
+}
+
+TEST_F(TestValidator, Draft7_IfThenElse)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/if-then-else.json");
+}
+
+TEST_F(TestValidator, Draft7_InfiniteLoopDetection)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/infinite-loop-detection.json");
+}
+
+TEST_F(TestValidator, Draft7_Items)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/items.json");
+}
+
+TEST_F(TestValidator, Draft7_Maximum)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/maximum.json");
+}
+
+TEST_F(TestValidator, Draft7_MaxItems)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/maxItems.json");
+}
+
+TEST_F(TestValidator, Draft7_MaxLength)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/maxLength.json");
+}
+
+TEST_F(TestValidator, Draft7_MaxProperties)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/maxProperties.json");
+}
+
+TEST_F(TestValidator, Draft7_Minimum)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/minimum.json");
+}
+
+TEST_F(TestValidator, Draft7_MinItems)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/minItems.json");
+}
+
+TEST_F(TestValidator, Draft7_MinLength)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/minLength.json");
+}
+
+TEST_F(TestValidator, Draft7_MinProperties)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/minProperties.json");
+}
+
+TEST_F(TestValidator, Draft7_MultipleOf)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/multipleOf.json");
+}
+
+TEST_F(TestValidator, Draft7_Not)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/not.json");
+}
+
+TEST_F(TestValidator, Draft7_OneOf)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/oneOf.json");
+}
+
+TEST_F(TestValidator, Draft7_Pattern)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/pattern.json");
+}
+
+TEST_F(TestValidator, Draft7_PatternProperties)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/patternProperties.json");
+}
+
+TEST_F(TestValidator, Draft7_Properties)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/properties.json");
+}
+
+TEST_F(TestValidator, Draft7_PropertyNames)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/propertyNames.json");
+}
+
+TEST_F(TestValidator, Draft7_PropertyNamesInNestedSubschema)
+{
+    // Regression test: propertyNames in a nested subschema must validate
+    // property names against its own subschema, not the enclosing one
+    struct TestCase
+    {
+        const char *schema;
+        const char *document;
+        bool expected;
+    };
+
+    const TestCase testCases[] = {
+        { R"({"allOf": [{"type": "object", "propertyNames": {}}]})", R"({})", true },
+        { R"({"allOf": [{"type": "object", "propertyNames": {}}]})", R"({"a": "x"})", true },
+        { R"({"allOf": [{"type": "object", "propertyNames": {"type": "string"}}]})", R"({"a": 1})", true },
+        { R"({"anyOf": [{"type": "object", "propertyNames": {}}]})", R"({"a": 1})", true },
+        { R"({"oneOf": [{"type": "object", "propertyNames": {}}]})", R"({"a": 1})", true },
+        { R"({"properties": {"p": {"type": "object", "propertyNames": {}}}})", R"({"p": {"a": 1}})", true },
+        { R"({"$ref": "#/definitions/d", "definitions": {"d": {"type": "object", "propertyNames": {}}}})",
+          R"({"a": 1})", true },
+        { R"({"allOf": [{"type": "object", "propertyNames": {"maxLength": 0}}]})", R"({"a": "x"})", false },
+    };
+
+    for (const TestCase &testCase : testCases) {
+        rapidjson::Document schemaDocument;
+        schemaDocument.Parse(testCase.schema);
+        ASSERT_FALSE(schemaDocument.HasParseError());
+
+        Schema schema;
+        SchemaParser parser(SchemaParser::kDraft7);
+        parser.populateSchema(RapidJsonAdapter(schemaDocument), schema);
+
+        rapidjson::Document document;
+        document.Parse(testCase.document);
+        ASSERT_FALSE(document.HasParseError());
+
+        Validator validator;
+        EXPECT_EQ(testCase.expected, validator.validate(schema, RapidJsonAdapter(document), nullptr))
+                << "schema: " << testCase.schema << ", document: " << testCase.document;
+    }
+}
+
+TEST_F(TestValidator, Draft7_Ref)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/ref.json");
+}
+
+TEST_F(TestValidator, Draft7_RefRemote)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/refRemote.json");
+}
+
+TEST_F(TestValidator, Draft7_Required)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/required.json");
+}
+
+TEST_F(TestValidator, Draft7_Type)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/type.json");
+}
+
+TEST_F(TestValidator, Draft7_UniqueItems)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/uniqueItems.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatDate)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/date.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatTime)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/time.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatDateTime)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/date-time.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatIpv4)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/ipv4.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatHostname)
+{
+    // A-labels are only checked against the syntax of RFC 1123, and are not
+    // decoded to check them against the rules of IDNA2008
+    const std::set<std::string> skipCases = {
+        "validation of A-label (punycode) host names"
+    };
+    processTestFile(TEST_SUITE_DIR "draft7/optional/format/hostname.json", SchemaParser::kDraft7, skipCases);
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatIpv6)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/ipv6.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatJsonPointer)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/json-pointer.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatRegex)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/regex.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatRelativeJsonPointer)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/relative-json-pointer.json");
+}
+
+TEST_F(TestValidator, Draft7_OptionalFormatUnknown)
+{
+    processDraft7TestFile(TEST_SUITE_DIR "draft7/optional/format/unknown.json");
+}
