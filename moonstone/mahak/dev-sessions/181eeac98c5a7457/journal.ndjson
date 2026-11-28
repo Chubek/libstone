@@ -1,0 +1,337 @@
+{"actor":"system","data":{"created_unix_ns":1795830795695340443,"owner_pid":1561876,"revision":0,"root":"/dev/shm/mahak-181eeac98c5a7457","schema":1,"session":"181eeac98c5a7457","workers":["1","2","3","4","5","6","7","8"]},"kind":"session-created","revision":1,"timestamp_ns":1795830795695577494}
+{"actor":"broker","data":{},"kind":"broker-start","revision":2,"timestamp_ns":1795830795695832377}
+{"actor":"2","data":{"pid":1561877,"role":"broker","state":"running","updated_unix_ns":1795830795695910190,"worker":"2"},"kind":"worker-status","revision":3,"timestamp_ns":1795830795695932762}
+{"actor":"3","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795706129211,"worker":"3"},"kind":"worker-status","revision":4,"timestamp_ns":1795830795706170714}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":5,"timestamp_ns":1795830795706303485}
+{"actor":"3","data":{"pid":1561878,"role":"implementation","state":"registered","updated_unix_ns":1795830795706369706,"worker":"3"},"kind":"worker-status","revision":6,"timestamp_ns":1795830795706415882}
+{"actor":"4","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795706485832,"worker":"4"},"kind":"worker-status","revision":7,"timestamp_ns":1795830795706523572}
+{"actor":"3","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795706634805,"worker":"3"},"kind":"worker-status","revision":8,"timestamp_ns":1795830795706688485}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":9,"timestamp_ns":1795830795706805911}
+{"actor":"4","data":{"pid":1561879,"role":"implementation","state":"registered","updated_unix_ns":1795830795706950528,"worker":"4"},"kind":"worker-status","revision":10,"timestamp_ns":1795830795707007559}
+{"actor":"5","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795707111177,"worker":"5"},"kind":"worker-status","revision":11,"timestamp_ns":1795830795707166827}
+{"actor":"4","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795707260293,"worker":"4"},"kind":"worker-status","revision":12,"timestamp_ns":1795830795707303225}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":13,"timestamp_ns":1795830795707386542}
+{"actor":"5","data":{"pid":1561880,"role":"implementation","state":"registered","updated_unix_ns":1795830795707489747,"worker":"5"},"kind":"worker-status","revision":14,"timestamp_ns":1795830795707548159}
+{"actor":"7","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795707619043,"worker":"7"},"kind":"worker-status","revision":15,"timestamp_ns":1795830795707653476}
+{"actor":"5","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795707753314,"worker":"5"},"kind":"worker-status","revision":16,"timestamp_ns":1795830795707810654}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":17,"timestamp_ns":1795830795707903882}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795708005188,"worker":"3"},"kind":"worker-status","revision":18,"timestamp_ns":1795830795708049967}
+{"actor":"7","data":{"pid":1561882,"role":"implementation","state":"registered","updated_unix_ns":1795830795708113239,"worker":"7"},"kind":"worker-status","revision":19,"timestamp_ns":1795830795708182885}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795708252821,"worker":"4"},"kind":"worker-status","revision":20,"timestamp_ns":1795830795708286580}
+{"actor":"7","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795708352768,"worker":"7"},"kind":"worker-status","revision":21,"timestamp_ns":1795830795708399066}
+{"actor":"3","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795706530160,"worker":"3"},"from":"3","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":22,"timestamp_ns":1795830795708504191}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795708609034,"worker":"5"},"kind":"worker-status","revision":23,"timestamp_ns":1795830795708645259}
+{"actor":"4","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795707160970,"worker":"4"},"from":"4","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":24,"timestamp_ns":1795830795708850767}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795708952036,"worker":"7"},"kind":"worker-status","revision":25,"timestamp_ns":1795830795708987716}
+{"actor":"5","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795707652118,"worker":"5"},"from":"5","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":26,"timestamp_ns":1795830795709193229}
+{"actor":"7","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795708289663,"worker":"7"},"from":"7","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":27,"timestamp_ns":1795830795709405468}
+{"actor":"6","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795709513238,"worker":"6"},"kind":"worker-status","revision":28,"timestamp_ns":1795830795709553839}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":29,"timestamp_ns":1795830795709677371}
+{"actor":"6","data":{"pid":1561881,"role":"implementation","state":"registered","updated_unix_ns":1795830795709738125,"worker":"6"},"kind":"worker-status","revision":30,"timestamp_ns":1795830795709807710}
+{"actor":"1","data":{"pid":1561877,"role":"orchestrator","state":"registered","updated_unix_ns":1795830795709886537,"worker":"1"},"kind":"worker-status","revision":31,"timestamp_ns":1795830795709939451}
+{"actor":"6","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795710045566,"worker":"6"},"kind":"worker-status","revision":32,"timestamp_ns":1795830795710106507}
+{"actor":"broker","data":{"pid":1561877,"role":"orchestrator","state":"registered"},"kind":"worker-registered","revision":33,"timestamp_ns":1795830795710207375}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795710299321,"worker":"6"},"kind":"worker-status","revision":34,"timestamp_ns":1795830795710338474}
+{"actor":"1","data":{"pid":1561876,"role":"orchestrator","state":"registered","updated_unix_ns":1795830795710397691,"worker":"1"},"kind":"worker-status","revision":35,"timestamp_ns":1795830795710462928}
+{"actor":"6","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795709931287,"worker":"6"},"from":"6","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":36,"timestamp_ns":1795830795710560800}
+{"actor":"8","data":{"pid":1561877,"role":"implementation","state":"registered","updated_unix_ns":1795830795710673969,"worker":"8"},"kind":"worker-status","revision":37,"timestamp_ns":1795830795710718159}
+{"actor":"broker","data":{"pid":1561877,"role":"implementation","state":"registered"},"kind":"worker-registered","revision":38,"timestamp_ns":1795830795710847597}
+{"actor":"8","data":{"pid":1561883,"role":"implementation","state":"registered","updated_unix_ns":1795830795710907366,"worker":"8"},"kind":"worker-status","revision":39,"timestamp_ns":1795830795710980550}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795711049216,"worker":"1"},"kind":"worker-status","revision":40,"timestamp_ns":1795830795711094187}
+{"actor":"8","data":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795711154537,"worker":"8"},"kind":"worker-status","revision":41,"timestamp_ns":1795830795711211556}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830795711278175,"worker":"8"},"kind":"worker-status","revision":42,"timestamp_ns":1795830795711326222}
+{"actor":"8","data":{"detail":{"phase":"starting","role":"implementation","state":"working","updated_unix_ns":1795830795711082824,"worker":"8"},"from":"8","op":"status","state":"working","to":"1"},"kind":"status-routed","revision":43,"timestamp_ns":1795830795711538792}
+{"actor":"broker","data":{"message":"1: envelope exceeds the POSIX queue message budget (873 > 480 bytes)"},"kind":"broker-delivery-failure","revision":44,"timestamp_ns":1795830795711758139}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796009904646,"worker":"3"},"kind":"worker-status","revision":45,"timestamp_ns":1795830796010003505}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796010217147,"worker":"4"},"kind":"worker-status","revision":46,"timestamp_ns":1795830796010271201}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796010707462,"worker":"5"},"kind":"worker-status","revision":47,"timestamp_ns":1795830796010768779}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796010867001,"worker":"7"},"kind":"worker-status","revision":48,"timestamp_ns":1795830796010915521}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796011848640,"worker":"6"},"kind":"worker-status","revision":49,"timestamp_ns":1795830796011898427}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796012595371,"worker":"1"},"kind":"worker-status","revision":50,"timestamp_ns":1795830796012643730}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796012832985,"worker":"8"},"kind":"worker-status","revision":51,"timestamp_ns":1795830796012881471}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796311878426,"worker":"3"},"kind":"worker-status","revision":52,"timestamp_ns":1795830796311971523}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796312100566,"worker":"4"},"kind":"worker-status","revision":53,"timestamp_ns":1795830796312152611}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796312701581,"worker":"5"},"kind":"worker-status","revision":54,"timestamp_ns":1795830796312761141}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796312854152,"worker":"7"},"kind":"worker-status","revision":55,"timestamp_ns":1795830796312905790}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796313613123,"worker":"6"},"kind":"worker-status","revision":56,"timestamp_ns":1795830796313678454}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796314523461,"worker":"1"},"kind":"worker-status","revision":57,"timestamp_ns":1795830796314588039}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796315055045,"worker":"8"},"kind":"worker-status","revision":58,"timestamp_ns":1795830796315120014}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796613976299,"worker":"4"},"kind":"worker-status","revision":59,"timestamp_ns":1795830796614066075}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796614168284,"worker":"3"},"kind":"worker-status","revision":60,"timestamp_ns":1795830796614223265}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796614628923,"worker":"7"},"kind":"worker-status","revision":61,"timestamp_ns":1795830796614683457}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796614772548,"worker":"5"},"kind":"worker-status","revision":62,"timestamp_ns":1795830796614825047}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796615219223,"worker":"6"},"kind":"worker-status","revision":63,"timestamp_ns":1795830796615274720}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796616795303,"worker":"1"},"kind":"worker-status","revision":64,"timestamp_ns":1795830796616865185}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796616974215,"worker":"8"},"kind":"worker-status","revision":65,"timestamp_ns":1795830796617031980}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796916221799,"worker":"3"},"kind":"worker-status","revision":66,"timestamp_ns":1795830796916384306}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796916579352,"worker":"4"},"kind":"worker-status","revision":67,"timestamp_ns":1795830796916669035}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796916835428,"worker":"7"},"kind":"worker-status","revision":68,"timestamp_ns":1795830796916902644}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796917000987,"worker":"5"},"kind":"worker-status","revision":69,"timestamp_ns":1795830796917066223}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796917247245,"worker":"6"},"kind":"worker-status","revision":70,"timestamp_ns":1795830796917324627}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796918580033,"worker":"1"},"kind":"worker-status","revision":71,"timestamp_ns":1795830796918663957}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830796918768374,"worker":"8"},"kind":"worker-status","revision":72,"timestamp_ns":1795830796918831512}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797218078098,"worker":"4"},"kind":"worker-status","revision":73,"timestamp_ns":1795830797218184749}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797218285376,"worker":"3"},"kind":"worker-status","revision":74,"timestamp_ns":1795830797218346034}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797218876506,"worker":"7"},"kind":"worker-status","revision":75,"timestamp_ns":1795830797218952050}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797219053262,"worker":"6"},"kind":"worker-status","revision":76,"timestamp_ns":1795830797219115617}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797219243566,"worker":"5"},"kind":"worker-status","revision":77,"timestamp_ns":1795830797219308125}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797220594856,"worker":"1"},"kind":"worker-status","revision":78,"timestamp_ns":1795830797220675933}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797220773859,"worker":"8"},"kind":"worker-status","revision":79,"timestamp_ns":1795830797220835748}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797520416330,"worker":"3"},"kind":"worker-status","revision":80,"timestamp_ns":1795830797520527827}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797520636270,"worker":"4"},"kind":"worker-status","revision":81,"timestamp_ns":1795830797520699464}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797520790419,"worker":"7"},"kind":"worker-status","revision":82,"timestamp_ns":1795830797520855689}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797520946295,"worker":"6"},"kind":"worker-status","revision":83,"timestamp_ns":1795830797521010345}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797521218571,"worker":"5"},"kind":"worker-status","revision":84,"timestamp_ns":1795830797521298643}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797522821337,"worker":"8"},"kind":"worker-status","revision":85,"timestamp_ns":1795830797522890974}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797522982999,"worker":"1"},"kind":"worker-status","revision":86,"timestamp_ns":1795830797523071504}
+{"actor":"broker","data":{"message":"1: envelope exceeds the POSIX queue message budget (873 > 480 bytes)"},"kind":"broker-delivery-failure","revision":87,"timestamp_ns":1795830797761018653}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797822511760,"worker":"7"},"kind":"worker-status","revision":88,"timestamp_ns":1795830797822637106}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797822744723,"worker":"4"},"kind":"worker-status","revision":89,"timestamp_ns":1795830797822818455}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797822918290,"worker":"3"},"kind":"worker-status","revision":90,"timestamp_ns":1795830797822990569}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797823474485,"worker":"6"},"kind":"worker-status","revision":91,"timestamp_ns":1795830797823568651}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797823670661,"worker":"5"},"kind":"worker-status","revision":92,"timestamp_ns":1795830797823746631}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797824873485,"worker":"8"},"kind":"worker-status","revision":93,"timestamp_ns":1795830797824960247}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830797825059717,"worker":"1"},"kind":"worker-status","revision":94,"timestamp_ns":1795830797825131269}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798124446673,"worker":"7"},"kind":"worker-status","revision":95,"timestamp_ns":1795830798124560717}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798124661073,"worker":"3"},"kind":"worker-status","revision":96,"timestamp_ns":1795830798124735242}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798124825792,"worker":"4"},"kind":"worker-status","revision":97,"timestamp_ns":1795830798124896552}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798125629211,"worker":"5"},"kind":"worker-status","revision":98,"timestamp_ns":1795830798125716473}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798125980060,"worker":"6"},"kind":"worker-status","revision":99,"timestamp_ns":1795830798126056806}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798127022659,"worker":"8"},"kind":"worker-status","revision":100,"timestamp_ns":1795830798127112786}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798127212643,"worker":"1"},"kind":"worker-status","revision":101,"timestamp_ns":1795830798127287730}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798426665793,"worker":"3"},"kind":"worker-status","revision":102,"timestamp_ns":1795830798426783083}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798426908515,"worker":"7"},"kind":"worker-status","revision":103,"timestamp_ns":1795830798426999016}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798427113534,"worker":"4"},"kind":"worker-status","revision":104,"timestamp_ns":1795830798427187260}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798427725554,"worker":"5"},"kind":"worker-status","revision":105,"timestamp_ns":1795830798427814947}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798428396942,"worker":"6"},"kind":"worker-status","revision":106,"timestamp_ns":1795830798428486354}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798429126144,"worker":"8"},"kind":"worker-status","revision":107,"timestamp_ns":1795830798429207821}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798429311274,"worker":"1"},"kind":"worker-status","revision":108,"timestamp_ns":1795830798429389174}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798728499919,"worker":"7"},"kind":"worker-status","revision":109,"timestamp_ns":1795830798728623464}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798728727662,"worker":"3"},"kind":"worker-status","revision":110,"timestamp_ns":1795830798728807191}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798728898920,"worker":"4"},"kind":"worker-status","revision":111,"timestamp_ns":1795830798728976492}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798730079958,"worker":"5"},"kind":"worker-status","revision":112,"timestamp_ns":1795830798730174888}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798731006152,"worker":"6"},"kind":"worker-status","revision":113,"timestamp_ns":1795830798731100697}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798731199563,"worker":"8"},"kind":"worker-status","revision":114,"timestamp_ns":1795830798731285962}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830798731376916,"worker":"1"},"kind":"worker-status","revision":115,"timestamp_ns":1795830798731456241}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799030418307,"worker":"7"},"kind":"worker-status","revision":116,"timestamp_ns":1795830799030542436}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799030644121,"worker":"4"},"kind":"worker-status","revision":117,"timestamp_ns":1795830799030726857}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799030818602,"worker":"3"},"kind":"worker-status","revision":118,"timestamp_ns":1795830799030899701}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799032225005,"worker":"5"},"kind":"worker-status","revision":119,"timestamp_ns":1795830799032323903}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799033370346,"worker":"1"},"kind":"worker-status","revision":120,"timestamp_ns":1795830799033473105}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799033572737,"worker":"6"},"kind":"worker-status","revision":121,"timestamp_ns":1795830799033663703}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799033760605,"worker":"8"},"kind":"worker-status","revision":122,"timestamp_ns":1795830799033854159}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799332514633,"worker":"7"},"kind":"worker-status","revision":123,"timestamp_ns":1795830799332643192}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799332744250,"worker":"4"},"kind":"worker-status","revision":124,"timestamp_ns":1795830799332832277}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799332922914,"worker":"3"},"kind":"worker-status","revision":125,"timestamp_ns":1795830799333006712}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799334286291,"worker":"5"},"kind":"worker-status","revision":126,"timestamp_ns":1795830799334386969}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799335402973,"worker":"1"},"kind":"worker-status","revision":127,"timestamp_ns":1795830799335503120}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799335722538,"worker":"8"},"kind":"worker-status","revision":128,"timestamp_ns":1795830799335810629}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799335903081,"worker":"6"},"kind":"worker-status","revision":129,"timestamp_ns":1795830799335988437}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799634371927,"worker":"4"},"kind":"worker-status","revision":130,"timestamp_ns":1795830799634501492}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799634602147,"worker":"7"},"kind":"worker-status","revision":131,"timestamp_ns":1795830799634690159}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799634863233,"worker":"3"},"kind":"worker-status","revision":132,"timestamp_ns":1795830799634985893}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799636657188,"worker":"5"},"kind":"worker-status","revision":133,"timestamp_ns":1795830799636762984}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799637518347,"worker":"1"},"kind":"worker-status","revision":134,"timestamp_ns":1795830799637624012}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799637728155,"worker":"8"},"kind":"worker-status","revision":135,"timestamp_ns":1795830799637823474}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799638420933,"worker":"6"},"kind":"worker-status","revision":136,"timestamp_ns":1795830799638514990}
+{"actor":"broker","data":{"message":"1: envelope exceeds the POSIX queue message budget (874 > 480 bytes)"},"kind":"broker-delivery-failure","revision":137,"timestamp_ns":1795830799811133030}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799936563634,"worker":"4"},"kind":"worker-status","revision":138,"timestamp_ns":1795830799936708656}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799936810127,"worker":"7"},"kind":"worker-status","revision":139,"timestamp_ns":1795830799936905100}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799937116779,"worker":"3"},"kind":"worker-status","revision":140,"timestamp_ns":1795830799937224266}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799938775981,"worker":"5"},"kind":"worker-status","revision":141,"timestamp_ns":1795830799938885303}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799939909803,"worker":"8"},"kind":"worker-status","revision":142,"timestamp_ns":1795830799940027204}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799940126435,"worker":"1"},"kind":"worker-status","revision":143,"timestamp_ns":1795830799940221040}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830799940841942,"worker":"6"},"kind":"worker-status","revision":144,"timestamp_ns":1795830799940949622}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800238745004,"worker":"7"},"kind":"worker-status","revision":145,"timestamp_ns":1795830800238887646}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800238988694,"worker":"4"},"kind":"worker-status","revision":146,"timestamp_ns":1795830800239089202}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800239181859,"worker":"3"},"kind":"worker-status","revision":147,"timestamp_ns":1795830800239275836}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800240913248,"worker":"5"},"kind":"worker-status","revision":148,"timestamp_ns":1795830800241033332}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800241833796,"worker":"8"},"kind":"worker-status","revision":149,"timestamp_ns":1795830800241955728}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800242054456,"worker":"1"},"kind":"worker-status","revision":150,"timestamp_ns":1795830800242154692}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800243364528,"worker":"6"},"kind":"worker-status","revision":151,"timestamp_ns":1795830800243480155}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800540878743,"worker":"7"},"kind":"worker-status","revision":152,"timestamp_ns":1795830800541031629}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800541134237,"worker":"3"},"kind":"worker-status","revision":153,"timestamp_ns":1795830800541233363}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800541327644,"worker":"4"},"kind":"worker-status","revision":154,"timestamp_ns":1795830800541428285}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800543372414,"worker":"5"},"kind":"worker-status","revision":155,"timestamp_ns":1795830800543492269}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800543964431,"worker":"8"},"kind":"worker-status","revision":156,"timestamp_ns":1795830800544081871}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800544183864,"worker":"1"},"kind":"worker-status","revision":157,"timestamp_ns":1795830800544284657}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800545578073,"worker":"6"},"kind":"worker-status","revision":158,"timestamp_ns":1795830800545694452}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800843112243,"worker":"7"},"kind":"worker-status","revision":159,"timestamp_ns":1795830800843273869}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800843384888,"worker":"3"},"kind":"worker-status","revision":160,"timestamp_ns":1795830800843502920}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800843598459,"worker":"4"},"kind":"worker-status","revision":161,"timestamp_ns":1795830800843709647}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800845191865,"worker":"5"},"kind":"worker-status","revision":162,"timestamp_ns":1795830800845319030}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800845900094,"worker":"8"},"kind":"worker-status","revision":163,"timestamp_ns":1795830800846017206}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800846119021,"worker":"1"},"kind":"worker-status","revision":164,"timestamp_ns":1795830800846226363}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830800848092274,"worker":"6"},"kind":"worker-status","revision":165,"timestamp_ns":1795830800848223416}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801145006999,"worker":"7"},"kind":"worker-status","revision":166,"timestamp_ns":1795830801145154435}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801145256521,"worker":"3"},"kind":"worker-status","revision":167,"timestamp_ns":1795830801145365698}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801145458761,"worker":"4"},"kind":"worker-status","revision":168,"timestamp_ns":1795830801145569240}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801147194116,"worker":"5"},"kind":"worker-status","revision":169,"timestamp_ns":1795830801147324173}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801147895011,"worker":"8"},"kind":"worker-status","revision":170,"timestamp_ns":1795830801148028082}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801148126688,"worker":"1"},"kind":"worker-status","revision":171,"timestamp_ns":1795830801148240278}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801150644061,"worker":"6"},"kind":"worker-status","revision":172,"timestamp_ns":1795830801150767911}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801447118928,"worker":"7"},"kind":"worker-status","revision":173,"timestamp_ns":1795830801447273936}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801447376561,"worker":"4"},"kind":"worker-status","revision":174,"timestamp_ns":1795830801447492746}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801447585025,"worker":"3"},"kind":"worker-status","revision":175,"timestamp_ns":1795830801447694693}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801449499690,"worker":"5"},"kind":"worker-status","revision":176,"timestamp_ns":1795830801449625275}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801449988988,"worker":"8"},"kind":"worker-status","revision":177,"timestamp_ns":1795830801450127775}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801450225283,"worker":"1"},"kind":"worker-status","revision":178,"timestamp_ns":1795830801450347825}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801453112142,"worker":"6"},"kind":"worker-status","revision":179,"timestamp_ns":1795830801453259866}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801749178665,"worker":"3"},"kind":"worker-status","revision":180,"timestamp_ns":1795830801749468166}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801749633603,"worker":"4"},"kind":"worker-status","revision":181,"timestamp_ns":1795830801749826009}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801749993473,"worker":"7"},"kind":"worker-status","revision":182,"timestamp_ns":1795830801750132761}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801751361551,"worker":"5"},"kind":"worker-status","revision":183,"timestamp_ns":1795830801751588837}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801752048976,"worker":"1"},"kind":"worker-status","revision":184,"timestamp_ns":1795830801752291333}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801752403527,"worker":"8"},"kind":"worker-status","revision":185,"timestamp_ns":1795830801752533599}
+{"actor":"6","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830801755794042,"worker":"6"},"kind":"worker-status","revision":186,"timestamp_ns":1795830801755965319}
+{"actor":"contract","data":{"interfaces":[{"fields":["schema","targets","benchmarks"],"name":"BenchmarkManifest","stability":"frozen"}],"name":"mahak.api.v1","owner":"worker-1","published_unix_ns":1795830801860995036,"revision":1,"version":1},"kind":"contract-published","revision":187,"timestamp_ns":1795830801861188532}
+{"actor":"3","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861580364,"worker":"3"},"kind":"worker-status","revision":188,"timestamp_ns":1795830801861793207}
+{"actor":"4","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861903064,"worker":"4"},"kind":"worker-status","revision":189,"timestamp_ns":1795830801862123069}
+{"actor":"5","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801862242397,"worker":"5"},"kind":"worker-status","revision":190,"timestamp_ns":1795830801862426678}
+{"actor":"6","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801862538685,"worker":"6"},"kind":"worker-status","revision":191,"timestamp_ns":1795830801862715037}
+{"actor":"8","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801862793384,"worker":"8"},"kind":"worker-status","revision":192,"timestamp_ns":1795830801862966507}
+{"actor":"7","data":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801863036963,"worker":"7"},"kind":"worker-status","revision":193,"timestamp_ns":1795830801863265706}
+{"actor":"3","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861576681,"worker":"3"},"from":"3","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":194,"timestamp_ns":1795830801863516322}
+{"actor":"3","data":{"from":"3","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":195,"timestamp_ns":1795830801863853386}
+{"actor":"4","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861590887,"worker":"4"},"from":"4","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":196,"timestamp_ns":1795830801864171505}
+{"actor":"5","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861826126,"worker":"5"},"from":"5","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":197,"timestamp_ns":1795830801864485516}
+{"actor":"6","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861861800,"worker":"6"},"from":"6","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":198,"timestamp_ns":1795830801864807451}
+{"actor":"8","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861895088,"worker":"8"},"from":"8","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":199,"timestamp_ns":1795830801865127254}
+{"actor":"7","data":{"detail":{"phase":"implementing","role":"implementation","state":"implementing","updated_unix_ns":1795830801861910154,"worker":"7"},"from":"7","op":"status","state":"implementing","to":"1"},"kind":"status-routed","revision":200,"timestamp_ns":1795830801865454941}
+{"actor":"broker","data":{"message":"4: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":201,"timestamp_ns":1795830801886153618}
+{"actor":"4","data":{"from":"4","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":202,"timestamp_ns":1795830801886343376}
+{"actor":"broker","data":{"message":"5: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":203,"timestamp_ns":1795830801907098626}
+{"actor":"5","data":{"from":"5","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":204,"timestamp_ns":1795830801907298039}
+{"actor":"broker","data":{"message":"6: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":205,"timestamp_ns":1795830801928071240}
+{"actor":"6","data":{"from":"6","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":206,"timestamp_ns":1795830801928274110}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":207,"timestamp_ns":1795830801948972755}
+{"actor":"8","data":{"from":"8","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":208,"timestamp_ns":1795830801949169869}
+{"actor":"broker","data":{"message":"7: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":209,"timestamp_ns":1795830801969924808}
+{"actor":"7","data":{"from":"7","op":"status","progress":0.5,"state":"implementing","to":"1"},"kind":"status-routed","revision":210,"timestamp_ns":1795830801970132975}
+{"actor":"broker","data":{"message":"7: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":211,"timestamp_ns":1795830801990917902}
+{"actor":"7","data":{"from":"7","op":"status","state":"duplicate-probe","to":"1"},"kind":"status-routed","revision":212,"timestamp_ns":1795830801991144405}
+{"actor":"broker","data":{"message":"7: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":213,"timestamp_ns":1795830802011742899}
+{"actor":"orchestrator","data":{"decision":"timeout-default","source":"5","timestamp_ns":1795830802013269559,"value":30000},"kind":"decision","revision":214,"timestamp_ns":1795830802013446642}
+{"actor":"8","data":{"from":"8","index":1,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":215,"timestamp_ns":1795830802014740958}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":216,"timestamp_ns":1795830802035416892}
+{"actor":"8","data":{"from":"8","index":2,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":217,"timestamp_ns":1795830802035618982}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":218,"timestamp_ns":1795830802056482087}
+{"actor":"8","data":{"from":"8","index":3,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":219,"timestamp_ns":1795830802056752708}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":220,"timestamp_ns":1795830802077561121}
+{"actor":"8","data":{"from":"8","index":4,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":221,"timestamp_ns":1795830802077771321}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802077879481,"worker":"3"},"kind":"worker-status","revision":222,"timestamp_ns":1795830802078032053}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802078129338,"worker":"4"},"kind":"worker-status","revision":223,"timestamp_ns":1795830802078273850}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802078374115,"worker":"7"},"kind":"worker-status","revision":224,"timestamp_ns":1795830802078581869}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802078681916,"worker":"5"},"kind":"worker-status","revision":225,"timestamp_ns":1795830802078843396}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802078939966,"worker":"1"},"kind":"worker-status","revision":226,"timestamp_ns":1795830802079090083}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":227,"timestamp_ns":1795830802099796593}
+{"actor":"8","data":{"from":"8","index":5,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":228,"timestamp_ns":1795830802100020591}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":229,"timestamp_ns":1795830802120763930}
+{"actor":"8","data":{"from":"8","index":6,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":230,"timestamp_ns":1795830802120968241}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":231,"timestamp_ns":1795830802141582509}
+{"actor":"8","data":{"from":"8","index":7,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":232,"timestamp_ns":1795830802141787778}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":233,"timestamp_ns":1795830802162496962}
+{"actor":"8","data":{"from":"8","index":8,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":234,"timestamp_ns":1795830802162714996}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":235,"timestamp_ns":1795830802183434079}
+{"actor":"8","data":{"from":"8","index":9,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":236,"timestamp_ns":1795830802183635121}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":237,"timestamp_ns":1795830802204311982}
+{"actor":"8","data":{"from":"8","index":10,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":238,"timestamp_ns":1795830802204521696}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":239,"timestamp_ns":1795830802225160543}
+{"actor":"8","data":{"from":"8","index":11,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":240,"timestamp_ns":1795830802225371966}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":241,"timestamp_ns":1795830802246051642}
+{"actor":"8","data":{"from":"8","index":12,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":242,"timestamp_ns":1795830802246274071}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":243,"timestamp_ns":1795830802266990008}
+{"actor":"8","data":{"from":"8","index":13,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":244,"timestamp_ns":1795830802267223896}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":245,"timestamp_ns":1795830802287909118}
+{"actor":"8","data":{"from":"8","index":14,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":246,"timestamp_ns":1795830802288122657}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":247,"timestamp_ns":1795830802308812213}
+{"actor":"8","data":{"from":"8","index":15,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":248,"timestamp_ns":1795830802309028243}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":249,"timestamp_ns":1795830802329844553}
+{"actor":"8","data":{"from":"8","index":16,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":250,"timestamp_ns":1795830802330124184}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":251,"timestamp_ns":1795830802350938763}
+{"actor":"8","data":{"from":"8","index":17,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":252,"timestamp_ns":1795830802351157189}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802351261698,"worker":"8"},"kind":"worker-status","revision":253,"timestamp_ns":1795830802351429168}
+{"actor":"8","data":{"from":"8","index":18,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":254,"timestamp_ns":1795830802351841680}
+{"actor":"8","data":{"from":"8","index":19,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":255,"timestamp_ns":1795830802352227189}
+{"actor":"8","data":{"from":"8","index":20,"op":"status","state":"burst","to":"1"},"kind":"status-routed","revision":256,"timestamp_ns":1795830802352649412}
+{"actor":"broker","data":{"message":"1: envelope exceeds the POSIX queue message budget (877 > 480 bytes)"},"kind":"broker-delivery-failure","revision":257,"timestamp_ns":1795830802352995344}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802358985132,"worker":"3"},"kind":"worker-status","revision":258,"timestamp_ns":1795830802359153071}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802380118538,"worker":"4"},"kind":"worker-status","revision":259,"timestamp_ns":1795830802380292050}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802380392089,"worker":"7"},"kind":"worker-status","revision":260,"timestamp_ns":1795830802380560427}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802380716160,"worker":"5"},"kind":"worker-status","revision":261,"timestamp_ns":1795830802380882150}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802380979561,"worker":"1"},"kind":"worker-status","revision":262,"timestamp_ns":1795830802381135148}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802632241490,"worker":"8"},"kind":"worker-status","revision":263,"timestamp_ns":1795830802632468185}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802660880656,"worker":"3"},"kind":"worker-status","revision":264,"timestamp_ns":1795830802661082898}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802681918180,"worker":"4"},"kind":"worker-status","revision":265,"timestamp_ns":1795830802682211711}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802682373036,"worker":"7"},"kind":"worker-status","revision":266,"timestamp_ns":1795830802682665046}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802682816838,"worker":"5"},"kind":"worker-status","revision":267,"timestamp_ns":1795830802683109369}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802683246337,"worker":"1"},"kind":"worker-status","revision":268,"timestamp_ns":1795830802683409942}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802934214985,"worker":"8"},"kind":"worker-status","revision":269,"timestamp_ns":1795830802934413708}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802963173275,"worker":"3"},"kind":"worker-status","revision":270,"timestamp_ns":1795830802963402473}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802984023846,"worker":"4"},"kind":"worker-status","revision":271,"timestamp_ns":1795830802984246068}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802984354989,"worker":"7"},"kind":"worker-status","revision":272,"timestamp_ns":1795830802984520592}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802984619046,"worker":"1"},"kind":"worker-status","revision":273,"timestamp_ns":1795830802984774281}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830802984864096,"worker":"5"},"kind":"worker-status","revision":274,"timestamp_ns":1795830802985027410}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803236297139,"worker":"8"},"kind":"worker-status","revision":275,"timestamp_ns":1795830803236506429}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803265055909,"worker":"3"},"kind":"worker-status","revision":276,"timestamp_ns":1795830803265239994}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803286035006,"worker":"4"},"kind":"worker-status","revision":277,"timestamp_ns":1795830803286230553}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803286336589,"worker":"7"},"kind":"worker-status","revision":278,"timestamp_ns":1795830803286501313}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803286742552,"worker":"5"},"kind":"worker-status","revision":279,"timestamp_ns":1795830803286928466}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803287028465,"worker":"1"},"kind":"worker-status","revision":280,"timestamp_ns":1795830803287203679}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803538104651,"worker":"8"},"kind":"worker-status","revision":281,"timestamp_ns":1795830803538319946}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803567255018,"worker":"3"},"kind":"worker-status","revision":282,"timestamp_ns":1795830803567453261}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803587828069,"worker":"7"},"kind":"worker-status","revision":283,"timestamp_ns":1795830803588027565}
+{"actor":"6","data":{"last_seen_ns":96589084492973,"state":"unresponsive","updated_unix_ns":1795830803588102952,"worker":"6"},"kind":"worker-status","revision":284,"timestamp_ns":1795830803588263762}
+{"actor":"broker","data":{"last_seen_ns":96589084492973,"state":"unresponsive"},"kind":"worker-unavailable","revision":285,"timestamp_ns":1795830803588520765}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803588654778,"worker":"4"},"kind":"worker-status","revision":286,"timestamp_ns":1795830803588821150}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803588911933,"worker":"1"},"kind":"worker-status","revision":287,"timestamp_ns":1795830803589134570}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803589242348,"worker":"5"},"kind":"worker-status","revision":288,"timestamp_ns":1795830803589477181}
+{"actor":"broker","data":{"message":"6: recipient unavailable: 6"},"kind":"broker-delivery-failure","revision":289,"timestamp_ns":1795830803789988802}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803840099126,"worker":"8"},"kind":"worker-status","revision":290,"timestamp_ns":1795830803840321489}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803869396206,"worker":"3"},"kind":"worker-status","revision":291,"timestamp_ns":1795830803869663437}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803889684234,"worker":"7"},"kind":"worker-status","revision":292,"timestamp_ns":1795830803889950220}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803890313829,"worker":"1"},"kind":"worker-status","revision":293,"timestamp_ns":1795830803890519653}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803890619518,"worker":"4"},"kind":"worker-status","revision":294,"timestamp_ns":1795830803890797571}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830803890969776,"worker":"5"},"kind":"worker-status","revision":295,"timestamp_ns":1795830803891172520}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804141754964,"worker":"8"},"kind":"worker-status","revision":296,"timestamp_ns":1795830804141996619}
+{"actor":"3","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804171282452,"worker":"3"},"kind":"worker-status","revision":297,"timestamp_ns":1795830804171513158}
+{"actor":"7","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804191503283,"worker":"7"},"kind":"worker-status","revision":298,"timestamp_ns":1795830804191725965}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804192138913,"worker":"1"},"kind":"worker-status","revision":299,"timestamp_ns":1795830804192351412}
+{"actor":"4","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804192458575,"worker":"4"},"kind":"worker-status","revision":300,"timestamp_ns":1795830804192645964}
+{"actor":"5","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804192854912,"worker":"5"},"kind":"worker-status","revision":301,"timestamp_ns":1795830804193046546}
+{"actor":"orchestrator","data":{"blocked":1,"decision":"milestone-integration","errors":0,"requests":6,"reviews":5,"statuses":35,"timestamp_ns":1795830804351716987,"unresponsive_diagnosed":false},"kind":"decision","revision":302,"timestamp_ns":1795830804351962994}
+{"actor":"3","data":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804352549966,"worker":"3"},"kind":"worker-status","revision":303,"timestamp_ns":1795830804352810773}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":304,"timestamp_ns":1795830804373010297}
+{"actor":"4","data":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804373624936,"worker":"4"},"kind":"worker-status","revision":305,"timestamp_ns":1795830804373885378}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":306,"timestamp_ns":1795830804393840890}
+{"actor":"5","data":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804394083253,"worker":"5"},"kind":"worker-status","revision":307,"timestamp_ns":1795830804394326403}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":308,"timestamp_ns":1795830804414601700}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":309,"timestamp_ns":1795830804435352912}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":310,"timestamp_ns":1795830804456128534}
+{"actor":"7","data":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804463141114,"worker":"7"},"kind":"worker-status","revision":311,"timestamp_ns":1795830804463389307}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":312,"timestamp_ns":1795830804476914776}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":313,"timestamp_ns":1795830804497723346}
+{"actor":"6","data":{"op":"complete","reason":"simulated-unresponsive-exit","role":"implementation","state":"complete","updated_unix_ns":1795830804517677362,"worker":"6"},"kind":"worker-status","revision":314,"timestamp_ns":1795830804517955117}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":315,"timestamp_ns":1795830804518379614}
+{"actor":"broker","data":{"message":"1: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":316,"timestamp_ns":1795830804539353865}
+{"actor":"broker","data":{"message":"3: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":317,"timestamp_ns":1795830804580724587}
+{"actor":"1","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804580926291,"worker":"1"},"kind":"worker-status","revision":318,"timestamp_ns":1795830804581125875}
+{"actor":"8","data":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804581277488,"worker":"8"},"kind":"worker-status","revision":319,"timestamp_ns":1795830804581573337}
+{"actor":"broker","data":{"message":"4: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":320,"timestamp_ns":1795830804622232704}
+{"actor":"8","data":{"heartbeat":true,"state":"running","updated_unix_ns":1795830804622375702,"worker":"8"},"kind":"worker-status","revision":321,"timestamp_ns":1795830804622613229}
+{"actor":"1","data":{"blocked":1,"decision":"milestone-integration","errors":0,"requests":6,"reviews":5,"role":"orchestrator","state":"complete","statuses":35,"unresponsive_diagnosed":false,"updated_unix_ns":1795830804652319294,"worker":"1"},"kind":"worker-status","revision":322,"timestamp_ns":1795830804652580109}
+{"actor":"broker","data":{"message":"5: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":323,"timestamp_ns":1795830804663896071}
+{"actor":"1","data":{"op":"complete","reason":"orchestrator-done","role":"orchestrator","state":"complete","updated_unix_ns":1795830804671546725,"worker":"1"},"kind":"worker-status","revision":324,"timestamp_ns":1795830804671769828}
+{"actor":"broker","data":{"message":"7: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":325,"timestamp_ns":1795830804705220864}
+{"actor":"broker","data":{"message":"6: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":326,"timestamp_ns":1795830804746563473}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":327,"timestamp_ns":1795830804767473164}
+{"actor":"8","data":{"detail":{"op":"complete","reason":"done","role":"implementation","state":"complete","updated_unix_ns":1795830804581273011,"worker":"8"},"from":"8","op":"status","state":"complete","to":"1"},"kind":"status-routed","revision":328,"timestamp_ns":1795830804767723690}
+{"actor":"broker","data":{"op":"shutdown"},"kind":"shutdown-requested","revision":329,"timestamp_ns":1795830804768251009}
+{"actor":"broker","data":{"message":"3: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":330,"timestamp_ns":1795830804788992824}
+{"actor":"broker","data":{"message":"4: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":331,"timestamp_ns":1795830804809869204}
+{"actor":"broker","data":{"message":"5: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":332,"timestamp_ns":1795830804830619811}
+{"actor":"broker","data":{"message":"6: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":333,"timestamp_ns":1795830804851343526}
+{"actor":"broker","data":{"message":"7: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":334,"timestamp_ns":1795830804872078338}
+{"actor":"broker","data":{"message":"8: recipient mailbox remained full after bounded retries"},"kind":"broker-delivery-failure","revision":335,"timestamp_ns":1795830804892870275}
+{"actor":"broker","data":{"backpressure":196,"duplicates":1,"heartbeat_failures":1,"received":328,"rejected":15,"routed":70,"timeouts":6},"kind":"broker-stop","revision":336,"timestamp_ns":1795830806896025422}
+{"actor":"2","data":{"role":"broker","state":"stopped","updated_unix_ns":1795830806896142181,"worker":"2"},"kind":"worker-status","revision":337,"timestamp_ns":1795830806896380247}

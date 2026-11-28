@@ -1,0 +1,6 @@
+{
+  "role": "broker",
+  "state": "stopped",
+  "updated_unix_ns": 1795830806896142181,
+  "worker": "2"
+}

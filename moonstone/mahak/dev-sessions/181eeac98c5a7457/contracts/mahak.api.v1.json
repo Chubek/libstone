@@ -1,0 +1,18 @@
+{
+  "interfaces": [
+    {
+      "fields": [
+        "schema",
+        "targets",
+        "benchmarks"
+      ],
+      "name": "BenchmarkManifest",
+      "stability": "frozen"
+    }
+  ],
+  "name": "mahak.api.v1",
+  "owner": "worker-1",
+  "published_unix_ns": 1795830801860995036,
+  "revision": 1,
+  "version": 1
+}

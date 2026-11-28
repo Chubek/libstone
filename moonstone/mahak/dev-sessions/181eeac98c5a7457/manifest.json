@@ -1,0 +1,18 @@
+{
+  "created_unix_ns": 1795830795695340443,
+  "owner_pid": 1561876,
+  "revision": 337,
+  "root": "/dev/shm/mahak-181eeac98c5a7457",
+  "schema": 1,
+  "session": "181eeac98c5a7457",
+  "workers": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+  ]
+}
