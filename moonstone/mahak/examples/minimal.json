@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "id": "mahak-example",
+  "version": "1.0.0",
+  "description": "Minimal compile-and-execute benchmark",
+  "seed": 20260101,
+  "defaults": {
+    "warmup": 1,
+    "repetitions": 3,
+    "timeout_ms": 10000,
+    "measurement": "warm-process"
+  },
+  "targets": [
+    {
+      "id": "cc-o2",
+      "kind": "compiler",
+      "description": "System C compiler at -O2",
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {
+              "argv": ["{param:cc}", "-O2", "-o", "{artifact:prog}", "{fixture:source}"],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "execute": {"argv": ["{artifact:prog}", "{param:size}"]},
+      "parameters": [
+        {"name": "cc", "values": ["cc"]},
+        {"name": "size", "values": [64, 128]}
+      ]
+    }
+  ],
+  "benchmarks": [
+    {
+      "id": "kernel",
+      "description": "Checksum kernel",
+      "group": "kernels",
+      "tags": ["cpu"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "fixtures/checksum.c", "target": "kernel.c"}],
+      "oracle": {"kind": "regex", "pattern": "^checksum=[0-9a-f]{16}$"},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    }
+  ]
+}

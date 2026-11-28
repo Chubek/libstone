@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "id": "mahak-example-extended",
+  "version": "1.1.0",
+  "description": "Two compiler configurations, a parameter matrix, adaptive sampling and an exclusion",
+  "seed": 42,
+  "defaults": {
+    "warmup": 1,
+    "repetitions": 3,
+    "timeout_ms": 20000,
+    "measurement": "warm-process",
+    "adaptive": false,
+    "target_relative_stddev": 0.05
+  },
+  "targets": [
+    {
+      "id": "cc-o2",
+      "kind": "compiler",
+      "description": "Optimized build",
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {
+              "argv": ["cc", "-O2", "-o", "{artifact:prog}", "{fixture:source}"],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "execute": {"argv": ["{artifact:prog}", "{param:size}"]},
+      "parameters": [{"name": "size", "values": [64, 128, 256]}]
+    },
+    {
+      "id": "cc-o0",
+      "kind": "compiler",
+      "description": "Unoptimized control build",
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {
+              "argv": ["cc", "-O0", "-o", "{artifact:prog}", "{fixture:source}"],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "execute": {"argv": ["{artifact:prog}", "{param:size}"]},
+      "parameters": [{"name": "size", "values": [64, 128, 256]}]
+    }
+  ],
+  "benchmarks": [
+    {
+      "id": "kernel",
+      "description": "Checksum kernel across input sizes",
+      "group": "kernels",
+      "tags": ["cpu", "numeric"],
+      "modes": ["end-to-end", "throughput"],
+      "fixtures": [
+        {"name": "source", "path": "fixtures/checksum.c", "target": "kernel.c"}
+      ],
+      "oracle": {"kind": "regex", "pattern": "^checksum=[0-9a-f]{16}$"},
+      "metrics": [
+        {"name": "wall", "unit": "ns", "direction": "lower", "primary": true},
+        {"name": "cpu_user", "unit": "ns", "direction": "lower"},
+        {"name": "max_rss", "unit": "bytes", "direction": "lower"}
+      ],
+      "sampling": {
+        "warmup": 1,
+        "repetitions": 5,
+        "adaptive": true,
+        "target_relative_stddev": 0.2
+      }
+    }
+  ],
+  "exclusions": [
+    {
+      "benchmark": "kernel",
+      "target": "cc-o0",
+      "reason": "the -O0 build is a correctness control, not a timed configuration"
+    }
+  ]
+}
