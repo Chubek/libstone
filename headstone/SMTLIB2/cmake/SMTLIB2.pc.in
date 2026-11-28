@@ -1,0 +1,8 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: SMTLIB2
+Description: Header-only SMT-LIB 2 frontend scaffold
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
