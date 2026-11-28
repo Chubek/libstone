@@ -276,3 +276,27 @@ rejected.
   are reported as unavailable.
 - The development coordination layer is not part of the measured execution path
   and does not use POSIX message queues during a benchmark run.
+
+## 11. Additive contract revision (v1.1)
+
+Four headers extend the v1 surface without changing an existing declaration:
+
+| Header | Surface | Guarantees it encodes |
+| --- | --- | --- |
+| `Plugin.hpp` | native plugin ABI (`mahak_plugin_init_v1`), size-tagged host/plugin tables, typed registration, `PluginRegistry` | reject ABI mismatch, undersized tables, duplicate ids and missing mandatory hooks; teardown before unload; no fabricated capability |
+| `Runner.hpp` | Lua runner/extension hooks, `RunnerLimits`, `HookComposition`, `RunnerFingerprint` | JSON remains mandatory; a script-only run is a configuration error; ambiguous judging must name a composition; hook identity is persisted with the session |
+| `Profile.hpp` | named profiles, `ExecutionFingerprint`, `ReplayPolicy`, `DotOptions` | stable id differs from display name; a replay adds no timing samples; canonical JSON stays authoritative and the index is rebuildable |
+| `Recommend.hpp` | oracle facts, recommendation status/source, `Recommender` | legality facts and performance observations stay separate; `BudgetExhausted` is never success; a model suggestion that fails the same checks is downgraded, not promoted |
+
+`Version.hpp` constants stay unchanged; each header pins its own version
+(`mahak_plugin_abi_version`, `mahak_runner_api_version`,
+`mahak_profile_schema_version`, `mahak_recommend_api_version`). The umbrella
+header includes all four, and `tests/contract.cpp` pins the versions, table
+shapes, id rules and fingerprint determinism.
+
+Not yet wired: selecting a plugin oracle or a runner from a manifest requires an
+additive field on `EngineOptions`/`OracleSpec`, which lands with the SDK
+implementation together with the `libmahaksdk` shared library. Until then a
+plugin can be loaded and its hooks called through `PluginRegistry`, but a
+manifest cannot name it. This is stated rather than implied so no specification
+appears to support more than the build does.
