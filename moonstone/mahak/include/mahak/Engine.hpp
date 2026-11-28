@@ -27,6 +27,7 @@ struct EngineOptions {
     std::vector<int> cpu_affinity;
     std::uint32_t max_repetitions = 0;
     std::string session_id;
+    std::vector<std::string> plugins;
 };
 
 // Embeddable benchmark engine. One Engine owns at most one active session at a

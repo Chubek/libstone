@@ -86,6 +86,7 @@ struct OracleSpec {
     std::string pattern;
     std::string field;
     double tolerance = 1e-9;
+    std::string plugin;
 };
 
 struct MetricSpec {

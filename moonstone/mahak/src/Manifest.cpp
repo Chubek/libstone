@@ -322,10 +322,14 @@ Result<std::vector<ParameterSpec>> parse_parameters(const Object &object,
 Result<OracleSpec> parse_oracle(const Object &object, std::string_view path) {
     if (auto keys = check_keys(object, path,
                                {"kind", "expected_exit", "expected", "pattern", "field",
-                                "tolerance"});
+                                "tolerance", "plugin"});
         !keys)
         return keys.error();
     OracleSpec oracle;
+    auto plugin = optional_string(object, "plugin", path, "");
+    if (!plugin)
+        return plugin.error();
+    oracle.plugin = std::move(plugin.value());
     auto kind = optional_string(object, "kind", path, "exit-code");
     if (!kind)
         return kind.error();
@@ -368,6 +372,8 @@ Result<OracleSpec> parse_oracle(const Object &object, std::string_view path) {
     if (!tolerance)
         return tolerance.error();
     oracle.tolerance = tolerance.value();
+    if (!oracle.plugin.empty())
+        return oracle;
     switch (oracle.kind) {
     case OracleKind::Regex:
         if (oracle.pattern.empty())

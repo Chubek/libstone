@@ -104,3 +104,10 @@ if(MOONSTONE_BUILD_MAHAK_COORDINATION)
 endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+foreach(fragment sdk lua profile recommend install)
+  set(mahak_fragment "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Mahak_${fragment}.cmake")
+  if(EXISTS "${mahak_fragment}")
+    include("${mahak_fragment}")
+  endif()
+endforeach()

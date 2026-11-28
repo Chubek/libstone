@@ -177,9 +177,15 @@ class PluginRegistry {
     Result<void> load(std::string_view path, const PluginLoadOptions &options = {});
 
     std::vector<PluginInfo> list() const;
-    // Returns null when no plugin registered that id.
+    // Borrowed pointers; callers must externally synchronize their use
+    // (including raw hook calls) with teardown, moves and destruction.
     const PluginHooks *hooks(std::string_view id) const;
     const PluginInfo *info(std::string_view id) const;
+
+    // Dispatches an oracle with its registered user data. Teardown waits for
+    // in-flight dispatch and rejects new dispatch while teardown is pending.
+    Result<OracleResult> judge(std::string_view id, const CasePlan &plan,
+                               const CommandResult &command) const;
 
     // Calls every teardown, then unloads. Idempotent; also runs on destruction.
     void teardown();
@@ -192,3 +198,6 @@ class PluginRegistry {
 
 } // namespace v1
 } // namespace moonstone::mahak
+
+extern "C" std::uint32_t mahak_sdk_version() noexcept;
+extern "C" void mahak_sdk_fill_host_api(moonstone::mahak::PluginHostApi *host) noexcept;

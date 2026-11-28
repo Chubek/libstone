@@ -26,6 +26,7 @@
 #include "mahak/Execution.hpp"
 #include "mahak/Manifest.hpp"
 #include "mahak/Measurement.hpp"
+#include "mahak/Plugin.hpp"
 #include "mahak/Statistics.hpp"
 
 namespace moonstone::mahak {
@@ -257,7 +258,34 @@ struct Engine::Impl {
     std::mutex mutex;
     bool active = false;
 
+    std::once_flag plugin_init;
+    std::optional<PluginRegistry> plugin_registry;
+    std::optional<Error> plugin_error;
+
     explicit Impl(EngineOptions value) : options(std::move(value)) {}
+
+    Result<OracleResult> judge(const CasePlan &plan, const CommandResult &child) {
+        if (plan.oracle.plugin.empty())
+            return evaluate_oracle(plan.oracle, child);
+        std::call_once(plugin_init, [&] {
+            auto registry = PluginRegistry::create();
+            if (!registry) {
+                plugin_error = registry.error();
+                return;
+            }
+            for (const auto &path : options.plugins) {
+                auto loaded = registry.value().load(path);
+                if (!loaded) {
+                    plugin_error = loaded.error();
+                    return;
+                }
+            }
+            plugin_registry.emplace(std::move(registry.value()));
+        });
+        if (plugin_error)
+            return *plugin_error;
+        return plugin_registry->judge(plan.oracle.plugin, plan, child);
+    }
 };
 
 Engine::Engine(EngineOptions options) : impl_(std::make_unique<Impl>(std::move(options))) {}
@@ -353,9 +381,12 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
     bool execute_stage_ran = false;
     const std::vector<MetricDefinition> metrics = metrics_for(plan);
 
-    auto record_execute = [&](const CommandResult &child, bool measured) {
+    auto record_execute = [&](const CommandResult &child, bool measured) -> Result<bool> {
+        auto judged = impl_->judge(plan, child);
+        if (!judged)
+            return judged.error();
         const MetricParseResult parsed = collect_command_metrics(child);
-        const OracleResult oracle = evaluate_oracle(plan.oracle, child);
+        const OracleResult &oracle = judged.value();
         result.oracle = oracle;
         const bool valid = child.validity == Validity::Valid && oracle.passed;
         result.status = valid ? "completed"
@@ -376,7 +407,9 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
             observation.validity =
                 observation.valid ? Validity::Valid
                                   : (oracle.passed ? Validity::MeasurementFailed
-                                                   : Validity::InvalidOutput);
+                                                   : (plan.oracle.plugin.empty()
+                                                          ? Validity::InvalidOutput
+                                                          : oracle.validity));
             observation.provenance =
                 metric.name == "wall" || metric.name == "cpu_user" ||
                         metric.name == "cpu_system" || metric.name == "max_rss"
@@ -468,7 +501,12 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
                     }
                     CommandResult child = executed.value();
                     execute_stage_ran = true;
-                    const bool valid = record_execute(child, !warmup);
+                    auto verdict = record_execute(child, !warmup);
+                    if (!verdict) {
+                        remove_work();
+                        return verdict.error();
+                    }
+                    const bool valid = verdict.value();
                     const std::uint64_t wall = child.wall_ns;
                     stage_result.commands.push_back(std::move(child));
                     if (warmup)
@@ -496,7 +534,12 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
                         record_build(kind, child);
                     if (kind == StageKind::Execute) {
                         execute_stage_ran = true;
-                        if (!record_execute(child, true))
+                        auto verdict = record_execute(child, true);
+                        if (!verdict) {
+                            remove_work();
+                            return verdict.error();
+                        }
+                        if (!verdict.value())
                             stage_failed = true;
                     } else if (child.validity != Validity::Valid) {
                         stage_failed = true;
