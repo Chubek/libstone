@@ -1,4 +1,98 @@
-# Building libstone
+# libstone: LLVM on Crack!
+
+libstone is a semi-experimental, semi-slop, semi-genuine monorepo containing several
+'Pebbles' for development of domain-specific and general-purpose languages. It
+dogfoods several languages of its own. libstone contains no implementation of 
+'original' general-purpose languages; but it has loads of genuinely innovative
+and original DSLs. It also contains tools for static analysis, FFI, memory management,
+it has a linker, an assembler, several architecture definition languages, tools for
+constructing hardware desciription languages and it contains an HDL as well. It has
+dozens of IRs, and moreso tools for develoing your own IR. Of any kind. It has 
+some tools for language synthesis and program synthesis. It has a benchmarking tool
+that specializes in compilers and interpreters. It has a WASM suite. We could go on.
+
+I'll allow the following diagram to explain the curent state of libstone:
+
+```
+                                   LIBSTONE
+             Language implementation and compiler infrastructure
+                                      |
+          +---------------------------+---------------------------+
+          |                           |                           |
+          v                           v                           v
+  +----------------+         +------------------+       +------------------+
+  | CORNERSTONE    |         | FLINTSTONE       |       | MOONSTONE        |
+  | Generators     |         | Multi-level IL   |       | Language runtime |
+  |                |         | and compiler SDK |       | and safety tools |
+  | Archon         |         |                  |       |                  |
+  | ASDL           |         | Dialects, types  |       | ExoML / Exotract |
+  | Aurocks        |         | passes, targets  |       | Plaid            |
+  | LLSynth        |         | C ABI, CLI       |       | Chisel, Syren    |
+  | Cephyr         |         |                  |       | Prolific, QMR    |
+  | Amalgam8, etc. |         +--------+---------+       +------------------+
+  +----------------+                  |
+                                      | uses and integrates
+                    +-----------------+------------------+
+                    |                 |                  |
+                    v                 v                  v
+          +----------------+ +----------------+ +----------------+
+          | FIRESTONE      | | BLACKSTONE     | | LIMESTONE      |
+          | Compiler and   | | Optimization   | | Backend and VM |
+          | runtime pieces | | kernel catalog | | infrastructure |
+          |                | |                | |                |
+          | IR, CFG, types | | Lua rewrites   | | RegTL          |
+          | VMs, selection | | lrewrite       | | Schedrow       |
+          | scheduling     | | Firestone      | | UniSel         |
+          | register alloc | | adapter        | | VMWeave        |
+          +----------------+ +----------------+ +-------+--------+
+                                                        |
+                                                        v
+                                               +----------------+
+                                               | SANDSTONE      |
+                                               | ISA and native |
+                                               | code tooling   |
+                                               |                |
+                                               | Architecture   |
+                                               | descriptions   |
+                                               | Assembly       |
+                                               | Encoding       |
+                                               | Decoding       |
+                                               +----------------+
+
+
+  +------------------+   +------------------+   +------------------+
+  | WETSTONE         |   | WEIGHSTONE       |   | NOVOSTONE        |
+  | Static analysis  |   | Integer and      |   | Compiler methods |
+  |                  |   | affine reasoning |   |                  |
+  | Dataflow, alias  |   |                  |   | Datalog, CCDB    |
+  | Symbolic, CFG    |   | Bit vectors      |   | Database IR      |
+  | Interprocedural  |   | Ranges, loops    |   | Speculative IR   |
+  | Verification    |   | Polyhedra        |   | Cost models, PCC |
+  +------------------+   +------------------+   | ActionSemantics  |
+                                                +------------------+
+
+  +------------------+   +------------------+   +------------------+
+  | YELLOWSTONE      |   | TOURCHSTONE      |   | SHARED SUPPORT   |
+  | Binary tooling   |<--| Native interop   |   |                  |
+  |                  |   |                  |   | third_party/     |
+  | qBFD, linker     |   | Dynamic loading  |   | scripts/         |
+  | Object tools     |   | Foreign calls    |   | CMake, tests     |
+  | qDWARF, qWasm    |   | XBind bindings   |   |                  |
+  +------------------+   +------------------+   +------------------+
+```
+
+At this moment, the crown jewel of libstone is `cornerstone/Cephyr`, a *fully ISO/IEC
+9899 C11* conformant implementation of C and its standard library. 
+
+A 'Pebble' in libstone terminology refers to all the directories at the 
+root ending in *stone. Their names are sometimes semantic (for example, `headstone`)
+is dedicated to constructing header-only libraries and languages. 
+
+
+## Building libstone
+
+First off, note that some of libstone's tools are header-only C++ libraries. "Building"
+them means building their examples, test suite and fixtures.
 
 See the [Libstone manual](manual/README.md) for the component guide, build and
 configuration reference, first programs, embedding, extension points, and
