@@ -27,6 +27,8 @@ extern "C" {
 #define CEPHYR_SDK_MAX_MESSAGE_BYTES 4096u
 #define CEPHYR_SDK_MAX_FILE_BYTES 4096u
 
+#define CEPHYR_SDK_TEXT(s) { (s), sizeof(s) - 1 }
+
 /* A byte span, not a C string. Null is valid only for an empty span.
  * Embedded NUL bytes are not permitted in values submitted by SDK clients. */
 typedef struct cephyr_sdk_text {
