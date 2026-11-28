@@ -1,5 +1,7 @@
 #include "mahak/coordination/Broker.hpp"
 
+#include "mahak/coordination/Roster.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <csignal>
@@ -7,6 +9,8 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <optional>
+#include <sys/stat.h>
 #include <set>
 #include <thread>
 #include <unistd.h>
@@ -86,6 +90,22 @@ class BrokerImpl {
         // Worker inbound queues are created by the workers themselves. The
         // broker attaches lazily when routing; this avoids accounting every
         // queue's capacity to one process on hosts with a tiny mqueue budget.
+        if (!options_.roster_root.empty()) {
+            auto loaded = load_roster(options_.roster_root);
+            if (!loaded)
+                return loaded.error();
+            if (loaded.value().session != options_.session)
+                return broker_error("roster session '" + loaded.value().session +
+                                        "' does not match broker session '" + options_.session +
+                                        "'",
+                                    ErrorCategory::InvalidInput);
+            roster_ = std::move(loaded.value());
+            Json data = Json::object();
+            data.set("revision", static_cast<std::int64_t>(roster_->revision));
+            data.set("root", roster_->root);
+            data.set("workers", static_cast<std::int64_t>(roster_->entries.size()));
+            blink_("roster-loaded", std::move(data));
+        }
         blink_("broker-start", Json::object());
         Json broker_status = Json::object();
         broker_status.set("state", "running");
@@ -121,6 +141,7 @@ class BrokerImpl {
             }
             const std::uint64_t now = now_ns();
             if (now - last_housekeeping > 100'000'000ULL) {
+                (void)reload_roster_if_changed();
                 housekeeping(now);
                 last_housekeeping = now;
             }
@@ -134,6 +155,8 @@ class BrokerImpl {
     BrokerOptions options_;
     std::unique_ptr<Blotter> blotter_;
     std::unique_ptr<Mailbox> ingress_;
+    std::optional<Roster> roster_;
+    std::uint64_t roster_mtime_ns_ = 0;
     std::map<std::string, Mailbox> mailboxes_;
     std::set<std::string> registered_;
     std::set<std::string> unavailable_;
@@ -160,6 +183,66 @@ class BrokerImpl {
     void blink_(std::string_view kind, Json data) {
         if (blotter_)
             (void)blotter_->record_event("broker", kind, data);
+    }
+
+    // Comrade-name routing. The roster is re-read when the file changes so a
+    // revised roster (revision + 1) takes effect without restarting the broker.
+    bool reload_roster_if_changed() {
+        if (options_.roster_root.empty())
+            return false;
+        struct stat status {};
+        const std::string path = roster_path(options_.roster_root);
+        if (::stat(path.c_str(), &status) != 0)
+            return false;
+        const auto mtime = static_cast<std::uint64_t>(status.st_mtime) * 1000000000ull +
+                           static_cast<std::uint64_t>(status.st_mtim.tv_nsec);
+        if (mtime == roster_mtime_ns_)
+            return false;
+        auto loaded = try_load_roster(options_.roster_root);
+        if (!loaded || !loaded.value())
+            return false;
+        if (loaded.value()->session != options_.session) {
+            journal_error("roster-session-mismatch", loaded.value()->session);
+            return false;
+        }
+        roster_mtime_ns_ = mtime;
+        if (roster_ && roster_->revision == loaded.value()->revision)
+            return false;
+        roster_ = std::move(loaded.value());
+        Json data = Json::object();
+        data.set("revision", static_cast<std::int64_t>(roster_->revision));
+        data.set("workers", static_cast<std::int64_t>(roster_->entries.size()));
+        blink_("roster-revision", std::move(data));
+        return true;
+    }
+
+    // Rewrites a comrade name to its numeric protocol id. Returns false only
+    // when a roster is published and the name is not in it.
+    bool resolve_comrade(Envelope &envelope) {
+        if (options_.roster_root.empty())
+            return true;
+        if (envelope.recipient == "broker" || envelope.recipient == "*")
+            return true;
+        if (roster_ && roster_->lookup(envelope.recipient) != nullptr) {
+            const RosterEntry *entry = roster_->lookup(envelope.recipient);
+            if (entry->name != envelope.recipient)
+                return true; // already a numeric id known to the roster
+            const std::string id = std::to_string(entry->protocol_id);
+            Json data = Json::object();
+            data.set("message_id", envelope.id);
+            data.set("from", envelope.sender);
+            data.set("comrade", entry->name);
+            data.set("protocol_id", static_cast<std::int64_t>(entry->protocol_id));
+            blink_("named-route", std::move(data));
+            envelope.recipient = id;
+            return true;
+        }
+        if (reload_roster_if_changed() && roster_ &&
+            roster_->lookup(envelope.recipient) != nullptr)
+            return resolve_comrade(envelope);
+        if (roster_)
+            return false;
+        return true;
     }
 
     std::string next_id() {
@@ -416,7 +499,7 @@ class BrokerImpl {
         return false;
     }
 
-    void handle(const Envelope &envelope) {
+    void handle(Envelope envelope) {
         update_seen(envelope.sender, now_ns());
         if (seen_.count({envelope.sender, envelope.sequence}) != 0) {
             ++stats_.duplicates;
@@ -424,6 +507,13 @@ class BrokerImpl {
             return;
         }
         remember(envelope);
+
+        if (!resolve_comrade(envelope)) {
+            ++stats_.rejected;
+            send_error(envelope.sender, "unknown comrade '" + envelope.recipient + "'",
+                       envelope.id);
+            return;
+        }
 
         Envelope effective = envelope;
         const bool resolved = static_cast<bool>(resolve_inbound(effective));

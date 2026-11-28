@@ -29,6 +29,36 @@ if(MOONSTONE_BUILD_TOOLS)
   endforeach()
 endif()
 
+if(MOONSTONE_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/roster.cpp")
+  add_executable(moonstone_test_mahak_coordination_roster tests/roster.cpp)
+  target_link_libraries(moonstone_test_mahak_coordination_roster
+    PRIVATE moonstone_mahak_coordination)
+  if(MSVC)
+    target_compile_options(moonstone_test_mahak_coordination_roster PRIVATE /UNDEBUG /W4)
+  else()
+    target_compile_options(moonstone_test_mahak_coordination_roster PRIVATE
+      -UNDEBUG -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME moonstone.mahak.coordination.roster
+    COMMAND moonstone_test_mahak_coordination_roster)
+  set_tests_properties(moonstone.mahak.coordination.roster PROPERTIES TIMEOUT 60)
+endif()
+
+if(MOONSTONE_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/roster_broker.cpp")
+  add_executable(moonstone_test_mahak_coordination_roster_broker tests/roster_broker.cpp)
+  target_link_libraries(moonstone_test_mahak_coordination_roster_broker
+    PRIVATE moonstone_mahak_coordination)
+  if(MSVC)
+    target_compile_options(moonstone_test_mahak_coordination_roster_broker PRIVATE /UNDEBUG /W4)
+  else()
+    target_compile_options(moonstone_test_mahak_coordination_roster_broker PRIVATE
+      -UNDEBUG -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME moonstone.mahak.coordination.roster_broker
+    COMMAND moonstone_test_mahak_coordination_roster_broker)
+  set_tests_properties(moonstone.mahak.coordination.roster_broker PROPERTIES TIMEOUT 90)
+endif()
+
 if(MOONSTONE_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol.cpp")
   add_executable(moonstone_test_mahak_coordination tests/protocol.cpp)
   target_link_libraries(moonstone_test_mahak_coordination

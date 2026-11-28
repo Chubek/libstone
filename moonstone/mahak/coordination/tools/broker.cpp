@@ -47,6 +47,8 @@ int main(int argc, char **argv) {
             options.workers = split(value("--workers"));
         else if (argument == "--blotter-root")
             options.blotter_root = value("--blotter-root");
+        else if (argument == "--roster-root")
+            options.roster_root = value("--roster-root");
         else if (argument == "--heartbeat-ms")
             options.heartbeat_timeout_ms = static_cast<std::uint32_t>(std::stoul(value("--heartbeat-ms")));
         else if (argument == "--request-timeout-ms")
@@ -57,7 +59,7 @@ int main(int argc, char **argv) {
             options.verbose = true;
         else if (argument == "--help" || argument == "-h") {
             std::cout << "usage: mahak-coord-broker_main --session ID --workers 1,2,3,..."
-                         " [--blotter-root DIR] [--heartbeat-ms N] [--verbose]\n";
+                         " [--blotter-root DIR] [--roster-root DIR] [--heartbeat-ms N] [--verbose]\n";
             return 0;
         } else {
             std::cerr << "unknown argument: " << argument << "\n";

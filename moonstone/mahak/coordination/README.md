@@ -68,3 +68,22 @@ adaptation to a measured kernel/namespace constraint, documented in
 | `tools/demo.cpp` | eight-role protocol exercise |
 | `tests/protocol.cpp` | envelope, mailbox, blotter concurrency tests |
 | `PROTOCOL.md` | wire and lifecycle contract |
+
+## Worker roster
+
+`Roster.hpp` publishes `/dev/shm/foo-blotter/WORKERS.json` so nine named agents
+can address each other by comrade name. Queue names derive from the session and
+the numeric protocol id; the orchestrator owns the broker ingress and the
+directory lock. See `PROTOCOL.md` for the file schema, revision and
+acknowledgement rules, and the `named-route` journal event.
+
+```cpp
+auto roster = build_roster(default_root(), session, {
+    {"Atlas", "orchestrator", 1, true},
+    {"Flint", "engine", 2, false},
+});
+publish_roster(roster.value());
+auto lock = RosterLock::acquire(default_root());
+```
+
+Run `--roster-root DIR` with `mahak-coord-broker` to enable named routing.

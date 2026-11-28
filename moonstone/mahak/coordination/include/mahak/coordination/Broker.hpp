@@ -14,6 +14,10 @@ namespace moonstone::mahak::coordination {
 struct BrokerOptions {
     std::string session;
     std::string blotter_root; // empty selects /dev/shm/mahak-<session>
+    // When set, WORKERS.json is read from this directory and recipients may be
+    // addressed by comrade name; the broker resolves the name to the numeric
+    // protocol id before routing. Empty disables named routing.
+    std::string roster_root;
     std::vector<std::string> workers; // worker ids expected to register
     std::uint32_t queue_depth = 1;
     std::uint32_t heartbeat_timeout_ms = 5000;

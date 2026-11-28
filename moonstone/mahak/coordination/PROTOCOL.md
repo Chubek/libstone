@@ -1,5 +1,49 @@
 # Coordination protocol
 
+## Worker roster
+
+`/dev/shm/foo-blotter/WORKERS.json` is written once by the orchestrator before
+the startup barrier and is read-only for everyone else. It is the only place a
+comrade name is defined, so a worker never needs to know another worker's
+numeric id in advance.
+
+```json
+{
+  "v": 1,
+  "revision": 1,
+  "session": "0123456789abcdef",
+  "root": "/dev/shm/foo-blotter",
+  "broker_ingress": "/mahak-0123456789abcdef-broker",
+  "published_unix_ns": 1760000000000000000,
+  "workers": [
+    {"name": "Atlas", "role": "orchestrator", "protocol_id": 1,
+     "inbox": "/mahak-0123456789abcdef-broker", "orchestrator": true},
+    {"name": "Flint", "role": "engine", "protocol_id": 2,
+     "inbox": "/mahak-0123456789abcdef-w2", "orchestrator": false}
+  ]
+}
+```
+
+- Exactly one entry is the orchestrator; its `inbox` is the broker ingress.
+- Every other `inbox` is `/mahak-<session>-w<protocol_id>`.
+- Publishing is atomic (temp, fsync, rename, directory fsync) under
+  `roster.lock`; `session.lock` is the orchestrator's ownership lock for the
+  directory and is a different file so publishing never self-deadlocks.
+- A revised roster increments `revision`. The broker re-reads the file when its
+  mtime changes, so name resolution follows a revision without a restart.
+- `ACKS.json` records `{"v":1,"revision":N,"acked":{name: unix_ns}}`. An
+  acknowledgement for any revision other than the published one is rejected:
+  a worker cannot claim a roster it never read. A revision bump clears every
+  previous acknowledgement.
+
+## Named addressing
+
+A recipient may be a comrade name, a numeric protocol id, `broker`, or `*`.
+The broker resolves a name through `WORKERS.json` before routing, journals a
+`named-route` event (`message_id`, `from`, `comrade`, `protocol_id`), and
+forwards to `w<protocol_id>`. An unknown name is rejected with an `ERROR`
+envelope whose message names the comrade; it is never silently dropped.
+
 ## Addressing
 
 - Worker mailbox: `/mahak-<session>-w<worker-id>`.
