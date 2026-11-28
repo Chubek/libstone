@@ -1,0 +1,17 @@
+# Mahak local build and verification artifacts must never enter a patch.
+build/
+build-*/
+build_*/
+cmake-build-*/
+Testing/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.log
+core
+core.*
