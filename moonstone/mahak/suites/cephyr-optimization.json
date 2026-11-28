@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "id": "cephyr-optimization",
+  "version": "1.0.0",
+  "description": "Cephyr MIR optimization: Blackstone off (baseline) versus on (candidate). FactIR is disabled on both sides so the only variable is the MIR rewrite pass.",
+  "seed": 20260101,
+  "defaults": {
+    "warmup": 1,
+    "repetitions": 5,
+    "timeout_ms": 60000,
+    "measurement": "warm-process"
+  },
+  "targets": [
+    {
+      "id": "cephyr-baseline",
+      "kind": "compiler",
+      "description": "Cephyr with --no-blackstone --no-factir",
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {
+              "argv": [
+                "{param:compiler}", "--target={param:target}", "--no-blackstone", "--no-factir",
+                "{fixture:source}", "-o", "{artifact:prog}"
+              ],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "execute": {"argv": ["{artifact:prog}"]},
+      "parameters": [
+        {"name": "compiler", "values": ["cephyr"]},
+        {"name": "target", "values": ["x86_64-linux-gnu"]}
+      ]
+    },
+    {
+      "id": "cephyr-candidate",
+      "kind": "compiler",
+      "description": "Cephyr with --blackstone --no-factir",
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {
+              "argv": [
+                "{param:compiler}", "--target={param:target}", "--blackstone", "--no-factir",
+                "{fixture:source}", "-o", "{artifact:prog}"
+              ],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "execute": {"argv": ["{artifact:prog}"]},
+      "parameters": [
+        {"name": "compiler", "values": ["cephyr"]},
+        {"name": "target", "values": ["x86_64-linux-gnu"]}
+      ]
+    }
+  ],
+  "benchmarks": [
+    {
+      "id": "phi-join",
+      "group": "cross-block",
+      "tags": ["blackstone", "join"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/phi_join.c", "target": "phi_join.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 5}
+    },
+    {
+      "id": "cse-dominance",
+      "group": "cross-block",
+      "tags": ["blackstone", "cse"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/cse_dominance.c", "target": "cse_dominance.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 5}
+    },
+    {
+      "id": "stress-dense",
+      "group": "stress",
+      "tags": ["blackstone", "stress"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/stress_dense.c", "target": "stress_dense.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    },
+    {
+      "id": "stress-sparse",
+      "group": "stress",
+      "tags": ["blackstone", "stress"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/stress_sparse.c", "target": "stress_sparse.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    },
+    {
+      "id": "stress-inert",
+      "group": "stress",
+      "tags": ["blackstone", "cost-of-nothing"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/stress_inert.c", "target": "stress_inert.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    },
+    {
+      "id": "join-disagree-control",
+      "group": "control",
+      "tags": ["blackstone", "soundness"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "fixtures/join_disagree.c", "target": "join_disagree.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    },
+    {
+      "id": "memory-effects-control",
+      "group": "control",
+      "tags": ["blackstone", "effects"],
+      "modes": ["end-to-end"],
+      "fixtures": [{"name": "source", "path": "../../../cornerstone/Cephyr/benchmark/fixtures/memory_effects.c", "target": "memory_effects.c"}],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    }
+  ]
+}

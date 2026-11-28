@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "id": "cephyr-abi",
+  "version": "1.0.0",
+  "description": "By-value aggregate interoperability: Cephyr caller against a reference callee and the reverse. Register-passed records, mixed integer/floating records, and a stack-passed record are covered. An unsupported aggregate ABI is recorded as a build failure (a coverage gap), never as a pass.",
+  "seed": 20260103,
+  "defaults": {
+    "warmup": 0,
+    "repetitions": 3,
+    "timeout_ms": 60000,
+    "measurement": "warm-process"
+  },
+  "targets": [
+    {
+      "id": "native-runner",
+      "kind": "executable",
+      "description": "Runs the linked interoperability case",
+      "execute": {"argv": ["{artifact:prog}"]}
+    }
+  ],
+  "benchmarks": [
+    {
+      "id": "cephyr-caller",
+      "group": "abi",
+      "tags": ["interop", "by-value", "cephyr-caller"],
+      "modes": ["end-to-end"],
+      "fixtures": [
+        {"name": "caller", "path": "fixtures/abi/abi_caller.c", "target": "abi_caller.c"},
+        {"name": "callee", "path": "fixtures/abi/abi_callee.c", "target": "abi_callee.c"}
+      ],
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/abi_caller.c", "-o", "{artifact:caller.o}"], "artifacts": ["caller.o"]},
+            {"argv": ["cc", "-O2", "-c", "fixtures/abi_callee.c", "-o", "{artifact:callee.o}"], "artifacts": ["callee.o"]}
+          ]
+        },
+        {
+          "kind": "link",
+          "commands": [
+            {"argv": ["cc", "{artifact:caller.o}", "{artifact:callee.o}", "-o", "{artifact:prog}", "-lm"], "artifacts": ["prog"]}
+          ]
+        }
+      ],
+      "parameters": [
+        {"name": "compiler", "values": ["cephyr"]},
+        {"name": "target", "values": ["x86_64-linux-gnu"]}
+      ],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 0, "repetitions": 3}
+    },
+    {
+      "id": "cephyr-callee",
+      "group": "abi",
+      "tags": ["interop", "by-value", "cephyr-callee"],
+      "modes": ["end-to-end"],
+      "fixtures": [
+        {"name": "caller", "path": "fixtures/abi/abi_caller.c", "target": "abi_caller.c"},
+        {"name": "callee", "path": "fixtures/abi/abi_callee.c", "target": "abi_callee.c"}
+      ],
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {"argv": ["cc", "-O2", "-c", "fixtures/abi_caller.c", "-o", "{artifact:caller.o}"], "artifacts": ["caller.o"]},
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/abi_callee.c", "-o", "{artifact:callee.o}"], "artifacts": ["callee.o"]}
+          ]
+        },
+        {
+          "kind": "link",
+          "commands": [
+            {"argv": ["cc", "{artifact:caller.o}", "{artifact:callee.o}", "-o", "{artifact:prog}", "-lm"], "artifacts": ["prog"]}
+          ]
+        }
+      ],
+      "parameters": [
+        {"name": "compiler", "values": ["cephyr"]},
+        {"name": "target", "values": ["x86_64-linux-gnu"]}
+      ],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 0, "repetitions": 3}
+    },
+    {
+      "id": "reference-control",
+      "group": "abi",
+      "tags": ["interop", "correctness-control"],
+      "modes": ["end-to-end"],
+      "fixtures": [
+        {"name": "caller", "path": "fixtures/abi/abi_caller.c", "target": "abi_caller.c"},
+        {"name": "callee", "path": "fixtures/abi/abi_callee.c", "target": "abi_callee.c"}
+      ],
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {"argv": ["cc", "-O2", "-c", "fixtures/abi_caller.c", "-o", "{artifact:caller.o}"], "artifacts": ["caller.o"]},
+            {"argv": ["cc", "-O2", "-c", "fixtures/abi_callee.c", "-o", "{artifact:callee.o}"], "artifacts": ["callee.o"]}
+          ]
+        },
+        {
+          "kind": "link",
+          "commands": [
+            {"argv": ["cc", "{artifact:caller.o}", "{artifact:callee.o}", "-o", "{artifact:prog}", "-lm"], "artifacts": ["prog"]}
+          ]
+        }
+      ],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 0, "repetitions": 1}
+    }
+  ]
+}

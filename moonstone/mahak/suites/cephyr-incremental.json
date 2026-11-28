@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "id": "cephyr-incremental",
+  "version": "1.0.0",
+  "description": "Multi-file build cost. full-build compiles and links a five-unit project; single-unit compiles one translation unit. Compare sessions to price a one-unit rebuild against a full rebuild. Editing fixtures/shared.h changes EXPECTED_SUM, so a stale object fails the oracle.",
+  "seed": 20260102,
+  "defaults": {
+    "warmup": 1,
+    "repetitions": 3,
+    "timeout_ms": 120000,
+    "measurement": "warm-process"
+  },
+  "targets": [
+    {
+      "id": "cephyr-project",
+      "kind": "executable",
+      "description": "Cephyr multi-unit project driver",
+      "execute": {"argv": ["{artifact:prog}"]},
+      "parameters": [
+        {"name": "compiler", "values": ["cephyr"]},
+        {"name": "target", "values": ["x86_64-linux-gnu"]}
+      ]
+    }
+  ],
+  "benchmarks": [
+    {
+      "id": "full-build",
+      "group": "incremental",
+      "tags": ["multi-file", "clean"],
+      "modes": ["end-to-end"],
+      "fixtures": [
+        {"name": "shared", "path": "fixtures/project/shared.h", "target": "project/shared.h"},
+        {"name": "private_a", "path": "fixtures/project/private_a.h", "target": "project/private_a.h"},
+        {"name": "unit_a", "path": "fixtures/project/unit_a.c", "target": "project/unit_a.c"},
+        {"name": "unit_b", "path": "fixtures/project/unit_b.c", "target": "project/unit_b.c"},
+        {"name": "unit_c", "path": "fixtures/project/unit_c.c", "target": "project/unit_c.c"},
+        {"name": "unit_d", "path": "fixtures/project/unit_d.c", "target": "project/unit_d.c"},
+        {"name": "main", "path": "fixtures/project/main.c", "target": "project/main.c"}
+      ],
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/unit_a.c", "-o", "{artifact:unit_a.o}"], "artifacts": ["unit_a.o"]},
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/unit_b.c", "-o", "{artifact:unit_b.o}"], "artifacts": ["unit_b.o"]},
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/unit_c.c", "-o", "{artifact:unit_c.o}"], "artifacts": ["unit_c.o"]},
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/unit_d.c", "-o", "{artifact:unit_d.o}"], "artifacts": ["unit_d.o"]},
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/main.c", "-o", "{artifact:main.o}"], "artifacts": ["main.o"]}
+          ]
+        },
+        {
+          "kind": "link",
+          "commands": [
+            {
+              "argv": [
+                "{param:compiler}", "--target={param:target}",
+                "{artifact:unit_a.o}", "{artifact:unit_b.o}", "{artifact:unit_c.o}",
+                "{artifact:unit_d.o}", "{artifact:main.o}", "-o", "{artifact:prog}"
+              ],
+              "artifacts": ["prog"]
+            }
+          ]
+        }
+      ],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "metrics": [{"name": "wall", "unit": "ns", "direction": "lower", "primary": true}],
+      "sampling": {"warmup": 1, "repetitions": 3}
+    },
+    {
+      "id": "single-unit",
+      "group": "incremental",
+      "tags": ["multi-file", "one-unit"],
+      "modes": ["compile-only"],
+      "fixtures": [
+        {"name": "shared", "path": "fixtures/project/shared.h", "target": "project/shared.h"},
+        {"name": "private_a", "path": "fixtures/project/private_a.h", "target": "project/private_a.h"},
+        {"name": "unit_a", "path": "fixtures/project/unit_a.c", "target": "project/unit_a.c"}
+      ],
+      "stages": [
+        {
+          "kind": "compile",
+          "commands": [
+            {"argv": ["{param:compiler}", "--target={param:target}", "-c", "fixtures/project/unit_a.c", "-o", "{artifact:unit_a.o}"], "artifacts": ["unit_a.o"]}
+          ]
+        }
+      ],
+      "oracle": {"kind": "exit-code", "expected_exit": 0},
+      "sampling": {"warmup": 1, "repetitions": 5}
+    }
+  ]
+}

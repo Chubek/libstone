@@ -350,6 +350,7 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
     std::map<std::string, std::uint64_t> sequences;
     std::uint64_t sample_index = 0;
     std::uint64_t measured_repetitions = 0;
+    bool execute_stage_ran = false;
     const std::vector<MetricDefinition> metrics = metrics_for(plan);
 
     auto record_execute = [&](const CommandResult &child, bool measured) {
@@ -466,6 +467,7 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
                         return result;
                     }
                     CommandResult child = executed.value();
+                    execute_stage_ran = true;
                     const bool valid = record_execute(child, !warmup);
                     const std::uint64_t wall = child.wall_ns;
                     stage_result.commands.push_back(std::move(child));
@@ -493,6 +495,7 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
                     if (kind == StageKind::Compile || kind == StageKind::Link)
                         record_build(kind, child);
                     if (kind == StageKind::Execute) {
+                        execute_stage_ran = true;
                         if (!record_execute(child, true))
                             stage_failed = true;
                     } else if (child.validity != Validity::Valid) {
@@ -514,6 +517,13 @@ Result<CaseResult> Engine::run_case(const CasePlan &plan) {
                 return result;
             }
         }
+    }
+    if (!execute_stage_ran) {
+        // A compile-only or link-only case never evaluates the oracle. Say so
+        // explicitly instead of leaving a failed-looking default oracle.
+        result.oracle.passed = true;
+        result.oracle.validity = Validity::Valid;
+        result.oracle.message = "no execute stage; oracle not evaluated";
     }
     if (result.status == "unsupported")
         result.status = "completed";

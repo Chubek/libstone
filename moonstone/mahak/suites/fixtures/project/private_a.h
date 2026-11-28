@@ -1,0 +1,4 @@
+#ifndef PROJECT_PRIVATE_A_H
+#define PROJECT_PRIVATE_A_H
+#define UNIT_A_BASE 11L
+#endif

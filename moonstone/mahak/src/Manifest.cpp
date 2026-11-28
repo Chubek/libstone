@@ -1103,6 +1103,18 @@ Result<SuitePlan> plan_manifest(const Manifest &manifest, const PlanOptions &opt
                 return invalid(diagnostic.primary.file, diagnostic.message);
         }
     }
+    for (const auto &override_entry : options.parameter_overrides) {
+        bool known = false;
+        for (const auto &target : manifest.targets)
+            for (const auto &parameter : target.parameters)
+                known = known || parameter.name == override_entry.first;
+        for (const auto &benchmark : manifest.benchmarks)
+            for (const auto &parameter : benchmark.parameters)
+                known = known || parameter.name == override_entry.first;
+        if (!known)
+            return invalid("parameters",
+                           "override for unknown parameter '" + override_entry.first + "'");
+    }
     SuitePlan plan;
     plan.manifest_id = manifest.id;
     plan.manifest_version = manifest.version;
@@ -1166,47 +1178,41 @@ Result<SuitePlan> plan_manifest(const Manifest &manifest, const PlanOptions &opt
             std::vector<ParameterSpec> matrix = target->parameters;
             matrix.insert(matrix.end(), benchmark->parameters.begin(),
                           benchmark->parameters.end());
-            std::vector<std::pair<std::string, std::string>> pinned;
-            for (const auto &override_entry : options.parameter_overrides) {
-                bool known = false;
-                for (const auto &parameter : matrix)
-                    known = known || parameter.name == override_entry.first;
-                if (!known)
-                    return invalid("parameters",
-                                   "override for unknown parameter '" + override_entry.first + "'");
-                pinned.emplace_back(override_entry.first, override_entry.second);
+            // Overrides are suite-wide: a name is valid when any target or
+            // benchmark declares it, and it only affects cases that have it.
+            std::vector<std::pair<std::string, std::string>> pinned =
+                options.parameter_overrides;
+            // An override pins a parameter to one value. The value does not have
+            // to appear in the declared matrix: overriding a path-like parameter
+            // (a compiler location, a sysroot) is the common case.
+            std::vector<ParameterSpec> effective = matrix;
+            for (auto &parameter : effective) {
+                for (const auto &pin : pinned) {
+                    if (pin.first != parameter.name)
+                        continue;
+                    Json::Array single;
+                    single.push_back(Json(pin.second));
+                    parameter.values = Json(std::move(single));
+                }
             }
             std::vector<std::vector<ResolvedParameter>> combinations(1);
-            for (const auto &parameter : matrix) {
+            for (const auto &parameter : effective) {
                 std::vector<std::vector<ResolvedParameter>> next;
                 const Json::Array *raw_values = parameter.values.as_array();
                 if (raw_values == nullptr)
                     return invalid("parameters", "parameter '" + parameter.name + "' is not an array");
-                std::vector<std::string> values;
-                for (const auto &value : *raw_values)
-                    values.push_back(format_parameter_value(value));
-                if (values.empty())
+                if (raw_values->empty())
                     return invalid("parameters", "parameter '" + parameter.name + "' has no values");
                 for (const auto &prefix : combinations) {
-                    for (std::size_t index = 0; index < raw_values->size(); ++index) {
-                        const std::string text = values[index];
-                        bool skip = false;
-                        for (const auto &pin : pinned) {
-                            if (pin.first == parameter.name && pin.second != text)
-                                skip = true;
-                        }
-                        if (skip)
-                            continue;
+                    for (const auto &value : *raw_values) {
                         std::vector<ResolvedParameter> combination = prefix;
-                        combination.push_back(
-                            ResolvedParameter{parameter.name, (*raw_values)[index], text});
+                        combination.push_back(ResolvedParameter{parameter.name, value,
+                                                                format_parameter_value(value)});
                         next.push_back(std::move(combination));
                     }
                 }
                 combinations = std::move(next);
             }
-            if (combinations.size() == 1 && combinations.front().empty() && !pinned.empty())
-                return invalid("parameters", "overrides removed every parameter combination");
 
             for (const auto &combination : combinations) {
                 CasePlan case_plan;

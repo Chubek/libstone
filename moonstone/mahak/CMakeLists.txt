@@ -58,6 +58,13 @@ if(MOONSTONE_BUILD_TESTS)
     set_tests_properties(moonstone.mahak.${stem} PROPERTIES TIMEOUT 120)
   endforeach()
 
+  # The suite manifests are validated and planned by a test that does not need
+  # the compilers they name.
+  if(TARGET moonstone_test_mahak_suites)
+    target_compile_definitions(moonstone_test_mahak_suites PRIVATE
+      MAHAK_SUITE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/suites")
+  endif()
+
   # Strict C11 consumer for the embedding ABI.
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/c_api.c")
     add_executable(moonstone_test_mahak_c_api tests/c_api.c)
